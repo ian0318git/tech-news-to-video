@@ -380,13 +380,13 @@ def with_client(f):
 
 
 def json_output_response(data: dict) -> None:
-    """Print JSON response."""
-    console.print(json.dumps(data, indent=2, default=str))
+    """Print JSON response (no colors for machine parsing)."""
+    click.echo(json.dumps(data, indent=2, default=str))
 
 
 def json_error_response(code: str, message: str) -> None:
-    """Print JSON error and exit."""
-    console.print(json.dumps({"error": True, "code": code, "message": message}, indent=2))
+    """Print JSON error and exit (no colors for machine parsing)."""
+    click.echo(json.dumps({"error": True, "code": code, "message": message}, indent=2))
     raise SystemExit(1)
 
 

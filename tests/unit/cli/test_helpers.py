@@ -217,46 +217,34 @@ class TestArtifactTypeMappings:
 
 class TestJsonOutputResponse:
     def test_outputs_valid_json(self, capsys):
-        with patch("notebooklm.cli.helpers.console") as mock_console:
-            captured_output = []
-            mock_console.print = lambda x: captured_output.append(x)
+        json_output_response({"test": "value", "number": 42})
 
-            json_output_response({"test": "value", "number": 42})
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        assert data["test"] == "value"
+        assert data["number"] == 42
 
-            output = captured_output[0]
-            data = json.loads(output)
-            assert data["test"] == "value"
-            assert data["number"] == 42
+    def test_handles_nested_data(self, capsys):
+        json_output_response({"nested": {"key": "value"}, "list": [1, 2, 3]})
 
-    def test_handles_nested_data(self):
-        with patch("notebooklm.cli.helpers.console") as mock_console:
-            captured_output = []
-            mock_console.print = lambda x: captured_output.append(x)
-
-            json_output_response({"nested": {"key": "value"}, "list": [1, 2, 3]})
-
-            output = captured_output[0]
-            data = json.loads(output)
-            assert data["nested"]["key"] == "value"
-            assert data["list"] == [1, 2, 3]
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        assert data["nested"]["key"] == "value"
+        assert data["list"] == [1, 2, 3]
 
 
 class TestJsonErrorResponse:
-    def test_outputs_error_json_and_exits(self):
-        with patch("notebooklm.cli.helpers.console") as mock_console:
-            captured_output = []
-            mock_console.print = lambda x: captured_output.append(x)
+    def test_outputs_error_json_and_exits(self, capsys):
+        with pytest.raises(SystemExit) as exc_info:
+            json_error_response("TEST_ERROR", "Test error message")
 
-            with pytest.raises(SystemExit) as exc_info:
-                json_error_response("TEST_ERROR", "Test error message")
+        assert exc_info.value.code == 1
 
-            assert exc_info.value.code == 1
-
-            output = captured_output[0]
-            data = json.loads(output)
-            assert data["error"] is True
-            assert data["code"] == "TEST_ERROR"
-            assert data["message"] == "Test error message"
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        assert data["error"] is True
+        assert data["code"] == "TEST_ERROR"
+        assert data["message"] == "Test error message"
 
 
 # =============================================================================
@@ -390,19 +378,15 @@ class TestHandleAuthError:
             call_args = mock_console.print.call_args[0][0]
             assert "login" in call_args.lower()
 
-    def test_json_outputs_json_error_and_exits(self):
-        with patch("notebooklm.cli.helpers.console") as mock_console:
-            captured_output = []
-            mock_console.print = lambda x: captured_output.append(x)
+    def test_json_outputs_json_error_and_exits(self, capsys):
+        with pytest.raises(SystemExit) as exc_info:
+            handle_auth_error(json_output=True)
 
-            with pytest.raises(SystemExit) as exc_info:
-                handle_auth_error(json_output=True)
-
-            assert exc_info.value.code == 1
-            output = captured_output[0]
-            data = json.loads(output)
-            assert data["error"] is True
-            assert data["code"] == "AUTH_REQUIRED"
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        assert data["error"] is True
+        assert data["code"] == "AUTH_REQUIRED"
 
 
 # =============================================================================
