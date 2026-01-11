@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-01-11
+
+### Added
+- **Source selection for chat and artifacts** - Select specific sources when using `ask` or `generate` commands
+  - New `--sources` flag accepts comma-separated source IDs or partial matches
+  - Works with all generation commands (audio, video, quiz, etc.) and chat
+- **Research sources table** - `research status` now displays sources in a formatted table instead of just a count
+
+### Fixed
+- **JSON output broken in TTY terminals** - `--json` flag output was including ANSI color codes, breaking JSON parsing for commands like `notebooklm list --json`
+- **Warning stacklevel** - `warnings.warn` calls now report correct source location
+
+### Infrastructure
+- **Windows CI testing** - Windows is now part of the nightly E2E test matrix
+- **VCR.py integration** - Added recorded HTTP cassette support for faster, deterministic integration tests
+- **Test coverage improvements** - Improved coverage for `_artifacts.py` (71% → 83%), `download.py`, and `session.py`
+
 ## [0.1.3] - 2026-01-10
 
 ### Fixed
@@ -113,7 +130,8 @@ This is the initial public release of `notebooklm-py`. While core functionality 
 - **Authentication expiry**: CSRF tokens expire after some time. Re-run `notebooklm login` if you encounter auth errors.
 - **Large file uploads**: Files over 50MB may fail or timeout. Split large documents if needed.
 
-[Unreleased]: https://github.com/teng-lin/notebooklm-py/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/teng-lin/notebooklm-py/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/teng-lin/notebooklm-py/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/teng-lin/notebooklm-py/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/teng-lin/notebooklm-py/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/teng-lin/notebooklm-py/compare/v0.1.0...v0.1.1
