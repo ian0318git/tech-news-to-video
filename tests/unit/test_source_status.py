@@ -186,15 +186,26 @@ class TestWaitUntilReady:
         processing_source = Source(id="src_1", status=SourceStatus.PROCESSING)
         ready_source = Source(id="src_1", status=SourceStatus.READY)
 
-        call_times = []
+        call_count = 0
+        sleep_intervals = []
 
         async def mock_get(notebook_id, source_id):
-            call_times.append(asyncio.get_event_loop().time())
-            if len(call_times) < 4:
+            nonlocal call_count
+            call_count += 1
+            if call_count < 4:
                 return processing_source
             return ready_source
 
-        with patch.object(sources_api, "get", side_effect=mock_get):
+        original_sleep = asyncio.sleep
+
+        async def mock_sleep(delay):
+            sleep_intervals.append(delay)
+            await original_sleep(0.001)  # Minimal actual sleep
+
+        with (
+            patch.object(sources_api, "get", side_effect=mock_get),
+            patch("notebooklm._sources.asyncio.sleep", side_effect=mock_sleep),
+        ):
             await sources_api.wait_until_ready(
                 "nb_1",
                 "src_1",
@@ -204,12 +215,11 @@ class TestWaitUntilReady:
                 max_interval=1.0,
             )
 
-        # Check that intervals increase (with some tolerance)
-        if len(call_times) >= 3:
-            interval1 = call_times[2] - call_times[1]
-            interval0 = call_times[1] - call_times[0]
-            # Second interval should be larger than first (backoff)
-            assert interval1 >= interval0 * 1.5
+        # Check that intervals increase exponentially
+        assert len(sleep_intervals) >= 2
+        # With initial_interval=0.05 and backoff_factor=2.0:
+        # First sleep: 0.05, Second sleep: 0.10, Third sleep: 0.20
+        assert sleep_intervals[1] >= sleep_intervals[0] * 1.5
 
 
 class TestWaitForSources:
