@@ -15,6 +15,7 @@ from notebooklm.paths import (
     get_storage_path,
 )
 
+
 # Windows clears HOME/USERPROFILE differently, so we need to preserve them
 # when testing default path behavior
 def _get_env_without_notebooklm_home():
@@ -54,7 +55,9 @@ class TestGetHomeDir:
             assert result.exists()
             assert result.is_dir()
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="Unix permissions not applicable on Windows")
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="Unix permissions not applicable on Windows"
+    )
     def test_create_flag_sets_permissions(self, tmp_path):
         """create=True sets directory permissions to 0o700."""
         custom_path = tmp_path / "secure_home"
