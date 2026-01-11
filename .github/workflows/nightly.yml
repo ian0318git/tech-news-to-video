@@ -12,10 +12,14 @@ concurrency:
 
 jobs:
   e2e:
-    name: E2E Tests
-    runs-on: ubuntu-latest
+    name: E2E Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     # Only run on main repo (not forks) due to secrets requirement
     if: github.repository == 'teng-lin/notebooklm-py'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
 
     steps:
     - uses: actions/checkout@v4
@@ -33,21 +37,27 @@ jobs:
 
     - name: Get Playwright version
       id: playwright-version
+      shell: bash
       run: |
         echo "version=$(pip show playwright | grep '^Version:' | cut -d' ' -f2)" >> $GITHUB_OUTPUT
 
     - name: Cache Playwright browsers
       uses: actions/cache@v4
       with:
-        path: ~/.cache/ms-playwright
-        key: playwright-ubuntu-latest-${{ steps.playwright-version.outputs.version }}
+        path: |
+          ~/.cache/ms-playwright
+          ~/AppData/Local/ms-playwright
+        key: playwright-${{ matrix.os }}-${{ steps.playwright-version.outputs.version }}
 
-    - name: Install Playwright browsers and dependencies
-      run: |
-        playwright install chromium
-        playwright install-deps
+    - name: Install Playwright browsers
+      run: playwright install chromium
+
+    - name: Install Playwright system dependencies (Linux)
+      if: runner.os == 'Linux'
+      run: playwright install-deps
 
     - name: Debug - Print notebook IDs
+      shell: bash
       env:
         NOTEBOOKLM_READ_ONLY_NOTEBOOK_ID: ${{ secrets.NOTEBOOKLM_READ_ONLY_NOTEBOOK_ID }}
         NOTEBOOKLM_GENERATION_NOTEBOOK_ID: ${{ secrets.NOTEBOOKLM_GENERATION_NOTEBOOK_ID }}
@@ -57,9 +67,9 @@ jobs:
         echo "READ_ONLY length: ${#NOTEBOOKLM_READ_ONLY_NOTEBOOK_ID}"
         echo "GENERATION length: ${#NOTEBOOKLM_GENERATION_NOTEBOOK_ID}"
 
-    - name: Run E2E tests
+    - name: Run E2E tests (read-only)
       env:
         NOTEBOOKLM_AUTH_JSON: ${{ secrets.NOTEBOOKLM_AUTH_JSON }}
         NOTEBOOKLM_READ_ONLY_NOTEBOOK_ID: ${{ secrets.NOTEBOOKLM_READ_ONLY_NOTEBOOK_ID }}
         NOTEBOOKLM_GENERATION_NOTEBOOK_ID: ${{ secrets.NOTEBOOKLM_GENERATION_NOTEBOOK_ID }}
-      run: pytest tests/e2e -m "not variants" -s -v --tb=short
+      run: pytest tests/e2e -m "readonly and not variants" -s -v --tb=short
