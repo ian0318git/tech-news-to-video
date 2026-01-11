@@ -5,6 +5,7 @@ polling for results, and importing discovered sources.
 """
 
 import asyncio
+import warnings
 
 import pytest
 
@@ -231,11 +232,22 @@ class TestResearchImport:
 
         # Verify import
         assert isinstance(imported, list)
-        # Import may succeed or fail depending on source validity
-        # If sources were imported, they should have id and title
-        for src in imported:
-            if src:  # May be empty dict if import failed
-                assert "id" in src or "title" in src
+        # We requested to import sources, so we should get results
+        # If the API accepted our sources, each should have both id and title
+        if imported:
+            for src in imported:
+                assert "id" in src, f"Imported source missing 'id': {src}"
+                assert "title" in src, f"Imported source missing 'title': {src}"
+            # At least one source should have been imported
+            assert len(imported) > 0, "No sources were imported despite sources being available"
+        else:
+            # If nothing was imported, log for investigation but don't fail
+            # (could be rate limiting or source validity issues)
+            warnings.warn(
+                f"Import returned empty list for {len(sources_to_import)} sources. "
+                "This may indicate an API issue or invalid sources.",
+                stacklevel=2,
+            )
 
 
 @requires_auth

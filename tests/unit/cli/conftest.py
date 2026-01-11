@@ -35,8 +35,9 @@ def mock_fetch_tokens():
     """Mock fetch_tokens for CLI commands.
 
     After CLI refactoring, fetch_tokens is called via cli.helpers module.
+    Uses AsyncMock since fetch_tokens is an async function.
     """
-    with patch("notebooklm.cli.helpers.fetch_tokens") as mock:
+    with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock:
         mock.return_value = ("csrf_token", "session_id")
         yield mock
 

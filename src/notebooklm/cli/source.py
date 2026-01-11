@@ -22,6 +22,7 @@ from rich.table import Table
 from ..client import NotebookLMClient
 from .helpers import (
     console,
+    display_research_sources,
     get_source_type_display,
     json_output_response,
     require_notebook,
@@ -466,7 +467,8 @@ def source_add_research(
 
             if status.get("status") == "completed":
                 sources = status.get("sources", [])
-                console.print(f"\n[green]Found {len(sources)} sources[/green]")
+                console.print()
+                display_research_sources(sources)
 
                 if import_all and sources and task_id:
                     imported = await client.research.import_sources(nb_id, task_id, sources)
