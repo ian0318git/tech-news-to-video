@@ -262,34 +262,11 @@ class ChatAPI:
     # =========================================================================
 
     async def _get_source_ids(self, notebook_id: str) -> list[str]:
-        """Extract source IDs from notebook data."""
-        params = [notebook_id, None, [2], None, 0]
-        notebook_data = await self._core.rpc_call(
-            RPCMethod.GET_NOTEBOOK,
-            params,
-            source_path=f"/notebook/{notebook_id}",
-        )
+        """Extract source IDs from notebook data.
 
-        source_ids: list[str] = []
-        if not notebook_data or not isinstance(notebook_data, list):
-            return source_ids
-
-        try:
-            if len(notebook_data) > 0 and isinstance(notebook_data[0], list):
-                notebook_info = notebook_data[0]
-                if len(notebook_info) > 1 and isinstance(notebook_info[1], list):
-                    sources = notebook_info[1]
-                    for source in sources:
-                        if isinstance(source, list) and len(source) > 0:
-                            first = source[0]
-                            if isinstance(first, list) and len(first) > 0:
-                                sid = first[0]
-                                if isinstance(sid, str):
-                                    source_ids.append(sid)
-        except (IndexError, TypeError):
-            pass
-
-        return source_ids
+        Delegates to ClientCore.get_source_ids() for shared implementation.
+        """
+        return await self._core.get_source_ids(notebook_id)
 
     def _build_conversation_history(self, conversation_id: str) -> list | None:
         """Build conversation history for follow-up requests."""
