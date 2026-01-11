@@ -34,6 +34,26 @@ pytest tests/e2e -m e2e
 notebooklm --help
 ```
 
+## Pre-Commit Checks (REQUIRED before committing)
+
+**IMPORTANT:** Always run these checks before committing to avoid CI failures:
+
+```bash
+# Format code with ruff
+ruff format src/ tests/
+
+# Check for linting issues
+ruff check src/ tests/
+
+# Run tests
+pytest
+```
+
+Or use this one-liner:
+```bash
+ruff format src/ tests/ && ruff check src/ tests/ && pytest
+```
+
 ## Architecture
 
 ### Layered Design
