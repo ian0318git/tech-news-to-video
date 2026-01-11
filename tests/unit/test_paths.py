@@ -1,8 +1,11 @@
 """Tests for path resolution module."""
 
 import os
+import sys
 from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 
 from notebooklm.paths import (
     get_browser_profile_dir,
@@ -12,13 +15,19 @@ from notebooklm.paths import (
     get_storage_path,
 )
 
+# Windows clears HOME/USERPROFILE differently, so we need to preserve them
+# when testing default path behavior
+def _get_env_without_notebooklm_home():
+    """Get current env without NOTEBOOKLM_HOME, preserving HOME/USERPROFILE."""
+    env = os.environ.copy()
+    env.pop("NOTEBOOKLM_HOME", None)
+    return env
+
 
 class TestGetHomeDir:
     def test_default_path(self):
         """Without NOTEBOOKLM_HOME, returns ~/.notebooklm."""
-        with patch.dict(os.environ, {}, clear=True):
-            # Remove NOTEBOOKLM_HOME if it exists
-            os.environ.pop("NOTEBOOKLM_HOME", None)
+        with patch.dict(os.environ, _get_env_without_notebooklm_home(), clear=True):
             result = get_home_dir()
             assert result == Path.home() / ".notebooklm"
 
@@ -45,6 +54,7 @@ class TestGetHomeDir:
             assert result.exists()
             assert result.is_dir()
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="Unix permissions not applicable on Windows")
     def test_create_flag_sets_permissions(self, tmp_path):
         """create=True sets directory permissions to 0o700."""
         custom_path = tmp_path / "secure_home"
@@ -59,8 +69,7 @@ class TestGetHomeDir:
 class TestGetStoragePath:
     def test_default_path(self):
         """Returns storage_state.json in home dir."""
-        with patch.dict(os.environ, {}, clear=True):
-            os.environ.pop("NOTEBOOKLM_HOME", None)
+        with patch.dict(os.environ, _get_env_without_notebooklm_home(), clear=True):
             result = get_storage_path()
             assert result == Path.home() / ".notebooklm" / "storage_state.json"
 
@@ -75,8 +84,7 @@ class TestGetStoragePath:
 class TestGetContextPath:
     def test_default_path(self):
         """Returns context.json in home dir."""
-        with patch.dict(os.environ, {}, clear=True):
-            os.environ.pop("NOTEBOOKLM_HOME", None)
+        with patch.dict(os.environ, _get_env_without_notebooklm_home(), clear=True):
             result = get_context_path()
             assert result == Path.home() / ".notebooklm" / "context.json"
 
@@ -91,8 +99,7 @@ class TestGetContextPath:
 class TestGetBrowserProfileDir:
     def test_default_path(self):
         """Returns browser_profile in home dir."""
-        with patch.dict(os.environ, {}, clear=True):
-            os.environ.pop("NOTEBOOKLM_HOME", None)
+        with patch.dict(os.environ, _get_env_without_notebooklm_home(), clear=True):
             result = get_browser_profile_dir()
             assert result == Path.home() / ".notebooklm" / "browser_profile"
 
@@ -107,8 +114,7 @@ class TestGetBrowserProfileDir:
 class TestGetPathInfo:
     def test_default_paths(self):
         """Returns correct info with default paths."""
-        with patch.dict(os.environ, {}, clear=True):
-            os.environ.pop("NOTEBOOKLM_HOME", None)
+        with patch.dict(os.environ, _get_env_without_notebooklm_home(), clear=True):
             info = get_path_info()
 
             assert info["home_source"] == "default (~/.notebooklm)"
