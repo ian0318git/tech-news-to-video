@@ -245,7 +245,8 @@ class TestResearchImport:
             import warnings
             warnings.warn(
                 f"Import returned empty list for {len(sources_to_import)} sources. "
-                "This may indicate an API issue or invalid sources."
+                "This may indicate an API issue or invalid sources.",
+                stacklevel=2,
             )
 
 
