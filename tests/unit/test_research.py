@@ -383,3 +383,100 @@ class TestResearch:
             assert imported[0]["title"] == "First Article"
             assert imported[1]["id"] == "src_002"
             assert imported[1]["title"] == "Second Article"
+
+    @pytest.mark.asyncio
+    async def test_deep_research_workflow_poll_to_import(self, auth_tokens, httpx_mock):
+        """Test deep research workflow: sources from poll() work with import_sources().
+
+        Deep research returns sources in a different format (title only, no URL).
+        This test validates that deep research sources can be imported correctly.
+        """
+        # Step 1: Mock deep research start response
+        start_response = json.dumps(["task_deep_456", "report_789"])
+        start_chunk = json.dumps(
+            ["wrb.fr", RPCMethod.START_DEEP_RESEARCH.value, start_response, None, None]
+        )
+
+        # Step 2: Mock poll response with deep research sources
+        # Deep research format: [None, title, None, type, ...]
+        # Note: Deep research sources have NO URL, only titles
+        poll_sources = [
+            [None, "Deep Finding: AI Ethics Overview", None, 2],
+            [None, "Deep Finding: Machine Learning Trends", None, 2],
+            [None, "Deep Finding: Neural Network Architectures", None, 2],
+        ]
+        task_info = [
+            None,
+            ["deep AI research", 1],
+            1,
+            [poll_sources, "Comprehensive deep research summary"],
+            2,  # completed
+        ]
+        poll_response = json.dumps([[["task_deep_456", task_info]]])
+        poll_chunk = json.dumps(
+            ["wrb.fr", RPCMethod.POLL_RESEARCH.value, poll_response, None, None]
+        )
+
+        # Step 3: Mock import response for deep research sources
+        import_response = json.dumps([[
+            [["deep_src_001"], "Deep Finding: AI Ethics Overview"],
+            [["deep_src_002"], "Deep Finding: Machine Learning Trends"],
+        ]])
+        import_chunk = json.dumps(
+            ["wrb.fr", RPCMethod.IMPORT_RESEARCH.value, import_response, None, None]
+        )
+
+        # Add responses in order
+        httpx_mock.add_response(
+            content=f")]}}'\n{len(start_chunk)}\n{start_chunk}\n".encode(),
+            method="POST",
+        )
+        httpx_mock.add_response(
+            content=f")]}}'\n{len(poll_chunk)}\n{poll_chunk}\n".encode(),
+            method="POST",
+        )
+        httpx_mock.add_response(
+            content=f")]}}'\n{len(import_chunk)}\n{import_chunk}\n".encode(),
+            method="POST",
+        )
+
+        async with NotebookLMClient(auth_tokens) as client:
+            # Start deep research
+            start_result = await client.research.start(
+                notebook_id="nb_123",
+                query="deep AI research",
+                mode="deep",
+            )
+            assert start_result is not None
+            assert start_result["mode"] == "deep"
+            task_id = start_result["task_id"]
+
+            # Poll for results
+            poll_result = await client.research.poll("nb_123")
+            assert poll_result["status"] == "completed"
+            sources = poll_result["sources"]
+            assert len(sources) == 3
+
+            # Deep research sources should have title but empty URL
+            for src in sources:
+                assert "title" in src
+                assert "url" in src
+                assert src["url"] == ""  # Deep research has no URLs
+                assert "Deep Finding" in src["title"]
+
+            # User selects first 2 sources to import
+            sources_to_import = sources[:2]
+
+            # Import deep research sources - validate format compatibility
+            imported = await client.research.import_sources(
+                notebook_id="nb_123",
+                task_id=task_id,
+                sources=sources_to_import,
+            )
+
+            # Verify import succeeded
+            assert len(imported) == 2
+            assert imported[0]["id"] == "deep_src_001"
+            assert "AI Ethics" in imported[0]["title"]
+            assert imported[1]["id"] == "deep_src_002"
+            assert "Machine Learning" in imported[1]["title"]
