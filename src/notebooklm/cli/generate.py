@@ -292,7 +292,16 @@ def generate_audio(
 @click.option("--json", "json_output", is_flag=True, help="Output as JSON")
 @with_client
 def generate_video(
-    ctx, description, notebook_id, video_format, style, language, source_ids, wait, json_output, client_auth
+    ctx,
+    description,
+    notebook_id,
+    video_format,
+    style,
+    language,
+    source_ids,
+    wait,
+    json_output,
+    client_auth,
 ):
     """Generate video overview.
 
@@ -409,7 +418,9 @@ def generate_slide_deck(
 @click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
 @click.option("--wait/--no-wait", default=False, help="Wait for completion (default: no-wait)")
 @with_client
-def generate_quiz(ctx, description, notebook_id, quantity, difficulty, source_ids, wait, client_auth):
+def generate_quiz(
+    ctx, description, notebook_id, quantity, difficulty, source_ids, wait, client_auth
+):
     """Generate quiz.
 
     \b
@@ -458,7 +469,9 @@ def generate_quiz(ctx, description, notebook_id, quantity, difficulty, source_id
 @click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
 @click.option("--wait/--no-wait", default=False, help="Wait for completion (default: no-wait)")
 @with_client
-def generate_flashcards(ctx, description, notebook_id, quantity, difficulty, source_ids, wait, client_auth):
+def generate_flashcards(
+    ctx, description, notebook_id, quantity, difficulty, source_ids, wait, client_auth
+):
     """Generate flashcards.
 
     \b
@@ -643,7 +656,9 @@ def generate_mind_map(ctx, notebook_id, source_ids, client_auth):
 @click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
 @click.option("--wait/--no-wait", default=False, help="Wait for completion (default: no-wait)")
 @with_client
-def generate_report_cmd(ctx, description, report_format, notebook_id, source_ids, wait, client_auth):
+def generate_report_cmd(
+    ctx, description, report_format, notebook_id, source_ids, wait, client_auth
+):
     """Generate a report (briefing doc, study guide, blog post, or custom).
 
     \b

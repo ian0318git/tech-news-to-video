@@ -633,4 +633,6 @@ async def multi_source_notebook_id(client):
         try:
             await client.notebooks.delete(notebook_id)
         except Exception as e:
-            warnings.warn(f"Failed to delete multi-source notebook {notebook_id}: {e}", stacklevel=2)
+            warnings.warn(
+                f"Failed to delete multi-source notebook {notebook_id}: {e}", stacklevel=2
+            )

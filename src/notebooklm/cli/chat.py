@@ -42,7 +42,9 @@ def register_chat_commands(cli):
         help="Limit to specific source IDs (can be repeated)",
     )
     @with_client
-    def ask_cmd(ctx, question, notebook_id, conversation_id, new_conversation, source_ids, client_auth):
+    def ask_cmd(
+        ctx, question, notebook_id, conversation_id, new_conversation, source_ids, client_auth
+    ):
         """Ask a notebook a question.
 
         By default, continues the last conversation. Use --new to start fresh.
