@@ -5,6 +5,7 @@ polling for results, and importing discovered sources.
 """
 
 import asyncio
+import warnings
 
 import pytest
 
@@ -242,7 +243,6 @@ class TestResearchImport:
         else:
             # If nothing was imported, log for investigation but don't fail
             # (could be rate limiting or source validity issues)
-            import warnings
             warnings.warn(
                 f"Import returned empty list for {len(sources_to_import)} sources. "
                 "This may indicate an API issue or invalid sources.",
