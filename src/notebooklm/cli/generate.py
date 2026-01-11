@@ -38,6 +38,7 @@ from .helpers import (
     require_notebook,
     with_client,
 )
+from .options import json_option
 
 
 async def handle_generation_result(
@@ -92,7 +93,7 @@ async def handle_generation_result(
         task_id = result.get("artifact_id") or result.get("task_id")
         status = result
     elif isinstance(result, list) and len(result) > 0:
-        task_id = result[0]
+        task_id = result[0] if isinstance(result[0], str) else None
         status = result
 
     # Wait for completion if requested
@@ -107,46 +108,54 @@ async def handle_generation_result(
     return status if isinstance(status, GenerationStatus) else None
 
 
+def _extract_task_id(status: Any) -> str | None:
+    """Extract task ID from various status formats.
+
+    Handles GenerationStatus objects, dicts with task_id/artifact_id keys,
+    and lists where the first element is an ID string.
+    """
+    if hasattr(status, "task_id"):
+        return status.task_id
+    if isinstance(status, dict):
+        return status.get("task_id") or status.get("artifact_id")
+    if isinstance(status, list) and len(status) > 0 and isinstance(status[0], str):
+        return status[0]
+    return None
+
+
 def _output_generation_status(status: Any, artifact_type: str, json_output: bool) -> None:
     """Output generation status in appropriate format."""
+    is_complete = hasattr(status, "is_complete") and status.is_complete
+    is_failed = hasattr(status, "is_failed") and status.is_failed
+
     if json_output:
-        if hasattr(status, "is_complete") and status.is_complete:
+        if is_complete:
             json_output_response(
                 {
-                    "artifact_id": getattr(status, "task_id", None),
+                    "task_id": getattr(status, "task_id", None),
                     "status": "completed",
                     "url": getattr(status, "url", None),
                 }
             )
-        elif hasattr(status, "is_failed") and status.is_failed:
+        elif is_failed:
             json_error_response(
                 "GENERATION_FAILED",
                 getattr(status, "error", None) or f"{artifact_type.title()} generation failed",
             )
         else:
-            # Handle various result formats: GenerationStatus, dict, or list
-            artifact_id = (
-                getattr(status, "task_id", None)
-                or (status.get("artifact_id") if isinstance(status, dict) else None)
-                or (status[0] if isinstance(status, list) and len(status) > 0 else None)
-            )
-            json_output_response({"artifact_id": artifact_id, "status": "pending"})
+            task_id = _extract_task_id(status)
+            json_output_response({"task_id": task_id, "status": "pending"})
     else:
-        if hasattr(status, "is_complete") and status.is_complete:
+        if is_complete:
             url = getattr(status, "url", None)
             if url:
                 console.print(f"[green]{artifact_type.title()} ready:[/green] {url}")
             else:
                 console.print(f"[green]{artifact_type.title()} ready[/green]")
-        elif hasattr(status, "is_failed") and status.is_failed:
+        elif is_failed:
             console.print(f"[red]Failed:[/red] {getattr(status, 'error', 'Unknown error')}")
         else:
-            # Extract task_id for cleaner display
-            task_id = (
-                getattr(status, "task_id", None)
-                or (status.get("artifact_id") if isinstance(status, dict) else None)
-                or (status[0] if isinstance(status, list) and len(status) > 0 else None)
-            )
+            task_id = _extract_task_id(status)
             console.print(f"[yellow]Started:[/yellow] {task_id or status}")
 
 
@@ -203,7 +212,7 @@ def generate():
 @click.option("--language", default="en")
 @click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
 @click.option("--wait/--no-wait", default=False, help="Wait for completion (default: no-wait)")
-@click.option("--json", "json_output", is_flag=True, help="Output as JSON")
+@json_option
 @with_client
 def generate_audio(
     ctx,
@@ -218,6 +227,9 @@ def generate_audio(
     client_auth,
 ):
     """Generate audio overview (podcast).
+
+    \b
+    Use --json for machine-readable output.
 
     \b
     Example:
@@ -289,7 +301,7 @@ def generate_audio(
 @click.option("--language", default="en")
 @click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
 @click.option("--wait/--no-wait", default=False, help="Wait for completion (default: no-wait)")
-@click.option("--json", "json_output", is_flag=True, help="Output as JSON")
+@json_option
 @with_client
 def generate_video(
     ctx,
@@ -304,6 +316,9 @@ def generate_video(
     client_auth,
 ):
     """Generate video overview.
+
+    \b
+    Use --json for machine-readable output.
 
     \b
     Example:
@@ -367,11 +382,24 @@ def generate_video(
 @click.option("--language", default="en")
 @click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
 @click.option("--wait/--no-wait", default=False, help="Wait for completion (default: no-wait)")
+@json_option
 @with_client
 def generate_slide_deck(
-    ctx, description, notebook_id, deck_format, deck_length, language, source_ids, wait, client_auth
+    ctx,
+    description,
+    notebook_id,
+    deck_format,
+    deck_length,
+    language,
+    source_ids,
+    wait,
+    json_output,
+    client_auth,
 ):
     """Generate slide deck.
+
+    \b
+    Use --json for machine-readable output.
 
     \b
     Example:
@@ -399,7 +427,7 @@ def generate_slide_deck(
                 slide_format=format_map[deck_format],
                 slide_length=length_map[deck_length],
             )
-            await handle_generation_result(client, nb_id, result, "slide deck", wait)
+            await handle_generation_result(client, nb_id, result, "slide deck", wait, json_output)
 
     return _run()
 
@@ -417,11 +445,15 @@ def generate_slide_deck(
 @click.option("--difficulty", type=click.Choice(["easy", "medium", "hard"]), default="medium")
 @click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
 @click.option("--wait/--no-wait", default=False, help="Wait for completion (default: no-wait)")
+@json_option
 @with_client
 def generate_quiz(
-    ctx, description, notebook_id, quantity, difficulty, source_ids, wait, client_auth
+    ctx, description, notebook_id, quantity, difficulty, source_ids, wait, json_output, client_auth
 ):
     """Generate quiz.
+
+    \b
+    Use --json for machine-readable output.
 
     \b
     Example:
@@ -450,7 +482,7 @@ def generate_quiz(
                 quantity=quantity_map[quantity],
                 difficulty=difficulty_map[difficulty],
             )
-            await handle_generation_result(client, nb_id, result, "quiz", wait)
+            await handle_generation_result(client, nb_id, result, "quiz", wait, json_output)
 
     return _run()
 
@@ -468,11 +500,15 @@ def generate_quiz(
 @click.option("--difficulty", type=click.Choice(["easy", "medium", "hard"]), default="medium")
 @click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
 @click.option("--wait/--no-wait", default=False, help="Wait for completion (default: no-wait)")
+@json_option
 @with_client
 def generate_flashcards(
-    ctx, description, notebook_id, quantity, difficulty, source_ids, wait, client_auth
+    ctx, description, notebook_id, quantity, difficulty, source_ids, wait, json_output, client_auth
 ):
     """Generate flashcards.
+
+    \b
+    Use --json for machine-readable output.
 
     \b
     Example:
@@ -501,7 +537,7 @@ def generate_flashcards(
                 quantity=quantity_map[quantity],
                 difficulty=difficulty_map[difficulty],
             )
-            await handle_generation_result(client, nb_id, result, "flashcards", wait)
+            await handle_generation_result(client, nb_id, result, "flashcards", wait, json_output)
 
     return _run()
 
@@ -528,11 +564,24 @@ def generate_flashcards(
 @click.option("--language", default="en")
 @click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
 @click.option("--wait/--no-wait", default=False, help="Wait for completion (default: no-wait)")
+@json_option
 @with_client
 def generate_infographic(
-    ctx, description, notebook_id, orientation, detail, language, source_ids, wait, client_auth
+    ctx,
+    description,
+    notebook_id,
+    orientation,
+    detail,
+    language,
+    source_ids,
+    wait,
+    json_output,
+    client_auth,
 ):
     """Generate infographic.
+
+    \b
+    Use --json for machine-readable output.
 
     \b
     Example:
@@ -562,7 +611,7 @@ def generate_infographic(
                 orientation=orientation_map[orientation],
                 detail_level=detail_map[detail],
             )
-            await handle_generation_result(client, nb_id, result, "infographic", wait)
+            await handle_generation_result(client, nb_id, result, "infographic", wait, json_output)
 
     return _run()
 
@@ -579,9 +628,15 @@ def generate_infographic(
 @click.option("--language", default="en")
 @click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
 @click.option("--wait/--no-wait", default=False, help="Wait for completion (default: no-wait)")
+@json_option
 @with_client
-def generate_data_table(ctx, description, notebook_id, language, source_ids, wait, client_auth):
+def generate_data_table(
+    ctx, description, notebook_id, language, source_ids, wait, json_output, client_auth
+):
     """Generate data table.
+
+    \b
+    Use --json for machine-readable output.
 
     \b
     Example:
@@ -596,7 +651,7 @@ def generate_data_table(ctx, description, notebook_id, language, source_ids, wai
             result = await client.artifacts.generate_data_table(
                 nb_id, source_ids=sources, language=language, instructions=description
             )
-            await handle_generation_result(client, nb_id, result, "data table", wait)
+            await handle_generation_result(client, nb_id, result, "data table", wait, json_output)
 
     return _run()
 
@@ -610,31 +665,54 @@ def generate_data_table(ctx, description, notebook_id, language, source_ids, wai
     help="Notebook ID (uses current if not set)",
 )
 @click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
+@json_option
 @with_client
-def generate_mind_map(ctx, notebook_id, source_ids, client_auth):
-    """Generate mind map."""
+def generate_mind_map(ctx, notebook_id, source_ids, json_output, client_auth):
+    """Generate mind map.
+
+    \b
+    Use --json for machine-readable output.
+    """
     nb_id = require_notebook(notebook_id)
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
             sources = list(source_ids) if source_ids else None
-            with console.status("Generating mind map..."):
-                result = await client.artifacts.generate_mind_map(nb_id, source_ids=sources)
 
-            if result:
-                console.print("[green]Mind map generated:[/green]")
-                if isinstance(result, dict):
-                    console.print(f"  Note ID: {result.get('note_id', '-')}")
-                    mind_map = result.get("mind_map", {})
-                    if isinstance(mind_map, dict):
-                        console.print(f"  Root: {mind_map.get('name', '-')}")
-                        console.print(f"  Children: {len(mind_map.get('children', []))} nodes")
-                else:
-                    console.print(result)
+            # Show status spinner only for console output
+            if json_output:
+                result = await client.artifacts.generate_mind_map(nb_id, source_ids=sources)
             else:
-                console.print("[yellow]No result[/yellow]")
+                with console.status("Generating mind map..."):
+                    result = await client.artifacts.generate_mind_map(nb_id, source_ids=sources)
+
+            _output_mind_map_result(result, json_output)
 
     return _run()
+
+
+def _output_mind_map_result(result: Any, json_output: bool) -> None:
+    """Output mind map result in appropriate format."""
+    if not result:
+        if json_output:
+            json_error_response("GENERATION_FAILED", "Mind map generation failed")
+        else:
+            console.print("[yellow]No result[/yellow]")
+        return
+
+    if json_output:
+        json_output_response(result)
+        return
+
+    console.print("[green]Mind map generated:[/green]")
+    if isinstance(result, dict):
+        console.print(f"  Note ID: {result.get('note_id', '-')}")
+        mind_map = result.get("mind_map", {})
+        if isinstance(mind_map, dict):
+            console.print(f"  Root: {mind_map.get('name', '-')}")
+            console.print(f"  Children: {len(mind_map.get('children', []))} nodes")
+    else:
+        console.print(result)
 
 
 @generate.command("report")
@@ -655,11 +733,15 @@ def generate_mind_map(ctx, notebook_id, source_ids, client_auth):
 )
 @click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
 @click.option("--wait/--no-wait", default=False, help="Wait for completion (default: no-wait)")
+@json_option
 @with_client
 def generate_report_cmd(
-    ctx, description, report_format, notebook_id, source_ids, wait, client_auth
+    ctx, description, report_format, notebook_id, source_ids, wait, json_output, client_auth
 ):
     """Generate a report (briefing doc, study guide, blog post, or custom).
+
+    \b
+    Use --json for machine-readable output.
 
     \b
     Examples:
@@ -704,6 +786,6 @@ def generate_report_cmd(
                 report_format=report_format_enum,
                 custom_prompt=custom_prompt,
             )
-            await handle_generation_result(client, nb_id, result, format_display, wait)
+            await handle_generation_result(client, nb_id, result, format_display, wait, json_output)
 
     return _run()
