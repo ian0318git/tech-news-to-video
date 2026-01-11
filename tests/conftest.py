@@ -1,6 +1,7 @@
 """Shared test fixtures."""
 
 import json
+import os
 
 import pytest
 
@@ -8,11 +9,17 @@ from notebooklm.rpc import RPCMethod
 
 
 def pytest_configure(config):
-    """Register custom markers."""
+    """Register custom markers and configure test environment."""
     config.addinivalue_line(
         "markers",
         "vcr: marks tests that use VCR cassettes (may be skipped if cassettes unavailable)",
     )
+    # Disable Rich/Click formatting in tests to avoid ANSI escape codes in output
+    # This ensures consistent test assertions regardless of -s flag
+    # NO_COLOR disables colors, TERM=dumb disables all formatting (bold, etc.)
+    # Force these values to ensure consistent behavior across all environments
+    os.environ["NO_COLOR"] = "1"
+    os.environ["TERM"] = "dumb"
 
 
 @pytest.fixture
