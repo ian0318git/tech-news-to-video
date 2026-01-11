@@ -210,7 +210,7 @@ class ArtifactsAPI:
             GenerationStatus with task_id for polling.
         """
         if source_ids is None:
-            source_ids = await self._get_source_ids(notebook_id)
+            source_ids = await self._core.get_source_ids(notebook_id)
 
         source_ids_triple = [[[sid]] for sid in source_ids] if source_ids else []
         source_ids_double = [[sid] for sid in source_ids] if source_ids else []
@@ -267,7 +267,7 @@ class ArtifactsAPI:
             GenerationStatus with task_id for polling.
         """
         if source_ids is None:
-            source_ids = await self._get_source_ids(notebook_id)
+            source_ids = await self._core.get_source_ids(notebook_id)
 
         source_ids_triple = [[[sid]] for sid in source_ids] if source_ids else []
         source_ids_double = [[sid] for sid in source_ids] if source_ids else []
@@ -324,7 +324,7 @@ class ArtifactsAPI:
             GenerationStatus with task_id for polling.
         """
         if source_ids is None:
-            source_ids = await self._get_source_ids(notebook_id)
+            source_ids = await self._core.get_source_ids(notebook_id)
 
         format_configs = {
             ReportFormat.BRIEFING_DOC: {
@@ -440,7 +440,7 @@ class ArtifactsAPI:
             GenerationStatus with task_id for polling.
         """
         if source_ids is None:
-            source_ids = await self._get_source_ids(notebook_id)
+            source_ids = await self._core.get_source_ids(notebook_id)
 
         source_ids_triple = [[[sid]] for sid in source_ids] if source_ids else []
         quantity_code = quantity.value if quantity else None
@@ -497,7 +497,7 @@ class ArtifactsAPI:
             GenerationStatus with task_id for polling.
         """
         if source_ids is None:
-            source_ids = await self._get_source_ids(notebook_id)
+            source_ids = await self._core.get_source_ids(notebook_id)
 
         source_ids_triple = [[[sid]] for sid in source_ids] if source_ids else []
         quantity_code = quantity.value if quantity else None
@@ -555,7 +555,7 @@ class ArtifactsAPI:
             GenerationStatus with task_id for polling.
         """
         if source_ids is None:
-            source_ids = await self._get_source_ids(notebook_id)
+            source_ids = await self._core.get_source_ids(notebook_id)
 
         source_ids_triple = [[[sid]] for sid in source_ids] if source_ids else []
         orientation_code = orientation.value if orientation else None
@@ -607,7 +607,7 @@ class ArtifactsAPI:
             GenerationStatus with task_id for polling.
         """
         if source_ids is None:
-            source_ids = await self._get_source_ids(notebook_id)
+            source_ids = await self._core.get_source_ids(notebook_id)
 
         source_ids_triple = [[[sid]] for sid in source_ids] if source_ids else []
         format_code = slide_format.value if slide_format else None
@@ -657,7 +657,7 @@ class ArtifactsAPI:
             GenerationStatus with task_id for polling.
         """
         if source_ids is None:
-            source_ids = await self._get_source_ids(notebook_id)
+            source_ids = await self._core.get_source_ids(notebook_id)
 
         source_ids_triple = [[[sid]] for sid in source_ids] if source_ids else []
 
@@ -708,7 +708,7 @@ class ArtifactsAPI:
         import json as json_module
 
         if source_ids is None:
-            source_ids = await self._get_source_ids(notebook_id)
+            source_ids = await self._core.get_source_ids(notebook_id)
 
         source_ids_nested = [[[sid]] for sid in source_ids] if source_ids else []
 
@@ -1259,7 +1259,7 @@ class ArtifactsAPI:
             List of ReportSuggestion objects.
         """
         if source_ids is None:
-            source_ids = await self._get_source_ids(notebook_id)
+            source_ids = await self._core.get_source_ids(notebook_id)
 
         source_ids_nested = [[[sid]] for sid in source_ids] if source_ids else []
 
@@ -1345,13 +1345,6 @@ class ArtifactsAPI:
         if result and isinstance(result, list) and len(result) > 0:
             return result[0] if isinstance(result[0], list) else result
         return []
-
-    async def _get_source_ids(self, notebook_id: str) -> builtins.list[str]:
-        """Extract source IDs from notebook data.
-
-        Delegates to ClientCore.get_source_ids() for shared implementation.
-        """
-        return await self._core.get_source_ids(notebook_id)
 
     async def _download_urls_batch(
         self, urls_and_paths: builtins.list[tuple[str, str]]

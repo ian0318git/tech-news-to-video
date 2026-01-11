@@ -2,7 +2,7 @@
 
 Tests that source_ids are correctly handled when:
 1. Explicitly passed (subset of sources)
-2. None (uses all sources via _get_source_ids)
+2. None (uses all sources via core.get_source_ids)
 
 Verifies correct encoding of source IDs in RPC parameters:
 - source_ids_triple = [[[sid]] for sid in source_ids]
@@ -615,15 +615,3 @@ class TestGetSourceIds:
 
         # Should only extract the valid source
         assert source_ids == ["valid_id"]
-
-    @pytest.mark.asyncio
-    async def test_api_get_source_ids_delegates_to_core(self, mock_core, mock_notes_api):
-        """Test that API._get_source_ids delegates to core.get_source_ids."""
-        api = ArtifactsAPI(mock_core, mock_notes_api)
-
-        mock_core.get_source_ids.return_value = ["src_a", "src_b"]
-
-        source_ids = await api._get_source_ids("nb_123")
-
-        mock_core.get_source_ids.assert_called_once_with("nb_123")
-        assert source_ids == ["src_a", "src_b"]

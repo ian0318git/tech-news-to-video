@@ -76,7 +76,7 @@ class ChatAPI:
             )
         """
         if source_ids is None:
-            source_ids = await self._get_source_ids(notebook_id)
+            source_ids = await self._core.get_source_ids(notebook_id)
 
         is_new_conversation = conversation_id is None
         if is_new_conversation:
@@ -260,13 +260,6 @@ class ChatAPI:
     # =========================================================================
     # Private Helpers
     # =========================================================================
-
-    async def _get_source_ids(self, notebook_id: str) -> list[str]:
-        """Extract source IDs from notebook data.
-
-        Delegates to ClientCore.get_source_ids() for shared implementation.
-        """
-        return await self._core.get_source_ids(notebook_id)
 
     def _build_conversation_history(self, conversation_id: str) -> list | None:
         """Build conversation history for follow-up requests."""
