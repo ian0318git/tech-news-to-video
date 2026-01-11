@@ -15,6 +15,7 @@ from functools import wraps
 
 import click
 from rich.console import Console
+from rich.table import Table
 
 from ..auth import (
     AuthTokens,
@@ -388,6 +389,29 @@ def json_error_response(code: str, message: str) -> None:
     """Print JSON error and exit (no colors for machine parsing)."""
     click.echo(json.dumps({"error": True, "code": code, "message": message}, indent=2))
     raise SystemExit(1)
+
+
+def display_research_sources(sources: list[dict], max_display: int = 10) -> None:
+    """Display research sources in a formatted table.
+
+    Args:
+        sources: List of source dicts with 'title' and 'url' keys
+        max_display: Maximum sources to show before truncating (default 10)
+    """
+    console.print(f"[bold]Found {len(sources)} sources[/bold]")
+
+    if sources:
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Title", style="cyan")
+        table.add_column("URL", style="dim")
+        for src in sources[:max_display]:
+            table.add_row(
+                src.get("title", "Untitled")[:50],
+                src.get("url", "")[:60],
+            )
+        if len(sources) > max_display:
+            table.add_row(f"... and {len(sources) - max_display} more", "")
+        console.print(table)
 
 
 # =============================================================================

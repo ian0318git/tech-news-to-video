@@ -8,11 +8,11 @@ Commands:
 import asyncio
 
 import click
-from rich.table import Table
 
 from ..client import NotebookLMClient
 from .helpers import (
     console,
+    display_research_sources,
     json_output_response,
     require_notebook,
     with_client,
@@ -84,20 +84,7 @@ def research_status(ctx, notebook_id, json_output, client_auth):
                 sources = status.get("sources", [])
                 summary = status.get("summary", "")
                 console.print(f"[green]Research completed:[/green] {query}")
-                console.print(f"[bold]Found {len(sources)} sources[/bold]")
-
-                if sources:
-                    table = Table(show_header=True, header_style="bold")
-                    table.add_column("Title", style="cyan")
-                    table.add_column("URL", style="dim")
-                    for src in sources[:10]:
-                        table.add_row(
-                            src.get("title", "Untitled")[:50],
-                            src.get("url", "")[:60],
-                        )
-                    if len(sources) > 10:
-                        table.add_row(f"... and {len(sources) - 10} more", "")
-                    console.print(table)
+                display_research_sources(sources)
 
                 if summary:
                     console.print(f"\n[bold]Summary:[/bold]\n{summary[:500]}")
@@ -197,7 +184,7 @@ def research_wait(ctx, notebook_id, timeout, interval, import_all, json_output, 
                 json_output_response(result)
             else:
                 console.print(f"[green]✓ Research completed:[/green] {query}")
-                console.print(f"[bold]Found {len(sources)} sources[/bold]")
+                display_research_sources(sources)
 
                 if import_all and sources and task_id:
                     with console.status("Importing sources..."):
