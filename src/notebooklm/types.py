@@ -11,6 +11,7 @@ Usage:
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 # Re-export enums from rpc/types.py for convenience
 from .rpc.types import (
@@ -315,7 +316,14 @@ class Source:
                 # Determine source type
                 source_type = "text"
                 if url:
-                    source_type = "youtube" if "youtube.com" in url or "youtu.be" in url else "url"
+                    hostname = (urlparse(url).hostname or "").lower()
+                    # Check exact match or proper subdomain (leading dot ensures boundary)
+                    is_youtube = (
+                        hostname == "youtube.com"
+                        or hostname.endswith(".youtube.com")
+                        or hostname == "youtu.be"
+                    )
+                    source_type = "youtube" if is_youtube else "url"
                 elif title and (title.endswith(".pdf") or title.endswith(".txt")):
                     source_type = "text_file"
 

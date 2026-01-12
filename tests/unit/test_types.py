@@ -170,6 +170,37 @@ class TestSource:
 
         assert source.source_type == "youtube"
 
+    @pytest.mark.parametrize(
+        "url,expected_type",
+        [
+            # Valid YouTube URLs (should be detected as "youtube")
+            ("https://www.youtube.com/watch?v=abc", "youtube"),
+            ("https://m.youtube.com/watch?v=abc", "youtube"),
+            ("https://music.youtube.com/watch?v=abc", "youtube"),
+            ("https://youtu.be/abc", "youtube"),
+            ("https://YOUTUBE.COM/watch?v=abc", "youtube"),  # Case insensitive
+            ("https://YouTube.Com/watch?v=abc", "youtube"),  # Mixed case
+            # Invalid URLs - should NOT be detected as YouTube
+            ("https://evil.com/youtube.com/fake", "url"),  # youtube.com in path
+            ("https://youtube.com.fake.com/video", "url"),  # Subdomain of fake.com
+            ("https://notyoutube.com/video", "url"),  # Different domain
+            ("https://example.com?redirect=youtube.com", "url"),  # In query param
+        ],
+    )
+    def test_from_api_response_youtube_url_detection(self, url, expected_type):
+        """Test YouTube URL detection handles edge cases correctly."""
+        data = [
+            [
+                [
+                    ["src_test"],
+                    "Test Video",
+                    [None, None, None, None, None, None, None, [url]],
+                ]
+            ]
+        ]
+        source = Source.from_api_response(data)
+        assert source.source_type == expected_type
+
     def test_from_api_response_empty_data_raises(self):
         """Test that empty data raises ValueError."""
         with pytest.raises(ValueError, match="Invalid source data"):
