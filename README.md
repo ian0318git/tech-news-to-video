@@ -48,9 +48,15 @@ pip install notebooklm-py
 pip install "notebooklm-py[browser]"
 playwright install chromium
 ```
-See [Installation](#installation) for options or jump to [Quick Start](#quick-start).
+See [Installation](#installation) for options.
 
 ## Quick Start
+
+<p align="center">
+  <a href="https://asciinema.org/a/767284" target="_blank"><img src="https://asciinema.org/a/767284.svg" width="600" /></a>
+  <br>
+  <em>16-minute session compressed to 30 seconds</em>
+</p>
 
 ### CLI
 
