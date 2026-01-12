@@ -199,6 +199,13 @@ class ResearchAPI:
 
         Returns:
             List of imported sources with 'id' and 'title'.
+
+        Note:
+            The API response can be incomplete - it may return fewer items than
+            were actually imported. All requested sources typically get imported
+            successfully, but the return value may not reflect all of them.
+            To reliably verify imports, check the notebook's source list using
+            `client.sources.list(notebook_id)` after calling this method.
         """
         if not sources:
             return []
