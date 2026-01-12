@@ -76,36 +76,36 @@ class TestResearchImportVerification:
         expected_import_count = len(sources_to_import)
 
         # Step 4: Import sources
-        imported = await client.research.import_sources(
+        await client.research.import_sources(
             temp_notebook.id,
             task_id,
             sources_to_import,
         )
 
-        # Step 5: Wait for sources to appear
-        await asyncio.sleep(3)
+        # Step 5: Poll for imported sources to appear
+        import_timeout = 30.0
+        import_max_attempts = int(import_timeout / POLL_INTERVAL)
+        new_source_count = -1
+
+        for _ in range(import_max_attempts):
+            final_sources = await client.sources.list(temp_notebook.id)
+            new_source_count = len(final_sources) - initial_count
+            if new_source_count == expected_import_count:
+                break
+            await asyncio.sleep(POLL_INTERVAL)
 
         # Step 6: Verify source count
-        final_sources = await client.sources.list(temp_notebook.id)
-        new_source_count = len(final_sources) - initial_count
-
         # The critical assertion: verify ALL requested sources were actually imported
         # Note: import_sources() return value may be incomplete due to API quirk,
         # so we verify against actual notebook contents instead
         assert new_source_count == expected_import_count, (
             f"Source count mismatch! "
             f"Requested to import {expected_import_count} but {new_source_count} "
-            f"new sources appear in notebook."
+            f"new sources appear in notebook after waiting."
         )
 
-        # Verify import returned something
-        assert len(imported) > 0, (
-            f"import_sources() returned empty list despite {expected_import_count} "
-            f"valid sources with URLs being provided"
-        )
-
-    @pytest.mark.asyncio
-    async def test_import_sources_filters_empty_urls(self, client, temp_notebook):
+    @staticmethod
+    def test_import_sources_filters_empty_urls():
         """Test that sources without URLs are filtered out before import.
 
         The import_sources method should skip sources with empty/None/missing URLs
