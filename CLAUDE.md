@@ -215,6 +215,11 @@ For each review comment (especially from `gemini-code-assist`):
 2. Make the suggested fix if it improves the code
 3. Commit with a descriptive message referencing the feedback
 4. Push and re-check CI
+5. **Reply to the review thread** confirming the fix:
+   ```bash
+   gh api repos/teng-lin/notebooklm-py/pulls/<PR>/comments/<COMMENT_ID>/replies \
+     -f body="Addressed in commit <SHA>: <brief description>"
+   ```
 
 ### 4. Verify Final State
 ```bash
