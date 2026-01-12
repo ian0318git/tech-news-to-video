@@ -14,6 +14,7 @@ from ..types import ChatMode
 from .helpers import (
     console,
     get_current_conversation,
+    json_output_response,
     require_notebook,
     set_current_conversation,
     with_client,
@@ -41,13 +42,25 @@ def register_chat_commands(cli):
         multiple=True,
         help="Limit to specific source IDs (can be repeated)",
     )
+    @click.option(
+        "--json", "json_output", is_flag=True, help="Output as JSON (includes references)"
+    )
     @with_client
     def ask_cmd(
-        ctx, question, notebook_id, conversation_id, new_conversation, source_ids, client_auth
+        ctx,
+        question,
+        notebook_id,
+        conversation_id,
+        new_conversation,
+        source_ids,
+        json_output,
+        client_auth,
     ):
         """Ask a notebook a question.
 
         By default, continues the last conversation. Use --new to start fresh.
+        The answer includes inline citations like [1], [2] that reference sources.
+        Use --json to get structured output with source IDs for each reference.
 
         \b
         Example:
@@ -55,6 +68,7 @@ def register_chat_commands(cli):
           notebooklm ask --new "start fresh question"
           notebooklm ask -c <id> "continue this one"
           notebooklm ask -s src_001 -s src_002 "question about specific sources"
+          notebooklm ask "explain X" --json     # Get answer with source references
         """
         nb_id = require_notebook(notebook_id)
 
@@ -62,8 +76,8 @@ def register_chat_commands(cli):
             async with NotebookLMClient(client_auth) as client:
                 effective_conv_id = None
                 if new_conversation:
-                    effective_conv_id = None
-                    console.print("[dim]Starting new conversation...[/dim]")
+                    if not json_output:
+                        console.print("[dim]Starting new conversation...[/dim]")
                 elif conversation_id:
                     effective_conv_id = conversation_id
                 else:
@@ -76,9 +90,10 @@ def register_chat_commands(cli):
                                 effective_conv_id = (
                                     last_conv[0] if isinstance(last_conv, list) else str(last_conv)
                                 )
-                                console.print(
-                                    f"[dim]Continuing conversation {effective_conv_id[:8]}...[/dim]"
-                                )
+                                if not json_output:
+                                    console.print(
+                                        f"[dim]Continuing conversation {effective_conv_id[:8]}...[/dim]"
+                                    )
                         except Exception:
                             pass
 
@@ -90,6 +105,15 @@ def register_chat_commands(cli):
 
                 if result.conversation_id:
                     set_current_conversation(result.conversation_id)
+
+                if json_output:
+                    from dataclasses import asdict
+
+                    data = asdict(result)
+                    # Exclude raw_response from CLI output for brevity
+                    del data["raw_response"]
+                    json_output_response(data)
+                    return
 
                 console.print("[bold cyan]Answer:[/bold cyan]")
                 console.print(result.answer)

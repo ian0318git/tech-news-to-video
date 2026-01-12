@@ -6,6 +6,7 @@ from notebooklm.types import (
     Artifact,
     AskResult,
     ChatMode,
+    ChatReference,
     ConversationTurn,
     GenerationStatus,
     Note,
@@ -13,6 +14,7 @@ from notebooklm.types import (
     NotebookDescription,
     ReportSuggestion,
     Source,
+    SourceFulltext,
 )
 
 
@@ -509,3 +511,199 @@ class TestAskResult:
         assert result.turn_number == 1
         assert result.is_follow_up is False
         assert result.raw_response == "Full raw response"
+
+    def test_creation_with_references(self):
+        """Test AskResult creation with references."""
+        refs = [
+            ChatReference(source_id="src-1", citation_number=1),
+            ChatReference(source_id="src-2", citation_number=2),
+        ]
+        result = AskResult(
+            answer="Based on [1] and [2]...",
+            conversation_id="conv_123",
+            turn_number=1,
+            is_follow_up=False,
+            references=refs,
+        )
+
+        assert len(result.references) == 2
+        assert result.references[0].source_id == "src-1"
+        assert result.references[1].citation_number == 2
+
+    def test_default_references_empty(self):
+        """Test that references defaults to empty list."""
+        result = AskResult(
+            answer="Answer",
+            conversation_id="conv_123",
+            turn_number=1,
+            is_follow_up=False,
+        )
+
+        assert result.references == []
+
+
+class TestChatReference:
+    def test_creation_minimal(self):
+        """Test ChatReference with just source_id."""
+        ref = ChatReference(source_id="abc123-def456-789")
+
+        assert ref.source_id == "abc123-def456-789"
+        assert ref.citation_number is None
+        assert ref.start_char is None
+        assert ref.end_char is None
+
+    def test_creation_full(self):
+        """Test ChatReference with all fields."""
+        ref = ChatReference(
+            source_id="abc123-def456-789",
+            citation_number=1,
+            start_char=100,
+            end_char=200,
+        )
+
+        assert ref.source_id == "abc123-def456-789"
+        assert ref.citation_number == 1
+        assert ref.start_char == 100
+        assert ref.end_char == 200
+
+
+class TestSourceFulltext:
+    def test_creation(self):
+        """Test SourceFulltext creation."""
+        fulltext = SourceFulltext(
+            source_id="src-123",
+            title="My Source",
+            content="This is the full content of the source.",
+            source_type=5,  # web_page
+            url="https://example.com",
+            char_count=40,
+        )
+
+        assert fulltext.source_id == "src-123"
+        assert fulltext.title == "My Source"
+        assert fulltext.content == "This is the full content of the source."
+        assert fulltext.source_type == 5
+        assert fulltext.url == "https://example.com"
+        assert fulltext.char_count == 40
+
+    def test_creation_minimal(self):
+        """Test SourceFulltext with minimal fields."""
+        fulltext = SourceFulltext(
+            source_id="src-123",
+            title="Title",
+            content="Content",
+        )
+
+        assert fulltext.source_id == "src-123"
+        assert fulltext.source_type is None
+        assert fulltext.url is None
+        assert fulltext.char_count == 0
+
+    def test_find_citation_context_single_match(self):
+        """Test finding a single citation in content."""
+        fulltext = SourceFulltext(
+            source_id="src-123",
+            title="Test",
+            content="Before text. The citation text appears here. After text.",
+        )
+
+        matches = fulltext.find_citation_context("The citation text", context_chars=10)
+
+        assert len(matches) == 1
+        context, pos = matches[0]
+        assert pos == 13  # Position of "The citation text"
+        assert "The citation text" in context
+
+    def test_find_citation_context_multiple_matches(self):
+        """Test finding multiple non-overlapping matches."""
+        fulltext = SourceFulltext(
+            source_id="src-123",
+            title="Test",
+            content="First keyword here. Some other text. Second keyword here.",
+        )
+
+        matches = fulltext.find_citation_context("keyword", context_chars=5)
+
+        assert len(matches) == 2
+        assert matches[0][1] == 6  # Position of first "keyword"
+        assert matches[1][1] == 44  # Position of second "keyword"
+
+    def test_find_citation_context_no_match(self):
+        """Test when citation is not found."""
+        fulltext = SourceFulltext(
+            source_id="src-123",
+            title="Test",
+            content="Some content that doesn't contain the search term.",
+        )
+
+        matches = fulltext.find_citation_context("nonexistent")
+
+        assert matches == []
+
+    def test_find_citation_context_empty_cited_text(self):
+        """Test with empty cited_text."""
+        fulltext = SourceFulltext(
+            source_id="src-123",
+            title="Test",
+            content="Some content here.",
+        )
+
+        assert fulltext.find_citation_context("") == []
+        assert fulltext.find_citation_context(None) == []  # type: ignore
+
+    def test_find_citation_context_empty_content(self):
+        """Test with empty content."""
+        fulltext = SourceFulltext(
+            source_id="src-123",
+            title="Test",
+            content="",
+        )
+
+        matches = fulltext.find_citation_context("search term")
+
+        assert matches == []
+
+    def test_find_citation_context_long_citation_truncated(self):
+        """Test that citations >40 chars are truncated for search."""
+        long_citation = "A" * 50  # 50 chars, should be truncated to 40
+        fulltext = SourceFulltext(
+            source_id="src-123",
+            title="Test",
+            content="Prefix " + "A" * 40 + "B" * 10 + " Suffix",  # Only first 40 As match
+        )
+
+        matches = fulltext.find_citation_context(long_citation, context_chars=5)
+
+        assert len(matches) == 1
+        context, pos = matches[0]
+        assert pos == 7  # Position after "Prefix "
+        # Context should use search_text length (40), not cited_text length (50)
+        assert len(context) <= 5 + 40 + 5  # context_chars + search_text + context_chars
+
+    def test_find_citation_context_at_start(self):
+        """Test citation at the very start of content."""
+        fulltext = SourceFulltext(
+            source_id="src-123",
+            title="Test",
+            content="Citation at start. Rest of content.",
+        )
+
+        matches = fulltext.find_citation_context("Citation at start", context_chars=50)
+
+        assert len(matches) == 1
+        context, pos = matches[0]
+        assert pos == 0
+
+    def test_find_citation_context_at_end(self):
+        """Test citation at the very end of content."""
+        fulltext = SourceFulltext(
+            source_id="src-123",
+            title="Test",
+            content="Beginning content. Citation at end",
+        )
+
+        matches = fulltext.find_citation_context("Citation at end", context_chars=50)
+
+        assert len(matches) == 1
+        context, pos = matches[0]
+        assert pos == 19

@@ -102,6 +102,9 @@ Before starting workflows, verify the CLI is ready:
 | Chat | `notebooklm ask "question"` |
 | Chat (new conversation) | `notebooklm ask "question" --new` |
 | Chat (specific sources) | `notebooklm ask "question" -s src_id1 -s src_id2` |
+| Chat (with references) | `notebooklm ask "question" --json` |
+| Get source fulltext | `notebooklm source fulltext <source_id>` |
+| Get source guide | `notebooklm source guide <source_id>` |
 | Generate podcast | `notebooklm generate audio "instructions"` |
 | Generate podcast (JSON) | `notebooklm generate audio --json` |
 | Generate podcast (specific sources) | `notebooklm generate audio -s src_id1 -s src_id2` |
@@ -137,6 +140,26 @@ $ notebooklm source add "https://example.com" --json
 ```
 $ notebooklm generate audio "Focus on key points" --json
 {"task_id": "xyz789...", "status": "pending"}
+```
+
+**Chat with references:**
+```
+$ notebooklm ask "What is X?" --json
+{"answer": "X is... [1] [2]", "conversation_id": "...", "turn_number": 1, "is_follow_up": false, "references": [{"source_id": "abc123...", "citation_number": 1, "cited_text": "Relevant passage from source..."}, {"source_id": "def456...", "citation_number": 2, "cited_text": "Another passage..."}]}
+```
+
+**Source fulltext (get indexed content):**
+```
+$ notebooklm source fulltext <source_id> --json
+{"source_id": "...", "title": "...", "char_count": 12345, "content": "Full indexed text..."}
+```
+
+**Understanding citations:** The `cited_text` in references is often a snippet or section header, not the full quoted passage. The `start_char`/`end_char` positions reference NotebookLM's internal chunked index, not the raw fulltext. Use `SourceFulltext.find_citation_context()` to locate citations:
+```python
+fulltext = await client.sources.get_fulltext(notebook_id, ref.source_id)
+matches = fulltext.find_citation_context(ref.cited_text)  # Returns list[(context, position)]
+if matches:
+    context, pos = matches[0]  # First match; check len(matches) > 1 for duplicates
 ```
 
 **Extract IDs:** Parse the `id`, `source_id`, or `task_id` field from JSON output.

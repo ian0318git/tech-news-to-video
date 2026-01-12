@@ -32,6 +32,7 @@ from .rpc.types import (
     VideoFormat,
     VideoStyle,
     artifact_status_to_str,
+    source_status_to_str,
 )
 
 __all__ = [
@@ -40,11 +41,13 @@ __all__ = [
     "NotebookDescription",
     "SuggestedTopic",
     "Source",
+    "SourceFulltext",
     "Artifact",
     "GenerationStatus",
     "ReportSuggestion",
     "Note",
     "ConversationTurn",
+    "ChatReference",
     "AskResult",
     "ChatMode",
     # Exceptions
@@ -70,6 +73,9 @@ __all__ = [
     "DriveMimeType",
     "ExportType",
     "SourceStatus",
+    # Helper functions
+    "artifact_status_to_str",
+    "source_status_to_str",
 ]
 
 
@@ -324,6 +330,70 @@ class Source:
         source_id = data[0] if len(data) > 0 else ""
         title = data[1] if len(data) > 1 else None
         return cls(id=str(source_id), title=title, source_type="text")
+
+
+@dataclass
+class SourceFulltext:
+    """Full text content of a source as indexed by NotebookLM.
+
+    This is the raw text content that was extracted/indexed from the source,
+    along with metadata. Returned by `client.sources.get_fulltext()`.
+
+    Attributes:
+        source_id: The source UUID.
+        title: Source title.
+        content: Full indexed text content.
+        source_type: Type code (1=google_docs, 3=pdf, 4=pasted_text, 5=web_page, 9=youtube).
+        url: Original URL for web/YouTube sources.
+        char_count: Number of characters in the content.
+    """
+
+    source_id: str
+    title: str
+    content: str
+    source_type: int | None = None
+    url: str | None = None
+    char_count: int = 0
+
+    def find_citation_context(
+        self,
+        cited_text: str,
+        context_chars: int = 200,
+    ) -> list[tuple[str, int]]:
+        """Search for citation text and return matching contexts.
+
+        Best-effort heuristic using substring search. May fail or return
+        incorrect matches when:
+        - cited_text appears multiple times (all occurrences returned)
+        - NotebookLM truncated the citation during chunking
+        - Formatting differs between citation and indexed content
+
+        Note: ChatReference.start_char/end_char reference NotebookLM's internal
+        chunked index, NOT positions in this fulltext. Use this method instead.
+
+        Args:
+            cited_text: Text to search for (from ChatReference.cited_text).
+            context_chars: Surrounding context to include (default 200).
+
+        Returns:
+            List of (context, position) tuples for each match found.
+            Empty list if no matches. Position is start of match in content.
+        """
+        if not cited_text or not self.content:
+            return []
+
+        # Use prefix for search (citations are often truncated)
+        search_text = cited_text[: min(40, len(cited_text))]
+
+        matches = []
+        pos = 0
+        while (idx := self.content.find(search_text, pos)) != -1:
+            start = max(0, idx - context_chars)
+            end = min(len(self.content), idx + len(search_text) + context_chars)
+            matches.append((self.content[start:end], idx))
+            pos = idx + len(search_text)  # Skip past match to avoid overlaps
+
+        return matches
 
 
 # =============================================================================
@@ -640,11 +710,46 @@ class ConversationTurn:
 
 
 @dataclass
+class ChatReference:
+    """A reference/citation in a chat response.
+
+    References link parts of the answer to specific sources.
+    When you click a reference in the NotebookLM UI, it shows
+    the relevant passage from the source.
+
+    Attributes:
+        source_id: The source UUID this reference points to.
+        citation_number: The citation number shown in the answer (e.g., [1], [2]).
+        cited_text: The actual text passage from the source being cited.
+        start_char: Start character position in the source content (if available).
+        end_char: End character position in the source content (if available).
+        chunk_id: Internal chunk ID (for debugging, not user-facing).
+    """
+
+    source_id: str
+    citation_number: int | None = None
+    cited_text: str | None = None
+    start_char: int | None = None
+    end_char: int | None = None
+    chunk_id: str | None = None
+
+
+@dataclass
 class AskResult:
-    """Result of asking the notebook a question."""
+    """Result of asking the notebook a question.
+
+    Attributes:
+        answer: The AI-generated answer text.
+        conversation_id: UUID for this conversation (used for follow-ups).
+        turn_number: The turn number in the conversation.
+        is_follow_up: Whether this was a follow-up question.
+        references: List of source references cited in the answer.
+        raw_response: First 1000 chars of raw API response (for debugging).
+    """
 
     answer: str
     conversation_id: str
     turn_number: int
     is_follow_up: bool
+    references: list["ChatReference"] = field(default_factory=list)
     raw_response: str = ""
