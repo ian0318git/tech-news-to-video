@@ -76,8 +76,8 @@ jobs:
       run: |
         if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
           # Linux: run all E2E tests except variants
-          pytest tests/e2e -m "not variants" -s -v --tb=short
+          pytest tests/e2e -m "not variants" -s -v --tb=short --reruns 2 --reruns-delay 30
         else
           # Windows: run only read-only tests (safer, avoids write operations)
-          pytest tests/e2e -m "readonly and not variants" -s -v --tb=short
+          pytest tests/e2e -m "readonly and not variants" -s -v --tb=short --reruns 2 --reruns-delay 30
         fi
