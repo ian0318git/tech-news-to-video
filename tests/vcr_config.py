@@ -81,15 +81,16 @@ SENSITIVE_PATTERNS: list[tuple[str, str]] = [
     (r'"QGcrse"\s*:\s*"[^"]+"', '"QGcrse":"SCRUBBED_CLIENT_ID"'),
     (r'"iQJtYd"\s*:\s*"[^"]+"', '"iQJtYd":"SCRUBBED_PROJECT_ID"'),
     # ==========================================================================
-    # Generic email scrubbing (catches emails in HTML and other JSON fields)
+    # PII scrubbing for Google account holder information
     # ==========================================================================
-    # Email in any context (conservative pattern for common email formats)
-    (r"peopleconf@gmail\.com", "SCRUBBED_EMAIL@example.com"),
-    # Display name in HTML (People Conf)
+    # Generic email pattern for Gmail/Google accounts (safe - only in account context)
+    (r"[a-zA-Z0-9._%+-]+@gmail\.com", "SCRUBBED_EMAIL@example.com"),
+    # Display name in aria-label (generic - "Google Account:" prefix is specific enough)
+    (r"Google Account: [^\"<]+", "Google Account: SCRUBBED_NAME"),
+    # Display name in HTML tags (user-specific - add your name if recording new cassettes)
     (r">People Conf<", ">SCRUBBED_NAME<"),
+    # Display name in JSON (user-specific - add your name if recording new cassettes)
     (r'"People Conf"', '"SCRUBBED_NAME"'),
-    # Display name in aria-label attributes
-    (r"Google Account: People Conf", "Google Account: SCRUBBED_NAME"),
 ]
 
 

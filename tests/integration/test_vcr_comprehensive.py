@@ -139,11 +139,11 @@ class TestSourcesAPI:
         """Get source guide for a specific source."""
         auth = await get_vcr_auth()
         async with NotebookLMClient(auth) as client:
-            # First get a source to test with
             sources = await client.sources.list(READONLY_NOTEBOOK_ID)
-            if sources:
-                guide = await client.sources.get_guide(READONLY_NOTEBOOK_ID, sources[0].id)
-                assert guide is not None
+            if not sources:
+                pytest.skip("No sources available in notebook for testing")
+            guide = await client.sources.get_guide(READONLY_NOTEBOOK_ID, sources[0].id)
+            assert guide is not None
 
     @pytest.mark.vcr
     @pytest.mark.asyncio
@@ -152,14 +152,14 @@ class TestSourcesAPI:
         """Get source fulltext content."""
         auth = await get_vcr_auth()
         async with NotebookLMClient(auth) as client:
-            # First get a source to test with
             sources = await client.sources.list(READONLY_NOTEBOOK_ID)
-            if sources:
-                fulltext = await client.sources.get_fulltext(READONLY_NOTEBOOK_ID, sources[0].id)
-                assert fulltext is not None
-                assert fulltext.source_id == sources[0].id
-                assert fulltext.content is not None
-                assert len(fulltext.content) > 0
+            if not sources:
+                pytest.skip("No sources available in notebook for testing")
+            fulltext = await client.sources.get_fulltext(READONLY_NOTEBOOK_ID, sources[0].id)
+            assert fulltext is not None
+            assert fulltext.source_id == sources[0].id
+            assert fulltext.content is not None
+            assert len(fulltext.content) > 0
 
     @pytest.mark.vcr
     @pytest.mark.asyncio
