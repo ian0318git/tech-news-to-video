@@ -20,9 +20,8 @@ import pytest
 # Add tests directory to path for vcr_config import
 sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent))
-from conftest import skip_no_cassettes
+from conftest import get_vcr_auth, skip_no_cassettes
 from notebooklm import NotebookLMClient
-from notebooklm.auth import AuthTokens
 from vcr_config import notebooklm_vcr
 
 # Skip all tests in this module if cassettes are not available
@@ -40,7 +39,7 @@ class TestRealAPIWithVCR:
     @notebooklm_vcr.use_cassette("real_api_list_notebooks.yaml")
     async def test_list_notebooks(self):
         """Record listing notebooks from real API."""
-        auth = await AuthTokens.from_storage()
+        auth = await get_vcr_auth()
 
         async with NotebookLMClient(auth) as client:
             notebooks = await client.notebooks.list()
@@ -54,7 +53,7 @@ class TestRealAPIWithVCR:
     @notebooklm_vcr.use_cassette("real_api_get_notebook.yaml")
     async def test_get_notebook(self):
         """Record getting a specific notebook from real API."""
-        auth = await AuthTokens.from_storage()
+        auth = await get_vcr_auth()
 
         async with NotebookLMClient(auth) as client:
             notebook = await client.notebooks.get(TEST_NOTEBOOK_ID)
@@ -69,7 +68,7 @@ class TestRealAPIWithVCR:
     @notebooklm_vcr.use_cassette("real_api_list_sources.yaml")
     async def test_list_sources(self):
         """Record listing sources from a notebook."""
-        auth = await AuthTokens.from_storage()
+        auth = await get_vcr_auth()
 
         async with NotebookLMClient(auth) as client:
             sources = await client.sources.list(TEST_NOTEBOOK_ID)
@@ -85,7 +84,7 @@ class TestArtifactsWithVCR:
     @notebooklm_vcr.use_cassette("real_api_list_artifacts.yaml")
     async def test_list_artifacts(self):
         """Record listing all artifacts from a notebook."""
-        auth = await AuthTokens.from_storage()
+        auth = await get_vcr_auth()
 
         async with NotebookLMClient(auth) as client:
             artifacts = await client.artifacts.list(TEST_NOTEBOOK_ID)
@@ -97,7 +96,7 @@ class TestArtifactsWithVCR:
     @notebooklm_vcr.use_cassette("real_api_list_audio.yaml")
     async def test_list_audio_artifacts(self):
         """Record listing audio artifacts (podcasts)."""
-        auth = await AuthTokens.from_storage()
+        auth = await get_vcr_auth()
 
         async with NotebookLMClient(auth) as client:
             audio = await client.artifacts.list_audio(TEST_NOTEBOOK_ID)
@@ -109,7 +108,7 @@ class TestArtifactsWithVCR:
     @notebooklm_vcr.use_cassette("real_api_list_reports.yaml")
     async def test_list_reports(self):
         """Record listing report artifacts."""
-        auth = await AuthTokens.from_storage()
+        auth = await get_vcr_auth()
 
         async with NotebookLMClient(auth) as client:
             reports = await client.artifacts.list_reports(TEST_NOTEBOOK_ID)
@@ -121,7 +120,7 @@ class TestArtifactsWithVCR:
     @notebooklm_vcr.use_cassette("real_api_list_quizzes.yaml")
     async def test_list_quizzes(self):
         """Record listing quiz artifacts."""
-        auth = await AuthTokens.from_storage()
+        auth = await get_vcr_auth()
 
         async with NotebookLMClient(auth) as client:
             quizzes = await client.artifacts.list_quizzes(TEST_NOTEBOOK_ID)
@@ -133,7 +132,7 @@ class TestArtifactsWithVCR:
     @notebooklm_vcr.use_cassette("real_api_list_mind_maps.yaml")
     async def test_list_mind_maps(self):
         """Record listing mind map artifacts (via notes API)."""
-        auth = await AuthTokens.from_storage()
+        auth = await get_vcr_auth()
 
         async with NotebookLMClient(auth) as client:
             mind_maps = await client.notes.list_mind_maps(TEST_NOTEBOOK_ID)

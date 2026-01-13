@@ -33,6 +33,29 @@ skip_no_cassettes = pytest.mark.skipif(
 )
 
 
+async def get_vcr_auth() -> AuthTokens:
+    """Get auth tokens for VCR tests.
+
+    In record mode: loads real auth from storage (required for recording).
+    In replay mode: returns mock auth (cassettes have recorded responses).
+    """
+    if _vcr_record_mode:
+        return await AuthTokens.from_storage()
+    else:
+        # Mock auth for replay - values don't matter, VCR replays recorded responses
+        return AuthTokens(
+            cookies={
+                "SID": "mock_sid",
+                "HSID": "mock_hsid",
+                "SSID": "mock_ssid",
+                "APISID": "mock_apisid",
+                "SAPISID": "mock_sapisid",
+            },
+            csrf_token="mock_csrf_token",
+            session_id="mock_session_id",
+        )
+
+
 @pytest.fixture
 def auth_tokens():
     """Create test authentication tokens."""
