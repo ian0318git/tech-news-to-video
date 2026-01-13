@@ -19,7 +19,6 @@ captured_rpcs/
 .sisyphus/
 .claude/
 
-# VCR cassettes (contain recorded API responses)
-# Cassettes are recorded locally and may contain sensitive data before scrubbing
-# Only commit cassettes that have been verified to be properly scrubbed
-tests/cassettes/
+# VCR cassettes - committed after security review
+# Cassettes are scrubbed of sensitive data (cookies, tokens, user IDs, emails)
+# See tests/vcr_config.py for scrubbing patterns

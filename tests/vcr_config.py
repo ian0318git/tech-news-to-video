@@ -88,6 +88,8 @@ SENSITIVE_PATTERNS: list[tuple[str, str]] = [
     # Display name in HTML (People Conf)
     (r">People Conf<", ">SCRUBBED_NAME<"),
     (r'"People Conf"', '"SCRUBBED_NAME"'),
+    # Display name in aria-label attributes
+    (r"Google Account: People Conf", "Google Account: SCRUBBED_NAME"),
 ]
 
 

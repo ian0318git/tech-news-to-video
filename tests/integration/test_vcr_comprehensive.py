@@ -148,6 +148,22 @@ class TestSourcesAPI:
 
     @pytest.mark.vcr
     @pytest.mark.asyncio
+    @notebooklm_vcr.use_cassette("sources_get_fulltext.yaml")
+    async def test_get_fulltext(self):
+        """Get source fulltext content."""
+        auth = await AuthTokens.from_storage()
+        async with NotebookLMClient(auth) as client:
+            # First get a source to test with
+            sources = await client.sources.list(READONLY_NOTEBOOK_ID)
+            if sources:
+                fulltext = await client.sources.get_fulltext(READONLY_NOTEBOOK_ID, sources[0].id)
+                assert fulltext is not None
+                assert fulltext.source_id == sources[0].id
+                assert fulltext.content is not None
+                assert len(fulltext.content) > 0
+
+    @pytest.mark.vcr
+    @pytest.mark.asyncio
     @notebooklm_vcr.use_cassette("sources_add_text.yaml")
     async def test_add_text(self):
         """Add a text source."""
@@ -427,6 +443,27 @@ class TestChatAPI:
             )
         assert result is not None
         assert result.answer is not None
+        assert result.conversation_id is not None
+
+    @pytest.mark.vcr
+    @pytest.mark.asyncio
+    @notebooklm_vcr.use_cassette("chat_ask_with_references.yaml")
+    async def test_ask_with_references(self):
+        """Ask a question that generates references."""
+        auth = await AuthTokens.from_storage()
+        async with NotebookLMClient(auth) as client:
+            result = await client.chat.ask(
+                MUTABLE_NOTEBOOK_ID,
+                "Summarize the key points with specific citations from the sources.",
+            )
+        assert result is not None
+        assert result.answer is not None
+        # References may or may not be present depending on the answer
+        assert isinstance(result.references, list)
+        # If references exist, verify structure
+        for ref in result.references:
+            assert ref.source_id is not None
+            assert ref.citation_number is not None
 
     @pytest.mark.vcr
     @pytest.mark.asyncio
