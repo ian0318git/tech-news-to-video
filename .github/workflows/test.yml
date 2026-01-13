@@ -37,6 +37,9 @@ jobs:
     - name: Run type checking
       run: mypy src/notebooklm --ignore-missing-imports
 
+    - name: Verify e2e test fixtures
+      run: pytest tests/e2e --collect-only -q
+
   test:
     name: Test (${{ matrix.os }}, Python ${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
