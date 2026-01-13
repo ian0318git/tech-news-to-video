@@ -20,6 +20,7 @@ Example:
 """
 
 import logging
+import re
 from pathlib import Path
 
 from ._artifacts import ArtifactsAPI
@@ -72,7 +73,9 @@ class NotebookLMClient:
             auth: Authentication tokens from browser login.
             timeout: HTTP request timeout in seconds. Defaults to 30 seconds.
         """
-        self._core = ClientCore(auth, timeout=timeout)
+        # Pass refresh_auth as callback for automatic retry on auth failures
+        # Note: refresh_auth calls update_auth_headers internally
+        self._core = ClientCore(auth, timeout=timeout, refresh_callback=self.refresh_auth)
 
         # Initialize sub-client APIs
         # Note: notes must be initialized before artifacts (artifacts uses notes API)
@@ -141,8 +144,6 @@ class NotebookLMClient:
         Raises:
             ValueError: If token extraction fails (page structure may have changed).
         """
-        import re
-
         http_client = self._core.get_http_client()
         response = await http_client.get("https://notebooklm.google.com/")
         response.raise_for_status()

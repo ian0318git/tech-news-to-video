@@ -1,9 +1,11 @@
 """Core infrastructure for NotebookLM API client."""
 
+import asyncio
 import logging
 import time
 from collections import OrderedDict
-from typing import Any
+from collections.abc import Awaitable, Callable, Coroutine
+from typing import Any, cast
 from urllib.parse import urlencode
 
 import httpx
@@ -11,6 +13,7 @@ import httpx
 from .auth import AuthTokens
 from .rpc import (
     BATCHEXECUTE_URL,
+    AuthError,
     RPCError,
     RPCMethod,
     build_request_body,
@@ -26,6 +29,40 @@ MAX_CONVERSATION_CACHE_SIZE = 100
 # Default HTTP timeout in seconds
 DEFAULT_TIMEOUT = 30.0
 
+# Auth error detection patterns (case-insensitive)
+AUTH_ERROR_PATTERNS = (
+    "authentication",
+    "expired",
+    "unauthorized",
+    "login",
+    "re-authenticate",
+)
+
+
+def is_auth_error(error: Exception) -> bool:
+    """Check if an exception indicates an authentication failure.
+
+    Args:
+        error: The exception to check.
+
+    Returns:
+        True if the error is likely due to authentication issues.
+    """
+    # AuthError is always an auth error
+    if isinstance(error, AuthError):
+        return True
+
+    # HTTP 401/403 are auth errors
+    if isinstance(error, httpx.HTTPStatusError):
+        return error.response.status_code in (401, 403)
+
+    # RPCError with auth-related message
+    if isinstance(error, RPCError):
+        message = str(error).lower()
+        return any(pattern in message for pattern in AUTH_ERROR_PATTERNS)
+
+    return False
+
 
 class ClientCore:
     """Core client infrastructure for HTTP and RPC operations.
@@ -40,15 +77,28 @@ class ClientCore:
     ArtifactsAPI, etc.) and should not be used directly.
     """
 
-    def __init__(self, auth: AuthTokens, timeout: float = DEFAULT_TIMEOUT):
+    def __init__(
+        self,
+        auth: AuthTokens,
+        timeout: float = DEFAULT_TIMEOUT,
+        refresh_callback: Callable[[], Awaitable[AuthTokens]] | None = None,
+        refresh_retry_delay: float = 0.2,
+    ):
         """Initialize the core client.
 
         Args:
             auth: Authentication tokens from browser login.
             timeout: HTTP request timeout in seconds. Defaults to 30 seconds.
+            refresh_callback: Optional async callback to refresh auth tokens on failure.
+                If provided, rpc_call will automatically retry once after refreshing.
+            refresh_retry_delay: Delay in seconds before retrying after refresh.
         """
         self.auth = auth
         self._timeout = timeout
+        self._refresh_callback = refresh_callback
+        self._refresh_retry_delay = refresh_retry_delay
+        self._refresh_lock: asyncio.Lock | None = asyncio.Lock() if refresh_callback else None
+        self._refresh_task: asyncio.Task[AuthTokens] | None = None
         self._http_client: httpx.AsyncClient | None = None
         # Request ID counter for chat API (must be unique per request)
         self._reqid_counter: int = 100000
@@ -120,14 +170,19 @@ class ClientCore:
         params: list[Any],
         source_path: str = "/",
         allow_null: bool = False,
+        _is_retry: bool = False,
     ) -> Any:
         """Make an RPC call to the NotebookLM API.
+
+        Automatically refreshes authentication tokens and retries once if an
+        auth failure is detected and a refresh_callback was provided.
 
         Args:
             method: The RPC method to call.
             params: Parameters for the RPC call (nested list structure).
             source_path: The source path parameter (usually /notebook/{id}).
             allow_null: If True, don't raise error when response is null.
+            _is_retry: Internal flag to prevent infinite retries.
 
         Returns:
             Decoded response data.
@@ -150,33 +205,51 @@ class ClientCore:
         try:
             response = await self._http_client.post(url, content=body)
             response.raise_for_status()
-        except httpx.HTTPStatusError as e:
+        except (httpx.HTTPStatusError, httpx.RequestError) as e:
             elapsed = time.perf_counter() - start
-            logger.error(
-                "RPC %s failed after %.3fs: HTTP %s",
-                method.name,
-                elapsed,
-                e.response.status_code,
-            )
-            raise RPCError(
-                f"HTTP {e.response.status_code} calling {method.name}: {e.response.reason_phrase}",
-                rpc_id=method.value,
-            ) from e
-        except httpx.RequestError as e:
-            elapsed = time.perf_counter() - start
-            logger.error("RPC %s failed after %.3fs: %s", method.name, elapsed, e)
-            raise RPCError(
-                f"Request failed calling {method.name}: {e}",
-                rpc_id=method.value,
-            ) from e
+
+            # Check if this is an auth error and we can retry
+            if not _is_retry and self._refresh_callback and is_auth_error(e):
+                refreshed = await self._try_refresh_and_retry(
+                    method, params, source_path, allow_null, e
+                )
+                if refreshed is not None:
+                    return refreshed
+
+            if isinstance(e, httpx.HTTPStatusError):
+                logger.error(
+                    "RPC %s failed after %.3fs: HTTP %s",
+                    method.name,
+                    elapsed,
+                    e.response.status_code,
+                )
+                raise RPCError(
+                    f"HTTP {e.response.status_code} calling {method.name}: {e.response.reason_phrase}",
+                    rpc_id=method.value,
+                ) from e
+            else:
+                logger.error("RPC %s failed after %.3fs: %s", method.name, elapsed, e)
+                raise RPCError(
+                    f"Request failed calling {method.name}: {e}",
+                    rpc_id=method.value,
+                ) from e
 
         try:
             result = decode_response(response.text, method.value, allow_null=allow_null)
             elapsed = time.perf_counter() - start
             logger.debug("RPC %s completed in %.3fs", method.name, elapsed)
             return result
-        except RPCError:
+        except RPCError as e:
             elapsed = time.perf_counter() - start
+
+            # Check if this is an auth error and we can retry
+            if not _is_retry and self._refresh_callback and is_auth_error(e):
+                refreshed = await self._try_refresh_and_retry(
+                    method, params, source_path, allow_null, e
+                )
+                if refreshed is not None:
+                    return refreshed
+
             logger.error("RPC %s failed after %.3fs", method.name, elapsed)
             raise
         except Exception as e:
@@ -186,6 +259,75 @@ class ClientCore:
                 f"Failed to decode response for {method.name}: {e}",
                 rpc_id=method.value,
             ) from e
+
+    async def _try_refresh_and_retry(
+        self,
+        method: RPCMethod,
+        params: list[Any],
+        source_path: str,
+        allow_null: bool,
+        original_error: Exception,
+    ) -> Any | None:
+        """Attempt to refresh auth tokens and retry the RPC call.
+
+        Uses a shared task pattern to ensure only one refresh operation runs
+        at a time. Concurrent callers wait on the same task, preventing
+        redundant refresh calls under high concurrency.
+
+        Args:
+            method: The RPC method to retry.
+            params: Original parameters.
+            source_path: Original source path.
+            allow_null: Original allow_null setting.
+            original_error: The auth error that triggered this retry.
+
+        Returns:
+            The RPC result if retry succeeds, None if refresh failed.
+
+        Raises:
+            The original error (with refresh error as cause) if refresh fails.
+        """
+        logger.info(
+            "RPC %s auth error detected, attempting token refresh",
+            method.name,
+        )
+
+        # This function is only called when _refresh_callback is set
+        assert self._refresh_callback is not None
+
+        # Use lock to coordinate refresh task creation
+        # Note: refresh_callback is expected to update auth headers internally
+        # Lock is always created when callback is set (see __init__)
+        assert self._refresh_lock is not None
+
+        # Determine which task to await (existing or new)
+        async with self._refresh_lock:
+            if self._refresh_task is not None and not self._refresh_task.done():
+                # Another refresh is in progress, wait on it
+                refresh_task = self._refresh_task
+                logger.debug("Waiting on existing refresh task for RPC %s", method.name)
+            else:
+                # Start a new refresh task
+                # Cast needed: Awaitable → Coroutine for create_task (async funcs return coroutines)
+                coro = cast(Coroutine[Any, Any, AuthTokens], self._refresh_callback())
+                self._refresh_task = asyncio.create_task(coro)
+                refresh_task = self._refresh_task
+
+        # Await refresh outside the lock so other callers can join
+        try:
+            await refresh_task
+        except Exception as refresh_error:
+            logger.warning("Token refresh failed: %s", refresh_error)
+            raise original_error from refresh_error
+
+        # Brief delay before retry to avoid hammering the API
+        if self._refresh_retry_delay > 0:
+            await asyncio.sleep(self._refresh_retry_delay)
+
+        logger.info("Token refresh successful, retrying RPC %s", method.name)
+
+        # Retry with refreshed tokens
+        return await self.rpc_call(method, params, source_path, allow_null, _is_retry=True)
 
     def get_http_client(self) -> httpx.AsyncClient:
         """Get the underlying HTTP client for direct requests.
