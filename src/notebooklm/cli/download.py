@@ -90,7 +90,7 @@ async def _download_artifacts_generic(
     if latest and earliest:
         raise click.UsageError("Cannot specify both --latest and --earliest")
     if download_all and artifact_id:
-        raise click.UsageError("Cannot specify both --all and --artifact-id")
+        raise click.UsageError("Cannot specify both --all and --artifact")
 
     # Get notebook and auth
     nb_id = require_notebook(notebook)
@@ -396,7 +396,7 @@ def _display_download_result(result: dict, artifact_type: str):
 @click.option("--earliest", is_flag=True, help="Download earliest")
 @click.option("--all", "download_all", is_flag=True, help="Download all artifacts")
 @click.option("--name", help="Filter by artifact title (fuzzy match)")
-@click.option("--artifact-id", help="Select by exact artifact ID")
+@click.option("-a", "--artifact", "artifact_id", help="Select by artifact ID")
 @click.option("--json", "json_output", is_flag=True, help="Output JSON instead of text")
 @click.option("--dry-run", is_flag=True, help="Preview without downloading")
 @click.option("--force", is_flag=True, help="Overwrite existing files")
@@ -478,7 +478,7 @@ def download_audio(
 @click.option("--earliest", is_flag=True, help="Download earliest")
 @click.option("--all", "download_all", is_flag=True, help="Download all artifacts")
 @click.option("--name", help="Filter by artifact title (fuzzy match)")
-@click.option("--artifact-id", help="Select by exact artifact ID")
+@click.option("-a", "--artifact", "artifact_id", help="Select by artifact ID")
 @click.option("--json", "json_output", is_flag=True, help="Output JSON instead of text")
 @click.option("--dry-run", is_flag=True, help="Preview without downloading")
 @click.option("--force", is_flag=True, help="Overwrite existing files")
@@ -560,7 +560,7 @@ def download_video(
 @click.option("--earliest", is_flag=True, help="Download earliest")
 @click.option("--all", "download_all", is_flag=True, help="Download all artifacts")
 @click.option("--name", help="Filter by artifact title (fuzzy match)")
-@click.option("--artifact-id", help="Select by exact artifact ID")
+@click.option("-a", "--artifact", "artifact_id", help="Select by artifact ID")
 @click.option("--json", "json_output", is_flag=True, help="Output JSON instead of text")
 @click.option("--dry-run", is_flag=True, help="Preview without downloading")
 @click.option("--force", is_flag=True, help="Overwrite existing files")
@@ -642,7 +642,7 @@ def download_slide_deck(
 @click.option("--earliest", is_flag=True, help="Download earliest")
 @click.option("--all", "download_all", is_flag=True, help="Download all artifacts")
 @click.option("--name", help="Filter by artifact title (fuzzy match)")
-@click.option("--artifact-id", help="Select by exact artifact ID")
+@click.option("-a", "--artifact", "artifact_id", help="Select by artifact ID")
 @click.option("--json", "json_output", is_flag=True, help="Output JSON instead of text")
 @click.option("--dry-run", is_flag=True, help="Preview without downloading")
 @click.option("--force", is_flag=True, help="Overwrite existing files")

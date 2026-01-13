@@ -96,15 +96,15 @@ All generate commands support:
 
 | Command | Options | Example |
 |---------|---------|---------|
-| `audio [description]` | `--format`, `--length`, `--source`, `--wait`, `--json` | `generate audio "Focus on history"` |
-| `video [description]` | `--style`, `--format`, `--source`, `--wait`, `--json` | `generate video "Explainer for kids"` |
-| `slide-deck [description]` | `--format`, `--length`, `--source`, `--wait`, `--json` | `generate slide-deck` |
-| `quiz [description]` | `--difficulty`, `--quantity`, `--source`, `--wait`, `--json` | `generate quiz --difficulty hard` |
-| `flashcards [description]` | `--difficulty`, `--quantity`, `--source`, `--wait`, `--json` | `generate flashcards` |
-| `infographic [description]` | `--orientation`, `--detail`, `--source`, `--wait`, `--json` | `generate infographic` |
-| `data-table [description]` | `--source`, `--wait`, `--json` | `generate data-table` |
-| `mind-map` | `--source`, `--json` *(sync, no wait needed)* | `generate mind-map` |
-| `report [description]` | `--type`, `--source`, `--wait`, `--json` | `generate report --type study-guide` |
+| `audio [description]` | `--format`, `--length`, `-s/--source`, `--wait`, `--json` | `generate audio "Focus on history"` |
+| `video [description]` | `--style`, `--format`, `-s/--source`, `--wait`, `--json` | `generate video "Explainer for kids"` |
+| `slide-deck [description]` | `--format`, `--length`, `-s/--source`, `--wait`, `--json` | `generate slide-deck` |
+| `quiz [description]` | `--difficulty`, `--quantity`, `-s/--source`, `--wait`, `--json` | `generate quiz --difficulty hard` |
+| `flashcards [description]` | `--difficulty`, `--quantity`, `-s/--source`, `--wait`, `--json` | `generate flashcards` |
+| `infographic [description]` | `--orientation`, `--detail`, `-s/--source`, `--wait`, `--json` | `generate infographic` |
+| `data-table [description]` | `-s/--source`, `--wait`, `--json` | `generate data-table` |
+| `mind-map` | `-s/--source`, `--json` *(sync, no wait needed)* | `generate mind-map` |
+| `report [description]` | `--type`, `-s/--source`, `--wait`, `--json` | `generate report --type study-guide` |
 
 ### Artifact Commands (`notebooklm artifact <cmd>`)
 
@@ -117,16 +117,16 @@ All generate commands support:
 | `export <id>` | Artifact ID | `--type [docs|sheets]`, `--title` | `artifact export art123 --type sheets` |
 | `poll <task_id>` | Task ID | - | `artifact poll task123` |
 | `wait <id>` | Artifact ID | `--timeout`, `--interval` | `artifact wait art123` |
-| `suggestions` | - | - | `artifact suggestions` |
+| `suggestions` | - | `-s/--source`, `--json` | `artifact suggestions` |
 
 ### Download Commands (`notebooklm download <type>`)
 
 | Command | Arguments | Options | Example |
 |---------|-----------|---------|---------|
-| `audio [path]` | Output path | `--all`, `--latest`, `--name`, `--force`, `--dry-run` | `download audio --all` |
-| `video [path]` | Output path | `--all`, `--latest`, `--name`, `--force`, `--dry-run` | `download video --latest` |
-| `slide-deck [path]` | Output directory | `--all`, `--latest`, `--name`, `--force`, `--dry-run` | `download slide-deck ./slides/` |
-| `infographic [path]` | Output path | `--all`, `--latest`, `--name`, `--force`, `--dry-run` | `download infographic ./info.png` |
+| `audio [path]` | Output path | `-a/--artifact`, `--all`, `--latest`, `--name`, `--force`, `--dry-run` | `download audio --all` |
+| `video [path]` | Output path | `-a/--artifact`, `--all`, `--latest`, `--name`, `--force`, `--dry-run` | `download video --latest` |
+| `slide-deck [path]` | Output directory | `-a/--artifact`, `--all`, `--latest`, `--name`, `--force`, `--dry-run` | `download slide-deck ./slides/` |
+| `infographic [path]` | Output path | `-a/--artifact`, `--all`, `--latest`, `--name`, `--force`, `--dry-run` | `download infographic ./info.png` |
 
 ### Note Commands (`notebooklm note <cmd>`)
 
@@ -401,7 +401,7 @@ notebooklm download <type> [OUTPUT_PATH] [OPTIONS]
 - `--latest` - Download only the most recent artifact (default if no ID/name provided)
 - `--earliest` - Download only the oldest artifact
 - `--name NAME` - Download artifact with matching title (supports partial matches)
-- `--artifact-id ID` - Download specific artifact by ID
+- `-a, --artifact ID` - Select specific artifact by ID
 - `--dry-run` - Show what would be downloaded without actually downloading
 - `--force` - Overwrite existing files
 - `--no-clobber` - Skip if file already exists (default)

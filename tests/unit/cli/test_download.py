@@ -440,8 +440,8 @@ class TestDownloadFlagConflicts:
         assert result.exit_code != 0
         assert "Cannot specify both --latest and --earliest" in result.output
 
-    def test_all_and_artifact_id_conflict(self, runner, mock_auth, mock_fetch_tokens):
-        """Test --all and --artifact-id cannot be used together."""
+    def test_all_and_artifact_conflict(self, runner, mock_auth, mock_fetch_tokens):
+        """Test --all and --artifact cannot be used together."""
         with patch_client_for_module("download") as mock_client_cls:
             mock_client = create_mock_client()
             mock_client.artifacts.list = AsyncMock(
@@ -451,11 +451,11 @@ class TestDownloadFlagConflicts:
 
             result = runner.invoke(
                 cli,
-                ["download", "audio", "--all", "--artifact-id", "art_123", "-n", "nb_123"],
+                ["download", "audio", "--all", "--artifact", "art_123", "-n", "nb_123"],
             )
 
         assert result.exit_code != 0
-        assert "Cannot specify both --all and --artifact-id" in result.output
+        assert "Cannot specify both --all and --artifact" in result.output
 
 
 # =============================================================================
