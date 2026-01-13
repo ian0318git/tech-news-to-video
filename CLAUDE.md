@@ -189,3 +189,45 @@ All docs use lowercase-kebab naming in `docs/`:
 
 - **CLI**: Quick tasks, shell scripts, LLM agent automation
 - **Python API**: Application integration, complex workflows, async operations
+
+## Pull Request Workflow (REQUIRED)
+
+After creating a PR, you MUST monitor and address feedback:
+
+### 1. Monitor CI Status
+```bash
+# Check CI status (repeat until all pass)
+gh pr checks <PR_NUMBER>
+```
+
+Wait for all checks to pass. If any fail, investigate and fix.
+
+### 2. Check for Review Comments
+```bash
+# Get review comments
+gh api repos/teng-lin/notebooklm-py/pulls/<PR_NUMBER>/comments \
+  --jq '.[] | "File: \(.path):\(.line)\nComment: \(.body)\n---"'
+```
+
+### 3. Address Feedback
+For each review comment (especially from `gemini-code-assist`):
+1. Read and understand the feedback
+2. Make the suggested fix if it improves the code
+3. Commit with a descriptive message referencing the feedback
+4. Push and re-check CI
+5. **Reply to the review thread** confirming the fix:
+   ```bash
+   gh api repos/teng-lin/notebooklm-py/pulls/<PR>/comments/<COMMENT_ID>/replies \
+     -f body="Addressed in commit <SHA>: <brief description>"
+   ```
+
+### 4. Verify Final State
+```bash
+# Ensure PR is ready to merge
+gh pr view <PR_NUMBER> --json state,mergeStateStatus,mergeable
+```
+
+**Important**: Do NOT consider a PR complete until:
+- All CI checks pass
+- All review comments are addressed
+- `mergeStateStatus` is `CLEAN`
