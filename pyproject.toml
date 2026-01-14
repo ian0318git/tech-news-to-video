@@ -1,7 +1,7 @@
 [project]
 name = "notebooklm-py"
 version = "0.2.0"
-description = "Unofficial Python client for Google NotebookLM API"
+description = "Unofficial Python library for automating Google NotebookLM"
 dynamic = ["readme"]
 requires-python = ">=3.10"
 license = {text = "MIT"}
