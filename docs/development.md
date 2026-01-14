@@ -214,6 +214,7 @@ Version is defined in `pyproject.toml`. The `__version__` in `__init__.py` is dy
 |----------|---------|---------|
 | `test.yml` | Push/PR | Unit tests, linting, type checking |
 | `nightly.yml` | Daily 6 AM UTC | E2E tests with real API |
+| `rpc-health.yml` | Daily 7 AM UTC | RPC method ID monitoring (see [stability.md](stability.md#automated-rpc-health-check)) |
 | `testpypi-publish.yml` | Manual dispatch | Publish to TestPyPI |
 | `verify-package.yml` | Manual dispatch | Verify TestPyPI or PyPI install + E2E |
 | `publish.yml` | Tag push | Publish to PyPI |
