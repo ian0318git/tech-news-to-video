@@ -138,13 +138,18 @@ Checklist for releasing a new version of `notebooklm-py`.
   - **source**: `pypi`
 - [ ] Wait for all tests to pass
 
-### GitHub Release (Optional)
+### GitHub Release
 
-- [ ] Go to **Releases** → **Draft a new release**
-- [ ] Select tag `vX.Y.Z`
-- [ ] Title: `vX.Y.Z`
-- [ ] Copy release notes from `CHANGELOG.md`
-- [ ] Publish release
+- [ ] Create release from tag:
+  ```bash
+  gh release create vX.Y.Z --title "vX.Y.Z" --notes "$(cat CHANGELOG.md | sed -n '/## \[X.Y.Z\]/,/## \[/p' | sed '$d')"
+  ```
+  Or manually:
+  - Go to **Releases** → **Draft a new release**
+  - Select tag `vX.Y.Z`
+  - Title: `vX.Y.Z`
+  - Copy release notes from `CHANGELOG.md`
+  - Publish release
 
 ---
 
