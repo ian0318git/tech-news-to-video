@@ -1,7 +1,7 @@
 # RPC & UI Reference
 
 **Status:** Active
-**Last Updated:** 2026-01-07
+**Last Updated:** 2026-01-14
 **Source of Truth:** `src/notebooklm/rpc/types.py`
 **Purpose:** Complete reference for RPC methods, UI selectors, and payload structures
 
@@ -48,6 +48,8 @@
 | `QDyure` | SHARE_NOTEBOOK | Set notebook visibility (restricted/public) | `_notebooks.py` |
 | `JFMDGd` | GET_SHARE_STATUS | Get notebook share settings | Not implemented |
 | `ciyUvf` | GET_SUGGESTED_REPORTS | Get AI-suggested report formats | `_artifacts.py` |
+| `v9rmvd` | GET_INTERACTIVE_HTML | Fetch quiz/flashcard HTML content | `_artifacts.py` |
+| `fejl7e` | REMOVE_RECENTLY_VIEWED | Remove notebook from recent list | `_notebooks.py` |
 
 ### Content Type Codes (StudioContentType)
 
@@ -159,6 +161,25 @@ params = [
     None,         # 3
     0,            # 4: Fixed value
 ]
+```
+
+### RPC: REMOVE_RECENTLY_VIEWED (fejl7e)
+
+**Source:** `_notebooks.py::remove_from_recent()`
+
+Remove a notebook from the recently viewed list (doesn't delete the notebook).
+
+```python
+params = [notebook_id]  # Just the notebook ID
+
+# No source_path needed
+await rpc_call(
+    RPCMethod.REMOVE_RECENTLY_VIEWED,
+    params,
+    allow_null=True,
+)
+
+# Response: None (no return value)
 ```
 
 ---
@@ -1215,6 +1236,33 @@ await rpc_call(
 ```
 
 **Important:** The `?artifactId=xxx` URL is a **deep link** - it opens the shared notebook and navigates to that artifact. The artifact itself isn't independently shared.
+
+### RPC: GET_INTERACTIVE_HTML (v9rmvd)
+
+**Source:** `_artifacts.py::_get_artifact_content()`
+
+Fetch HTML content for quiz or flashcard artifacts. Used for downloading these artifact types in various formats.
+
+```python
+params = [artifact_id]  # Just the artifact ID
+
+# Called with source_path:
+await rpc_call(
+    RPCMethod.GET_INTERACTIVE_HTML,
+    params,
+    source_path=f"/notebook/{notebook_id}",
+)
+
+# Response structure:
+# [[
+#     ...,                    # indices 0-8: metadata
+#     [html_content],         # index 9: HTML content array
+#     ...
+# ]]
+#
+# HTML content contains quiz questions or flashcard data
+# that can be parsed into JSON, Markdown, or kept as HTML.
+```
 
 ### RPC: GET_SUGGESTED_REPORTS (ciyUvf)
 
