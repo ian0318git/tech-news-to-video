@@ -1336,3 +1336,27 @@ Some operations can run much longer:
 ### Implementation Note
 
 When automating, poll for completion rather than using fixed timeouts. Check artifact status or source processing state periodically.
+
+---
+
+## Legacy/Unused RPC Methods
+
+These RPC method IDs exist in `rpc/types.py` but are either legacy (superseded by other methods) or not currently used in the implementation. Documented here for completeness.
+
+| RPC ID | Method | Status | Notes |
+|--------|--------|--------|-------|
+| `hizoJc` | GET_SOURCE | Broken | Code comments indicate this doesn't work; `get()` uses GET_NOTEBOOK instead |
+| `qXyaNe` | DISCOVER_SOURCES | Unused | Purpose unknown, not called in implementation |
+| `AHyHrd` | CREATE_AUDIO | Legacy | Superseded by unified CREATE_VIDEO (R7cb6c) |
+| `VUsiyb` | GET_AUDIO | Legacy | Superseded by LIST_ARTIFACTS (gArtLc) |
+| `sJDbic` | DELETE_AUDIO | Legacy | Superseded by DELETE_STUDIO (V5N4be) |
+| `xpWGLf` | CREATE_ARTIFACT | Unused | Purpose unknown, CREATE_VIDEO handles all artifact types |
+| `BnLyuf` | GET_ARTIFACT | Unused | Purpose unknown, LIST_ARTIFACTS provides artifact data |
+| `LfTXoe` | LIST_ARTIFACTS_ALT | Unused | Alternative list method, main LIST_ARTIFACTS (gArtLc) is used |
+
+**Why keep these?** These IDs are preserved in the codebase in case:
+1. Google re-enables or changes their functionality
+2. Future reverse-engineering reveals their purpose
+3. They become useful for specific edge cases
+
+**Note:** The unified `CREATE_VIDEO` (R7cb6c) method handles all artifact generation (audio, video, reports, quizzes, etc.) despite its name. The legacy audio-specific methods were likely from an earlier API version.
