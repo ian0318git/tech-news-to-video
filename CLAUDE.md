@@ -178,12 +178,13 @@ Commands are organized as:
 ## Documentation
 
 All docs use lowercase-kebab naming in `docs/`:
-- `docs/getting-started.md` - Installation and first workflow
 - `docs/cli-reference.md` - CLI commands
 - `docs/python-api.md` - Python API reference
 - `docs/configuration.md` - Storage and settings
 - `docs/troubleshooting.md` - Known issues
-- `docs/contributing/` - Architecture, debugging, testing guides
+- `docs/development.md` - Architecture, testing, releasing
+- `docs/rpc-development.md` - RPC capture and debugging
+- `docs/rpc-reference.md` - RPC payload structures
 
 ## When to Suggest CLI vs API
 

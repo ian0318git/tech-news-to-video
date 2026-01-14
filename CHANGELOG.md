@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-01-13
+
 ### Added
 - **Source fulltext extraction** - Retrieve the complete indexed text content of any source
   - New `client.sources.get_fulltext(notebook_id, source_id)` Python API
@@ -17,6 +19,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Each reference includes `source_id`, `cited_text`, `start_char`, `end_char`, `chunk_id`
   - Use `notebooklm ask "question" --json` to see references in CLI output
 - **Source status helper** - New `source_status_to_str()` function for consistent status display
+- **Quiz and flashcard downloads** - Export interactive study materials in multiple formats
+  - New `download quiz` and `download flashcards` CLI commands
+  - Supports JSON, Markdown, and HTML output formats via `--format` flag
+  - Python API: `client.artifacts.download_quiz()` and `client.artifacts.download_flashcards()`
+- **Extended artifact downloads** - Download additional artifact types
+  - New `download report` command (exports as Markdown)
+  - New `download mind-map` command (exports as JSON)
+  - New `download data-table` command (exports as CSV)
+  - All download commands support `--all`, `--latest`, `--name`, and `--artifact` selection options
+
+### Fixed
+- **Regional Google domain authentication** - SID cookie extraction now works with regional Google domains (e.g., google.co.uk, google.de) in addition to google.com
+- **URL hostname validation** - Use proper URL parsing instead of string operations for security
 
 ### Changed
 - **Pre-commit checks** - Added mypy type checking to required pre-commit workflow
@@ -139,12 +154,13 @@ This is the initial public release of `notebooklm-py`. While core functionality 
 
 ### Known Issues
 
-- **RPC method IDs may change**: Google can update their internal APIs at any time, breaking this library. Check the [RPC Capture](docs/reference/internals/rpc-capture.md) for how to identify and update method IDs.
+- **RPC method IDs may change**: Google can update their internal APIs at any time, breaking this library. Check the [RPC Development Guide](docs/rpc-development.md) for how to identify and update method IDs.
 - **Rate limiting**: Heavy usage may trigger Google's rate limits. Add delays between bulk operations.
 - **Authentication expiry**: CSRF tokens expire after some time. Re-run `notebooklm login` if you encounter auth errors.
 - **Large file uploads**: Files over 50MB may fail or timeout. Split large documents if needed.
 
-[Unreleased]: https://github.com/teng-lin/notebooklm-py/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/teng-lin/notebooklm-py/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/teng-lin/notebooklm-py/compare/v0.1.4...v0.2.0
 [0.1.4]: https://github.com/teng-lin/notebooklm-py/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/teng-lin/notebooklm-py/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/teng-lin/notebooklm-py/compare/v0.1.1...v0.1.2

@@ -116,7 +116,7 @@ When Google changes their internal APIs:
    - Error message (especially any RPC error codes)
    - Which operation failed
    - When it started failing
-3. See [RPC Capture Guide](reference/internals/rpc-capture.md) for debugging
+3. See [RPC Development Guide](rpc-development.md) for debugging
 
 ### Self-Recovery
 

@@ -48,7 +48,6 @@ pip install notebooklm-py
 pip install "notebooklm-py[browser]"
 playwright install chromium
 ```
-See [Installation](#installation) for options.
 
 ## Quick Start
 
@@ -109,12 +108,12 @@ asyncio.run(main())
 ### Agent Skills (Claude Code)
 
 ```bash
-# Install the skill
+# Install via CLI or ask Claude Code to do it
 notebooklm skill install
 
-# Then use natural language in Claude Code:
+# Then use natural language:
 # "Create a podcast about quantum computing"
-# "Summarize these URLs into a notebook"
+# "Download the quiz as markdown"
 # "/notebooklm generate video"
 ```
 
@@ -127,12 +126,11 @@ notebooklm skill install
 | **Chat** | Questions, conversation history, custom personas |
 | **Generation** | Audio podcasts, video, slides, quizzes, flashcards, reports, infographics, mind maps |
 | **Research** | Web and Drive research agents with auto-import |
-| **Downloads** | Audio, video, slides, infographics |
+| **Downloads** | Audio, video, slides, infographics, reports, mind maps, data tables, quizzes, flashcards |
 | **Agent Skills** | Claude Code skill for LLM-driven automation |
 
 ## Documentation
 
-- **[Getting Started](docs/getting-started.md)** - Installation and first workflow
 - **[CLI Reference](docs/cli-reference.md)** - Complete command documentation
 - **[Python API](docs/python-api.md)** - Full API reference
 - **[Configuration](docs/configuration.md)** - Storage and settings
@@ -141,10 +139,9 @@ notebooklm skill install
 
 ### For Contributors
 
-- **[Architecture](docs/contributing/architecture.md)** - Code structure
-- **[Testing](docs/contributing/testing.md)** - Running and writing tests
-- **[RPC Capture](docs/reference/internals/rpc-capture.md)** - Protocol reference and capture guides
-- **[Debugging](docs/contributing/debugging.md)** - Network capture guide
+- **[Development Guide](docs/development.md)** - Architecture, testing, and releasing
+- **[RPC Development](docs/rpc-development.md)** - Protocol capture and debugging
+- **[RPC Reference](docs/rpc-reference.md)** - Payload structures
 - **[Changelog](CHANGELOG.md)** - Version history and release notes
 - **[Security](SECURITY.md)** - Security policy and credential handling
 

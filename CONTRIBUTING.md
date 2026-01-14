@@ -111,8 +111,8 @@ Design decisions should be captured where they're most useful, not in separate d
 |------|--------|---------|
 | Root GitHub files | `UPPERCASE.md` | `README.md`, `CONTRIBUTING.md` |
 | Agent files | `UPPERCASE.md` | `CLAUDE.md`, `AGENTS.md` |
-| Folder README | `README.md` | `docs/README.md` (GitHub auto-renders) |
-| All other docs/ files | `lowercase-kebab.md` | `getting-started.md`, `cli-reference.md` |
+| Subfolder README | `README.md` | `docs/examples/README.md` |
+| All other docs/ files | `lowercase-kebab.md` | `cli-reference.md`, `contributing.md` |
 | Scratch files | `YYYY-MM-DD-context.md` | `2026-01-06-debug-auth.md` |
 
 ### Status Headers
@@ -130,7 +130,7 @@ Agents should ignore files marked `Deprecated`.
 
 1. **Link, Don't Copy** - Reference README.md sections instead of repeating commands. Prevents drift between docs.
 
-2. **Scoped Instructions** - See `docs/README.md` for folder-specific documentation rules.
+2. **Scoped Instructions** - Subfolders like `docs/examples/` may have their own README.md with folder-specific rules.
 
 ---
 
@@ -138,19 +138,14 @@ Agents should ignore files marked `Deprecated`.
 
 ```
 docs/
-├── README.md              # Folder-specific rules
-├── getting-started.md     # Installation and first workflow
 ├── cli-reference.md       # CLI command reference
 ├── python-api.md          # Python API reference
 ├── configuration.md       # Storage and settings
 ├── troubleshooting.md     # Common issues and solutions
+├── stability.md           # API versioning policy
+├── development.md         # Architecture, testing, releasing
+├── rpc-development.md     # RPC capture and debugging
+├── rpc-reference.md       # RPC payload structures
 ├── examples/              # Runnable example scripts
-├── contributing/          # Contributor guides
-│   ├── architecture.md    # Code structure
-│   ├── debugging.md       # Network capture guide
-│   └── testing.md         # Running tests
-├── reference/
-│   └── internals/         # Reverse engineering notes
-└── scratch/               # Temporary agent work (disposable)
-    └── YYYY-MM-DD-context.md
+└── designs/               # Design decisions (ADRs)
 ```

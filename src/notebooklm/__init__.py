@@ -18,7 +18,7 @@ from ._logging import configure_logging
 
 configure_logging()
 
-__version__ = "0.1.3"
+__version__ = "0.2.0"
 
 # Public API: Authentication
 from .auth import DEFAULT_STORAGE_PATH, AuthTokens
