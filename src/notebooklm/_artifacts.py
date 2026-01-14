@@ -8,8 +8,10 @@ Quizzes, Flashcards, Infographics, Slide Decks, Data Tables, and Mind Maps.
 import asyncio
 import builtins
 import csv
+import html
 import json
 import logging
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -42,6 +44,59 @@ logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from ._notes import NotesAPI
+
+
+def _extract_app_data(html_content: str) -> dict:
+    """Extract JSON from data-app-data HTML attribute.
+
+    The quiz/flashcard HTML embeds JSON in a data-app-data attribute
+    with HTML-encoded content (e.g., &quot; for quotes).
+    """
+    match = re.search(r'data-app-data="([^"]+)"', html_content)
+    if not match:
+        raise ValueError("No data-app-data attribute found in HTML")
+
+    encoded_json = match.group(1)
+    decoded_json = html.unescape(encoded_json)
+    return json.loads(decoded_json)
+
+
+def _format_quiz_markdown(title: str, questions: list[dict]) -> str:
+    """Format quiz as markdown."""
+    lines = [f"# {title}", ""]
+    for i, q in enumerate(questions, 1):
+        lines.append(f"## Question {i}")
+        lines.append(q.get("question", ""))
+        lines.append("")
+        for opt in q.get("answerOptions", []):
+            marker = "[x]" if opt.get("isCorrect") else "[ ]"
+            lines.append(f"- {marker} {opt.get('text', '')}")
+        if q.get("hint"):
+            lines.append("")
+            lines.append(f"**Hint:** {q['hint']}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _format_flashcards_markdown(title: str, cards: list[dict]) -> str:
+    """Format flashcards as markdown."""
+    lines = [f"# {title}", ""]
+    for i, card in enumerate(cards, 1):
+        front = card.get("f", "")
+        back = card.get("b", "")
+        lines.extend(
+            [
+                f"## Card {i}",
+                "",
+                f"**Q:** {front}",
+                "",
+                f"**A:** {back}",
+                "",
+                "---",
+                "",
+            ]
+        )
+    return "\n".join(lines)
 
 
 def _extract_cell_text(cell: Any) -> str:
@@ -1100,6 +1155,136 @@ class ArtifactsAPI:
         except (IndexError, TypeError) as e:
             raise ValueError(f"Failed to parse slide deck structure: {e}") from e
 
+    async def _get_artifact_content(self, notebook_id: str, artifact_id: str) -> str | None:
+        """Fetch artifact HTML content for quiz/flashcard types."""
+        result = await self._core.rpc_call(
+            RPCMethod.GET_INTERACTIVE_HTML,
+            [artifact_id],
+            source_path=f"/notebook/{notebook_id}",
+            allow_null=True,
+        )
+        # Response is wrapped: result[0] contains the artifact data
+        if result and isinstance(result, list) and len(result) > 0:
+            data = result[0]
+            if isinstance(data, list) and len(data) > 9 and data[9]:
+                return data[9][0]  # HTML content
+        return None
+
+    async def _download_interactive_artifact(
+        self,
+        notebook_id: str,
+        output_path: str,
+        artifact_id: str | None,
+        output_format: str,
+        artifact_type: str,
+    ) -> str:
+        """Download quiz or flashcard artifact.
+
+        Args:
+            notebook_id: Notebook ID.
+            output_path: Output file path.
+            artifact_id: Specific artifact ID (optional).
+            output_format: Output format - json, markdown, or html.
+            artifact_type: Either "quiz" or "flashcards".
+
+        Returns:
+            Path to downloaded file.
+
+        Raises:
+            ValueError: If no completed artifact found or invalid output_format.
+        """
+        # Validate output format
+        valid_formats = ("json", "markdown", "html")
+        if output_format not in valid_formats:
+            raise ValueError(
+                f"Invalid output_format: {output_format!r}. Use one of: {', '.join(valid_formats)}"
+            )
+
+        # Type-specific configuration
+        is_quiz = artifact_type == "quiz"
+        type_label = "quiz" if is_quiz else "flashcard deck"
+        default_title = "Untitled Quiz" if is_quiz else "Untitled Flashcards"
+
+        # Fetch and filter artifacts
+        artifacts = (
+            await self.list_quizzes(notebook_id)
+            if is_quiz
+            else await self.list_flashcards(notebook_id)
+        )
+        completed = [a for a in artifacts if a.is_completed]
+        if not completed:
+            raise ValueError(f"No completed {type_label} found.")
+
+        # Select artifact
+        if artifact_id:
+            artifact = next((a for a in completed if a.id == artifact_id), None)
+            if not artifact:
+                raise ValueError(f"{artifact_type.capitalize()} artifact {artifact_id} not found.")
+        else:
+            artifact = completed[0]
+
+        # Fetch and parse HTML content
+        html_content = await self._get_artifact_content(notebook_id, artifact.id)
+        if not html_content:
+            raise ValueError(f"Failed to fetch {type_label} content.")
+
+        try:
+            app_data = _extract_app_data(html_content)
+        except (ValueError, json.JSONDecodeError) as e:
+            raise ValueError(f"Failed to parse {type_label} content: {e}") from e
+
+        # Format output
+        title = artifact.title or default_title
+        content = self._format_interactive_content(
+            app_data, title, output_format, html_content, is_quiz
+        )
+
+        # Create parent directories and write file
+        output_file = Path(output_path)
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+
+        def _write_file() -> None:
+            with open(output_path, "w", encoding="utf-8") as f:
+                f.write(content)
+
+        await asyncio.to_thread(_write_file)
+        return output_path
+
+    def _format_interactive_content(
+        self,
+        app_data: dict,
+        title: str,
+        output_format: str,
+        html_content: str,
+        is_quiz: bool,
+    ) -> str:
+        """Format quiz or flashcard content for output.
+
+        Args:
+            app_data: Parsed data from HTML.
+            title: Artifact title.
+            output_format: Output format - json, markdown, or html.
+            html_content: Original HTML content.
+            is_quiz: True for quiz, False for flashcards.
+
+        Returns:
+            Formatted content string.
+        """
+        if output_format == "html":
+            return html_content
+
+        if is_quiz:
+            questions = app_data.get("quiz", [])
+            if output_format == "markdown":
+                return _format_quiz_markdown(title, questions)
+            return json.dumps({"title": title, "questions": questions}, indent=2)
+
+        cards = app_data.get("flashcards", [])
+        if output_format == "markdown":
+            return _format_flashcards_markdown(title, cards)
+        normalized = [{"front": c.get("f", ""), "back": c.get("b", "")} for c in cards]
+        return json.dumps({"title": title, "cards": normalized}, indent=2)
+
     async def download_report(
         self,
         notebook_id: str,
@@ -1237,6 +1422,56 @@ class ArtifactsAPI:
 
         except (IndexError, TypeError, ValueError) as e:
             raise ValueError(f"Failed to parse data table structure: {e}") from e
+
+    async def download_quiz(
+        self,
+        notebook_id: str,
+        output_path: str,
+        artifact_id: str | None = None,
+        output_format: str = "json",
+    ) -> str:
+        """Download quiz questions.
+
+        Args:
+            notebook_id: Notebook ID.
+            output_path: Output file path.
+            artifact_id: Specific quiz artifact ID (optional).
+            output_format: Output format - json, markdown, or html.
+
+        Returns:
+            Path to downloaded file.
+
+        Raises:
+            ValueError: If no completed quiz artifact found.
+        """
+        return await self._download_interactive_artifact(
+            notebook_id, output_path, artifact_id, output_format, "quiz"
+        )
+
+    async def download_flashcards(
+        self,
+        notebook_id: str,
+        output_path: str,
+        artifact_id: str | None = None,
+        output_format: str = "json",
+    ) -> str:
+        """Download flashcard deck.
+
+        Args:
+            notebook_id: Notebook ID.
+            output_path: Output file path.
+            artifact_id: Specific flashcard artifact ID (optional).
+            output_format: Output format - json, markdown, or html.
+
+        Returns:
+            Path to downloaded file.
+
+        Raises:
+            ValueError: If no completed flashcard artifact found.
+        """
+        return await self._download_interactive_artifact(
+            notebook_id, output_path, artifact_id, output_format, "flashcards"
+        )
 
     # =========================================================================
     # Management Operations
@@ -1611,8 +1846,6 @@ class ArtifactsAPI:
         Returns:
             List of successfully downloaded output paths.
         """
-        from pathlib import Path
-
         downloaded: list[str] = []
 
         # Load cookies with domain info for cross-domain redirect handling
@@ -1656,8 +1889,6 @@ class ArtifactsAPI:
         Raises:
             ValueError: If download fails or authentication expired.
         """
-        from pathlib import Path
-
         output_file = Path(output_path)
         output_file.parent.mkdir(parents=True, exist_ok=True)
 

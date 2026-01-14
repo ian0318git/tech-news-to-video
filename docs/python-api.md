@@ -308,6 +308,8 @@ print(f"Keywords: {guide['keywords']}")
 | `download_report(notebook_id, output_path, artifact_id=None)` | `str, str, str` | `str` | Download report as Markdown (.md) |
 | `download_mind_map(notebook_id, output_path, artifact_id=None)` | `str, str, str` | `str` | Download mind map as JSON (.json) |
 | `download_data_table(notebook_id, output_path, artifact_id=None)` | `str, str, str` | `str` | Download data table as CSV (.csv) |
+| `download_quiz(notebook_id, output_path, artifact_id=None, output_format="json")` | `str, str, str, str` | `str` | Download quiz (json/markdown/html) |
+| `download_flashcards(notebook_id, output_path, artifact_id=None, output_format="json")` | `str, str, str, str` | `str` | Download flashcards (json/markdown/html) |
 
 **Download Methods:**
 
@@ -339,6 +341,18 @@ path = await client.artifacts.download_mind_map(nb_id, "./concept-map.json")
 # Download data table as CSV
 path = await client.artifacts.download_data_table(nb_id, "./data.csv")
 # CSV uses UTF-8 with BOM encoding for Excel compatibility
+
+# Download quiz as JSON (default)
+path = await client.artifacts.download_quiz(nb_id, "quiz.json")
+
+# Download quiz as markdown with answers marked
+path = await client.artifacts.download_quiz(nb_id, "quiz.md", output_format="markdown")
+
+# Download flashcards as JSON (normalizes f/b to front/back)
+path = await client.artifacts.download_flashcards(nb_id, "cards.json")
+
+# Download flashcards as markdown
+path = await client.artifacts.download_flashcards(nb_id, "cards.md", output_format="markdown")
 ```
 
 **Notes:**
@@ -348,6 +362,7 @@ path = await client.artifacts.download_data_table(nb_id, "./data.csv")
 - Report downloads extract the markdown content from the artifact
 - Mind map downloads return a JSON tree structure with `name` and `children` fields
 - Data table downloads parse the complex rich-text format into CSV rows/columns
+- Quiz/flashcard formats: `json` (structured), `markdown` (readable), `html` (raw)
 
 #### Export Methods
 

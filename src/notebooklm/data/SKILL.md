@@ -117,6 +117,10 @@ Before starting workflows, verify the CLI is ready:
 | Download report | `notebooklm download report ./report.md` |
 | Download mind map | `notebooklm download mind-map ./map.json` |
 | Download data table | `notebooklm download data-table ./data.csv` |
+| Download quiz | `notebooklm download quiz quiz.json` |
+| Download quiz (markdown) | `notebooklm download quiz --format markdown quiz.md` |
+| Download flashcards | `notebooklm download flashcards cards.json` |
+| Download flashcards (markdown) | `notebooklm download flashcards --format markdown cards.md` |
 | Delete notebook | `notebooklm notebook delete <id>` |
 
 **Parallel safety:** Use explicit notebook IDs in parallel workflows. Commands supporting `-n` shorthand: `artifact wait`, `source wait`, `research wait/status`, `download *`. Download commands also support `-a/--artifact`. Other commands use `--notebook`. For chat, use `--new` to start fresh conversations (avoids conversation ID conflicts).
@@ -182,8 +186,8 @@ All generate commands support:
 | Report | `generate report` | Yes (.md) |
 | Mind Map | `generate mind-map` | Yes (.json) |
 | Data Table | `generate data-table` | Yes (.csv) |
-| Quiz | `generate quiz` | No (view in UI) |
-| Flashcards | `generate flashcards` | No (view in UI) |
+| Quiz | `generate quiz` | Yes (.json/.md/.html) |
+| Flashcards | `generate flashcards` | Yes (.json/.md/.html) |
 
 ## Common Workflows
 

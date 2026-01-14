@@ -8,11 +8,13 @@ Commands:
     report       Download report as markdown
     mind-map     Download mind map as JSON
     data-table   Download data table as CSV
+    quiz         Download quiz questions
+    flashcards   Download flashcard deck
 """
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 import click
 
@@ -26,6 +28,26 @@ from .helpers import (
     require_notebook,
     run_async,
 )
+
+
+class ArtifactConfig(TypedDict):
+    """Configuration for an artifact type."""
+
+    type_id: int
+    extension: str
+    default_dir: str
+
+
+# Artifact type configurations for download commands
+ARTIFACT_CONFIGS: dict[str, ArtifactConfig] = {
+    "audio": {"type_id": 1, "extension": ".mp3", "default_dir": "./audio"},
+    "video": {"type_id": 3, "extension": ".mp4", "default_dir": "./video"},
+    "report": {"type_id": 2, "extension": ".md", "default_dir": "./reports"},
+    "mind-map": {"type_id": 5, "extension": ".json", "default_dir": "./mind-maps"},
+    "infographic": {"type_id": 7, "extension": ".png", "default_dir": "./infographic"},
+    "slide-deck": {"type_id": 8, "extension": ".pdf", "default_dir": "./slides"},
+    "data-table": {"type_id": 9, "extension": ".csv", "default_dir": "./data-tables"},
+}
 
 
 @click.group()
@@ -465,20 +487,7 @@ def _display_download_result(result: dict, artifact_type: str) -> None:
 @click.option("--force", is_flag=True, help="Overwrite existing files")
 @click.option("--no-clobber", is_flag=True, help="Skip if file exists")
 @click.pass_context
-def download_audio(
-    ctx,
-    output_path,
-    notebook,
-    latest,
-    earliest,
-    download_all,
-    name,
-    artifact_id,
-    json_output,
-    dry_run,
-    force,
-    no_clobber,
-):
+def download_audio(ctx, **kwargs):
     """Download audio overview(s) to file.
 
     \b
@@ -498,24 +507,7 @@ def download_audio(
       # Preview without downloading
       notebooklm download audio --all --dry-run
     """
-    _execute_download(
-        ctx,
-        "audio",
-        1,
-        ".mp3",
-        "./audio",
-        output_path,
-        notebook,
-        latest,
-        earliest,
-        download_all,
-        name,
-        artifact_id,
-        json_output,
-        dry_run,
-        force,
-        no_clobber,
-    )
+    _run_artifact_download(ctx, "audio", **kwargs)
 
 
 @download.command("video")
@@ -531,20 +523,7 @@ def download_audio(
 @click.option("--force", is_flag=True, help="Overwrite existing files")
 @click.option("--no-clobber", is_flag=True, help="Skip if file exists")
 @click.pass_context
-def download_video(
-    ctx,
-    output_path,
-    notebook,
-    latest,
-    earliest,
-    download_all,
-    name,
-    artifact_id,
-    json_output,
-    dry_run,
-    force,
-    no_clobber,
-):
+def download_video(ctx, **kwargs):
     """Download video overview(s) to file.
 
     \b
@@ -564,24 +543,7 @@ def download_video(
       # Preview without downloading
       notebooklm download video --all --dry-run
     """
-    _execute_download(
-        ctx,
-        "video",
-        3,
-        ".mp4",
-        "./video",
-        output_path,
-        notebook,
-        latest,
-        earliest,
-        download_all,
-        name,
-        artifact_id,
-        json_output,
-        dry_run,
-        force,
-        no_clobber,
-    )
+    _run_artifact_download(ctx, "video", **kwargs)
 
 
 @download.command("slide-deck")
@@ -597,20 +559,7 @@ def download_video(
 @click.option("--force", is_flag=True, help="Overwrite existing files")
 @click.option("--no-clobber", is_flag=True, help="Skip if file exists")
 @click.pass_context
-def download_slide_deck(
-    ctx,
-    output_path,
-    notebook,
-    latest,
-    earliest,
-    download_all,
-    name,
-    artifact_id,
-    json_output,
-    dry_run,
-    force,
-    no_clobber,
-):
+def download_slide_deck(ctx, **kwargs):
     """Download slide deck(s) as PDF files.
 
     \b
@@ -630,24 +579,7 @@ def download_slide_deck(
       # Preview without downloading
       notebooklm download slide-deck --all --dry-run
     """
-    _execute_download(
-        ctx,
-        "slide-deck",
-        8,
-        ".pdf",
-        "./slides",
-        output_path,
-        notebook,
-        latest,
-        earliest,
-        download_all,
-        name,
-        artifact_id,
-        json_output,
-        dry_run,
-        force,
-        no_clobber,
-    )
+    _run_artifact_download(ctx, "slide-deck", **kwargs)
 
 
 @download.command("infographic")
@@ -663,20 +595,7 @@ def download_slide_deck(
 @click.option("--force", is_flag=True, help="Overwrite existing files")
 @click.option("--no-clobber", is_flag=True, help="Skip if file exists")
 @click.pass_context
-def download_infographic(
-    ctx,
-    output_path,
-    notebook,
-    latest,
-    earliest,
-    download_all,
-    name,
-    artifact_id,
-    json_output,
-    dry_run,
-    force,
-    no_clobber,
-):
+def download_infographic(ctx, **kwargs):
     """Download infographic(s) to file.
 
     \b
@@ -696,24 +615,42 @@ def download_infographic(
       # Preview without downloading
       notebooklm download infographic --all --dry-run
     """
-    _execute_download(
-        ctx,
-        "infographic",
-        7,
-        ".png",
-        "./infographic",
-        output_path,
-        notebook,
-        latest,
-        earliest,
-        download_all,
-        name,
-        artifact_id,
-        json_output,
-        dry_run,
-        force,
-        no_clobber,
-    )
+    _run_artifact_download(ctx, "infographic", **kwargs)
+
+
+FORMAT_EXTENSIONS = {"json": ".json", "markdown": ".md", "html": ".html"}
+
+
+def _run_artifact_download(ctx, artifact_type: str, **kwargs) -> None:
+    """Execute download for a specific artifact type.
+
+    Handles the common pattern across all artifact download commands.
+    """
+    config = ARTIFACT_CONFIGS[artifact_type]
+    json_output = kwargs.get("json_output", False)
+
+    try:
+        result = run_async(
+            _download_artifacts_generic(
+                ctx=ctx,
+                artifact_type_name=artifact_type,
+                artifact_type_id=config["type_id"],
+                file_extension=config["extension"],
+                default_output_dir=config["default_dir"],
+                **kwargs,
+            )
+        )
+
+        if json_output:
+            console.print(json.dumps(result, indent=2))
+            return
+
+        _display_download_result(result, artifact_type)
+        if "error" in result:
+            raise SystemExit(1)
+
+    except Exception as e:
+        handle_error(e)
 
 
 @download.command("report")
@@ -729,20 +666,7 @@ def download_infographic(
 @click.option("--force", is_flag=True, help="Overwrite existing files")
 @click.option("--no-clobber", is_flag=True, help="Skip if file exists")
 @click.pass_context
-def download_report(
-    ctx,
-    output_path,
-    notebook,
-    latest,
-    earliest,
-    download_all,
-    name,
-    artifact_id,
-    json_output,
-    dry_run,
-    force,
-    no_clobber,
-):
+def download_report(ctx, **kwargs):
     """Download report(s) as markdown files.
 
     \b
@@ -762,24 +686,7 @@ def download_report(
       # Preview without downloading
       notebooklm download report --all --dry-run
     """
-    _execute_download(
-        ctx,
-        "report",
-        2,
-        ".md",
-        "./reports",
-        output_path,
-        notebook,
-        latest,
-        earliest,
-        download_all,
-        name,
-        artifact_id,
-        json_output,
-        dry_run,
-        force,
-        no_clobber,
-    )
+    _run_artifact_download(ctx, "report", **kwargs)
 
 
 @download.command("mind-map")
@@ -795,20 +702,7 @@ def download_report(
 @click.option("--force", is_flag=True, help="Overwrite existing files")
 @click.option("--no-clobber", is_flag=True, help="Skip if file exists")
 @click.pass_context
-def download_mind_map(
-    ctx,
-    output_path,
-    notebook,
-    latest,
-    earliest,
-    download_all,
-    name,
-    artifact_id,
-    json_output,
-    dry_run,
-    force,
-    no_clobber,
-):
+def download_mind_map(ctx, **kwargs):
     """Download mind map(s) as JSON files.
 
     \b
@@ -828,24 +722,7 @@ def download_mind_map(
       # Preview without downloading
       notebooklm download mind-map --all --dry-run
     """
-    _execute_download(
-        ctx,
-        "mind-map",
-        5,
-        ".json",
-        "./mind-maps",
-        output_path,
-        notebook,
-        latest,
-        earliest,
-        download_all,
-        name,
-        artifact_id,
-        json_output,
-        dry_run,
-        force,
-        no_clobber,
-    )
+    _run_artifact_download(ctx, "mind-map", **kwargs)
 
 
 @download.command("data-table")
@@ -861,20 +738,7 @@ def download_mind_map(
 @click.option("--force", is_flag=True, help="Overwrite existing files")
 @click.option("--no-clobber", is_flag=True, help="Skip if file exists")
 @click.pass_context
-def download_data_table(
-    ctx,
-    output_path,
-    notebook,
-    latest,
-    earliest,
-    download_all,
-    name,
-    artifact_id,
-    json_output,
-    dry_run,
-    force,
-    no_clobber,
-):
+def download_data_table(ctx, **kwargs):
     """Download data table(s) as CSV files.
 
     \b
@@ -894,21 +758,107 @@ def download_data_table(
       # Preview without downloading
       notebooklm download data-table --all --dry-run
     """
-    _execute_download(
-        ctx,
-        "data-table",
-        9,
-        ".csv",
-        "./data-tables",
-        output_path,
-        notebook,
-        latest,
-        earliest,
-        download_all,
-        name,
-        artifact_id,
-        json_output,
-        dry_run,
-        force,
-        no_clobber,
-    )
+    _run_artifact_download(ctx, "data-table", **kwargs)
+
+
+async def _download_interactive(
+    ctx,
+    artifact_type: str,
+    output_path: str | None,
+    notebook: str | None,
+    output_format: str,
+    artifact_id: str | None,
+) -> str:
+    """Download quiz or flashcard artifact.
+
+    Args:
+        ctx: Click context.
+        artifact_type: Either "quiz" or "flashcards".
+        output_path: User-specified output path.
+        notebook: Notebook ID.
+        output_format: Output format - json, markdown, or html.
+        artifact_id: Specific artifact ID.
+
+    Returns:
+        Path to downloaded file.
+    """
+    nb_id = require_notebook(notebook)
+    storage_path = ctx.obj.get("storage_path") if ctx.obj else None
+    cookies = load_auth_from_storage(storage_path)
+
+    csrf, session_id = await fetch_tokens(cookies)
+    auth = AuthTokens(cookies=cookies, csrf_token=csrf, session_id=session_id)
+
+    async with NotebookLMClient(auth) as client:
+        ext = FORMAT_EXTENSIONS[output_format]
+        path = output_path or f"{artifact_type}{ext}"
+
+        if artifact_type == "quiz":
+            return await client.artifacts.download_quiz(
+                nb_id, path, artifact_id=artifact_id, output_format=output_format
+            )
+        return await client.artifacts.download_flashcards(
+            nb_id, path, artifact_id=artifact_id, output_format=output_format
+        )
+
+
+@download.command("quiz")
+@click.argument("output_path", required=False, type=click.Path())
+@click.option("-n", "--notebook", help="Notebook ID (uses current context if not set)")
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["json", "markdown", "html"]),
+    default="json",
+    help="Output format",
+)
+@click.option("-a", "--artifact", "artifact_id", help="Select by artifact ID")
+@click.pass_context
+def download_quiz_cmd(ctx, output_path, notebook, output_format, artifact_id):
+    """Download quiz questions.
+
+    \b
+    Examples:
+      notebooklm download quiz quiz.json
+      notebooklm download quiz --format markdown quiz.md
+      notebooklm download quiz --format html quiz.html
+    """
+    try:
+        result = run_async(
+            _download_interactive(ctx, "quiz", output_path, notebook, output_format, artifact_id)
+        )
+        console.print(f"[green]Downloaded quiz to:[/green] {result}")
+    except Exception as e:
+        handle_error(e)
+
+
+@download.command("flashcards")
+@click.argument("output_path", required=False, type=click.Path())
+@click.option("-n", "--notebook", help="Notebook ID (uses current context if not set)")
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["json", "markdown", "html"]),
+    default="json",
+    help="Output format",
+)
+@click.option("-a", "--artifact", "artifact_id", help="Select by artifact ID")
+@click.pass_context
+def download_flashcards_cmd(ctx, output_path, notebook, output_format, artifact_id):
+    """Download flashcard deck.
+
+    \b
+    Examples:
+      notebooklm download flashcards cards.json
+      notebooklm download flashcards --format markdown cards.md
+      notebooklm download flashcards --format html cards.html
+    """
+    try:
+        result = run_async(
+            _download_interactive(
+                ctx, "flashcards", output_path, notebook, output_format, artifact_id
+            )
+        )
+        console.print(f"[green]Downloaded flashcards to:[/green] {result}")
+    except Exception as e:
+        handle_error(e)
