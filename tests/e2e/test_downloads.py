@@ -175,13 +175,6 @@ class TestDownloadReport:
     @pytest.mark.readonly
     async def test_download_report(self, client, read_only_notebook_id):
         """Downloads existing report as markdown - read-only."""
-        # Debug: show what artifacts exist
-        raw = await client.artifacts._list_raw(read_only_notebook_id)
-        print(f"\n[DEBUG] Total raw artifacts: {len(raw)}")
-        for i, a in enumerate(raw):
-            if isinstance(a, list) and len(a) > 2:
-                print(f"  [{i}] type={a[2]}, len={len(a)}, status={a[4] if len(a) > 4 else '?'}")
-
         with tempfile.TemporaryDirectory() as tmpdir:
             output_path = os.path.join(tmpdir, "report.md")
             try:
