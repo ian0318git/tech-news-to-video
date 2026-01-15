@@ -5,7 +5,34 @@
 
 Checklist for releasing a new version of `notebooklm-py`.
 
-> **For Claude Code:** When asked to prepare a release, follow this checklist step by step. **NO STEPS ARE OPTIONAL.** Complete each checkbox before moving to the next. Ask the user to confirm before pushing or tagging. Never skip TestPyPI verification—it catches packaging issues that tests cannot detect.
+> **For Claude Code:** Follow this checklist step by step. **NO STEPS ARE OPTIONAL.** "Quick release" means efficient execution, NOT skipping steps.
+>
+> **Critical rules:**
+> 1. **Never combine commit and push** - always commit first, show user, then ask "Push to main?"
+> 2. **Explicit confirmation required** for: pushing to main, publishing to TestPyPI, creating tags, pushing tags
+> 3. **"ok" is not confirmation** - restate what you're about to do and wait for explicit "yes"
+> 4. **TestPyPI is mandatory** - it catches packaging issues that tests cannot detect
+
+---
+
+## Pre-Flight Summary
+
+Before starting, present this summary to the user:
+
+```
+Release Plan for vX.Y.Z:
+1. Update pyproject.toml and CHANGELOG.md
+2. Commit (will show diff first)
+3. ⏸️ CONFIRM: Push to main?
+4. Wait for CI (test.yml + E2E)
+5. ⏸️ CONFIRM: Publish to TestPyPI?
+6. Verify TestPyPI package
+7. ⏸️ CONFIRM: Create and push tag vX.Y.Z?
+8. Wait for PyPI publish
+9. Create GitHub release
+
+Proceed with release preparation?
+```
 
 ---
 
@@ -22,9 +49,32 @@ Checklist for releasing a new version of `notebooklm-py`.
   python -m py_compile docs/examples/*.py
   ```
 
+**Related docs to check/update if relevant:**
+
+| Doc | Update when... |
+|-----|----------------|
+| [SKILL.md](../src/notebooklm/data/SKILL.md) | New CLI commands, changed flags, new workflows |
+| [cli-reference.md](cli-reference.md) | Any CLI changes |
+| [python-api.md](python-api.md) | New/changed Python API |
+| [troubleshooting.md](troubleshooting.md) | New known issues, fixed issues to remove |
+| [development.md](development.md) | Architecture changes, new test patterns |
+| [configuration.md](configuration.md) | New env vars, config options |
+| [stability.md](stability.md) | Public API changes, deprecations |
+
 ### Version Bump
 
-- [ ] Determine version bump type (see [Version Numbering](#version-numbering) for details)
+- [ ] Determine version bump type using this decision tree:
+
+  ```
+  Did you add new items to `__all__` in `__init__.py`?
+  ├── YES → MINOR (new public API)
+  └── NO → PATCH (fixes, logging, UX, internal improvements)
+
+  When in doubt, it's PATCH.
+  ```
+
+  See [Version Numbering](#version-numbering) for full details.
+
 - [ ] Update version in `pyproject.toml`:
   ```toml
   version = "X.Y.Z"
@@ -62,10 +112,14 @@ Checklist for releasing a new version of `notebooklm-py`.
   ```bash
   git diff
   ```
-- [ ] Commit:
+- [ ] Commit (do NOT push yet):
   ```bash
   git add pyproject.toml CHANGELOG.md
   git commit -m "chore: release vX.Y.Z"
+  ```
+- [ ] Show commit to user:
+  ```bash
+  git show --stat
   ```
 
 ---
@@ -74,6 +128,7 @@ Checklist for releasing a new version of `notebooklm-py`.
 
 ### Push to Main
 
+- [ ] **⏸️ CONFIRM:** Ask user "Ready to push to main? This will trigger CI."
 - [ ] Push to main:
   ```bash
   git push origin main
@@ -97,6 +152,7 @@ Checklist for releasing a new version of `notebooklm-py`.
 
 ### Publish to TestPyPI
 
+- [ ] **⏸️ CONFIRM:** Ask user "Ready to publish to TestPyPI?"
 - [ ] Go to **Actions** → **Publish to TestPyPI**
 - [ ] Click **Run workflow**
 - [ ] Wait for upload to complete
@@ -122,6 +178,7 @@ Checklist for releasing a new version of `notebooklm-py`.
 
 ### Tag and Publish
 
+- [ ] **⏸️ CONFIRM:** Ask user "TestPyPI verified. Ready to create tag vX.Y.Z and publish to PyPI? This is irreversible."
 - [ ] Create tag:
   ```bash
   git tag vX.Y.Z
