@@ -1,11 +1,11 @@
 # Release Checklist
 
 **Status:** Active
-**Last Updated:** 2026-01-14
+**Last Updated:** 2026-01-15
 
 Checklist for releasing a new version of `notebooklm-py`.
 
-> **For Claude Code:** When asked to prepare a release, follow this checklist step by step. Complete each checkbox before moving to the next. Ask the user to confirm before pushing or tagging.
+> **For Claude Code:** When asked to prepare a release, follow this checklist step by step. **NO STEPS ARE OPTIONAL.** Complete each checkbox before moving to the next. Ask the user to confirm before pushing or tagging. Never skip TestPyPI verification—it catches packaging issues that tests cannot detect.
 
 ---
 
@@ -92,6 +92,8 @@ Checklist for releasing a new version of `notebooklm-py`.
 ---
 
 ## Package Verification
+
+> **⚠️ REQUIRED:** Do NOT skip TestPyPI verification. Always test on TestPyPI before publishing to PyPI. This catches packaging issues that unit tests cannot detect (missing files, broken imports, dependency problems).
 
 ### Publish to TestPyPI
 
