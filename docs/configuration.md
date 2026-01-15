@@ -1,7 +1,7 @@
 # Configuration
 
 **Status:** Active
-**Last Updated:** 2026-01-08
+**Last Updated:** 2026-01-15
 
 This guide covers storage locations, environment settings, and configuration options for `notebooklm-py`.
 
@@ -146,47 +146,6 @@ Output:
 │ Context         │ .../context.json            │           │
 │ Browser Profile │ .../browser_profile         │           │
 └─────────────────┴──────────────────────────────┴───────────┘
-```
-
-## Python API Configuration
-
-### Default Initialization
-
-```python
-from notebooklm import NotebookLMClient
-
-# Uses $NOTEBOOKLM_HOME/storage_state.json or ~/.notebooklm/storage_state.json
-async with await NotebookLMClient.from_storage() as client:
-    ...
-```
-
-### Custom Storage Path
-
-```python
-from pathlib import Path
-from notebooklm import NotebookLMClient
-
-# Specify a different storage file
-async with await NotebookLMClient.from_storage(
-    path=Path("./custom-storage.json")
-) as client:
-    ...
-```
-
-### Manual Authentication
-
-```python
-from notebooklm import NotebookLMClient, AuthTokens
-
-# Provide tokens directly
-auth = AuthTokens(
-    cookies={"SID": "...", "HSID": "...", ...},
-    csrf_token="SNlM0e_value",
-    session_id="FdrFJe_value"
-)
-
-async with NotebookLMClient(auth) as client:
-    ...
 ```
 
 ## Session Management
