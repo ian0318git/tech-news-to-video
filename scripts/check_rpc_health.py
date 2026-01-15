@@ -541,12 +541,30 @@ async def setup_temp_resources(
         return temp
 
     # Test ADD_SOURCE - extract source_id from response[0][0]
+    # Params format: [[[None, [title, content], None*6]], notebook_id, [2], None, None]
     await asyncio.sleep(CALL_DELAY)
     result, data = await test_rpc_method_with_data(
         client,
         auth,
         RPCMethod.ADD_SOURCE,
-        [temp.notebook_id, "Test Source", "Test content for RPC health check.", 0],
+        [
+            [
+                [
+                    None,
+                    ["Test Source", "Test content for RPC health check."],
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                ]
+            ],
+            temp.notebook_id,
+            [2],
+            None,
+            None,
+        ],
     )
     results.append(result)
     print(
@@ -559,9 +577,10 @@ async def setup_temp_resources(
         temp.source_id = extract_id(data, 0, 0)
 
     # Test CREATE_NOTE - extract note_id from response[0]
+    # Params format: [notebook_id, "", [1], None, title]
     await asyncio.sleep(CALL_DELAY)
     result, data = await test_rpc_method_with_data(
-        client, auth, RPCMethod.CREATE_NOTE, [[temp.notebook_id], "Test Note", "Test note content"]
+        client, auth, RPCMethod.CREATE_NOTE, [temp.notebook_id, "", [1], None, "Test Note"]
     )
     results.append(result)
     print(
