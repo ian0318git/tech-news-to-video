@@ -307,31 +307,6 @@ from notebooklm import NotebookLMClient
 # Now all notebooklm operations will log at DEBUG level
 ```
 
-### Enable Verbose Output
-
-Check what's happening under the hood:
-
-```bash
-# Diagnose authentication issues
-notebooklm auth check
-notebooklm auth check --test   # Include network test
-
-# See full error messages
-notebooklm list 2>&1
-
-# Verify auth is working
-notebooklm status
-```
-
-### Check Storage State
-
-Verify your session file is valid:
-
-```bash
-# Check file exists and has content
-cat ~/.notebooklm/storage_state.json | python -m json.tool | head -20
-```
-
 ### Test Basic Operations
 
 Start simple to isolate issues:
