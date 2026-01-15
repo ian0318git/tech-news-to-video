@@ -198,11 +198,14 @@ git push origin :refs/tags/vX.Y.Z
 
 ## Version Numbering
 
+**IMPORTANT:** Read [stability.md](stability.md) before deciding version bump.
+
 | Change Type | Bump | Example |
 |-------------|------|---------|
 | RPC method ID fixes | PATCH | 0.1.0 → 0.1.1 |
 | Bug fixes | PATCH | 0.1.1 → 0.1.2 |
-| New features | MINOR | 0.1.2 → 0.2.0 |
-| Breaking changes | MAJOR | 0.2.0 → 1.0.0 |
+| Internal improvements (logging, auth UX, CI) | PATCH | 0.1.2 → 0.1.3 |
+| **New public API** (new classes, methods in `__all__`) | MINOR | 0.1.3 → 0.2.0 |
+| Breaking changes to public API | MAJOR | 0.2.0 → 1.0.0 |
 
-See [stability.md](stability.md) for full versioning policy.
+**Key distinction:** "New features" means new **public API surface** (additions to `__all__` in `__init__.py`). Internal improvements, better error messages, logging enhancements, and UX improvements are PATCH releases.

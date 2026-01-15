@@ -49,6 +49,16 @@ pip install "notebooklm-py[browser]"
 playwright install chromium
 ```
 
+### Development Installation
+
+For contributors or testing unreleased features:
+
+```bash
+pip install git+https://github.com/teng-lin/notebooklm-py@main
+```
+
+⚠️ The main branch may contain unstable changes. Use PyPI releases for production.
+
 ## Quick Start
 
 <p align="center">

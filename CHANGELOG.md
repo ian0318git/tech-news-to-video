@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-01-15
+
+### Added
+- **Authentication diagnostics** - New `notebooklm auth check` command for troubleshooting auth issues
+  - Shows storage file location and validity
+  - Lists cookies present and their domains
+  - Detects `NOTEBOOKLM_AUTH_JSON` and `NOTEBOOKLM_HOME` usage
+  - `--test` flag performs network validation
+  - `--json` flag for machine-readable output (CI/CD friendly)
+- **Structured logging** - Comprehensive DEBUG logging across library
+  - `NOTEBOOKLM_LOG_LEVEL` environment variable (DEBUG, INFO, WARNING, ERROR)
+  - RPC call timing and method tracking
+  - Legacy `NOTEBOOKLM_DEBUG_RPC=1` still works
+- **RPC health monitoring** - Automated nightly check for Google API changes
+  - Detects RPC method ID mismatches before they cause failures
+  - Auto-creates GitHub issues with `rpc-breakage` label on detection
+
+### Fixed
+- **Cookie domain priority** - Prioritize `.google.com` cookies over regional domains (e.g., `.google.co.uk`) for more reliable authentication
+- **YouTube URL parsing** - Improved handling of edge cases in YouTube video URLs
+
+### Documentation
+- Added `auth check` to CLI reference and troubleshooting guide
+- Consolidated CI/CD troubleshooting in development guide
+- Added installation instructions to SKILL.md for Claude Code
+- Clarified version numbering policy (PATCH vs MINOR)
+
 ## [0.2.0] - 2026-01-14
 
 ### Added
@@ -160,7 +187,8 @@ This is the initial public release of `notebooklm-py`. While core functionality 
 - **Authentication expiry**: CSRF tokens expire after some time. Re-run `notebooklm login` if you encounter auth errors.
 - **Large file uploads**: Files over 50MB may fail or timeout. Split large documents if needed.
 
-[Unreleased]: https://github.com/teng-lin/notebooklm-py/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/teng-lin/notebooklm-py/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/teng-lin/notebooklm-py/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/teng-lin/notebooklm-py/compare/v0.1.4...v0.2.0
 [0.1.4]: https://github.com/teng-lin/notebooklm-py/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/teng-lin/notebooklm-py/compare/v0.1.2...v0.1.3
