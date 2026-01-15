@@ -16,11 +16,12 @@ pip install notebooklm-py
 
 **From GitHub (use latest release tag, NOT main branch):**
 ```bash
-# First check latest release at: https://github.com/teng-lin/notebooklm-py/releases/latest
-pip install git+https://github.com/teng-lin/notebooklm-py@v0.2.0
+# Get the latest release tag
+LATEST_TAG=$(gh release view --repo teng-lin/notebooklm-py --json tagName -q .tagName)
+pip install "git+https://github.com/teng-lin/notebooklm-py@${LATEST_TAG}"
 ```
 
-⚠️ **Important:** The `main` branch may contain unreleased changes. Always install from PyPI or a specific release tag for stability.
+⚠️ **NEVER install from main branch** (`pip install git+https://github.com/teng-lin/notebooklm-py`). The main branch may contain unreleased/unstable changes. Always use PyPI or a specific release tag.
 
 After installation, install the Claude Code skill:
 ```bash
