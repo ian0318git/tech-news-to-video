@@ -1,7 +1,7 @@
 # CLI Reference
 
 **Status:** Active
-**Last Updated:** 2026-01-10
+**Last Updated:** 2026-01-15
 
 Complete command reference for the `notebooklm` CLI.
 
@@ -43,6 +43,9 @@ See [Configuration](configuration.md) for details on environment variables and C
 | `status --paths` | Show configuration paths | `notebooklm status --paths` |
 | `status --json` | Output status as JSON | `notebooklm status --json` |
 | `clear` | Clear current context | `notebooklm clear` |
+| `auth check` | Diagnose authentication issues | `notebooklm auth check` |
+| `auth check --test` | Validate with network test | `notebooklm auth check --test` |
+| `auth check --json` | Output as JSON | `notebooklm auth check --json` |
 
 ### Notebook Commands
 
@@ -221,6 +224,49 @@ notebooklm status --json
 │ Browser Profile │ .../browser_profile         │                 │
 └─────────────────┴──────────────────────────────┴─────────────────┘
 ```
+
+### Session: `auth check`
+
+Diagnose authentication issues by validating storage file, cookies, and optionally testing token fetch.
+
+```bash
+notebooklm auth check [OPTIONS]
+```
+
+**Options:**
+- `--test` - Also test token fetch from NotebookLM (makes network request)
+- `--json` - Output as JSON (useful for scripts)
+
+**Examples:**
+```bash
+# Quick local validation
+notebooklm auth check
+
+# Full validation with network test
+notebooklm auth check --test
+
+# JSON output for automation
+notebooklm auth check --json
+```
+
+**Checks performed:**
+1. Storage file exists and is readable
+2. JSON structure is valid
+3. Required cookies (SID) are present
+4. Cookie domains are correct (.google.com vs regional)
+5. (With `--test`) Token fetch succeeds
+
+**Output shows:**
+- Authentication source (file path or environment variable)
+- Which cookies were found and from which domains
+- Detailed cookie breakdown by domain (highlighting key auth cookies)
+- Token lengths when using `--test`
+
+**Use cases:**
+- Debug "Not logged in" errors
+- Verify auth setup in CI/CD environments
+- Check if cookies are from correct domain (regional vs .google.com)
+- Diagnose NOTEBOOKLM_AUTH_JSON environment variable issues
 
 ### Source: `add-research`
 

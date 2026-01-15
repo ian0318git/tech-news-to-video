@@ -61,6 +61,7 @@ Before starting workflows, verify the CLI is ready:
 
 **Run automatically (no confirmation):**
 - `notebooklm status` - check context
+- `notebooklm auth check` - diagnose auth issues
 - `notebooklm list` - list notebooks
 - `notebooklm source list` - list sources
 - `notebooklm artifact list` - list artifacts
@@ -86,6 +87,8 @@ Before starting workflows, verify the CLI is ready:
 | Task | Command |
 |------|---------|
 | Authenticate | `notebooklm login` |
+| Diagnose auth issues | `notebooklm auth check` |
+| Diagnose auth (full) | `notebooklm auth check --test` |
 | List notebooks | `notebooklm list` |
 | Create notebook | `notebooklm create "Title"` |
 | Set context | `notebooklm use <notebook_id>` |
@@ -326,6 +329,7 @@ notebooklm source add-research "topic" --mode deep --import-all
 **JSON output:** Use `--json` flag for machine-readable output:
 ```bash
 notebooklm list --json
+notebooklm auth check --json
 notebooklm source list --json
 notebooklm artifact list --json
 ```
@@ -335,6 +339,11 @@ notebooklm artifact list --json
 `notebooklm list --json`:
 ```json
 {"notebooks": [{"id": "...", "title": "...", "created_at": "..."}]}
+```
+
+`notebooklm auth check --json`:
+```json
+{"checks": {"storage_exists": true, "json_valid": true, "cookies_present": true, "sid_cookie": true, "token_fetch": true}, "details": {"storage_path": "...", "auth_source": "file", "cookies_found": ["SID", "HSID", "..."], "cookie_domains": [".google.com"]}}
 ```
 
 `notebooklm source list --json`:
@@ -362,7 +371,7 @@ notebooklm artifact list --json
 
 | Error | Cause | Action |
 |-------|-------|--------|
-| Auth/cookie error | Session expired | Run `notebooklm login` |
+| Auth/cookie error | Session expired | Run `notebooklm auth check` then `notebooklm login` |
 | "No notebook context" | Context not set | Use `-n <id>` or `--notebook <id>` flag (parallel), or `notebooklm use <id>` (single-agent) |
 | "No result found for RPC ID" | Rate limiting | Wait 5-10 min, retry |
 | `GENERATION_FAILED` | Google rate limit | Wait and retry later |
@@ -426,6 +435,8 @@ All commands use consistent exit codes:
 
 ```bash
 notebooklm --help              # Main commands
+notebooklm auth check          # Diagnose auth issues
+notebooklm auth check --test   # Full auth validation with network test
 notebooklm notebook --help     # Notebook management
 notebooklm source --help       # Source management
 notebooklm research --help     # Research status/wait
@@ -434,6 +445,7 @@ notebooklm artifact --help     # Artifact management
 notebooklm download --help     # Download content
 ```
 
+**Diagnose auth:** `notebooklm auth check` - shows cookie domains, storage path, validation status
 **Re-authenticate:** `notebooklm login`
 **Check version:** `notebooklm --version`
 **Update skill:** `notebooklm skill install`
