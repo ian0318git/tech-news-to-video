@@ -1,13 +1,26 @@
 # Troubleshooting
 
 **Status:** Active
-**Last Updated:** 2026-01-12
+**Last Updated:** 2026-01-15
 
 Common issues, known limitations, and workarounds for `notebooklm-py`.
 
 ## Common Errors
 
 ### Authentication Errors
+
+**First step:** Run `notebooklm auth check` to diagnose auth issues:
+```bash
+notebooklm auth check          # Quick local validation
+notebooklm auth check --test   # Full validation with network test
+notebooklm auth check --json   # Machine-readable output for CI/CD
+```
+
+This shows:
+- Storage file location and validity
+- Which cookies are present and their domains
+- Whether NOTEBOOKLM_AUTH_JSON or NOTEBOOKLM_HOME is being used
+- (With `--test`) Whether token fetch succeeds
 
 See [Authentication Lifecycle](#authentication-lifecycle) for background on token types.
 
@@ -339,6 +352,10 @@ from notebooklm import NotebookLMClient
 Check what's happening under the hood:
 
 ```bash
+# Diagnose authentication issues
+notebooklm auth check
+notebooklm auth check --test   # Include network test
+
 # See full error messages
 notebooklm list 2>&1
 
@@ -456,6 +473,9 @@ Add diagnostic steps to your workflow:
 ```yaml
 - name: Debug auth
   run: |
+    # Comprehensive auth check (preferred)
+    notebooklm auth check --json
+
     # Check if env var is set (without revealing content)
     if [ -n "$NOTEBOOKLM_AUTH_JSON" ]; then
       echo "NOTEBOOKLM_AUTH_JSON is set (length: ${#NOTEBOOKLM_AUTH_JSON})"
@@ -463,6 +483,12 @@ Add diagnostic steps to your workflow:
       echo "NOTEBOOKLM_AUTH_JSON is not set"
     fi
 ```
+
+The `auth check --json` output shows:
+- Whether storage/env var is being used
+- Which cookies are present
+- Cookie domains (important for regional users)
+- Any validation errors
 
 ---
 
