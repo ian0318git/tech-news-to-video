@@ -30,6 +30,7 @@ from collections import Counter
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
+from urllib.parse import quote
 from uuid import uuid4
 
 import httpx
@@ -183,13 +184,21 @@ async def make_rpc_request(
     auth: AuthTokens,
     method: RPCMethod,
     params: list[Any],
+    source_path: str = "/",
 ) -> tuple[str | None, str | None]:
     """Make an RPC request and return raw response text.
+
+    Args:
+        client: HTTP client
+        auth: Authentication tokens
+        method: RPC method to call
+        params: Method parameters
+        source_path: Source path for the request (default: "/")
 
     Returns:
         Tuple of (response text or None, error message or None)
     """
-    url = f"{BATCHEXECUTE_URL}?f.sid={auth.session_id}&source-path=%2F"
+    url = f"{BATCHEXECUTE_URL}?f.sid={auth.session_id}&source-path={quote(source_path, safe='')}"
     rpc_request = encode_rpc_request(method, params)
     body = build_request_body(rpc_request, auth.csrf_token)
 
@@ -214,13 +223,21 @@ async def make_rpc_call(
     auth: AuthTokens,
     method: RPCMethod,
     params: list[Any],
+    source_path: str = "/",
 ) -> tuple[list[str], str | None]:
     """Make an RPC call and return found IDs.
+
+    Args:
+        client: HTTP client
+        auth: Authentication tokens
+        method: RPC method to call
+        params: Method parameters
+        source_path: Source path for the request (default: "/")
 
     Returns:
         Tuple of (list of RPC IDs found in response, error message or None)
     """
-    response_text, error = await make_rpc_request(client, auth, method, params)
+    response_text, error = await make_rpc_request(client, auth, method, params, source_path)
     if error:
         return [], error
 
@@ -238,13 +255,24 @@ async def test_rpc_method(
     auth: AuthTokens,
     method: RPCMethod,
     params: list[Any],
+    source_path: str = "/",
 ) -> CheckResult:
     """Test an RPC method and return a CheckResult.
+
+    Args:
+        client: HTTP client
+        auth: Authentication tokens
+        method: RPC method to call
+        params: Method parameters
+        source_path: Source path for the request (default: "/")
+
+    Returns:
+        CheckResult with test status
 
     Makes the RPC call and checks if the expected method ID appears in the response.
     """
     expected_id = method.value
-    found_ids, error = await make_rpc_call(client, auth, method, params)
+    found_ids, error = await make_rpc_call(client, auth, method, params, source_path)
 
     if expected_id in found_ids:
         return CheckResult(
@@ -268,14 +296,25 @@ async def test_rpc_method_with_data(
     auth: AuthTokens,
     method: RPCMethod,
     params: list[Any],
+    source_path: str = "/",
 ) -> tuple[CheckResult, Any]:
     """Test an RPC method and return both CheckResult and response data.
+
+    Args:
+        client: HTTP client
+        auth: Authentication tokens
+        method: RPC method to call
+        params: Method parameters
+        source_path: Source path for the request (default: "/")
+
+    Returns:
+        Tuple of (CheckResult, decoded response data)
 
     Use this when you need the response data (e.g., to extract created resource IDs).
     """
     expected_id = method.value
 
-    response_text, error = await make_rpc_request(client, auth, method, params)
+    response_text, error = await make_rpc_request(client, auth, method, params, source_path)
     if error:
         return CheckResult(
             method=method,
@@ -331,9 +370,9 @@ def get_test_params(method: RPCMethod, notebook_id: str | None) -> list[Any] | N
         return []
 
     # Global settings (no notebook required)
-    if method == RPCMethod.SET_OUTPUT_LANGUAGE:
-        # Empty string reads current setting without changing
-        return [[[None, [[None, None, None, None, [""]]]]]]
+    if method == RPCMethod.GET_USER_SETTINGS:
+        # Empty params to read current settings
+        return []
 
     # Methods that require a notebook ID
     if not notebook_id:
@@ -537,7 +576,9 @@ async def setup_temp_resources(
     if result.status != CheckStatus.OK:
         return temp
 
-    temp.notebook_id = extract_id(data, 0)
+    # Notebook ID is at position [2] in CREATE_NOTEBOOK response
+    # Response format: [title, None, notebook_id, ...]
+    temp.notebook_id = extract_id(data, 2)
     if not temp.notebook_id:
         print(
             "WARNING: Notebook created but ID not found in response. May need manual cleanup.",
@@ -570,6 +611,7 @@ async def setup_temp_resources(
             None,
             None,
         ],
+        source_path=f"/notebook/{temp.notebook_id}",
     )
     results.append(result)
     print(
@@ -585,7 +627,11 @@ async def setup_temp_resources(
     # Params format: [notebook_id, "", [1], None, title]
     await asyncio.sleep(CALL_DELAY)
     result, data = await test_rpc_method_with_data(
-        client, auth, RPCMethod.CREATE_NOTE, [temp.notebook_id, "", [1], None, "Test Note"]
+        client,
+        auth,
+        RPCMethod.CREATE_NOTE,
+        [temp.notebook_id, "", [1], None, "Test Note"],
+        source_path=f"/notebook/{temp.notebook_id}",
     )
     results.append(result)
     print(
@@ -614,7 +660,11 @@ async def cleanup_temp_resources(
     if temp.note_id:
         await asyncio.sleep(CALL_DELAY)
         result = await test_rpc_method(
-            client, auth, RPCMethod.DELETE_NOTE, [[temp.notebook_id], temp.note_id]
+            client,
+            auth,
+            RPCMethod.DELETE_NOTE,
+            [temp.notebook_id, None, [temp.note_id]],
+            source_path=f"/notebook/{temp.notebook_id}",
         )
         results.append(result)
         print(
@@ -627,7 +677,11 @@ async def cleanup_temp_resources(
     if temp.source_id:
         await asyncio.sleep(CALL_DELAY)
         result = await test_rpc_method(
-            client, auth, RPCMethod.DELETE_SOURCE, [[temp.notebook_id], [[temp.source_id]]]
+            client,
+            auth,
+            RPCMethod.DELETE_SOURCE,
+            [[[temp.source_id]]],
+            source_path=f"/notebook/{temp.notebook_id}",
         )
         results.append(result)
         print(
