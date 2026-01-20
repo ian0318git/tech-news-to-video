@@ -8,6 +8,9 @@ from pytest_httpx import HTTPXMock
 
 from notebooklm import NotebookLMClient
 from notebooklm.rpc import AudioFormat, AudioLength, RPCError, RPCMethod, VideoFormat, VideoStyle
+from notebooklm.types import (
+    ArtifactNotReadyError,
+)
 
 
 class TestStudioContent:
@@ -659,7 +662,7 @@ class TestArtifactErrorPaths:
         httpx_mock.add_response(content=response.encode())
 
         async with NotebookLMClient(auth_tokens) as client:
-            with pytest.raises(ValueError, match="(not found|[Nn]o completed)"):
+            with pytest.raises(ArtifactNotReadyError):
                 await client.artifacts.download_audio("nb_123", "/tmp/audio.mp4")
 
     @pytest.mark.asyncio
@@ -682,7 +685,7 @@ class TestArtifactErrorPaths:
         httpx_mock.add_response(content=response.encode())
 
         async with NotebookLMClient(auth_tokens) as client:
-            with pytest.raises(ValueError, match="not found"):
+            with pytest.raises(ArtifactNotReadyError):
                 await client.artifacts.download_audio(
                     "nb_123", "/tmp/audio.mp4", artifact_id="nonexistent_id"
                 )
@@ -699,7 +702,7 @@ class TestArtifactErrorPaths:
         httpx_mock.add_response(content=response.encode())
 
         async with NotebookLMClient(auth_tokens) as client:
-            with pytest.raises(ValueError, match="(not found|[Nn]o completed)"):
+            with pytest.raises(ArtifactNotReadyError):
                 await client.artifacts.download_video("nb_123", "/tmp/video.mp4")
 
     @pytest.mark.asyncio
@@ -714,7 +717,7 @@ class TestArtifactErrorPaths:
         httpx_mock.add_response(content=response.encode())
 
         async with NotebookLMClient(auth_tokens) as client:
-            with pytest.raises(ValueError, match="(not found|[Nn]o completed)"):
+            with pytest.raises(ArtifactNotReadyError):
                 await client.artifacts.download_infographic("nb_123", "/tmp/infographic.png")
 
     @pytest.mark.asyncio
@@ -729,7 +732,7 @@ class TestArtifactErrorPaths:
         httpx_mock.add_response(content=response.encode())
 
         async with NotebookLMClient(auth_tokens) as client:
-            with pytest.raises(ValueError, match="(not found|[Nn]o completed)"):
+            with pytest.raises(ArtifactNotReadyError):
                 await client.artifacts.download_slide_deck("nb_123", "/tmp/slides")
 
     @pytest.mark.asyncio
@@ -786,7 +789,7 @@ class TestArtifactErrorPaths:
         httpx_mock.add_response(status_code=500)
 
         async with NotebookLMClient(auth_tokens) as client:
-            with pytest.raises(RPCError, match="HTTP 500"):
+            with pytest.raises(RPCError, match="Server error 500"):
                 await client.artifacts.list("nb_123")
 
     @pytest.mark.asyncio
@@ -864,7 +867,7 @@ class TestDownloadReport:
         httpx_mock.add_response(content=response.encode())
 
         async with NotebookLMClient(auth_tokens) as client:
-            with pytest.raises(ValueError, match="No completed report"):
+            with pytest.raises(ArtifactNotReadyError):
                 await client.artifacts.download_report("nb_123", "/tmp/report.md")
 
 
@@ -918,7 +921,7 @@ class TestDownloadMindMap:
         httpx_mock.add_response(content=response.encode())
 
         async with NotebookLMClient(auth_tokens) as client:
-            with pytest.raises(ValueError, match="No mind maps found"):
+            with pytest.raises(ArtifactNotReadyError):
                 await client.artifacts.download_mind_map("nb_123", "/tmp/mindmap.json")
 
 
@@ -986,5 +989,5 @@ class TestDownloadDataTable:
         httpx_mock.add_response(content=response.encode())
 
         async with NotebookLMClient(auth_tokens) as client:
-            with pytest.raises(ValueError, match="No completed data table"):
+            with pytest.raises(ArtifactNotReadyError):
                 await client.artifacts.download_data_table("nb_123", "/tmp/data.csv")

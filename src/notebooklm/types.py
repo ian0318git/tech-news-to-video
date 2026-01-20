@@ -54,9 +54,15 @@ __all__ = [
     "ChatMode",
     # Exceptions
     "SourceError",
+    "SourceAddError",
     "SourceProcessingError",
     "SourceTimeoutError",
     "SourceNotFoundError",
+    "ArtifactError",
+    "ArtifactNotFoundError",
+    "ArtifactNotReadyError",
+    "ArtifactParseError",
+    "ArtifactDownloadError",
     # Re-exported enums
     "StudioContentType",
     "AudioFormat",
@@ -254,6 +260,137 @@ class SourceAddError(SourceError):
             "  - Rate limiting or quota exceeded"
         )
         super().__init__(msg)
+
+
+# =============================================================================
+# Artifact Error Types
+# =============================================================================
+
+
+class ArtifactError(Exception):
+    """Base exception for artifact-related errors.
+
+    This includes errors when generating, fetching, parsing, or downloading artifacts
+    such as audio overviews, videos, reports, quizzes, and other generated content.
+    """
+
+    pass
+
+
+class ArtifactNotFoundError(ArtifactError):
+    """Raised when a specific artifact is not found.
+
+    Attributes:
+        artifact_id: The ID of the artifact that was not found.
+        artifact_type: The type of artifact (e.g., "audio", "video", "report").
+    """
+
+    def __init__(self, artifact_id: str, artifact_type: str | None = None):
+        self.artifact_id = artifact_id
+        self.artifact_type = artifact_type
+        type_info = f" {artifact_type}" if artifact_type else ""
+        super().__init__(f"{type_info.capitalize()} artifact {artifact_id} not found")
+
+
+class ArtifactNotReadyError(ArtifactError):
+    """Raised when an artifact is not in a completed/ready state.
+
+    This typically means the artifact is still being generated or has failed processing.
+
+    Attributes:
+        artifact_type: The type of artifact (e.g., "audio", "video").
+        artifact_id: The ID of the artifact (if known).
+        status: The current status of the artifact (if known).
+    """
+
+    def __init__(
+        self,
+        artifact_type: str,
+        artifact_id: str | None = None,
+        status: str | None = None,
+    ):
+        self.artifact_type = artifact_type
+        self.artifact_id = artifact_id
+        self.status = status
+
+        if artifact_id:
+            msg = f"{artifact_type.capitalize()} artifact {artifact_id} is not ready"
+            if status:
+                msg += f" (status: {status})"
+        else:
+            msg = f"No completed {artifact_type} found"
+
+        super().__init__(msg)
+
+
+def _build_artifact_error_message(
+    action: str, artifact_type: str, artifact_id: str | None, details: str | None
+) -> str:
+    """Build a consistent error message for artifact operations."""
+    msg = f"Failed to {action} {artifact_type} artifact"
+    if artifact_id:
+        msg += f" {artifact_id}"
+    if details:
+        msg += f": {details}"
+    return msg
+
+
+class ArtifactParseError(ArtifactError):
+    """Raised when artifact data cannot be parsed or has invalid structure.
+
+    This indicates the API returned data in an unexpected format, which may occur
+    when the API structure changes or the response is malformed.
+
+    Attributes:
+        artifact_type: The type of artifact being parsed.
+        artifact_id: The ID of the artifact (if known).
+        details: Additional error details from the parsing attempt.
+        cause: The underlying exception that caused the failure.
+    """
+
+    def __init__(
+        self,
+        artifact_type: str,
+        details: str | None = None,
+        artifact_id: str | None = None,
+        cause: Exception | None = None,
+    ):
+        self.artifact_type = artifact_type
+        self.artifact_id = artifact_id
+        self.details = details
+        self.cause = cause
+        super().__init__(
+            _build_artifact_error_message("parse", artifact_type, artifact_id, details)
+        )
+
+
+class ArtifactDownloadError(ArtifactError):
+    """Raised when downloading artifact content fails.
+
+    This occurs when the artifact exists but its content cannot be retrieved,
+    such as missing download URLs or HTTP errors during download.
+
+    Attributes:
+        artifact_type: The type of artifact being downloaded.
+        artifact_id: The ID of the artifact (if known).
+        details: Additional error details.
+        cause: The underlying exception that caused the failure.
+    """
+
+    def __init__(
+        self,
+        artifact_type: str,
+        details: str | None = None,
+        artifact_id: str | None = None,
+        cause: Exception | None = None,
+    ):
+        self.artifact_type = artifact_type
+        self.artifact_id = artifact_id
+        self.details = details
+        self.cause = cause
+        super().__init__(
+            _build_artifact_error_message("download", artifact_type, artifact_id, details)
+        )
 
 
 @dataclass

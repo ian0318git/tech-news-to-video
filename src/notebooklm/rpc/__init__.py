@@ -2,10 +2,17 @@
 
 from .decoder import (
     AuthError,
+    ClientError,
+    NetworkError,
+    RateLimitError,
     RPCError,
+    RPCErrorCode,
+    RPCTimeoutError,
+    ServerError,
     collect_rpc_ids,
     decode_response,
     extract_rpc_result,
+    get_error_message_for_code,
     parse_chunked_response,
     strip_anti_xssi,
 )
@@ -65,6 +72,15 @@ __all__ = [
     "extract_rpc_result",
     "collect_rpc_ids",
     "decode_response",
+    # Exceptions
     "RPCError",
     "AuthError",
+    "NetworkError",
+    "RPCTimeoutError",
+    "RateLimitError",
+    "ServerError",
+    "ClientError",
+    # Error handling utilities
+    "RPCErrorCode",
+    "get_error_message_for_code",
 ]

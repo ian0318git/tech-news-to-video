@@ -14,8 +14,13 @@ from .auth import AuthTokens
 from .rpc import (
     BATCHEXECUTE_URL,
     AuthError,
+    ClientError,
+    NetworkError,
+    RateLimitError,
     RPCError,
     RPCMethod,
+    RPCTimeoutError,
+    ServerError,
     build_request_body,
     decode_response,
     encode_rpc_request,
@@ -51,6 +56,11 @@ def is_auth_error(error: Exception) -> bool:
     # AuthError is always an auth error
     if isinstance(error, AuthError):
         return True
+
+    # Don't treat network/rate limit/server errors as auth errors
+    # even if they're subclasses of RPCError
+    if isinstance(error, (NetworkError, RPCTimeoutError, RateLimitError, ServerError, ClientError)):
+        return False
 
     # HTTP 401/403 are auth errors
     if isinstance(error, httpx.HTTPStatusError):
@@ -217,21 +227,83 @@ class ClientCore:
                     return refreshed
 
             if isinstance(e, httpx.HTTPStatusError):
+                status = e.response.status_code
                 logger.error(
                     "RPC %s failed after %.3fs: HTTP %s",
                     method.name,
                     elapsed,
-                    e.response.status_code,
+                    status,
                 )
+
+                # Map HTTP status codes to appropriate exception types
+                if status == 429:
+                    # Rate limiting - extract retry-after if available
+                    retry_after = None
+                    retry_after_header = e.response.headers.get("retry-after")
+                    if retry_after_header:
+                        try:
+                            retry_after = int(retry_after_header)
+                        except ValueError:
+                            pass
+                    msg = f"API rate limit exceeded calling {method.name}"
+                    if retry_after:
+                        msg += f". Retry after {retry_after} seconds"
+                    raise RateLimitError(msg, rpc_id=method.value, retry_after=retry_after) from e
+
+                if 500 <= status < 600:
+                    raise ServerError(
+                        f"Server error {status} calling {method.name}: {e.response.reason_phrase}",
+                        rpc_id=method.value,
+                        status_code=status,
+                    ) from e
+
+                if 400 <= status < 500 and status not in (401, 403):
+                    raise ClientError(
+                        f"Client error {status} calling {method.name}: {e.response.reason_phrase}",
+                        rpc_id=method.value,
+                        status_code=status,
+                    ) from e
+
+                # 401/403 or other: Generic RPCError (handled by auth retry above)
                 raise RPCError(
-                    f"HTTP {e.response.status_code} calling {method.name}: {e.response.reason_phrase}",
+                    f"HTTP {status} calling {method.name}: {e.response.reason_phrase}",
                     rpc_id=method.value,
                 ) from e
+
+            # Network/connection errors
             else:
                 logger.error("RPC %s failed after %.3fs: %s", method.name, elapsed, e)
-                raise RPCError(
+
+                # Check ConnectTimeout first (more specific than general TimeoutException)
+                if isinstance(e, httpx.ConnectTimeout):
+                    raise NetworkError(
+                        f"Connection timed out calling {method.name}: {e}",
+                        rpc_id=method.value,
+                        original_error=e,
+                    ) from e
+
+                # Timeout errors (general timeouts, not connection timeouts)
+                if isinstance(e, httpx.TimeoutException):
+                    raise RPCTimeoutError(
+                        f"Request timed out calling {method.name}",
+                        rpc_id=method.value,
+                        timeout_seconds=self._timeout,
+                        original_error=e,
+                    ) from e
+
+                # Connection errors (DNS, network unavailable, etc., excluding ConnectTimeout)
+                if isinstance(e, httpx.ConnectError):
+                    raise NetworkError(
+                        f"Connection failed calling {method.name}: {e}",
+                        rpc_id=method.value,
+                        original_error=e,
+                    ) from e
+
+                # Other request errors
+                raise NetworkError(
                     f"Request failed calling {method.name}: {e}",
                     rpc_id=method.value,
+                    original_error=e,
                 ) from e
 
         try:

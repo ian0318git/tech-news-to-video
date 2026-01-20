@@ -3,13 +3,92 @@
 import json
 import logging
 import re
+from enum import IntEnum
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
+class RPCErrorCode(IntEnum):
+    """Known RPC error codes from the batchexecute API.
+
+    These codes are discovered through network traffic analysis and may not be
+    exhaustive. Unknown codes will still be reported but without specific handling.
+    """
+
+    # Common error codes (discovered through testing)
+    UNKNOWN = 0  # Generic/unspecified error
+    INVALID_REQUEST = 400  # Malformed request
+    UNAUTHORIZED = 401  # Authentication required
+    FORBIDDEN = 403  # Insufficient permissions
+    NOT_FOUND = 404  # Resource not found
+    RATE_LIMITED = 429  # Too many requests
+    SERVER_ERROR = 500  # Internal server error
+
+
+# Error code to human-readable message mapping
+_ERROR_CODE_MESSAGES: dict[int, tuple[str, bool]] = {
+    # (message, is_retryable)
+    RPCErrorCode.INVALID_REQUEST: (
+        "Invalid request parameters. Check your input and try again.",
+        False,
+    ),
+    RPCErrorCode.UNAUTHORIZED: (
+        "Authentication required. Run 'notebooklm login' to re-authenticate.",
+        False,
+    ),
+    RPCErrorCode.FORBIDDEN: (
+        "Insufficient permissions for this operation.",
+        False,
+    ),
+    RPCErrorCode.NOT_FOUND: (
+        "Requested resource not found.",
+        False,
+    ),
+    RPCErrorCode.RATE_LIMITED: (
+        "API rate limit exceeded. Please wait before retrying.",
+        True,
+    ),
+    RPCErrorCode.SERVER_ERROR: (
+        "Server error occurred. This is usually temporary - try again later.",
+        True,
+    ),
+}
+
+
+def get_error_message_for_code(code: int | None) -> tuple[str, bool]:
+    """Get human-readable error message and retryability for an error code.
+
+    Args:
+        code: Integer error code from API response.
+
+    Returns:
+        Tuple of (error_message, is_retryable).
+        Returns generic message for unknown codes.
+    """
+    if code is None:
+        return ("Unknown error occurred.", False)
+
+    if code in _ERROR_CODE_MESSAGES:
+        return _ERROR_CODE_MESSAGES[code]
+
+    # Unknown code - provide generic guidance based on HTTP status code ranges
+    if 400 <= code < 500:
+        return (f"Client error {code}. Check your request parameters.", False)
+    if 500 <= code < 600:
+        return (f"Server error {code}. This is usually temporary - try again later.", True)
+    return (f"Error code: {code}", False)
+
+
 class RPCError(Exception):
-    """Raised when RPC call returns an error."""
+    """Raised when RPC call returns an error.
+
+    Attributes:
+        rpc_id: The RPC method ID that failed.
+        code: Error code from API response (if available).
+        found_ids: List of RPC IDs found in the response.
+        raw_response_preview: First 500 chars of response (for debugging).
+    """
 
     def __init__(
         self,
@@ -17,10 +96,12 @@ class RPCError(Exception):
         rpc_id: str | None = None,
         code: Any | None = None,
         found_ids: list[str] | None = None,
+        raw_response_preview: str | None = None,
     ):
         self.rpc_id = rpc_id
         self.code = code
         self.found_ids = found_ids or []
+        self.raw_response_preview = raw_response_preview
         super().__init__(message)
 
 
@@ -30,6 +111,118 @@ class AuthError(RPCError):
     This is a subclass of RPCError for backwards compatibility.
     Catching RPCError will also catch AuthError.
     """
+
+
+class NetworkError(RPCError):
+    """Raised when RPC call fails due to network issues.
+
+    This includes connection failures, DNS errors, and other transport-level problems.
+    These errors are typically transient and may succeed on retry.
+
+    Attributes:
+        rpc_id: The RPC method ID that failed.
+        original_error: The underlying network exception.
+    """
+
+    def __init__(
+        self, message: str, rpc_id: str | None = None, original_error: Exception | None = None
+    ):
+        super().__init__(message, rpc_id=rpc_id)
+        self.original_error = original_error
+
+
+class RPCTimeoutError(NetworkError):
+    """Raised when RPC call times out.
+
+    Indicates the request took too long to complete. May succeed with a longer timeout
+    or during periods of lower API load.
+
+    Note: Named RPCTimeoutError to avoid shadowing Python's built-in TimeoutError.
+
+    Attributes:
+        rpc_id: The RPC method ID that timed out.
+        timeout_seconds: The timeout duration that was exceeded.
+        original_error: The underlying timeout exception.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        rpc_id: str | None = None,
+        timeout_seconds: float | None = None,
+        original_error: Exception | None = None,
+    ):
+        super().__init__(message, rpc_id=rpc_id, original_error=original_error)
+        self.timeout_seconds = timeout_seconds
+
+
+class RateLimitError(RPCError):
+    """Raised when API rate limit is exceeded.
+
+    The API has rejected the request due to too many requests in a time window.
+    Requests should be retried after a delay.
+
+    Attributes:
+        rpc_id: The RPC method ID that was rate limited.
+        retry_after: Suggested seconds to wait before retrying (if available).
+        code: Error code from API response.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        rpc_id: str | None = None,
+        retry_after: int | None = None,
+        code: Any | None = None,
+    ):
+        super().__init__(message, rpc_id=rpc_id, code=code)
+        self.retry_after = retry_after
+
+
+class ServerError(RPCError):
+    """Raised when API returns a 5xx server error.
+
+    Indicates a problem on Google's servers. These are typically transient
+    and may succeed on retry with exponential backoff.
+
+    Attributes:
+        rpc_id: The RPC method ID that failed.
+        status_code: HTTP status code (500-599).
+        code: Error code from response.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        rpc_id: str | None = None,
+        status_code: int | None = None,
+        code: Any | None = None,
+    ):
+        super().__init__(message, rpc_id=rpc_id, code=code)
+        self.status_code = status_code
+
+
+class ClientError(RPCError):
+    """Raised when API returns a 4xx client error.
+
+    Indicates a problem with the request itself (invalid parameters, malformed data, etc.).
+    These errors typically should not be retried without fixing the request.
+
+    Attributes:
+        rpc_id: The RPC method ID that failed.
+        status_code: HTTP status code (400-499, excluding 401/403).
+        code: Error code from response.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        rpc_id: str | None = None,
+        status_code: int | None = None,
+        code: Any | None = None,
+    ):
+        super().__init__(message, rpc_id=rpc_id, code=code)
+        self.status_code = status_code
 
 
 def strip_anti_xssi(response: str) -> str:
@@ -67,11 +260,19 @@ def parse_chunked_response(response: str) -> list[Any]:
 
     Returns:
         List of parsed JSON chunks
+
+    Raises:
+        RPCError: If more than 10% of chunks are malformed, indicating API issues.
+
+    Note:
+        Malformed chunks are skipped with a warning logged. If the error rate
+        exceeds 10%, raises RPCError as this likely indicates API changes.
     """
     if not response or not response.strip():
         return []
 
     chunks = []
+    skipped_count = 0
     lines = response.strip().split("\n")
 
     i = 0
@@ -94,19 +295,47 @@ def parse_chunked_response(response: str) -> list[Any]:
                 try:
                     chunk = json.loads(json_str)
                     chunks.append(chunk)
-                except json.JSONDecodeError:
-                    # Skip malformed chunks
-                    pass
+                except json.JSONDecodeError as e:
+                    # Skip malformed chunks but warn
+                    skipped_count += 1
+                    logger.warning(
+                        "Skipping malformed chunk at line %d: %s. Preview: %s",
+                        i + 1,
+                        e,
+                        json_str[:100],
+                    )
             i += 1
         except ValueError:
             # Not a byte count, try to parse as JSON directly
             try:
                 chunk = json.loads(line)
                 chunks.append(chunk)
-            except json.JSONDecodeError:
-                # Skip non-JSON lines
-                pass
+            except json.JSONDecodeError as e:
+                # Skip non-JSON lines but warn
+                skipped_count += 1
+                logger.warning(
+                    "Skipping non-JSON line at %d: %s. Preview: %s",
+                    i + 1,
+                    e,
+                    line[:100],
+                )
             i += 1
+
+    # Fail if error rate is too high (indicates API problems)
+    if skipped_count > 0:
+        error_rate = skipped_count / len(lines) if lines else 0
+        if error_rate > 0.1:  # More than 10% malformed
+            raise RPCError(
+                f"Response parsing failed: {skipped_count} of {len(lines)} chunks malformed. "
+                f"This may indicate API changes or data corruption.",
+                raw_response_preview=response[:500],
+            )
+        # Non-critical but warn user results may be incomplete
+        logger.warning(
+            "Parsed response but skipped %d malformed chunks (%d%%). Results may be incomplete.",
+            skipped_count,
+            int(error_rate * 100),
+        )
 
     return chunks
 
@@ -175,13 +404,25 @@ def extract_rpc_result(chunks: list[Any], rpc_id: str) -> Any:
                 continue
 
             if item[0] == "er" and item[1] == rpc_id:
-                error_msg = item[2] if len(item) > 2 else "Unknown error"
-                if isinstance(error_msg, int):
-                    error_msg = f"Error code: {error_msg}"
+                error_code = item[2] if len(item) > 2 else None
+
+                # Try to get human-readable message for integer error codes
+                if isinstance(error_code, int):
+                    error_msg, is_retryable = get_error_message_for_code(error_code)
+                    logger.debug(
+                        "RPC error code %d for %s: %s (retryable: %s)",
+                        error_code,
+                        rpc_id,
+                        error_msg,
+                        is_retryable,
+                    )
+                else:
+                    error_msg = str(error_code) if error_code else "Unknown error"
+
                 raise RPCError(
-                    str(error_msg),
+                    error_msg,
                     rpc_id=rpc_id,
-                    code=item[2] if len(item) > 2 else None,
+                    code=error_code,
                 )
 
             if item[0] == "wrb.fr" and item[1] == rpc_id:
@@ -191,8 +432,8 @@ def extract_rpc_result(chunks: list[Any], rpc_id: str) -> Any:
                 # This indicates rate limiting, quota exceeded, or other API restrictions
                 if result_data is None and len(item) > 5 and item[5] is not None:
                     if _contains_user_displayable_error(item[5]):
-                        raise RPCError(
-                            "Request rejected by API - may indicate rate limiting or quota exceeded",
+                        raise RateLimitError(
+                            "API rate limit or quota exceeded. Please wait before retrying.",
                             rpc_id=rpc_id,
                             code="USER_DISPLAYABLE_ERROR",
                         )
@@ -227,6 +468,9 @@ def decode_response(raw_response: str, rpc_id: str, allow_null: bool = False) ->
     chunks = parse_chunked_response(cleaned)
     logger.debug("Parsed %d chunks from response", len(chunks))
 
+    # Create response preview for error context (first 500 chars)
+    response_preview = cleaned[:500] if len(cleaned) > 500 else cleaned
+
     # Collect all RPC IDs for debugging
     found_ids = collect_rpc_ids(chunks)
 
@@ -236,9 +480,11 @@ def decode_response(raw_response: str, rpc_id: str, allow_null: bool = False) ->
     try:
         result = extract_rpc_result(chunks, rpc_id)
     except RPCError as e:
-        # Add found_ids context to errors from extract_rpc_result
+        # Add context to errors from extract_rpc_result
         if not e.found_ids:
             e.found_ids = found_ids
+        if not e.raw_response_preview:
+            e.raw_response_preview = response_preview
         raise
 
     if result is None and not allow_null:
@@ -250,16 +496,19 @@ def decode_response(raw_response: str, rpc_id: str, allow_null: bool = False) ->
                 f"The RPC method ID may have changed.",
                 rpc_id=rpc_id,
                 found_ids=found_ids,
+                raw_response_preview=response_preview,
             )
         # Log raw response details at debug level for troubleshooting
-        # Show first 500 chars of cleaned response
-        response_preview = cleaned[:500] if len(cleaned) > 500 else cleaned
         logger.debug(
             "Empty result for RPC ID '%s'. Chunks parsed: %d. Response preview: %s",
             rpc_id,
             len(chunks),
             response_preview,
         )
-        raise RPCError(f"No result found for RPC ID: {rpc_id}", rpc_id=rpc_id)
+        raise RPCError(
+            f"No result found for RPC ID: {rpc_id}",
+            rpc_id=rpc_id,
+            raw_response_preview=response_preview,
+        )
 
     return result
