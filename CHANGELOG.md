@@ -7,42 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.3.0] - 2026-01-18
-
-### Breaking Changes
-- **Source type string values** - `Source.source_type` string values have changed for consistency with SourceType enum:
-  - `"url"` → `"web_page"`
-  - `"generated"` → `"markdown"`
-  - `"text"` → `"docx"`
-  - `"spreadsheet"` → `"google_spreadsheet"`
-  - Added: `"csv"`
-
-  **Migration**: Use `source_type_code` (int) for stable comparisons instead of `source_type` (str):
-  ```python
-  # Old (breaks in 0.3.0):
-  if source.source_type == "url": ...
-
-  # New (stable API):
-  from notebooklm.rpc.types import SourceType
-  if source.source_type_code == SourceType.WEB_PAGE: ...
-  ```
-
-- **Default source_type value** - Changed from `"text"` to `"unknown"` for sources without type information. This affects sources created without type codes or when parsing fails.
-
 ### Added
-- **SourceType enum expansion** - New type codes verified via E2E testing:
-  - `DOCX = 11` - DOCX document uploads (renamed from TEXT)
-  - `MARKDOWN = 8` - Markdown uploads, notes converted to sources (renamed from GENERATED_TEXT)
-  - `CSV = 16` - CSV file uploads
-  - `GOOGLE_SPREADSHEET = 14` - Google Sheets sources
-- **SourceStatus.PREPARING** - New status (5) for sources in upload/preparation phase
-- **source_type_code field** - Sources now include integer type code from SourceType enum for stable comparisons
+- **`SourceType` enum** - New `str, Enum` for type-safe source identification:
+  - `GOOGLE_DOCS`, `GOOGLE_SLIDES`, `GOOGLE_SPREADSHEET`, `PDF`, `PASTED_TEXT`, `WEB_PAGE`, `YOUTUBE`, `MARKDOWN`, `DOCX`, `CSV`, `IMAGE`, `MEDIA`, `UNKNOWN`
+- **`ArtifactType` enum** - New `str, Enum` for type-safe artifact identification:
+  - `AUDIO`, `VIDEO`, `REPORT`, `QUIZ`, `FLASHCARDS`, `MIND_MAP`, `INFOGRAPHIC`, `SLIDES`, `DATA_TABLE`, `UNKNOWN`
+- **`.kind` property** - Unified type access across `Source`, `Artifact`, and `SourceFulltext`:
+  ```python
+  # Works with both enum and string comparison
+  source.kind == SourceType.PDF        # True
+  source.kind == "pdf"                 # Also True
+  artifact.kind == ArtifactType.AUDIO  # True
+  artifact.kind == "audio"             # Also True
+  ```
+- **`UnknownTypeWarning`** - Warning (deduplicated) when API returns unknown type codes
+- **`SourceStatus.PREPARING`** - New status (5) for sources in upload/preparation phase
 - **E2E test coverage** - Added file upload tests for CSV, MP3, MP4, DOCX, JPG, Markdown with type verification
 
 ### Changed
-- **Source type detection** - Use API-provided type codes as source of truth instead of URL heuristics
+- **Source type detection** - Use API-provided type codes as source of truth instead of URL/extension heuristics
 - **CLI file handling** - Simplified to always use `add_file()` for proper type detection
-- **Default source_type** - Changed from `"text"` to `"unknown"` for sources without type codes
+- **`StudioContentType`** - Now internal only (use `ArtifactType` for public API)
+
+### Removed
+- **`detect_source_type()`** - Obsolete heuristic function replaced by `Source.kind` property
+- **`ARTIFACT_TYPE_DISPLAY`** - Unused constant replaced by `get_artifact_type_display()`
+
+### Deprecated
+- **`Source.source_type`** - Use `.kind` property instead (returns `SourceType` enum)
+- **`Artifact.artifact_type`** - Use `.kind` property instead (returns `ArtifactType` enum)
+- **`SourceFulltext.source_type`** - Use `.kind` property instead
 
 ## [0.2.1] - 2026-01-15
 

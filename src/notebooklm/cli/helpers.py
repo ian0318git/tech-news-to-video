@@ -15,18 +15,21 @@ import logging
 import os
 import time
 from functools import wraps
+from typing import TYPE_CHECKING
 
 import click
 from rich.console import Console
 from rich.table import Table
 
-from .._url_utils import is_youtube_url
 from ..auth import (
     AuthTokens,
     fetch_tokens,
     load_auth_from_storage,
 )
 from ..paths import get_browser_profile_dir, get_context_path
+
+if TYPE_CHECKING:
+    from ..types import Artifact
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -37,20 +40,7 @@ logger = logging.getLogger(__name__)
 CONTEXT_FILE = get_context_path()
 BROWSER_PROFILE_DIR = get_browser_profile_dir()
 
-# Artifact type display mapping
-ARTIFACT_TYPE_DISPLAY = {
-    1: "🎵 Audio Overview",
-    2: "📄 Report",
-    3: "🎥 Video Overview",
-    4: "📝 Quiz",
-    5: "🧠 Mind Map",
-    # Note: Type 6 appears unused in current API
-    7: "🖼️ Infographic",
-    8: "🎞️ Slide Deck",
-    9: "📋 Data Table",
-}
-
-# CLI artifact type to StudioContentType enum mapping
+# CLI artifact type to StudioContentType enum mapping (for filtering)
 ARTIFACT_TYPE_MAP = {
     "video": 3,
     "slide-deck": 8,
@@ -478,90 +468,59 @@ def display_research_sources(sources: list[dict], max_display: int = 10) -> None
 # =============================================================================
 
 
-def get_artifact_type_display(
-    artifact_type: int, variant: int | None = None, report_subtype: str | None = None
-) -> str:
+def get_artifact_type_display(artifact: "Artifact") -> str:
     """Get display string for artifact type.
 
     Args:
-        artifact_type: StudioContentType enum value
-        variant: Optional variant code (for type 4: 1=flashcards, 2=quiz)
-        report_subtype: Optional report subtype (for type 2: briefing_doc, study_guide, blog_post)
+        artifact: Artifact object
 
     Returns:
         Display string with emoji
     """
-    # Handle quiz/flashcards distinction (both use type 4)
-    if artifact_type == 4 and variant is not None:
-        if variant == 1:
-            return "🃏 Flashcards"
-        elif variant == 2:
-            return "📝 Quiz"
+    from notebooklm import ArtifactType
 
-    # Handle report subtypes (type 2)
-    if artifact_type == 2 and report_subtype:
+    kind = artifact.kind
+
+    # Map ArtifactType enum to display strings
+    display_map = {
+        ArtifactType.AUDIO: "🎧 Audio",
+        ArtifactType.VIDEO: "🎬 Video",
+        ArtifactType.QUIZ: "📝 Quiz",
+        ArtifactType.FLASHCARDS: "🃏 Flashcards",
+        ArtifactType.MIND_MAP: "🧠 Mind Map",
+        ArtifactType.INFOGRAPHIC: "🖼️ Infographic",
+        ArtifactType.SLIDES: "📊 Slides",
+        ArtifactType.DATA_TABLE: "📈 Data Table",
+    }
+
+    # Handle report subtypes specially
+    if kind == ArtifactType.REPORT:
         report_displays = {
             "briefing_doc": "📋 Briefing Doc",
             "study_guide": "📚 Study Guide",
             "blog_post": "✍️ Blog Post",
             "report": "📄 Report",
         }
-        return report_displays.get(report_subtype, "📄 Report")
+        return report_displays.get(artifact.report_subtype or "report", "📄 Report")
 
-    return ARTIFACT_TYPE_DISPLAY.get(artifact_type, f"Unknown ({artifact_type})")
-
-
-def detect_source_type(src: list) -> str:
-    """Detect source type from API data structure.
-
-    Detection logic:
-    - Check src[2][7] for YouTube/URL indicators
-    - Check src[3][1] for type code
-    - Check file size indicators at src[2][1]
-    - Use title extension as fallback (.pdf, .txt, etc.)
-
-    Returns:
-        Display string with emoji (e.g., "🎥 YouTube")
-    """
-    # Check for URL at position [2][7] (YouTube/URL indicator)
-    if len(src) > 2 and isinstance(src[2], list) and len(src[2]) > 7:
-        url_field = src[2][7]
-        if url_field and isinstance(url_field, list) and len(url_field) > 0:
-            url = url_field[0]
-            return "🎥 YouTube" if is_youtube_url(url) else "🔗 Web URL"
-
-    # Check title for file extension
-    title = src[1] if len(src) > 1 else ""
-    if title:
-        if title.endswith(".pdf"):
-            return "📄 PDF"
-        elif title.endswith((".txt", ".md", ".doc", ".docx")):
-            return "📝 Text File"
-        elif title.endswith((".xls", ".xlsx", ".csv")):
-            return "📊 Spreadsheet"
-
-    # Check for file size indicator (uploaded files have src[2][1] as size)
-    if len(src) > 2 and isinstance(src[2], list) and len(src[2]) > 1:
-        if isinstance(src[2][1], int) and src[2][1] > 0:
-            return "📎 Upload"
-
-    # Default to pasted text
-    return "📝 Pasted Text"
+    return display_map.get(kind, f"Unknown ({kind})")
 
 
 def get_source_type_display(source_type: str) -> str:
     """Get display string for source type.
 
     Args:
-        source_type: Type string from Source object (derived from SourceType enum)
+        source_type: Type string from Source.kind (SourceType str enum)
 
     Returns:
         Display string with emoji
     """
+    # Convert to string in case it's a SourceType enum
+    type_str = str(source_type)
     type_map = {
-        # From SourceType enum via source_type_code_to_str()
+        # From SourceType str enum values
         "google_docs": "📄 Google Docs",
-        "google_other": "📊 Google Workspace",
+        "google_slides": "📊 Google Slides",
         "google_spreadsheet": "📊 Google Sheets",
         "pdf": "📄 PDF",
         "pasted_text": "📝 Pasted Text",
@@ -575,4 +534,4 @@ def get_source_type_display(source_type: str) -> str:
         "csv": "📊 CSV",
         "unknown": "❓ Unknown",
     }
-    return type_map.get(source_type, f"❓ {source_type}")
+    return type_map.get(type_str, f"❓ {type_str}")
