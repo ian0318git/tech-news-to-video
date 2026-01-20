@@ -27,7 +27,6 @@ from ..auth import (
     load_auth_from_storage,
 )
 from ..paths import get_browser_profile_dir, get_context_path
-from .error_handler import handle_errors
 
 if TYPE_CHECKING:
     from ..types import Artifact
@@ -113,13 +112,7 @@ def get_current_notebook() -> str | None:
     try:
         data = json.loads(context_file.read_text())
         return data.get("notebook_id")
-    except (OSError, json.JSONDecodeError) as e:
-        logger.debug(
-            "Failed to read notebook context from %s (%s): %s",
-            context_file,
-            type(e).__name__,
-            e,
-        )
+    except (OSError, json.JSONDecodeError):
         return None
 
 
@@ -157,13 +150,7 @@ def get_current_conversation() -> str | None:
     try:
         data = json.loads(context_file.read_text())
         return data.get("conversation_id")
-    except (OSError, json.JSONDecodeError) as e:
-        logger.debug(
-            "Failed to read conversation context from %s (%s): %s",
-            context_file,
-            type(e).__name__,
-            e,
-        )
+    except (OSError, json.JSONDecodeError):
         return None
 
 
@@ -179,13 +166,8 @@ def set_current_conversation(conversation_id: str | None):
         elif "conversation_id" in data:
             del data["conversation_id"]
         context_file.write_text(json.dumps(data, indent=2))
-    except (OSError, json.JSONDecodeError) as e:
-        logger.debug(
-            "Failed to update conversation context in %s (%s): %s",
-            context_file,
-            type(e).__name__,
-            e,
-        )
+    except (OSError, json.JSONDecodeError):
+        pass
 
 
 def validate_id(entity_id: str, entity_name: str = "ID") -> str:
@@ -416,21 +398,19 @@ def with_client(f):
 
         try:
             auth = get_auth_tokens(ctx)
+            coro = f(ctx, *args, client_auth=auth, **kwargs)
+            result = run_async(coro)
+            log_result("completed")
+            return result
         except FileNotFoundError:
             log_result("failed", "not authenticated")
             handle_auth_error(json_output)
-            return  # handle_auth_error raises SystemExit, but type checker needs this
-
-        # Use centralized error handler for command execution
-        with handle_errors(json_output=json_output):
-            try:
-                coro = f(ctx, *args, client_auth=auth, **kwargs)
-                result = run_async(coro)
-                log_result("completed")
-                return result
-            except Exception as e:
-                log_result("failed", str(e))
-                raise
+        except Exception as e:
+            log_result("failed", str(e))
+            if json_output:
+                json_error_response("ERROR", str(e))
+            else:
+                handle_error(e)
 
     return wrapper
 
@@ -535,21 +515,22 @@ def get_source_type_display(source_type: str) -> str:
     Returns:
         Display string with emoji
     """
-    # Convert to string in case it's a SourceType enum
-    type_str = str(source_type)
+    # Extract value if it's a SourceType enum, otherwise use as-is
+    type_str = source_type.value if hasattr(source_type, "value") else str(source_type)
     type_map = {
-        # From SourceType str enum values
+        # From SourceType str enum values (types.py)
         "google_docs": "📄 Google Docs",
         "google_slides": "📊 Google Slides",
         "google_spreadsheet": "📊 Google Sheets",
         "pdf": "📄 PDF",
         "pasted_text": "📝 Pasted Text",
         "docx": "📝 DOCX",
-        "web_page": "🔗 Web URL",
+        "web_page": "🌐 Web Page",
         "markdown": "📝 Markdown",
-        "youtube": "🎥 YouTube",
+        "youtube": "🎬 YouTube",
         "media": "🎵 Media",
-        "upload": "📎 Upload",
+        "google_drive_audio": "🎧 Drive Audio",
+        "google_drive_video": "🎬 Drive Video",
         "image": "🖼️ Image",
         "csv": "📊 CSV",
         "unknown": "❓ Unknown",

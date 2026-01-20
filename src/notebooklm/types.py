@@ -86,7 +86,6 @@ class SourceType(str, Enum):
     YOUTUBE = "youtube"
     MARKDOWN = "markdown"
     DOCX = "docx"
-    EPUB = "epub"
     CSV = "csv"
     IMAGE = "image"
     MEDIA = "media"

@@ -99,6 +99,7 @@ class TestGetArtifactTypeDisplay:
         art = _make_artifact(9)
         assert get_artifact_type_display(art) == "📈 Data Table"
 
+    @pytest.mark.filterwarnings("ignore::notebooklm.types.UnknownTypeWarning")
     def test_unknown_type(self):
         art = _make_artifact(999)
         # Unknown types return "Unknown (<kind>)" format
@@ -130,10 +131,10 @@ class TestGetArtifactTypeDisplay:
 
 class TestGetSourceTypeDisplay:
     def test_youtube(self):
-        assert get_source_type_display("youtube") == "🎥 YouTube"
+        assert get_source_type_display("youtube") == "🎬 YouTube"
 
     def test_web_page(self):
-        assert get_source_type_display("web_page") == "🔗 Web URL"
+        assert get_source_type_display("web_page") == "🌐 Web Page"
 
     def test_pdf(self):
         assert get_source_type_display("pdf") == "📄 PDF"
@@ -147,8 +148,11 @@ class TestGetSourceTypeDisplay:
     def test_csv(self):
         assert get_source_type_display("csv") == "📊 CSV"
 
-    def test_upload(self):
-        assert get_source_type_display("upload") == "📎 Upload"
+    def test_google_drive_audio(self):
+        assert get_source_type_display("google_drive_audio") == "🎧 Drive Audio"
+
+    def test_google_drive_video(self):
+        assert get_source_type_display("google_drive_video") == "🎬 Drive Video"
 
     def test_docx(self):
         assert get_source_type_display("docx") == "📝 DOCX"
@@ -423,11 +427,7 @@ class TestWithClientDecorator:
         assert "login" in result.output.lower()
 
     def test_decorator_handles_exception_non_json(self):
-        """Test error handling in non-JSON mode.
-
-        Unexpected errors (non-library exceptions) use exit code 2 to
-        distinguish from user errors (exit code 1).
-        """
+        """Test error handling in non-JSON mode"""
         import click
         from click.testing import CliRunner
 
@@ -446,16 +446,11 @@ class TestWithClientDecorator:
                 mock_fetch.return_value = ("csrf", "session")
                 result = runner.invoke(test_cmd)
 
-        # Exit code 2 = unexpected error (bugs, unhandled exceptions)
-        assert result.exit_code == 2
+        assert result.exit_code == 1
         assert "Test error" in result.output
 
     def test_decorator_handles_exception_json_mode(self):
-        """Test error handling in JSON mode.
-
-        Unexpected errors (non-library exceptions) use exit code 2 to
-        distinguish from user errors (exit code 1).
-        """
+        """Test error handling in JSON mode"""
         import click
         from click.testing import CliRunner
 
@@ -475,11 +470,9 @@ class TestWithClientDecorator:
                 mock_fetch.return_value = ("csrf", "session")
                 result = runner.invoke(test_cmd, ["--json"])
 
-        # Exit code 2 = unexpected error (bugs, unhandled exceptions)
-        assert result.exit_code == 2
+        assert result.exit_code == 1
         data = json.loads(result.output)
         assert data["error"] is True
-        assert data["code"] == "UNEXPECTED_ERROR"
         assert "Test error" in data["message"]
 
 

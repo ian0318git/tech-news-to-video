@@ -37,6 +37,7 @@ def mock_auth():
 
 
 class TestArtifactList:
+    @pytest.mark.filterwarnings("ignore::notebooklm.types.UnknownTypeWarning")
     def test_artifact_list(self, runner, mock_auth):
         with patch_client_for_module("artifact") as mock_client_cls:
             mock_client = create_mock_client()
