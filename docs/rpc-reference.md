@@ -1505,8 +1505,6 @@ These RPC method IDs exist in `rpc/types.py` but are either legacy (superseded b
 |--------|--------|--------|-------|
 | `hizoJc` | GET_SOURCE | Broken | Code comments indicate this doesn't work; `get()` uses GET_NOTEBOOK instead |
 | `qXyaNe` | DISCOVER_SOURCES | Reserved | Not fully rolled out by Google yet |
-| `xpWGLf` | CREATE_ARTIFACT | Unused | Purpose unknown, CREATE_VIDEO handles all artifact types |
-| `BnLyuf` | GET_ARTIFACT | Unused | Purpose unknown, LIST_ARTIFACTS provides artifact data |
 
 **Why keep these?** These IDs are preserved in the codebase in case:
 1. Google re-enables or changes their functionality

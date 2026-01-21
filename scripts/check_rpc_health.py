@@ -104,7 +104,6 @@ FULL_MODE_ONLY_METHODS = {
     RPCMethod.ADD_SOURCE_FILE,  # Registers file source intent (no upload needed)
     RPCMethod.CREATE_NOTE,
     RPCMethod.CREATE_VIDEO,  # Main RPC for all artifacts - test with flashcards (fast)
-    RPCMethod.CREATE_ARTIFACT,  # Unused RPC - verify ID still valid
     RPCMethod.START_FAST_RESEARCH,  # Starts research (verify RPC ID, don't wait)
     # Read operations (need real artifact from CREATE_VIDEO)
     RPCMethod.GET_ARTIFACT,  # Tested after flashcard creation completes
@@ -561,7 +560,7 @@ async def setup_temp_resources(
     """Create temporary resources for full mode testing.
 
     Tests CREATE_NOTEBOOK, ADD_SOURCE, ADD_SOURCE_FILE, START_FAST_RESEARCH,
-    CREATE_NOTE, CREATE_VIDEO, GET_ARTIFACT, and CREATE_ARTIFACT RPC methods.
+    CREATE_NOTE, CREATE_VIDEO, and GET_ARTIFACT RPC methods.
     Polls for artifact completion before testing GET_ARTIFACT.
     """
     temp = TempResources()
@@ -769,49 +768,6 @@ async def setup_temp_resources(
             results.append(result)
             suffix = "artifact retrieved" if result.status == CheckStatus.OK else None
             print(format_check_output(result, suffix))
-
-    # Test CREATE_ARTIFACT - unused RPC, verify ID still valid
-    # Try with same params as CREATE_VIDEO to see if it responds
-    if temp.source_id:
-        await asyncio.sleep(CALL_DELAY)
-        source_ids_triple = [[[temp.source_id]]]
-        result = await test_rpc_method(
-            client,
-            auth,
-            RPCMethod.CREATE_ARTIFACT,
-            [
-                [2],
-                temp.notebook_id,
-                [
-                    None,
-                    None,
-                    4,  # StudioContentType.QUIZ_FLASHCARD
-                    source_ids_triple,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    [
-                        None,
-                        [
-                            1,  # Variant: flashcards
-                            None,
-                            None,
-                            None,
-                            None,
-                            None,
-                            [None, 1],
-                        ],
-                    ],
-                ],
-            ],
-            source_path=f"/notebook/{temp.notebook_id}",
-        )
-        results.append(result)
-        # This RPC may or may not work - we just want to verify the ID
-        suffix = "CREATE_ARTIFACT RPC tested" if result.status == CheckStatus.OK else None
-        print(format_check_output(result, suffix))
 
     return temp
 

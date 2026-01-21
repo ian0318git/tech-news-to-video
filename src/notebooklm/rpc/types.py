@@ -44,7 +44,6 @@ class RPCMethod(str, Enum):
     CREATE_VIDEO = "R7cb6c"
     POLL_STUDIO = "gArtLc"
     DELETE_STUDIO = "V5N4be"
-    CREATE_ARTIFACT = "xpWGLf"
     GET_ARTIFACT = "BnLyuf"
     LIST_ARTIFACTS = "gArtLc"
 
