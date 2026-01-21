@@ -121,10 +121,6 @@ ALWAYS_SKIP_METHODS = {
     RPCMethod.QUERY_ENDPOINT,
     # Takes too long
     RPCMethod.START_DEEP_RESEARCH,
-    # Legacy RPCs not used in codebase (superseded by CREATE_VIDEO/DELETE_STUDIO)
-    RPCMethod.CREATE_AUDIO,
-    RPCMethod.DELETE_AUDIO,
-    RPCMethod.GET_AUDIO,
 }
 
 
@@ -404,7 +400,6 @@ def get_test_params(method: RPCMethod, notebook_id: str | None) -> list[Any] | N
         RPCMethod.GET_CONVERSATION_HISTORY,
         RPCMethod.GET_NOTES_AND_MIND_MAPS,
         RPCMethod.DISCOVER_SOURCES,
-        RPCMethod.GET_AUDIO,
     ):
         return [[notebook_id]]
 

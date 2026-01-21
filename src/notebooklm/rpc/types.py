@@ -41,9 +41,6 @@ class RPCMethod(str, Enum):
     QUERY_ENDPOINT = "/_/LabsTailwindUi/data/google.internal.labs.tailwind.orchestration.v1.LabsTailwindOrchestrationService/GenerateFreeFormStreamed"
 
     # Studio content generation
-    CREATE_AUDIO = "AHyHrd"
-    GET_AUDIO = "VUsiyb"
-    DELETE_AUDIO = "sJDbic"
     CREATE_VIDEO = "R7cb6c"
     POLL_STUDIO = "gArtLc"
     DELETE_STUDIO = "V5N4be"

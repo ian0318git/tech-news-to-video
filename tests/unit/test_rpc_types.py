@@ -49,10 +49,6 @@ class TestRPCMethod:
         """Test SUMMARIZE RPC ID."""
         assert RPCMethod.SUMMARIZE == "VfAZjd"
 
-    def test_create_audio(self):
-        """Test CREATE_AUDIO RPC ID."""
-        assert RPCMethod.CREATE_AUDIO == "AHyHrd"
-
     def test_create_video(self):
         """Test CREATE_VIDEO RPC ID."""
         assert RPCMethod.CREATE_VIDEO == "R7cb6c"
