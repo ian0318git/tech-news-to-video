@@ -27,14 +27,14 @@
 | `b7Wfje` | UPDATE_SOURCE | Rename source | `_sources.py` |
 | `tr032e` | GET_SOURCE_GUIDE | Get source summary | `_sources.py` |
 | `R7cb6c` | CREATE_ARTIFACT | Unified artifact generation | `_artifacts.py` |
-| `gArtLc` | LIST_ARTIFACTS / POLL_ARTIFACT | List/poll artifacts | `_artifacts.py` |
+| `gArtLc` | LIST_ARTIFACTS | List artifacts in a notebook | `_artifacts.py` |
 | `V5N4be` | DELETE_ARTIFACT | Delete artifact | `_artifacts.py` |
 | `hPTbtc` | GET_CONVERSATION_HISTORY | Get chat history | `_chat.py` |
 | `CYK0Xb` | CREATE_NOTE | Create a note (placeholder) | `_notes.py` |
 | `cYAfTb` | UPDATE_NOTE | Update note content/title | `_notes.py` |
 | `AH0mwd` | DELETE_NOTE | Delete a note | `_notes.py` |
 | `cFji9` | GET_NOTES_AND_MIND_MAPS | List notes and mind maps | `_notes.py` |
-| `yyryJe` | ACT_ON_SOURCES | Mind map generation | `_artifacts.py` |
+| `yyryJe` | GENERATE_MIND_MAP | Mind map generation | `_artifacts.py` |
 | `VfAZjd` | SUMMARIZE | Get notebook summary | `_notebooks.py` |
 | `FLmJqe` | REFRESH_SOURCE | Refresh URL/Drive source | `_sources.py` |
 | `yR9Yof` | CHECK_SOURCE_FRESHNESS | Check if source needs refresh | `_sources.py` |
@@ -660,14 +660,14 @@ params = [
 ]
 ```
 
-#### Mind Map (Type 5) - Uses ACT_ON_SOURCES (yyryJe)
+#### Mind Map (Type 5) - Uses GENERATE_MIND_MAP (yyryJe)
 
 **Source:** `_artifacts.py::generate_mind_map()`
 
 **Note:** Mind map uses a different RPC method than other artifacts.
 
 ```python
-# RPC: ACT_ON_SOURCES (yyryJe), NOT CREATE_ARTIFACT
+# RPC: GENERATE_MIND_MAP (yyryJe), NOT CREATE_ARTIFACT
 params = [
     source_ids_nested,                            # 0: [[[sid]] for sid in source_ids]
     None,                                         # 1
@@ -680,9 +680,9 @@ params = [
 ]
 ```
 
-### RPC: LIST_ARTIFACTS / POLL_ARTIFACT (gArtLc)
+### RPC: LIST_ARTIFACTS (gArtLc)
 
-**Source:** `_artifacts.py::list()`
+**Source:** `_artifacts.py::list()`, `_artifacts.py::poll_status()`
 
 ```python
 params = [
@@ -1424,7 +1424,7 @@ await rpc_call(
 
 ### RPC: GET_SUGGESTED_REPORTS (ciyUvf)
 
-**Source:** `_artifacts.py::suggest_reports()` (currently uses ACT_ON_SOURCES alternative)
+**Source:** `_artifacts.py::suggest_reports()`
 
 Get AI-suggested report formats based on notebook content.
 
@@ -1454,7 +1454,7 @@ await rpc_call(
 # audience_level: 1=Beginner, 2=Intermediate, 3=Advanced
 ```
 
-**Note:** The current implementation uses `ACT_ON_SOURCES` with `"suggested_report_formats"` command as an alternative approach. This dedicated RPC method provides the same functionality.
+**Note:** This is the dedicated RPC method for getting suggested report formats. Previously `ACT_ON_SOURCES` with `"suggested_report_formats"` command was attempted but it doesn't work correctly.
 
 ---
 

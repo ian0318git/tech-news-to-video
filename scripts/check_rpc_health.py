@@ -84,10 +84,8 @@ STATUS_ICONS = {
 }
 
 # Methods that are duplicates (same ID, different name)
-DUPLICATE_METHODS = {
-    RPCMethod.GENERATE_MIND_MAP,  # Same as ACT_ON_SOURCES (yyryJe)
-    RPCMethod.LIST_ARTIFACTS,  # Same as POLL_ARTIFACT (gArtLc)
-}
+# Currently empty - no duplicate method IDs in use
+DUPLICATE_METHODS: set[RPCMethod] = set()
 
 # Methods that require real resource IDs (fail with placeholders).
 # These return HTTP 400 with placeholder IDs but would work with real IDs.
@@ -117,8 +115,6 @@ ALWAYS_SKIP_METHODS = {
     RPCMethod.QUERY_ENDPOINT,
     # Takes too long
     RPCMethod.START_DEEP_RESEARCH,
-    # Defined but not used in library - correct params format unknown
-    RPCMethod.GET_ARTIFACT,
     # Not fully rolled out by Google - fails with any IDs
     RPCMethod.DISCOVER_SOURCES,
 }
@@ -424,13 +420,15 @@ def get_test_params(method: RPCMethod, notebook_id: str | None) -> list[Any] | N
 
     # Methods that take [[notebook_id]] as the only param
     if method in (
-        RPCMethod.LIST_ARTIFACTS,
-        RPCMethod.POLL_ARTIFACT,
         RPCMethod.GET_CONVERSATION_HISTORY,
         RPCMethod.GET_NOTES_AND_MIND_MAPS,
         RPCMethod.DISCOVER_SOURCES,
     ):
         return [[notebook_id]]
+
+    # LIST_ARTIFACTS has special params
+    if method == RPCMethod.LIST_ARTIFACTS:
+        return [[2], notebook_id, 'NOT artifact.status = "ARTIFACT_STATUS_SUGGESTED"']
 
     # Notebook operations (read-only - rename to same name is a no-op)
     if method == RPCMethod.RENAME_NOTEBOOK:
@@ -451,7 +449,7 @@ def get_test_params(method: RPCMethod, notebook_id: str | None) -> list[Any] | N
         return [[notebook_id], [], "Summarize the content"]
 
     # Artifact operations (read-only - use placeholder IDs)
-    if method in (RPCMethod.GET_ARTIFACT, RPCMethod.GET_INTERACTIVE_HTML):
+    if method == RPCMethod.GET_INTERACTIVE_HTML:
         return [[notebook_id], "placeholder"]
 
     if method == RPCMethod.RENAME_ARTIFACT:
@@ -472,7 +470,7 @@ def get_test_params(method: RPCMethod, notebook_id: str | None) -> list[Any] | N
         return [[notebook_id], "placeholder", "Updated", "Updated content"]
 
     # Mind map operation (read-only)
-    if method == RPCMethod.ACT_ON_SOURCES:
+    if method == RPCMethod.GENERATE_MIND_MAP:
         return [[notebook_id], [], 5]  # Mind map type
 
     # Sharing operations (read-only checks)
@@ -590,8 +588,8 @@ async def setup_temp_resources(
     """Create temporary resources for full mode testing.
 
     Tests CREATE_NOTEBOOK, ADD_SOURCE, ADD_SOURCE_FILE, START_FAST_RESEARCH,
-    CREATE_NOTE, CREATE_ARTIFACT, and GET_ARTIFACT RPC methods.
-    Polls for artifact completion before testing GET_ARTIFACT.
+    CREATE_NOTE, and CREATE_ARTIFACT RPC methods.
+    Polls for artifact completion before testing DELETE_ARTIFACT in cleanup.
     """
     temp = TempResources()
 
@@ -746,7 +744,7 @@ async def setup_temp_resources(
                     f"  WARNING: CREATE_ARTIFACT ID extraction failed. Response: {repr(data)[:200]}"
                 )
 
-        # Poll for artifact completion and test GET_ARTIFACT
+        # Poll for artifact completion
         if temp.artifact_id:
             # Poll up to 30 seconds for flashcard generation to complete
             max_polls = 15
@@ -757,11 +755,12 @@ async def setup_temp_resources(
             for _ in range(max_polls):
                 await asyncio.sleep(poll_interval)
                 polls_done += 1
+                # Use LIST_ARTIFACTS and find by ID (no poll-by-ID RPC exists)
                 poll_result = await test_rpc_method(
                     client,
                     auth,
-                    RPCMethod.POLL_ARTIFACT,
-                    [temp.artifact_id, temp.notebook_id, [2]],
+                    RPCMethod.LIST_ARTIFACTS,
+                    [[2], temp.notebook_id, 'NOT artifact.status = "ARTIFACT_STATUS_SUGGESTED"'],
                     source_path=f"/notebook/{temp.notebook_id}",
                 )
                 # Check if status indicates completion (status code 3 = ready)
@@ -776,10 +775,6 @@ async def setup_temp_resources(
                 print(
                     f"  Artifact not ready after {max_polls * poll_interval:.0f}s (continuing anyway)"
                 )
-
-            # Note: GET_ARTIFACT (BnLyuf) is defined but not used in the library.
-            # The correct params format is unknown - library uses list() + filter instead.
-            # DELETE_ARTIFACT test in cleanup phase validates artifact manipulation works.
     else:
         # Skip artifact tests - no source_id available
         print("SKIP     CREATE_ARTIFACT - No source_id available (source extraction failed)")

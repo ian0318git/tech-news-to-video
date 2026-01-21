@@ -42,10 +42,8 @@ class RPCMethod(str, Enum):
 
     # Artifact operations
     CREATE_ARTIFACT = "R7cb6c"  # Generate any artifact (audio, video, report, quiz, etc.)
-    POLL_ARTIFACT = "gArtLc"  # Poll for artifact generation status
-    LIST_ARTIFACTS = "gArtLc"  # Same RPC as POLL_ARTIFACT, alias for listing
+    LIST_ARTIFACTS = "gArtLc"  # List all artifacts in a notebook
     DELETE_ARTIFACT = "V5N4be"
-    GET_ARTIFACT = "BnLyuf"
     RENAME_ARTIFACT = "rc3d8d"
     EXPORT_ARTIFACT = "Krh3pd"
     SHARE_ARTIFACT = "RGP97b"
@@ -58,8 +56,7 @@ class RPCMethod(str, Enum):
     IMPORT_RESEARCH = "LBwxtb"
 
     # Note and mind map operations
-    ACT_ON_SOURCES = "yyryJe"
-    GENERATE_MIND_MAP = "yyryJe"  # Same RPC as ACT_ON_SOURCES
+    GENERATE_MIND_MAP = "yyryJe"  # Generate mind map from sources
     CREATE_NOTE = "CYK0Xb"
     GET_NOTES_AND_MIND_MAPS = "cFji9"  # Returns both notes and mind maps
     UPDATE_NOTE = "cYAfTb"
