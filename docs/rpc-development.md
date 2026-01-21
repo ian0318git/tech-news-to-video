@@ -1,7 +1,7 @@
 # RPC Development Guide
 
 **Status:** Active
-**Last Updated:** 2026-01-13
+**Last Updated:** 2026-01-20
 
 This guide covers everything about NotebookLM's RPC protocol: capturing calls, debugging issues, and implementing new methods.
 

@@ -1,9 +1,9 @@
 # CLI Reference
 
 **Status:** Active
-**Last Updated:** 2026-01-15
+**Last Updated:** 2026-01-20
 
-Complete command reference for the `notebooklm` CLI.
+Complete command reference for the `notebooklm` CLI—providing full programmatic access to all NotebookLM features, including capabilities not exposed in the web UI.
 
 ## Command Structure
 
@@ -82,6 +82,8 @@ See [Configuration](configuration.md) for details on environment variables and C
 
 ### Source Commands (`notebooklm source <cmd>`)
 
+Supported source types: URLs, YouTube videos, files (PDF, text, Markdown, Word, audio, video, images), Google Drive documents, and pasted text.
+
 | Command | Arguments | Options | Example |
 |---------|-----------|---------|---------|
 | `list` | - | - | `source list` |
@@ -109,18 +111,19 @@ All generate commands support:
 - `--source/-s` to select specific sources (repeatable)
 - `--json` for machine-readable output (returns `task_id` and `status`)
 - `--language` to override output language (defaults to config or 'en')
+- `--retry N` to automatically retry on rate limits with exponential backoff
 
 | Command | Options | Example |
 |---------|---------|---------|
-| `audio [description]` | `--format`, `--length`, `-s/--source`, `--wait`, `--json` | `generate audio "Focus on history"` |
-| `video [description]` | `--style`, `--format`, `-s/--source`, `--wait`, `--json` | `generate video "Explainer for kids"` |
-| `slide-deck [description]` | `--format`, `--length`, `-s/--source`, `--wait`, `--json` | `generate slide-deck` |
-| `quiz [description]` | `--difficulty`, `--quantity`, `-s/--source`, `--wait`, `--json` | `generate quiz --difficulty hard` |
-| `flashcards [description]` | `--difficulty`, `--quantity`, `-s/--source`, `--wait`, `--json` | `generate flashcards` |
-| `infographic [description]` | `--orientation`, `--detail`, `-s/--source`, `--wait`, `--json` | `generate infographic` |
-| `data-table [description]` | `-s/--source`, `--wait`, `--json` | `generate data-table` |
-| `mind-map` | `-s/--source`, `--json` *(sync, no wait needed)* | `generate mind-map` |
-| `report [description]` | `--type`, `-s/--source`, `--wait`, `--json` | `generate report --type study-guide` |
+| `audio [description]` | `--format [deep-dive\|brief\|critique\|debate]`, `--length [short\|default\|long]`, `--wait` | `generate audio "Focus on history"` |
+| `video [description]` | `--format [explainer\|brief]`, `--style [auto\|classic\|whiteboard\|kawaii\|anime\|watercolor\|retro-print\|heritage\|paper-craft]`, `--wait` | `generate video "Explainer for kids"` |
+| `slide-deck [description]` | `--format [detailed\|presenter]`, `--length [default\|short]`, `--wait` | `generate slide-deck` |
+| `quiz [description]` | `--difficulty [easy\|medium\|hard]`, `--quantity [fewer\|standard\|more]`, `--wait` | `generate quiz --difficulty hard` |
+| `flashcards [description]` | `--difficulty [easy\|medium\|hard]`, `--quantity [fewer\|standard\|more]`, `--wait` | `generate flashcards` |
+| `infographic [description]` | `--orientation [landscape\|portrait\|square]`, `--detail [concise\|standard\|detailed]`, `--wait` | `generate infographic` |
+| `data-table <description>` | `--wait` | `generate data-table "compare concepts"` |
+| `mind-map` | *(sync, no wait needed)* | `generate mind-map` |
+| `report [description]` | `--format [briefing-doc\|study-guide\|blog-post\|custom]`, `--wait` | `generate report --format study-guide` |
 
 ### Artifact Commands (`notebooklm artifact <cmd>`)
 
@@ -172,6 +175,19 @@ Manage Claude Code skill integration.
 | `show` | Display skill content | `skill show` |
 
 After installation, Claude Code recognizes NotebookLM commands via `/notebooklm` or natural language like "create a podcast about X".
+
+### Features Beyond the Web UI
+
+These CLI capabilities are not available in NotebookLM's web interface:
+
+| Feature | Command | Description |
+|---------|---------|-------------|
+| **Batch downloads** | `download <type> --all` | Download all artifacts of a type at once |
+| **Quiz/Flashcard export** | `download quiz --format json` | Export as JSON, Markdown, or HTML |
+| **Mind map extraction** | `download mind-map` | Export hierarchical JSON for visualization tools |
+| **Data table export** | `download data-table` | Download structured tables as CSV |
+| **Source fulltext** | `source fulltext <id>` | Retrieve the indexed text content of any source |
+| **Programmatic sharing** | `share` commands | Manage permissions without the UI |
 
 ---
 
@@ -483,16 +499,21 @@ notebooklm generate report [description] [OPTIONS]
 ```
 
 **Options:**
-- `--type [briefing-doc|study-guide|blog-post|custom]` - Report type
+- `--format [briefing-doc|study-guide|blog-post|custom]` - Report format (default: briefing-doc)
 - `-s, --source ID` - Use specific source(s) (repeatable, uses all if not specified)
+- `--wait` - Wait for generation to complete
+- `--json` - Output as JSON
 
 **Examples:**
 ```bash
-notebooklm generate report --type study-guide
-notebooklm generate report "Executive summary for stakeholders" --type briefing-doc
+notebooklm generate report --format study-guide
+notebooklm generate report "Executive summary for stakeholders" --format briefing-doc
 
 # Generate report from specific sources
-notebooklm generate report --type study-guide -s src_001 -s src_002
+notebooklm generate report --format study-guide -s src_001 -s src_002
+
+# Custom report with description (auto-selects custom format)
+notebooklm generate report "Create a white paper analyzing the key trends"
 ```
 
 ### Download: `audio`, `video`, `slide-deck`, `infographic`, `report`, `mind-map`, `data-table`
@@ -728,7 +749,7 @@ When using this CLI programmatically:
 5. **Auto-detection**: `source add` auto-detects content type:
    - URLs starting with `http` → web source
    - YouTube URLs → video transcript extraction
-   - File paths → file upload
+   - File paths → file upload (PDF, text, Markdown, Word, audio, video, images)
 
 6. **Error handling**: Commands exit with non-zero status on failure. Check stderr for error messages.
 

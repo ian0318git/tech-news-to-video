@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Language settings** - Configure output language for artifact generation (audio, video, etc.)
+  - New `notebooklm language list` - List all 80+ supported languages with native names
+  - New `notebooklm language get` - Show current language setting
+  - New `notebooklm language set <code>` - Set language (e.g., `zh_Hans`, `ja`, `es`)
+  - Language is a **global** setting affecting all notebooks in your account
+  - `--local` flag for offline-only operations (skip server sync)
+  - `--language` flag on generate commands for per-command override
+- **Sharing API** - Programmatic notebook sharing management
+  - New `client.sharing.get_status(notebook_id)` - Get current sharing configuration
+  - New `client.sharing.set_public(notebook_id, True/False)` - Enable/disable public link
+  - New `client.sharing.set_view_level(notebook_id, level)` - Set viewer access (FULL_NOTEBOOK or CHAT_ONLY)
+  - New `client.sharing.add_user(notebook_id, email, permission)` - Share with specific users
+  - New `client.sharing.update_user(notebook_id, email, permission)` - Update user permissions
+  - New `client.sharing.remove_user(notebook_id, email)` - Remove user access
+  - New `ShareStatus`, `SharedUser` dataclasses for structured sharing data
+  - New `ShareAccess`, `SharePermission`, `ShareViewLevel` enums
 - **`SourceType` enum** - New `str, Enum` for type-safe source identification:
   - `GOOGLE_DOCS`, `GOOGLE_SLIDES`, `GOOGLE_SPREADSHEET`, `PDF`, `PASTED_TEXT`, `WEB_PAGE`, `YOUTUBE`, `MARKDOWN`, `DOCX`, `CSV`, `IMAGE`, `MEDIA`, `UNKNOWN`
 - **`ArtifactType` enum** - New `str, Enum` for type-safe artifact identification:
@@ -23,6 +39,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`UnknownTypeWarning`** - Warning (deduplicated) when API returns unknown type codes
 - **`SourceStatus.PREPARING`** - New status (5) for sources in upload/preparation phase
 - **E2E test coverage** - Added file upload tests for CSV, MP3, MP4, DOCX, JPG, Markdown with type verification
+- **`--retry` flag for generation commands** - Automatic retry with exponential backoff on rate limits
+  - `notebooklm generate audio --retry 3` - Retry up to 3 times on rate limit errors
+  - Works with all generate commands (audio, video, quiz, etc.)
+- **`ArtifactStatus.FAILED`** - New status (code 4) for artifact generation failures
+- **Centralized exception hierarchy** - All errors now inherit from `NotebookLMError` base class
+  - New `SourceAddError` with detailed failure messages for source operations
+  - Granular exception types for better error handling in automation
+- **CLI `share` command group** - Notebook sharing management from command line
+  - `notebooklm share` - Enable public sharing
+  - `notebooklm share --revoke` - Disable public sharing
+- **Partial UUID matching for note commands** - `note get`, `note delete`, etc. now support partial IDs
+
+### Fixed
+- **Silent failures in CLI** - Commands now properly report errors instead of failing silently
+- **Source type emoji display** - Improved consistency in `source list` output
 
 ### Changed
 - **Source type detection** - Use API-provided type codes as source of truth instead of URL/extension heuristics

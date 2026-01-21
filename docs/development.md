@@ -1,7 +1,7 @@
 # Contributing Guide
 
 **Status:** Active
-**Last Updated:** 2026-01-15
+**Last Updated:** 2026-01-20
 
 This guide covers everything you need to contribute to `notebooklm-py`: architecture overview, testing, and releasing.
 
@@ -24,6 +24,8 @@ src/notebooklm/
 ├── _chat.py             # ChatAPI implementation
 ├── _research.py         # ResearchAPI implementation
 ├── _notes.py            # NotesAPI implementation
+├── _settings.py         # SettingsAPI implementation
+├── _sharing.py          # SharingAPI implementation
 ├── rpc/                 # RPC protocol layer
 │   ├── __init__.py
 │   ├── types.py         # RPCMethod enum and constants

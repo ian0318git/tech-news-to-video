@@ -1,7 +1,7 @@
 # API Stability and Versioning
 
 **Status:** Active
-**Last Updated:** 2026-01-14
+**Last Updated:** 2026-01-20
 
 This document describes the stability guarantees and versioning policy for `notebooklm-py`.
 
@@ -56,18 +56,31 @@ NotebookLMClient.artifacts
 NotebookLMClient.chat
 NotebookLMClient.research
 NotebookLMClient.notes
+NotebookLMClient.settings
+NotebookLMClient.sharing
 
 # Types
 Notebook, Source, Artifact, Note
 GenerationStatus, AskResult
 NotebookDescription, ConversationTurn
+ShareStatus, SharedUser, SourceFulltext
 
-# Exceptions
-SourceError, SourceProcessingError, SourceTimeoutError, SourceNotFoundError
-RPCError
+# Exceptions (all inherit from NotebookLMError)
+NotebookLMError                    # Base exception
+RPCError, AuthError, RateLimitError, RPCTimeoutError, ServerError
+NetworkError, DecodingError, UnknownRPCMethodError
+ClientError, ConfigurationError, ValidationError
+# Domain-specific
+SourceError, SourceAddError, SourceProcessingError, SourceTimeoutError, SourceNotFoundError
+NotebookError, NotebookNotFoundError
+ArtifactError, ArtifactDownloadError, ArtifactNotFoundError, ArtifactNotReadyError, ArtifactParseError
+ChatError
 
 # Enums
-AudioFormat, VideoFormat, StudioContentType, ExportType, etc.
+AudioFormat, VideoFormat, StudioContentType, ExportType
+SourceType, ArtifactType, SourceStatus
+ShareAccess, SharePermission, ShareViewLevel
+ChatGoal, ChatResponseLength, ChatMode
 
 # Auth
 AuthTokens, DEFAULT_STORAGE_PATH

@@ -1,7 +1,7 @@
 # Troubleshooting
 
 **Status:** Active
-**Last Updated:** 2026-01-15
+**Last Updated:** 2026-01-20
 
 Common issues, known limitations, and workarounds for `notebooklm-py`.
 
@@ -170,6 +170,14 @@ Google enforces strict rate limits on the batchexecute endpoint.
 - `UserDisplayableError` with code `[3]`
 
 **Best Practices:**
+
+**CLI:** Use `--retry` for automatic exponential backoff:
+```bash
+notebooklm generate audio --retry 3   # Retry up to 3 times on rate limit
+notebooklm generate video --retry 5   # Works with all generate commands
+```
+
+**Python:**
 ```python
 import asyncio
 

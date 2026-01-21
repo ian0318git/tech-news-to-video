@@ -1,7 +1,7 @@
 # Configuration
 
 **Status:** Active
-**Last Updated:** 2026-01-15
+**Last Updated:** 2026-01-20
 
 This guide covers storage locations, environment settings, and configuration options for `notebooklm-py`.
 
@@ -80,7 +80,8 @@ A persistent Chromium user data directory used during `notebooklm login`.
 |----------|-------------|---------|
 | `NOTEBOOKLM_HOME` | Base directory for all files | `~/.notebooklm` |
 | `NOTEBOOKLM_AUTH_JSON` | Inline authentication JSON (for CI/CD) | - |
-| `NOTEBOOKLM_DEBUG_RPC` | Enable RPC debug logging | `false` |
+| `NOTEBOOKLM_LOG_LEVEL` | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR` | `WARNING` |
+| `NOTEBOOKLM_DEBUG_RPC` | Legacy: Enable RPC debug logging (use `LOG_LEVEL=DEBUG` instead) | `false` |
 
 ### NOTEBOOKLM_HOME
 
