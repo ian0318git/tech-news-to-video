@@ -338,6 +338,11 @@ class TestMindMapGeneration:
     @pytest.mark.asyncio
     async def test_generate_mind_map(self, client, generation_notebook_id):
         """Mind map generation is fast (~5-10s), not slow."""
+        # Clean up old mind maps to prevent accumulation from nightly runs
+        existing_mind_maps = await client.notes.list_mind_maps(generation_notebook_id)
+        for mm in existing_mind_maps:
+            await client.notes.delete_mind_map(generation_notebook_id, mm[0])
+
         result = await client.artifacts.generate_mind_map(generation_notebook_id)
         assert result is not None
         assert "mind_map" in result
