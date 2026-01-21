@@ -538,3 +538,389 @@ class TestChatAPI:
         async with vcr_client() as client:
             history = await client.chat.get_history(MUTABLE_NOTEBOOK_ID)
         assert isinstance(history, list)
+
+
+# =============================================================================
+# Settings API
+# =============================================================================
+
+
+class TestSettingsAPI:
+    """Settings API operations."""
+
+    @pytest.mark.vcr
+    @pytest.mark.asyncio
+    @notebooklm_vcr.use_cassette("settings_get_output_language.yaml")
+    async def test_get_output_language(self):
+        """Get current output language setting."""
+        async with vcr_client() as client:
+            language = await client.settings.get_output_language()
+        # Language may be None if not set, or a string like "en", "ja", "zh_Hans"
+        assert language is None or isinstance(language, str)
+
+    @pytest.mark.vcr
+    @pytest.mark.asyncio
+    @notebooklm_vcr.use_cassette("settings_set_output_language.yaml")
+    async def test_set_output_language(self):
+        """Set output language (then restore original)."""
+        async with vcr_client() as client:
+            # Get current language to restore later
+            original = await client.settings.get_output_language()
+            # Set to English
+            result = await client.settings.set_output_language("en")
+            assert result == "en" or result is None
+            # Restore original if it was set
+            if original:
+                await client.settings.set_output_language(original)
+
+
+# =============================================================================
+# Sharing API
+# =============================================================================
+
+
+class TestSharingAPI:
+    """Sharing API operations."""
+
+    @pytest.mark.vcr
+    @pytest.mark.asyncio
+    @notebooklm_vcr.use_cassette("sharing_get_status.yaml")
+    async def test_get_status(self):
+        """Get sharing status for a notebook."""
+        async with vcr_client() as client:
+            status = await client.sharing.get_status(READONLY_NOTEBOOK_ID)
+        assert status is not None
+        assert status.notebook_id == READONLY_NOTEBOOK_ID
+
+    @pytest.mark.vcr
+    @pytest.mark.asyncio
+    @notebooklm_vcr.use_cassette("sharing_set_public.yaml")
+    async def test_set_public(self):
+        """Toggle public sharing (restore original state)."""
+        async with vcr_client() as client:
+            # Get current status
+            original = await client.sharing.get_status(MUTABLE_NOTEBOOK_ID)
+            # Toggle to opposite
+            new_status = await client.sharing.set_public(
+                MUTABLE_NOTEBOOK_ID, not original.is_public
+            )
+            assert new_status.is_public != original.is_public
+            # Restore original state
+            await client.sharing.set_public(MUTABLE_NOTEBOOK_ID, original.is_public)
+
+
+# =============================================================================
+# Sources API - Additional Operations
+# =============================================================================
+
+
+class TestSourcesAdditionalAPI:
+    """Additional sources API operations not covered in main TestSourcesAPI."""
+
+    @pytest.mark.vcr
+    @pytest.mark.asyncio
+    @notebooklm_vcr.use_cassette("sources_add_file.yaml")
+    async def test_add_file(self, tmp_path):
+        """Add a file source."""
+        # Create a test file
+        test_file = tmp_path / "vcr_test_document.txt"
+        test_file.write_text("This is a test document for VCR cassette recording.")
+
+        async with vcr_client() as client:
+            source = await client.sources.add_file(
+                MUTABLE_NOTEBOOK_ID,
+                str(test_file),
+            )
+        assert source is not None
+        assert source.id is not None
+
+    @pytest.mark.vcr
+    @pytest.mark.asyncio
+    @notebooklm_vcr.use_cassette("sources_check_freshness.yaml")
+    async def test_check_freshness(self):
+        """Check source freshness."""
+        async with vcr_client() as client:
+            sources = await client.sources.list(READONLY_NOTEBOOK_ID)
+            if not sources:
+                pytest.skip("No sources available")
+            is_fresh = await client.sources.check_freshness(
+                READONLY_NOTEBOOK_ID, sources[0].id
+            )
+        assert isinstance(is_fresh, bool)
+
+    @pytest.mark.vcr
+    @pytest.mark.asyncio
+    @notebooklm_vcr.use_cassette("sources_refresh.yaml")
+    async def test_refresh(self):
+        """Refresh a source."""
+        from notebooklm import SourceType
+
+        async with vcr_client() as client:
+            sources = await client.sources.list(MUTABLE_NOTEBOOK_ID)
+            if not sources:
+                pytest.skip("No sources available")
+            # Find a WEB_PAGE source (text sources can't be refreshed)
+            url_source = next(
+                (s for s in sources if s.kind == SourceType.WEB_PAGE), None
+            )
+            if not url_source:
+                pytest.skip("No WEB_PAGE source available for refresh")
+            result = await client.sources.refresh(MUTABLE_NOTEBOOK_ID, url_source.id)
+        assert isinstance(result, bool)
+
+    @pytest.mark.vcr
+    @pytest.mark.asyncio
+    @notebooklm_vcr.use_cassette("sources_rename.yaml")
+    async def test_rename(self):
+        """Rename a source (then restore original name)."""
+        async with vcr_client() as client:
+            sources = await client.sources.list(MUTABLE_NOTEBOOK_ID)
+            if not sources:
+                pytest.skip("No sources available")
+            source = sources[0]
+            original_title = source.title
+            # Rename
+            renamed = await client.sources.rename(
+                MUTABLE_NOTEBOOK_ID, source.id, "VCR Test Renamed Source"
+            )
+            assert renamed.title == "VCR Test Renamed Source"
+            # Restore
+            await client.sources.rename(MUTABLE_NOTEBOOK_ID, source.id, original_title)
+
+    @pytest.mark.vcr
+    @pytest.mark.asyncio
+    @notebooklm_vcr.use_cassette("sources_delete.yaml")
+    async def test_delete(self):
+        """Delete a source (creates one first to delete)."""
+        async with vcr_client() as client:
+            # Create a source to delete
+            source = await client.sources.add_text(
+                MUTABLE_NOTEBOOK_ID,
+                title="VCR Delete Test Source",
+                content="This source will be deleted.",
+            )
+            assert source is not None
+            # Delete it
+            result = await client.sources.delete(MUTABLE_NOTEBOOK_ID, source.id)
+        assert result is True
+
+
+# =============================================================================
+# Notebooks API - Additional Operations
+# =============================================================================
+
+
+class TestNotebooksAdditionalAPI:
+    """Additional notebooks API operations."""
+
+    @pytest.mark.vcr
+    @pytest.mark.asyncio
+    @notebooklm_vcr.use_cassette("notebooks_create.yaml")
+    async def test_create(self):
+        """Create a new notebook."""
+        async with vcr_client() as client:
+            notebook = await client.notebooks.create("VCR Test Notebook")
+        assert notebook is not None
+        assert notebook.title == "VCR Test Notebook"
+        # Note: We don't delete it here to keep the cassette simple
+        # A separate delete test will clean up
+
+    @pytest.mark.vcr
+    @pytest.mark.asyncio
+    @notebooklm_vcr.use_cassette("notebooks_delete.yaml")
+    async def test_delete(self):
+        """Delete a notebook (creates one first)."""
+        async with vcr_client() as client:
+            # Create a notebook to delete
+            notebook = await client.notebooks.create("VCR Delete Test Notebook")
+            assert notebook is not None
+            # Delete it
+            result = await client.notebooks.delete(notebook.id)
+        assert result is True
+
+    @pytest.mark.vcr
+    @pytest.mark.asyncio
+    @notebooklm_vcr.use_cassette("notebooks_remove_from_recent.yaml")
+    async def test_remove_from_recent(self):
+        """Remove a notebook from recently viewed."""
+        async with vcr_client() as client:
+            # This just removes from the recent list, doesn't delete
+            await client.notebooks.remove_from_recent(MUTABLE_NOTEBOOK_ID)
+        # No return value to check - if it doesn't raise, it worked
+
+
+# =============================================================================
+# Notes API - Additional Operations
+# =============================================================================
+
+
+class TestNotesAdditionalAPI:
+    """Additional notes API operations."""
+
+    @pytest.mark.vcr
+    @pytest.mark.asyncio
+    @notebooklm_vcr.use_cassette("notes_delete.yaml")
+    async def test_delete(self):
+        """Delete a note (creates one first)."""
+        async with vcr_client() as client:
+            # Create a note to delete
+            note = await client.notes.create(
+                MUTABLE_NOTEBOOK_ID,
+                title="VCR Delete Test Note",
+                content="This note will be deleted.",
+            )
+            assert note is not None
+            # Delete it
+            result = await client.notes.delete(MUTABLE_NOTEBOOK_ID, note.id)
+        assert result is True
+
+
+# =============================================================================
+# Artifacts API - Additional Operations
+# =============================================================================
+
+
+class TestArtifactsAdditionalAPI:
+    """Additional artifacts API operations."""
+
+    @pytest.mark.vcr
+    @pytest.mark.asyncio
+    @notebooklm_vcr.use_cassette("artifacts_rename.yaml")
+    async def test_rename(self):
+        """Rename an artifact."""
+        async with vcr_client() as client:
+            # List artifacts to find one to rename
+            artifacts = await client.artifacts.list(MUTABLE_NOTEBOOK_ID)
+            if not artifacts:
+                pytest.skip("No artifacts available")
+            artifact = artifacts[0]
+            original_title = artifact.title
+            # Rename
+            await client.artifacts.rename(
+                MUTABLE_NOTEBOOK_ID, artifact.id, "VCR Renamed Artifact"
+            )
+            # Restore original name
+            await client.artifacts.rename(
+                MUTABLE_NOTEBOOK_ID, artifact.id, original_title
+            )
+
+    @pytest.mark.vcr
+    @pytest.mark.asyncio
+    @notebooklm_vcr.use_cassette("artifacts_delete.yaml")
+    async def test_delete(self):
+        """Delete an artifact."""
+        async with vcr_client() as client:
+            # List existing artifacts
+            artifacts = await client.artifacts.list(MUTABLE_NOTEBOOK_ID)
+            if not artifacts:
+                pytest.skip("No artifacts available to delete")
+            # Delete the first one
+            artifact_id = artifacts[0].id
+            deleted = await client.artifacts.delete(MUTABLE_NOTEBOOK_ID, artifact_id)
+        assert deleted is True
+
+    @pytest.mark.vcr
+    @pytest.mark.asyncio
+    @notebooklm_vcr.use_cassette("artifacts_export_report.yaml")
+    async def test_export_report(self):
+        """Export a report to Google Docs."""
+        async with vcr_client() as client:
+            # Find a completed report artifact
+            reports = await client.artifacts.list_reports(MUTABLE_NOTEBOOK_ID)
+            completed_reports = [r for r in reports if r.is_completed]
+            if not completed_reports:
+                pytest.skip("No completed report artifact available")
+            report = completed_reports[0]
+            # Export it to Google Docs
+            result = await client.artifacts.export_report(
+                MUTABLE_NOTEBOOK_ID, report.id, title="VCR Export Test"
+            )
+        assert result is not None
+
+
+# =============================================================================
+# Research API
+# =============================================================================
+
+
+class TestResearchAPI:
+    """Research API operations."""
+
+    @pytest.mark.vcr
+    @pytest.mark.asyncio
+    @notebooklm_vcr.use_cassette("research_start_fast.yaml")
+    async def test_start_fast(self):
+        """Start fast web research."""
+        async with vcr_client() as client:
+            result = await client.research.start(
+                MUTABLE_NOTEBOOK_ID,
+                query="Python programming best practices",
+                source="web",
+                mode="fast",
+            )
+        assert result is not None
+        assert "task_id" in result
+        assert result["mode"] == "fast"
+
+    @pytest.mark.vcr
+    @pytest.mark.asyncio
+    @notebooklm_vcr.use_cassette("research_poll.yaml")
+    async def test_poll(self):
+        """Poll research status."""
+        async with vcr_client() as client:
+            # Start research first
+            await client.research.start(
+                MUTABLE_NOTEBOOK_ID,
+                query="Machine learning fundamentals",
+                source="web",
+                mode="fast",
+            )
+            # Poll for results
+            result = await client.research.poll(MUTABLE_NOTEBOOK_ID)
+        assert result is not None
+        assert "status" in result
+
+    @pytest.mark.vcr
+    @pytest.mark.asyncio
+    @notebooklm_vcr.use_cassette("research_import_sources.yaml")
+    async def test_import_sources(self):
+        """Import research sources."""
+        async with vcr_client() as client:
+            # Start research
+            start_result = await client.research.start(
+                MUTABLE_NOTEBOOK_ID,
+                query="Data science tutorials",
+                source="web",
+                mode="fast",
+            )
+            if not start_result:
+                pytest.skip("Could not start research")
+
+            # Poll until we have sources (with timeout via cassette)
+            poll_result = await client.research.poll(MUTABLE_NOTEBOOK_ID)
+            if not poll_result.get("sources"):
+                pytest.skip("No research sources found")
+
+            # Import first source
+            imported = await client.research.import_sources(
+                MUTABLE_NOTEBOOK_ID,
+                start_result["task_id"],
+                poll_result["sources"][:1],
+            )
+        assert isinstance(imported, list)
+
+    @pytest.mark.vcr
+    @pytest.mark.asyncio
+    @notebooklm_vcr.use_cassette("research_start_deep.yaml")
+    async def test_start_deep(self):
+        """Start deep web research."""
+        async with vcr_client() as client:
+            result = await client.research.start(
+                MUTABLE_NOTEBOOK_ID,
+                query="Artificial intelligence history",
+                source="web",
+                mode="deep",
+            )
+        assert result is not None
+        assert "task_id" in result
+        assert result["mode"] == "deep"
