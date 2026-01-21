@@ -242,7 +242,7 @@ class TestArtifactsSourceSelection:
         # Verify get_source_ids was called
         mock_core.get_source_ids.assert_called_once_with("nb_123")
 
-        # Verify CREATE_VIDEO RPC was called with fetched source IDs
+        # Verify CREATE_ARTIFACT RPC was called with fetched source IDs
         mock_core.rpc_call.assert_called_once()
         call_args = mock_core.rpc_call.call_args
         params = call_args.args[1]

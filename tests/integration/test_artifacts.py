@@ -37,7 +37,7 @@ class TestStudioContent:
         httpx_mock.add_response(content=notebook_response.encode())
 
         audio_response = build_rpc_response(
-            RPCMethod.CREATE_VIDEO, [["artifact_123", "Audio Overview", "2024-01-05", None, 1]]
+            RPCMethod.CREATE_ARTIFACT, [["artifact_123", "Audio Overview", "2024-01-05", None, 1]]
         )
         httpx_mock.add_response(content=audio_response.encode())
 
@@ -49,7 +49,7 @@ class TestStudioContent:
         assert result.status in ("pending", "in_progress")
 
         request = httpx_mock.get_requests()[-1]
-        assert RPCMethod.CREATE_VIDEO.value in str(request.url)
+        assert RPCMethod.CREATE_ARTIFACT.value in str(request.url)
 
     @pytest.mark.asyncio
     async def test_generate_audio_with_format_and_length(
@@ -74,7 +74,7 @@ class TestStudioContent:
         httpx_mock.add_response(content=notebook_response.encode())
 
         response = build_rpc_response(
-            RPCMethod.CREATE_VIDEO, [["artifact_123", "Audio Overview", "2024-01-05", None, 1]]
+            RPCMethod.CREATE_ARTIFACT, [["artifact_123", "Audio Overview", "2024-01-05", None, 1]]
         )
         httpx_mock.add_response(content=response.encode())
 
@@ -109,7 +109,7 @@ class TestStudioContent:
             ],
         )
         video_response = build_rpc_response(
-            RPCMethod.CREATE_VIDEO, [["artifact_456", "Video Overview", "2024-01-05", None, 1]]
+            RPCMethod.CREATE_ARTIFACT, [["artifact_456", "Video Overview", "2024-01-05", None, 1]]
         )
         httpx_mock.add_response(content=notebook_response.encode())
         httpx_mock.add_response(content=video_response.encode())
@@ -145,7 +145,7 @@ class TestStudioContent:
             ],
         )
         slide_deck_response = build_rpc_response(
-            RPCMethod.CREATE_VIDEO, [["artifact_456", "Slide Deck", "2024-01-05", None, 1]]
+            RPCMethod.CREATE_ARTIFACT, [["artifact_456", "Slide Deck", "2024-01-05", None, 1]]
         )
         httpx_mock.add_response(content=notebook_response.encode())
         httpx_mock.add_response(content=slide_deck_response.encode())
@@ -201,7 +201,7 @@ class TestGenerateQuiz:
             ],
         )
         quiz_response = build_rpc_response(
-            RPCMethod.CREATE_VIDEO, [["quiz_123", "Quiz", "2024-01-05", None, 1]]
+            RPCMethod.CREATE_ARTIFACT, [["quiz_123", "Quiz", "2024-01-05", None, 1]]
         )
         httpx_mock.add_response(content=notebook_response.encode())
         httpx_mock.add_response(content=quiz_response.encode())
@@ -221,7 +221,7 @@ class TestDeleteStudioContent:
         httpx_mock: HTTPXMock,
         build_rpc_response,
     ):
-        response = build_rpc_response(RPCMethod.DELETE_STUDIO, [True])
+        response = build_rpc_response(RPCMethod.DELETE_ARTIFACT, [True])
         httpx_mock.add_response(content=response.encode())
 
         async with NotebookLMClient(auth_tokens) as client:
@@ -349,7 +349,7 @@ class TestArtifactsAPI:
             ],
         )
         flashcards_response = build_rpc_response(
-            RPCMethod.CREATE_VIDEO, [["fc_123", "Flashcards", "2024-01-05", None, 1]]
+            RPCMethod.CREATE_ARTIFACT, [["fc_123", "Flashcards", "2024-01-05", None, 1]]
         )
         httpx_mock.add_response(content=notebook_response.encode())
         httpx_mock.add_response(content=flashcards_response.encode())
@@ -382,7 +382,7 @@ class TestArtifactsAPI:
             ],
         )
         guide_response = build_rpc_response(
-            RPCMethod.CREATE_VIDEO, [["sg_123", "Study Guide", "2024-01-05", None, 1]]
+            RPCMethod.CREATE_ARTIFACT, [["sg_123", "Study Guide", "2024-01-05", None, 1]]
         )
         httpx_mock.add_response(content=notebook_response.encode())
         httpx_mock.add_response(content=guide_response.encode())
@@ -415,7 +415,7 @@ class TestArtifactsAPI:
             ],
         )
         infographic_response = build_rpc_response(
-            RPCMethod.CREATE_VIDEO, [["ig_123", "Infographic", "2024-01-05", None, 1]]
+            RPCMethod.CREATE_ARTIFACT, [["ig_123", "Infographic", "2024-01-05", None, 1]]
         )
         httpx_mock.add_response(content=notebook_response.encode())
         httpx_mock.add_response(content=infographic_response.encode())
@@ -448,7 +448,7 @@ class TestArtifactsAPI:
             ],
         )
         table_response = build_rpc_response(
-            RPCMethod.CREATE_VIDEO, [["dt_123", "Data Table", "2024-01-05", None, 1]]
+            RPCMethod.CREATE_ARTIFACT, [["dt_123", "Data Table", "2024-01-05", None, 1]]
         )
         httpx_mock.add_response(content=notebook_response.encode())
         httpx_mock.add_response(content=table_response.encode())
@@ -561,7 +561,7 @@ class TestArtifactsAPI:
         build_rpc_response,
     ):
         """Test deleting an artifact."""
-        response = build_rpc_response(RPCMethod.DELETE_STUDIO, None)
+        response = build_rpc_response(RPCMethod.DELETE_ARTIFACT, None)
         httpx_mock.add_response(content=response.encode())
 
         async with NotebookLMClient(auth_tokens) as client:
@@ -569,7 +569,7 @@ class TestArtifactsAPI:
 
         assert result is True
         request = httpx_mock.get_request()
-        assert RPCMethod.DELETE_STUDIO in str(request.url)
+        assert RPCMethod.DELETE_ARTIFACT in str(request.url)
 
     @pytest.mark.asyncio
     async def test_list_flashcards(

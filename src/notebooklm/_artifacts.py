@@ -1554,7 +1554,7 @@ class ArtifactsAPI:
         logger.debug("Deleting artifact %s from notebook %s", artifact_id, notebook_id)
         params = [[2], artifact_id]
         await self._core.rpc_call(
-            RPCMethod.DELETE_STUDIO,
+            RPCMethod.DELETE_ARTIFACT,
             params,
             source_path=f"/notebook/{notebook_id}",
             allow_null=True,
@@ -1587,10 +1587,10 @@ class ArtifactsAPI:
         Returns:
             GenerationStatus with current status.
         """
-        # POLL_STUDIO RPC is unreliable - use list as fallback
+        # POLL_ARTIFACT RPC is unreliable - use list as fallback
         params = [task_id, notebook_id, [2]]
         result = await self._core.rpc_call(
-            RPCMethod.POLL_STUDIO,
+            RPCMethod.POLL_ARTIFACT,
             params,
             source_path=f"/notebook/{notebook_id}",
             allow_null=True,
@@ -1851,7 +1851,7 @@ class ArtifactsAPI:
         logger.debug("Generating artifact type=%s in notebook %s", artifact_type, notebook_id)
         try:
             result = await self._core.rpc_call(
-                RPCMethod.CREATE_VIDEO,
+                RPCMethod.CREATE_ARTIFACT,
                 params,
                 source_path=f"/notebook/{notebook_id}",
                 allow_null=True,

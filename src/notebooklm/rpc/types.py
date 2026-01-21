@@ -40,12 +40,16 @@ class RPCMethod(str, Enum):
     # Query endpoint (not a batchexecute RPC ID)
     QUERY_ENDPOINT = "/_/LabsTailwindUi/data/google.internal.labs.tailwind.orchestration.v1.LabsTailwindOrchestrationService/GenerateFreeFormStreamed"
 
-    # Studio content generation
-    CREATE_VIDEO = "R7cb6c"
-    POLL_STUDIO = "gArtLc"
-    DELETE_STUDIO = "V5N4be"
+    # Artifact operations
+    CREATE_ARTIFACT = "R7cb6c"  # Generate any artifact (audio, video, report, quiz, etc.)
+    POLL_ARTIFACT = "gArtLc"  # Poll for artifact generation status
+    LIST_ARTIFACTS = "gArtLc"  # Same RPC as POLL_ARTIFACT, alias for listing
+    DELETE_ARTIFACT = "V5N4be"
     GET_ARTIFACT = "BnLyuf"
-    LIST_ARTIFACTS = "gArtLc"
+    RENAME_ARTIFACT = "rc3d8d"
+    EXPORT_ARTIFACT = "Krh3pd"
+    SHARE_ARTIFACT = "RGP97b"
+    GET_INTERACTIVE_HTML = "v9rmvd"  # Fetch quiz/flashcard HTML content
 
     # Research
     START_FAST_RESEARCH = "Ljjv0c"
@@ -53,25 +57,18 @@ class RPCMethod(str, Enum):
     POLL_RESEARCH = "e3bVqc"
     IMPORT_RESEARCH = "LBwxtb"
 
+    # Note and mind map operations
     ACT_ON_SOURCES = "yyryJe"
-    GENERATE_MIND_MAP = "yyryJe"
+    GENERATE_MIND_MAP = "yyryJe"  # Same RPC as ACT_ON_SOURCES
     CREATE_NOTE = "CYK0Xb"
     GET_NOTES_AND_MIND_MAPS = "cFji9"  # Returns both notes and mind maps
-
-    # Note operations
     UPDATE_NOTE = "cYAfTb"
     DELETE_NOTE = "AH0mwd"
-
-    # Artifact management
-    RENAME_ARTIFACT = "rc3d8d"
-    EXPORT_ARTIFACT = "Krh3pd"
-    GET_INTERACTIVE_HTML = "v9rmvd"  # Fetch quiz/flashcard HTML content
 
     # Conversation
     GET_CONVERSATION_HISTORY = "hPTbtc"
 
-    # Sharing operations
-    SHARE_ARTIFACT = "RGP97b"  # Share any artifact (audio, video, report, quiz, flashcards)
+    # Sharing operations (notebook-level)
     SHARE_NOTEBOOK = "QDyure"  # Set notebook visibility (restricted/anyone with link)
     GET_SHARE_STATUS = "JFMDGd"  # Get notebook share settings
     # Note: SET_SHARE_ACCESS uses RENAME_NOTEBOOK (s0tc2d) with different params
@@ -87,7 +84,7 @@ class RPCMethod(str, Enum):
 class StudioContentType(int, Enum):
     """Types of studio content that can be generated.
 
-    These are integer codes used in the R7cb6c RPC call.
+    These are integer codes used in the CREATE_ARTIFACT (R7cb6c) RPC call.
     Values correspond to artifact_data[2] in API responses.
     """
 

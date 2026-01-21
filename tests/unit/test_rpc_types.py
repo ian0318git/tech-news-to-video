@@ -49,13 +49,13 @@ class TestRPCMethod:
         """Test SUMMARIZE RPC ID."""
         assert RPCMethod.SUMMARIZE == "VfAZjd"
 
-    def test_create_video(self):
-        """Test CREATE_VIDEO RPC ID."""
-        assert RPCMethod.CREATE_VIDEO == "R7cb6c"
+    def test_create_artifact(self):
+        """Test CREATE_ARTIFACT RPC ID."""
+        assert RPCMethod.CREATE_ARTIFACT == "R7cb6c"
 
-    def test_poll_studio(self):
-        """Test POLL_STUDIO RPC ID."""
-        assert RPCMethod.POLL_STUDIO == "gArtLc"
+    def test_poll_artifact(self):
+        """Test POLL_ARTIFACT RPC ID."""
+        assert RPCMethod.POLL_ARTIFACT == "gArtLc"
 
     def test_rpc_method_is_string(self):
         """Test RPCMethod values are strings (for JSON serialization)."""

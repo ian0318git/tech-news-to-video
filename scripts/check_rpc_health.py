@@ -86,7 +86,7 @@ STATUS_ICONS = {
 # Methods that are duplicates (same ID, different name)
 DUPLICATE_METHODS = {
     RPCMethod.GENERATE_MIND_MAP,  # Same as ACT_ON_SOURCES (yyryJe)
-    RPCMethod.LIST_ARTIFACTS,  # Same as POLL_STUDIO (gArtLc)
+    RPCMethod.LIST_ARTIFACTS,  # Same as POLL_ARTIFACT (gArtLc)
 }
 
 # Methods that require real resource IDs (fail with placeholders)
@@ -103,14 +103,14 @@ FULL_MODE_ONLY_METHODS = {
     RPCMethod.ADD_SOURCE,
     RPCMethod.ADD_SOURCE_FILE,  # Registers file source intent (no upload needed)
     RPCMethod.CREATE_NOTE,
-    RPCMethod.CREATE_VIDEO,  # Main RPC for all artifacts - test with flashcards (fast)
+    RPCMethod.CREATE_ARTIFACT,  # Main RPC for all artifacts - test with flashcards (fast)
     RPCMethod.START_FAST_RESEARCH,  # Starts research (verify RPC ID, don't wait)
-    # Read operations (need real artifact from CREATE_VIDEO)
+    # Read operations (need real artifact from CREATE_ARTIFACT)
     RPCMethod.GET_ARTIFACT,  # Tested after flashcard creation completes
     # Delete operations (tested after creates)
     RPCMethod.DELETE_NOTE,
     RPCMethod.DELETE_SOURCE,
-    RPCMethod.DELETE_STUDIO,  # Main RPC for artifact deletion
+    RPCMethod.DELETE_ARTIFACT,  # Main RPC for artifact deletion
     RPCMethod.DELETE_NOTEBOOK,
 }
 
@@ -130,7 +130,7 @@ class TempResources:
     notebook_id: str | None = None
     source_id: str | None = None
     note_id: str | None = None
-    artifact_id: str | None = None  # Flashcard artifact for DELETE_STUDIO test
+    artifact_id: str | None = None  # Flashcard artifact for DELETE_ARTIFACT test
 
 
 def extract_id(data: Any, *indices: int) -> str | None:
@@ -395,7 +395,7 @@ def get_test_params(method: RPCMethod, notebook_id: str | None) -> list[Any] | N
     # Methods that take [[notebook_id]] as the only param
     if method in (
         RPCMethod.LIST_ARTIFACTS,
-        RPCMethod.POLL_STUDIO,
+        RPCMethod.POLL_ARTIFACT,
         RPCMethod.GET_CONVERSATION_HISTORY,
         RPCMethod.GET_NOTES_AND_MIND_MAPS,
         RPCMethod.DISCOVER_SOURCES,
@@ -560,7 +560,7 @@ async def setup_temp_resources(
     """Create temporary resources for full mode testing.
 
     Tests CREATE_NOTEBOOK, ADD_SOURCE, ADD_SOURCE_FILE, START_FAST_RESEARCH,
-    CREATE_NOTE, CREATE_VIDEO, and GET_ARTIFACT RPC methods.
+    CREATE_NOTE, CREATE_ARTIFACT, and GET_ARTIFACT RPC methods.
     Polls for artifact completion before testing GET_ARTIFACT.
     """
     temp = TempResources()
@@ -679,7 +679,7 @@ async def setup_temp_resources(
     if result.status == CheckStatus.OK:
         temp.note_id = extract_id(data, 0)
 
-    # Test CREATE_VIDEO - main RPC for all artifact generation (flashcards are fast)
+    # Test CREATE_ARTIFACT - main RPC for all artifact generation (flashcards are fast)
     # Params for quiz: [[2], notebook_id, [None, None, 4, source_ids_triple, ...]]
     if temp.source_id:
         await asyncio.sleep(CALL_DELAY)
@@ -687,7 +687,7 @@ async def setup_temp_resources(
         result, data = await test_rpc_method_with_data(
             client,
             auth,
-            RPCMethod.CREATE_VIDEO,
+            RPCMethod.CREATE_ARTIFACT,
             [
                 [2],
                 temp.notebook_id,
@@ -739,7 +739,7 @@ async def setup_temp_resources(
                 poll_result = await test_rpc_method(
                     client,
                     auth,
-                    RPCMethod.POLL_STUDIO,
+                    RPCMethod.POLL_ARTIFACT,
                     [temp.artifact_id, temp.notebook_id, [2]],
                     source_path=f"/notebook/{temp.notebook_id}",
                 )
@@ -780,7 +780,7 @@ async def cleanup_temp_resources(
 ) -> None:
     """Delete temporary resources and test DELETE RPC methods.
 
-    Tests DELETE_NOTE, DELETE_SOURCE, DELETE_STUDIO, and DELETE_NOTEBOOK RPCs.
+    Tests DELETE_NOTE, DELETE_SOURCE, DELETE_ARTIFACT, and DELETE_NOTEBOOK RPCs.
     """
     if not temp.notebook_id:
         return
@@ -819,13 +819,13 @@ async def cleanup_temp_resources(
             )
         )
 
-    # Test DELETE_STUDIO if we have an artifact (main RPC for artifact deletion)
+    # Test DELETE_ARTIFACT if we have an artifact (main RPC for artifact deletion)
     if temp.artifact_id:
         await asyncio.sleep(CALL_DELAY)
         result = await test_rpc_method(
             client,
             auth,
-            RPCMethod.DELETE_STUDIO,
+            RPCMethod.DELETE_ARTIFACT,
             [[2], temp.artifact_id],
             source_path=f"/notebook/{temp.notebook_id}",
         )

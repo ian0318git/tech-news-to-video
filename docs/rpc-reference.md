@@ -26,9 +26,9 @@
 | `tGMBJ` | DELETE_SOURCE | Delete a source | `_sources.py` |
 | `b7Wfje` | UPDATE_SOURCE | Rename source | `_sources.py` |
 | `tr032e` | GET_SOURCE_GUIDE | Get source summary | `_sources.py` |
-| `R7cb6c` | CREATE_VIDEO | Unified artifact generation | `_artifacts.py` |
-| `gArtLc` | LIST_ARTIFACTS | List/poll artifacts | `_artifacts.py` |
-| `V5N4be` | DELETE_STUDIO | Delete studio artifact | `_artifacts.py` |
+| `R7cb6c` | CREATE_ARTIFACT | Unified artifact generation | `_artifacts.py` |
+| `gArtLc` | LIST_ARTIFACTS / POLL_ARTIFACT | List/poll artifacts | `_artifacts.py` |
+| `V5N4be` | DELETE_ARTIFACT | Delete artifact | `_artifacts.py` |
 | `hPTbtc` | GET_CONVERSATION_HISTORY | Get chat history | `_chat.py` |
 | `CYK0Xb` | CREATE_NOTE | Create a note (placeholder) | `_notes.py` |
 | `cYAfTb` | UPDATE_NOTE | Update note content/title | `_notes.py` |
@@ -419,7 +419,7 @@ await page.locator(".create-artifact-button-container:has-text('Audio') .option-
 await page.locator(".create-artifact-button-container:has-text('Audio')").click()
 ```
 
-### RPC: CREATE_VIDEO / Unified Artifact (R7cb6c)
+### RPC: CREATE_ARTIFACT (R7cb6c)
 
 **All artifact types use `R7cb6c` with different content type codes and nested configs.**
 
@@ -667,7 +667,7 @@ params = [
 **Note:** Mind map uses a different RPC method than other artifacts.
 
 ```python
-# RPC: ACT_ON_SOURCES (yyryJe), NOT CREATE_VIDEO
+# RPC: ACT_ON_SOURCES (yyryJe), NOT CREATE_ARTIFACT
 params = [
     source_ids_nested,                            # 0: [[[sid]] for sid in source_ids]
     None,                                         # 1
@@ -680,7 +680,7 @@ params = [
 ]
 ```
 
-### RPC: LIST_ARTIFACTS / POLL_STUDIO (gArtLc)
+### RPC: LIST_ARTIFACTS / POLL_ARTIFACT (gArtLc)
 
 **Source:** `_artifacts.py::list()`
 
@@ -1511,4 +1511,4 @@ These RPC method IDs exist in `rpc/types.py` but are either legacy (superseded b
 2. Future reverse-engineering reveals their purpose
 3. They become useful for specific edge cases
 
-**Note:** The unified `CREATE_VIDEO` (R7cb6c) method handles all artifact generation (audio, video, reports, quizzes, etc.) despite its name.
+**Note:** The unified `CREATE_ARTIFACT` (R7cb6c) method handles all artifact generation (audio, video, reports, quizzes, etc.).

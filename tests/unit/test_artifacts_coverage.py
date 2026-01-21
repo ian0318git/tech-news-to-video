@@ -645,9 +645,9 @@ class TestPollStatusMediaReadiness:
         """Test poll_status returns completed when audio URL is present."""
         api, mock_core = mock_artifacts_api
 
-        # POLL_STUDIO returns None, triggering fallback
+        # POLL_ARTIFACT returns None, triggering fallback
         mock_core.rpc_call.side_effect = [
-            None,  # POLL_STUDIO
+            None,  # POLL_ARTIFACT
             [
                 [
                     [  # LIST_ARTIFACTS response
@@ -678,9 +678,9 @@ class TestPollStatusMediaReadiness:
         """Test poll_status returns in_progress when audio URL is missing."""
         api, mock_core = mock_artifacts_api
 
-        # POLL_STUDIO returns None, triggering fallback
+        # POLL_ARTIFACT returns None, triggering fallback
         mock_core.rpc_call.side_effect = [
-            None,  # POLL_STUDIO
+            None,  # POLL_ARTIFACT
             [
                 [
                     [  # LIST_ARTIFACTS response - status=COMPLETED but no URL
@@ -706,7 +706,7 @@ class TestPollStatusMediaReadiness:
         api, mock_core = mock_artifacts_api
 
         mock_core.rpc_call.side_effect = [
-            None,  # POLL_STUDIO
+            None,  # POLL_ARTIFACT
             [
                 [
                     [  # LIST_ARTIFACTS - video with status=COMPLETED but no URL
@@ -733,7 +733,7 @@ class TestPollStatusMediaReadiness:
         api, mock_core = mock_artifacts_api
 
         mock_core.rpc_call.side_effect = [
-            None,  # POLL_STUDIO
+            None,  # POLL_ARTIFACT
             [
                 [
                     [  # LIST_ARTIFACTS - quiz
@@ -757,7 +757,7 @@ class TestPollStatusMediaReadiness:
         api, mock_core = mock_artifacts_api
 
         mock_core.rpc_call.side_effect = [
-            None,  # POLL_STUDIO
+            None,  # POLL_ARTIFACT
             [
                 [
                     [  # LIST_ARTIFACTS - audio still processing
