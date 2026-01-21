@@ -1510,7 +1510,6 @@ These RPC method IDs exist in `rpc/types.py` but are either legacy (superseded b
 | `sJDbic` | DELETE_AUDIO | Legacy | Superseded by DELETE_STUDIO (V5N4be) |
 | `xpWGLf` | CREATE_ARTIFACT | Unused | Purpose unknown, CREATE_VIDEO handles all artifact types |
 | `BnLyuf` | GET_ARTIFACT | Unused | Purpose unknown, LIST_ARTIFACTS provides artifact data |
-| `LfTXoe` | LIST_ARTIFACTS_ALT | Unused | Alternative list method, main LIST_ARTIFACTS (gArtLc) is used |
 
 **Why keep these?** These IDs are preserved in the codebase in case:
 1. Google re-enables or changes their functionality

@@ -69,7 +69,6 @@ class RPCMethod(str, Enum):
     # Artifact management
     RENAME_ARTIFACT = "rc3d8d"
     EXPORT_ARTIFACT = "Krh3pd"
-    LIST_ARTIFACTS_ALT = "LfTXoe"
     GET_INTERACTIVE_HTML = "v9rmvd"  # Fetch quiz/flashcard HTML content
 
     # Conversation

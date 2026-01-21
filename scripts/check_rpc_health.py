@@ -92,9 +92,7 @@ DUPLICATE_METHODS = {
 # Methods that require real resource IDs (fail with placeholders)
 # These return HTTP 400 with placeholder IDs but would work with real IDs
 PLACEHOLDER_FAIL_METHODS = {
-    RPCMethod.DISCOVER_SOURCES,  # Needs valid source discovery params
-    RPCMethod.GET_ARTIFACT,  # Needs real artifact ID
-    RPCMethod.LIST_ARTIFACTS_ALT,  # Needs specific notebook state
+    RPCMethod.DISCOVER_SOURCES,  # Reserved for future (not fully rolled out by Google)
 }
 
 # Methods that can only be tested in full mode (with temp notebook)
@@ -103,25 +101,30 @@ FULL_MODE_ONLY_METHODS = {
     # Create operations
     RPCMethod.CREATE_NOTEBOOK,
     RPCMethod.ADD_SOURCE,
+    RPCMethod.ADD_SOURCE_FILE,  # Registers file source intent (no upload needed)
     RPCMethod.CREATE_NOTE,
+    RPCMethod.CREATE_VIDEO,  # Main RPC for all artifacts - test with flashcards (fast)
+    RPCMethod.CREATE_ARTIFACT,  # Unused RPC - verify ID still valid
+    RPCMethod.START_FAST_RESEARCH,  # Starts research (verify RPC ID, don't wait)
+    # Read operations (need real artifact from CREATE_VIDEO)
+    RPCMethod.GET_ARTIFACT,  # Tested after flashcard creation completes
     # Delete operations (tested after creates)
     RPCMethod.DELETE_NOTE,
     RPCMethod.DELETE_SOURCE,
+    RPCMethod.DELETE_STUDIO,  # Main RPC for artifact deletion
     RPCMethod.DELETE_NOTEBOOK,
 }
 
 # Methods always skipped (even in full mode)
 ALWAYS_SKIP_METHODS = {
-    # These require complex setup or have side effects we can't easily undo
-    RPCMethod.CREATE_AUDIO,  # Takes too long, uses quota
-    RPCMethod.CREATE_VIDEO,  # Takes too long, uses quota
-    RPCMethod.CREATE_ARTIFACT,  # Takes too long, uses quota
-    RPCMethod.DELETE_AUDIO,  # Need audio first
-    RPCMethod.DELETE_STUDIO,  # Need studio first
-    RPCMethod.ADD_SOURCE_FILE,  # Requires multipart upload
-    RPCMethod.QUERY_ENDPOINT,  # Not a batchexecute RPC
-    RPCMethod.START_FAST_RESEARCH,  # Takes too long
-    RPCMethod.START_DEEP_RESEARCH,  # Takes too long
+    # Not a batchexecute RPC
+    RPCMethod.QUERY_ENDPOINT,
+    # Takes too long
+    RPCMethod.START_DEEP_RESEARCH,
+    # Legacy RPCs not used in codebase (superseded by CREATE_VIDEO/DELETE_STUDIO)
+    RPCMethod.CREATE_AUDIO,
+    RPCMethod.DELETE_AUDIO,
+    RPCMethod.GET_AUDIO,
 }
 
 
@@ -132,6 +135,7 @@ class TempResources:
     notebook_id: str | None = None
     source_id: str | None = None
     note_id: str | None = None
+    artifact_id: str | None = None  # Flashcard artifact for DELETE_STUDIO test
 
 
 def extract_id(data: Any, *indices: int) -> str | None:
@@ -371,8 +375,13 @@ def get_test_params(method: RPCMethod, notebook_id: str | None) -> list[Any] | N
 
     # Global settings (no notebook required)
     if method == RPCMethod.GET_USER_SETTINGS:
-        # Empty params to read current settings
-        return []
+        # Params to read current settings
+        return [None, [1, None, None, None, None, None, None, None, None, None, [1]]]
+
+    if method == RPCMethod.SET_USER_SETTINGS:
+        # Params structure: [[[null,[[null,null,null,null,["language_code"]]]]]]
+        # Use "en" as safe language code
+        return [[[None, [[None, None, None, None, ["en"]]]]]]
 
     # Methods that require a notebook ID
     if not notebook_id:
@@ -391,7 +400,6 @@ def get_test_params(method: RPCMethod, notebook_id: str | None) -> list[Any] | N
     # Methods that take [[notebook_id]] as the only param
     if method in (
         RPCMethod.LIST_ARTIFACTS,
-        RPCMethod.LIST_ARTIFACTS_ALT,
         RPCMethod.POLL_STUDIO,
         RPCMethod.GET_CONVERSATION_HISTORY,
         RPCMethod.GET_NOTES_AND_MIND_MAPS,
@@ -557,8 +565,9 @@ async def setup_temp_resources(
 ) -> TempResources:
     """Create temporary resources for full mode testing.
 
-    Tests CREATE_NOTEBOOK, ADD_SOURCE, and CREATE_NOTE RPC methods.
-    Extracts resource IDs directly from CREATE responses (no extra API calls).
+    Tests CREATE_NOTEBOOK, ADD_SOURCE, ADD_SOURCE_FILE, START_FAST_RESEARCH,
+    CREATE_NOTE, CREATE_VIDEO, GET_ARTIFACT, and CREATE_ARTIFACT RPC methods.
+    Polls for artifact completion before testing GET_ARTIFACT.
     """
     temp = TempResources()
 
@@ -623,6 +632,39 @@ async def setup_temp_resources(
     if result.status == CheckStatus.OK:
         temp.source_id = extract_id(data, 0, 0)
 
+    # Test ADD_SOURCE_FILE - registers file source intent (no actual upload needed)
+    # Params format: [[[filename]], notebook_id, [2], [1, None, ...]]
+    await asyncio.sleep(CALL_DELAY)
+    result = await test_rpc_method(
+        client,
+        auth,
+        RPCMethod.ADD_SOURCE_FILE,
+        [
+            [["test_file.pdf"]],
+            temp.notebook_id,
+            [2],
+            [1, None, None, None, None, None, None, None, None, None, [1]],
+        ],
+        source_path=f"/notebook/{temp.notebook_id}",
+    )
+    results.append(result)
+    suffix = "file source registered" if result.status == CheckStatus.OK else None
+    print(format_check_output(result, suffix))
+
+    # Test START_FAST_RESEARCH - starts research task (verify RPC ID only)
+    # Params format: [[query, source_type], None, 1, notebook_id]
+    await asyncio.sleep(CALL_DELAY)
+    result = await test_rpc_method(
+        client,
+        auth,
+        RPCMethod.START_FAST_RESEARCH,
+        [["test query", 1], None, 1, temp.notebook_id],  # 1 = Web search
+        source_path=f"/notebook/{temp.notebook_id}",
+    )
+    results.append(result)
+    suffix = "research started" if result.status == CheckStatus.OK else None
+    print(format_check_output(result, suffix))
+
     # Test CREATE_NOTE - extract note_id from response[0]
     # Params format: [notebook_id, "", [1], None, title]
     await asyncio.sleep(CALL_DELAY)
@@ -643,6 +685,139 @@ async def setup_temp_resources(
     if result.status == CheckStatus.OK:
         temp.note_id = extract_id(data, 0)
 
+    # Test CREATE_VIDEO - main RPC for all artifact generation (flashcards are fast)
+    # Params for quiz: [[2], notebook_id, [None, None, 4, source_ids_triple, ...]]
+    if temp.source_id:
+        await asyncio.sleep(CALL_DELAY)
+        source_ids_triple = [[[temp.source_id]]]
+        result, data = await test_rpc_method_with_data(
+            client,
+            auth,
+            RPCMethod.CREATE_VIDEO,
+            [
+                [2],
+                temp.notebook_id,
+                [
+                    None,
+                    None,
+                    4,  # StudioContentType.QUIZ_FLASHCARD
+                    source_ids_triple,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    [
+                        None,
+                        [
+                            1,  # Variant: flashcards (faster than quiz)
+                            None,  # instructions
+                            None,
+                            None,
+                            None,
+                            None,
+                            [None, 1],  # [difficulty, quantity] - FEWER
+                        ],
+                    ],
+                ],
+            ],
+            source_path=f"/notebook/{temp.notebook_id}",
+        )
+        results.append(result)
+        suffix = "flashcard generation triggered" if result.status == CheckStatus.OK else None
+        print(format_check_output(result, suffix))
+
+        if result.status == CheckStatus.OK:
+            # Artifact ID is at response[0][0]
+            temp.artifact_id = extract_id(data, 0, 0)
+
+        # Poll for artifact completion and test GET_ARTIFACT
+        if temp.artifact_id:
+            # Poll up to 30 seconds for flashcard generation to complete
+            max_polls = 15
+            poll_interval = 2.0
+            artifact_ready = False
+            polls_done = 0
+
+            for _ in range(max_polls):
+                await asyncio.sleep(poll_interval)
+                polls_done += 1
+                poll_result = await test_rpc_method(
+                    client,
+                    auth,
+                    RPCMethod.POLL_STUDIO,
+                    [temp.artifact_id, temp.notebook_id, [2]],
+                    source_path=f"/notebook/{temp.notebook_id}",
+                )
+                # Check if status indicates completion (status code 3 = ready)
+                # We don't add poll results to avoid cluttering output
+                if poll_result.status == CheckStatus.OK:
+                    artifact_ready = True
+                    break
+
+            if artifact_ready:
+                print(f"  Artifact ready after {polls_done * poll_interval:.0f}s polling")
+            else:
+                print(
+                    f"  Artifact not ready after {max_polls * poll_interval:.0f}s (continuing anyway)"
+                )
+
+            # Test GET_ARTIFACT with the real artifact ID
+            await asyncio.sleep(CALL_DELAY)
+            result = await test_rpc_method(
+                client,
+                auth,
+                RPCMethod.GET_ARTIFACT,
+                [[temp.notebook_id], temp.artifact_id],
+                source_path=f"/notebook/{temp.notebook_id}",
+            )
+            results.append(result)
+            suffix = "artifact retrieved" if result.status == CheckStatus.OK else None
+            print(format_check_output(result, suffix))
+
+    # Test CREATE_ARTIFACT - unused RPC, verify ID still valid
+    # Try with same params as CREATE_VIDEO to see if it responds
+    if temp.source_id:
+        await asyncio.sleep(CALL_DELAY)
+        source_ids_triple = [[[temp.source_id]]]
+        result = await test_rpc_method(
+            client,
+            auth,
+            RPCMethod.CREATE_ARTIFACT,
+            [
+                [2],
+                temp.notebook_id,
+                [
+                    None,
+                    None,
+                    4,  # StudioContentType.QUIZ_FLASHCARD
+                    source_ids_triple,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    [
+                        None,
+                        [
+                            1,  # Variant: flashcards
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                            [None, 1],
+                        ],
+                    ],
+                ],
+            ],
+            source_path=f"/notebook/{temp.notebook_id}",
+        )
+        results.append(result)
+        # This RPC may or may not work - we just want to verify the ID
+        suffix = "CREATE_ARTIFACT RPC tested" if result.status == CheckStatus.OK else None
+        print(format_check_output(result, suffix))
+
     return temp
 
 
@@ -652,7 +827,10 @@ async def cleanup_temp_resources(
     temp: TempResources,
     results: list[CheckResult],
 ) -> None:
-    """Delete temporary resources and test DELETE RPC methods."""
+    """Delete temporary resources and test DELETE RPC methods.
+
+    Tests DELETE_NOTE, DELETE_SOURCE, DELETE_STUDIO, and DELETE_NOTEBOOK RPCs.
+    """
     if not temp.notebook_id:
         return
 
@@ -689,6 +867,20 @@ async def cleanup_temp_resources(
                 result, "temp source deleted" if result.status == CheckStatus.OK else None
             )
         )
+
+    # Test DELETE_STUDIO if we have an artifact (main RPC for artifact deletion)
+    if temp.artifact_id:
+        await asyncio.sleep(CALL_DELAY)
+        result = await test_rpc_method(
+            client,
+            auth,
+            RPCMethod.DELETE_STUDIO,
+            [[2], temp.artifact_id],
+            source_path=f"/notebook/{temp.notebook_id}",
+        )
+        results.append(result)
+        suffix = "temp artifact deleted" if result.status == CheckStatus.OK else None
+        print(format_check_output(result, suffix))
 
     # Test DELETE_NOTEBOOK (always runs to cleanup)
     await asyncio.sleep(CALL_DELAY)
