@@ -297,6 +297,54 @@ notebooklm language set ja
 
 Run `notebooklm language list` for all 80+ supported languages.
 
+### Share: `status`, `public`, `view-level`, `add`, `update`, `remove`
+
+Manage notebook sharing settings and user permissions.
+
+```bash
+# Show current sharing status and shared users
+notebooklm share status
+
+# Enable public link sharing (anyone with link can view)
+notebooklm share public --enable
+
+# Disable public sharing
+notebooklm share public --disable
+
+# Set what viewers can access
+notebooklm share view-level full   # Full notebook (chat, sources, notes)
+notebooklm share view-level chat   # Chat interface only
+
+# Share with specific users
+notebooklm share add user@example.com                        # Add as viewer (default)
+notebooklm share add user@example.com --permission editor    # Add as editor
+notebooklm share add user@example.com -m "Check this out!"   # With message
+notebooklm share add user@example.com --no-notify            # Skip email notification
+
+# Update user permission
+notebooklm share update user@example.com --permission editor
+
+# Remove user access
+notebooklm share remove user@example.com
+notebooklm share remove user@example.com -y   # Skip confirmation
+```
+
+**Options (all commands):**
+- `-n, --notebook ID` - Specify notebook (uses current if not set, supports partial IDs)
+- `--json` - Output as JSON
+
+**Permission levels:**
+| Level | Access |
+|-------|--------|
+| `viewer` | Read-only access (default) |
+| `editor` | Can edit notebook content |
+
+**View levels:**
+| Level | Viewers can see |
+|-------|-----------------|
+| `full` | Chat, sources, and notes |
+| `chat` | Chat interface only |
+
 ### Session: `auth check`
 
 Diagnose authentication issues by validating storage file, cookies, and optionally testing token fetch.

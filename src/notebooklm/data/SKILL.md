@@ -449,7 +449,7 @@ All commands use consistent exit codes:
 - Notebooks (list, create, delete, rename)
 - Sources (add, list, delete)
 - Chat/queries
-- Mind-map, study-guide, FAQ, data-table generation
+- Mind-map, study-guide, report, data-table generation
 
 **Unreliable operations:** These may fail with rate limiting:
 - Audio (podcast) generation
