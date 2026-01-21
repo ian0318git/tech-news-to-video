@@ -144,21 +144,6 @@ tests/
 └── e2e/                # Real API calls (requires auth)
 ```
 
-### E2E Fixtures
-
-| Fixture | Use Case |
-|---------|----------|
-| `read_only_notebook_id` | List/download existing artifacts |
-| `temp_notebook` | Add/delete sources (auto-cleanup) |
-| `generation_notebook_id` | Generate artifacts (CI-aware cleanup) |
-
-### Rate Limiting
-
-NotebookLM has undocumented rate limits. Generation tests may be skipped when rate limited:
-- Use `pytest tests/e2e -m readonly` for quick validation
-- Wait a few minutes between full test runs
-- `SKIPPED (Rate limited by API)` is expected behavior, not failure
-
 ### VCR Testing (Recorded HTTP)
 
 VCR tests record HTTP interactions for offline, deterministic replay. We have two levels:
@@ -184,6 +169,21 @@ NOTEBOOKLM_VCR_RECORD=1 pytest tests/integration/test_vcr_*.py -v
 ```
 
 Sensitive data (cookies, tokens, emails) is automatically scrubbed from cassettes.
+
+### E2E Fixtures
+
+| Fixture | Use Case |
+|---------|----------|
+| `read_only_notebook_id` | List/download existing artifacts |
+| `temp_notebook` | Add/delete sources (auto-cleanup) |
+| `generation_notebook_id` | Generate artifacts (CI-aware cleanup) |
+
+### Rate Limiting
+
+NotebookLM has undocumented rate limits. Generation tests may be skipped when rate limited:
+- Use `pytest tests/e2e -m readonly` for quick validation
+- Wait a few minutes between full test runs
+- `SKIPPED (Rate limited by API)` is expected behavior, not failure
 
 ### Writing New Tests
 
