@@ -65,7 +65,7 @@ jobs:
                 # Group by type and status
                 by_type = {}
                 for a in artifacts:
-                    key = a.artifact_type
+                    key = a._artifact_type
                     if key not in by_type:
                         by_type[key] = []
                     by_type[key].append(a)
@@ -76,8 +76,8 @@ jobs:
                     type_name = TYPE_NAMES.get(t, f'Unknown({t})')
                     print(f'  {type_name} (type {t}): {len(items)}')
                     for a in items:
-                        status = a.status or 'unknown'
-                        variant_info = f', variant={a.variant}' if a.variant else ''
+                        status = a.status_str
+                        variant_info = f', variant={a._variant}' if a._variant else ''
                         print(f'    - {a.title} ({status}{variant_info})')
 
                 # Check expected types
@@ -92,9 +92,9 @@ jobs:
                     print(f'\nWARNING: Missing artifact types: {missing_names}')
 
                 # Check for completed artifacts
-                completed = sum(1 for a in artifacts if a.status == 'completed')
-                processing = sum(1 for a in artifacts if a.status == 'processing')
-                failed = sum(1 for a in artifacts if a.status == 'failed')
+                completed = sum(1 for a in artifacts if a.is_completed)
+                processing = sum(1 for a in artifacts if a.is_processing)
+                failed = sum(1 for a in artifacts if a.is_failed)
 
                 print(f'\nStatus summary:')
                 print(f'  Completed: {completed}')
