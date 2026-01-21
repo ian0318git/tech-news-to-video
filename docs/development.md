@@ -1,7 +1,7 @@
 # Contributing Guide
 
 **Status:** Active
-**Last Updated:** 2026-01-20
+**Last Updated:** 2026-01-21
 
 This guide covers everything you need to contribute to `notebooklm-py`: architecture overview, testing, and releasing.
 
@@ -137,9 +137,11 @@ pytest tests/e2e --include-variants # All tests including variants
 
 ```
 tests/
-├── unit/           # No network, fast, mock everything
-├── integration/    # Mocked HTTP responses + VCR cassettes
-└── e2e/            # Real API calls (requires auth)
+├── unit/               # No network, fast, mock everything
+├── integration/        # Mocked HTTP responses + VCR cassettes
+│   ├── test_vcr_*.py   # Client-level VCR tests
+│   └── cli_vcr/        # CLI integration tests with VCR
+└── e2e/                # Real API calls (requires auth)
 ```
 
 ### E2E Fixtures
@@ -159,17 +161,29 @@ NotebookLM has undocumented rate limits. Generation tests may be skipped when ra
 
 ### VCR Testing (Recorded HTTP)
 
-Record HTTP interactions for offline/deterministic replay:
+VCR tests record HTTP interactions for offline, deterministic replay. We have two levels:
+
+**Client-level VCR tests** (`tests/integration/test_vcr_*.py`):
+- Test Python API methods directly
+- Verify RPC encoding/decoding with real responses
+
+**CLI VCR tests** (`tests/integration/cli_vcr/`):
+- Test the full CLI → Client → RPC path
+- Use Click's CliRunner with VCR cassettes
+- Verify CLI commands work end-to-end without mocking the client
 
 ```bash
-# Record new cassettes (committed to repo with sensitive data scrubbed)
-NOTEBOOKLM_VCR_RECORD=1 pytest tests/integration/test_vcr_*.py -v
+# Run all VCR tests
+pytest tests/integration/
 
-# Run with recorded responses
-pytest tests/integration/test_vcr_*.py
+# Run only CLI VCR tests
+pytest tests/integration/cli_vcr/
+
+# Record new cassettes (sensitive data auto-scrubbed)
+NOTEBOOKLM_VCR_RECORD=1 pytest tests/integration/test_vcr_*.py -v
 ```
 
-Sensitive data (cookies, tokens, emails) is automatically scrubbed.
+Sensitive data (cookies, tokens, emails) is automatically scrubbed from cassettes.
 
 ### Writing New Tests
 
