@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-01-21
+
 ### Added
 - **Language settings** - Configure output language for artifact generation (audio, video, etc.)
   - New `notebooklm language list` - List all 80+ supported languages with native names
@@ -58,18 +60,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **Source type detection** - Use API-provided type codes as source of truth instead of URL/extension heuristics
 - **CLI file handling** - Simplified to always use `add_file()` for proper type detection
-- **`StudioContentType`** - Renamed to `ArtifactTypeCode`, now internal only (use `ArtifactType` for public API)
 
 ### Removed
 - **`detect_source_type()`** - Obsolete heuristic function replaced by `Source.kind` property
 - **`ARTIFACT_TYPE_DISPLAY`** - Unused constant replaced by `get_artifact_type_display()`
 
 ### Deprecated
-The following attributes emit `DeprecationWarning` when accessed and will be removed in **v0.4.0**.
+The following emit `DeprecationWarning` when accessed and will be removed in **v0.4.0**.
 See [Migration Guide](docs/stability.md#migrating-from-v02x-to-v030) for upgrade instructions.
 
-- **`Source.source_type`** - Use `.kind` property instead (returns `SourceType` enum)
-- **`Artifact.artifact_type`** - Use `.kind` property instead (returns `ArtifactType` enum)
+- **`Source.source_type`** - Use `.kind` property instead (returns `SourceType` str enum)
+- **`Artifact.artifact_type`** - Use `.kind` property instead (returns `ArtifactType` str enum)
 - **`Artifact.variant`** - Use `.kind`, `.is_quiz`, or `.is_flashcards` instead
 - **`SourceFulltext.source_type`** - Use `.kind` property instead
 - **`StudioContentType`** - Use `ArtifactType` (str enum) for user-facing code
@@ -254,7 +255,8 @@ This is the initial public release of `notebooklm-py`. While core functionality 
 - **Authentication expiry**: CSRF tokens expire after some time. Re-run `notebooklm login` if you encounter auth errors.
 - **Large file uploads**: Files over 50MB may fail or timeout. Split large documents if needed.
 
-[Unreleased]: https://github.com/teng-lin/notebooklm-py/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/teng-lin/notebooklm-py/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/teng-lin/notebooklm-py/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/teng-lin/notebooklm-py/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/teng-lin/notebooklm-py/compare/v0.1.4...v0.2.0
 [0.1.4]: https://github.com/teng-lin/notebooklm-py/compare/v0.1.3...v0.1.4

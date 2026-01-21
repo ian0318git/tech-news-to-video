@@ -1,7 +1,7 @@
 # API Stability and Versioning
 
 **Status:** Active
-**Last Updated:** 2026-01-20
+**Last Updated:** 2026-01-21
 
 This document describes the stability guarantees and versioning policy for `notebooklm-py`.
 
@@ -115,18 +115,20 @@ The following are deprecated and will be removed in **v0.4.0**:
 
 | Deprecated | Replacement | Notes |
 |------------|-------------|-------|
-| `Source.source_type` | `Source.kind` | Returns `SourceType` enum |
-| `Artifact.artifact_type` | `Artifact.kind` | Returns `ArtifactType` enum |
+| `Source.source_type` | `Source.kind` | Returns `SourceType` str enum |
+| `Artifact.artifact_type` | `Artifact.kind` | Returns `ArtifactType` str enum |
 | `Artifact.variant` | `Artifact.kind` | Use `.is_quiz` / `.is_flashcards` |
-| `SourceFulltext.source_type` | `SourceFulltext.kind` | Returns `SourceType` enum |
+| `SourceFulltext.source_type` | `SourceFulltext.kind` | Returns `SourceType` str enum |
 | `StudioContentType` | `ArtifactType` | Str enum for user-facing code |
 
-## Migration Guide: v0.2.x to v0.3.0
+## Migration Guides
+
+### Migrating from v0.2.x to v0.3.0
 
 Version 0.3.0 introduces **deprecated** attributes that emit `DeprecationWarning` when accessed.
 These will be removed in v0.4.0. Update your code now to avoid breakage.
 
-### 1. `Source.source_type` → `Source.kind`
+#### 1. `Source.source_type` → `Source.kind`
 
 **Before (deprecated):**
 ```python
@@ -141,11 +143,11 @@ from notebooklm import SourceType
 
 source = await client.sources.list(notebook_id)[0]
 
-# Option 1: Enum comparison (recommended)
+# Option 1: Use enum comparison (recommended)
 if source.kind == SourceType.PDF:
     print("This is a PDF")
 
-# Option 2: String comparison (str enum supports this)
+# Option 2: Use string comparison (str enum supports this)
 if source.kind == "pdf":
     print("This is a PDF")
 ```
@@ -153,7 +155,7 @@ if source.kind == "pdf":
 **Available `SourceType` values:**
 `GOOGLE_DOCS`, `GOOGLE_SLIDES`, `GOOGLE_SPREADSHEET`, `PDF`, `PASTED_TEXT`, `WEB_PAGE`, `YOUTUBE`, `MARKDOWN`, `DOCX`, `CSV`, `IMAGE`, `MEDIA`, `UNKNOWN`
 
-### 2. `Artifact.artifact_type` → `Artifact.kind`
+#### 2. `Artifact.artifact_type` → `Artifact.kind`
 
 **Before (deprecated):**
 ```python
@@ -161,7 +163,7 @@ from notebooklm import StudioContentType  # ⚠️ Emits DeprecationWarning
 
 artifact = await client.artifacts.list(notebook_id)[0]
 if artifact.artifact_type == StudioContentType.AUDIO:  # ⚠️ Emits DeprecationWarning
-    print("This is audio")
+    print("This is an audio artifact")
 ```
 
 **After (recommended):**
@@ -170,19 +172,19 @@ from notebooklm import ArtifactType
 
 artifact = await client.artifacts.list(notebook_id)[0]
 
-# Option 1: Enum comparison
+# Option 1: Use enum comparison (recommended)
 if artifact.kind == ArtifactType.AUDIO:
-    print("This is audio")
+    print("This is an audio artifact")
 
-# Option 2: String comparison
+# Option 2: Use string comparison (str enum supports this)
 if artifact.kind == "audio":
-    print("This is audio")
+    print("This is an audio artifact")
 ```
 
 **Available `ArtifactType` values:**
 `AUDIO`, `VIDEO`, `REPORT`, `QUIZ`, `FLASHCARDS`, `MIND_MAP`, `INFOGRAPHIC`, `SLIDE_DECK`, `DATA_TABLE`, `UNKNOWN`
 
-### 3. `Artifact.variant` → `Artifact.kind` or helpers
+#### 3. `Artifact.variant` → `Artifact.kind` or helpers
 
 **Before (deprecated):**
 ```python
@@ -203,7 +205,7 @@ if artifact.is_flashcards:
     print("These are flashcards")
 ```
 
-### Why These Changes?
+#### Why These Changes?
 
 1. **Stability**: The `.kind` property abstracts internal integer codes that Google may change
 2. **Usability**: String enums work in comparisons, logging, and serialization
