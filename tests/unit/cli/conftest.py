@@ -70,6 +70,7 @@ def create_mock_client():
     mock_client.chat = MagicMock()
     mock_client.research = MagicMock()
     mock_client.notes = MagicMock()
+    mock_client.sharing = MagicMock()
 
     return mock_client
 
@@ -146,13 +147,26 @@ class MultiPatcher:
 
     After refactoring, commands are spread across multiple modules, so we need
     to patch NotebookLMClient in all of them.
+
+    Uses importlib to get the actual module objects, bypassing shadowed names
+    in cli/__init__.py where click groups share names with modules.
     """
 
     def __init__(self):
+        import importlib
+
+        # Get actual module objects to avoid Python 3.10 shadowing issues
+        # where cli/__init__.py exports click groups with same names as modules
+        notebook_mod = importlib.import_module("notebooklm.cli.notebook")
+        chat_mod = importlib.import_module("notebooklm.cli.chat")
+        session_mod = importlib.import_module("notebooklm.cli.session")
+        share_mod = importlib.import_module("notebooklm.cli.share")
+
         self.patches = [
-            patch("notebooklm.cli.notebook.NotebookLMClient"),
-            patch("notebooklm.cli.chat.NotebookLMClient"),
-            patch("notebooklm.cli.session.NotebookLMClient"),
+            patch.object(notebook_mod, "NotebookLMClient"),
+            patch.object(chat_mod, "NotebookLMClient"),
+            patch.object(session_mod, "NotebookLMClient"),
+            patch.object(share_mod, "NotebookLMClient"),
         ]
         self.mocks = []
 
@@ -171,9 +185,10 @@ def patch_main_cli_client():
     """Create a context manager that patches NotebookLMClient in CLI command modules.
 
     After refactoring, top-level commands are in separate modules:
-    - notebook.py: list, create, delete, rename, share, summary
+    - notebook.py: list, create, delete, rename, summary
     - chat.py: ask, configure, history
     - session.py: use
+    - share.py: status, public, view-level, add, update, remove
 
     Returns:
         A context manager that patches NotebookLMClient in all relevant modules
