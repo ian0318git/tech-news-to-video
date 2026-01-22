@@ -2,22 +2,29 @@ name: Nightly E2E Tests
 
 on:
   schedule:
-    # Run at 6 AM UTC daily (10 PM PST / 1 AM EST)
+    # Main branch: 6 AM UTC (10 PM PST / 1 AM EST)
     - cron: '0 6 * * *'
+    # Develop branch: 11 AM UTC (3 AM PST / 6 AM EST) - 5 hours later
+    - cron: '0 11 * * *'
   workflow_dispatch:
     inputs:
       test_filter:
         description: 'Specific test to run (e.g., tests/e2e/test_downloads.py::TestDownloadReport)'
         required: false
         default: ''
-
-concurrency:
-  group: ${{ github.workflow }}
-  cancel-in-progress: true
+      branch:
+        description: 'Branch to test'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - main
+          - develop
 
 jobs:
   e2e:
-    name: E2E Tests (${{ matrix.os }})
+    name: E2E Tests (${{ matrix.branch }}/${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     # Only run on main repo (not forks) due to secrets requirement
     if: github.repository == 'teng-lin/notebooklm-py'
@@ -25,9 +32,23 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
+        branch: [main, develop]
+        exclude:
+          # Scheduled runs: 6 AM UTC = main only, 11 AM UTC = develop only
+          - branch: ${{ github.event_name == 'schedule' && github.event.schedule == '0 6 * * *' && 'develop' || '' }}
+          - branch: ${{ github.event_name == 'schedule' && github.event.schedule == '0 11 * * *' && 'main' || '' }}
+          # Manual runs: filter by selected branch
+          - branch: ${{ github.event_name == 'workflow_dispatch' && inputs.branch == 'main' && 'develop' || '' }}
+          - branch: ${{ github.event_name == 'workflow_dispatch' && inputs.branch == 'develop' && 'main' || '' }}
+
+    concurrency:
+      group: nightly-${{ matrix.branch }}-${{ matrix.os }}
+      cancel-in-progress: true
 
     steps:
     - uses: actions/checkout@v6
+      with:
+        ref: ${{ matrix.branch }}
 
     - name: Set up Python
       uses: actions/setup-python@v6
@@ -68,6 +89,7 @@ jobs:
         NOTEBOOKLM_GENERATION_NOTEBOOK_ID: ${{ secrets.NOTEBOOKLM_GENERATION_NOTEBOOK_ID }}
       shell: bash
       run: |
+        echo "Testing branch: ${{ matrix.branch }}"
         TEST_FILTER="${{ inputs.test_filter }}"
         if [ -n "$TEST_FILTER" ]; then
           # Run specific test(s) when filter provided
