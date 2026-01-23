@@ -804,54 +804,68 @@ async def cleanup_temp_resources(
     """Delete temporary resources and test DELETE RPC methods.
 
     Tests DELETE_NOTE, DELETE_SOURCE, DELETE_ARTIFACT, and DELETE_NOTEBOOK RPCs.
+    Always attempts to delete the notebook, even if other cleanup operations fail.
     """
     if not temp.notebook_id:
         return
 
-    # Test DELETE_NOTE if we have a note
+    # Test DELETE_NOTE if we have a note (best effort - don't block notebook deletion)
     if temp.note_id:
-        await asyncio.sleep(CALL_DELAY)
-        result = await test_rpc_method(
-            client,
-            auth,
-            RPCMethod.DELETE_NOTE,
-            [temp.notebook_id, None, [temp.note_id]],
-            source_path=f"/notebook/{temp.notebook_id}",
-        )
-        results.append(result)
-        print(format_check_with_success(result, "temp note deleted"))
+        try:
+            await asyncio.sleep(CALL_DELAY)
+            result = await test_rpc_method(
+                client,
+                auth,
+                RPCMethod.DELETE_NOTE,
+                [temp.notebook_id, None, [temp.note_id]],
+                source_path=f"/notebook/{temp.notebook_id}",
+            )
+            results.append(result)
+            print(format_check_with_success(result, "temp note deleted"))
+        except Exception as e:
+            print(f"ERROR    DELETE_NOTE - {e}")
 
-    # Test DELETE_SOURCE if we have a source
+    # Test DELETE_SOURCE if we have a source (best effort)
     if temp.source_id:
-        await asyncio.sleep(CALL_DELAY)
-        result = await test_rpc_method(
-            client,
-            auth,
-            RPCMethod.DELETE_SOURCE,
-            [[[temp.source_id]]],
-            source_path=f"/notebook/{temp.notebook_id}",
-        )
-        results.append(result)
-        print(format_check_with_success(result, "temp source deleted"))
+        try:
+            await asyncio.sleep(CALL_DELAY)
+            result = await test_rpc_method(
+                client,
+                auth,
+                RPCMethod.DELETE_SOURCE,
+                [[[temp.source_id]]],
+                source_path=f"/notebook/{temp.notebook_id}",
+            )
+            results.append(result)
+            print(format_check_with_success(result, "temp source deleted"))
+        except Exception as e:
+            print(f"ERROR    DELETE_SOURCE - {e}")
 
-    # Test DELETE_ARTIFACT if we have an artifact (main RPC for artifact deletion)
+    # Test DELETE_ARTIFACT if we have an artifact (best effort)
     if temp.artifact_id:
-        await asyncio.sleep(CALL_DELAY)
-        result = await test_rpc_method(
-            client,
-            auth,
-            RPCMethod.DELETE_ARTIFACT,
-            [[2], temp.artifact_id],
-            source_path=f"/notebook/{temp.notebook_id}",
-        )
-        results.append(result)
-        print(format_check_with_success(result, "temp artifact deleted"))
+        try:
+            await asyncio.sleep(CALL_DELAY)
+            result = await test_rpc_method(
+                client,
+                auth,
+                RPCMethod.DELETE_ARTIFACT,
+                [[2], temp.artifact_id],
+                source_path=f"/notebook/{temp.notebook_id}",
+            )
+            results.append(result)
+            print(format_check_with_success(result, "temp artifact deleted"))
+        except Exception as e:
+            print(f"ERROR    DELETE_ARTIFACT - {e}")
 
-    # Test DELETE_NOTEBOOK (always runs to cleanup)
-    await asyncio.sleep(CALL_DELAY)
-    result = await test_rpc_method(client, auth, RPCMethod.DELETE_NOTEBOOK, [temp.notebook_id])
-    results.append(result)
-    print(format_check_with_success(result, "temp notebook deleted"))
+    # ALWAYS delete notebook - this is critical to avoid orphaned notebooks
+    try:
+        await asyncio.sleep(CALL_DELAY)
+        result = await test_rpc_method(client, auth, RPCMethod.DELETE_NOTEBOOK, [temp.notebook_id])
+        results.append(result)
+        print(format_check_with_success(result, "temp notebook deleted"))
+    except Exception as e:
+        print(f"ERROR    DELETE_NOTEBOOK - {e}")
+        print(f"WARNING: Notebook {temp.notebook_id} may need manual cleanup", file=sys.stderr)
 
 
 async def run_health_check(full_mode: bool = False) -> list[CheckResult]:
@@ -882,14 +896,14 @@ async def run_health_check(full_mode: bool = False) -> list[CheckResult]:
     print()
 
     async with httpx.AsyncClient(timeout=30.0) as client:
-        if full_mode:
-            print("Creating temp resources for full testing...")
-            temp_resources = await setup_temp_resources(client, auth, results)
-            if temp_resources.notebook_id:
-                notebook_id = temp_resources.notebook_id
-            print()
-
         try:
+            if full_mode:
+                print("Creating temp resources for full testing...")
+                temp_resources = await setup_temp_resources(client, auth, results)
+                if temp_resources.notebook_id:
+                    notebook_id = temp_resources.notebook_id
+                print()
+
             methods = list(RPCMethod)
             total = len(methods)
 
