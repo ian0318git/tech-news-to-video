@@ -38,6 +38,8 @@ from .helpers import (
     json_error_response,
     json_output_response,
     require_notebook,
+    resolve_notebook_id,
+    resolve_source_ids,
     with_client,
 )
 from .language import SUPPORTED_LANGUAGES, get_language
@@ -362,11 +364,12 @@ def generate_audio(
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            sources = list(source_ids) if source_ids else None
+            nb_id_resolved = await resolve_notebook_id(client, nb_id)
+            sources = await resolve_source_ids(client, nb_id_resolved, source_ids)
 
             async def _generate():
                 return await client.artifacts.generate_audio(
-                    nb_id,
+                    nb_id_resolved,
                     source_ids=sources,
                     language=resolve_language(language),
                     instructions=description or None,
@@ -375,7 +378,9 @@ def generate_audio(
                 )
 
             result = await generate_with_retry(_generate, max_retries, "audio", json_output)
-            await handle_generation_result(client, nb_id, result, "audio", wait, json_output)
+            await handle_generation_result(
+                client, nb_id_resolved, result, "audio", wait, json_output
+            )
 
     return _run()
 
@@ -458,11 +463,12 @@ def generate_video(
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            sources = list(source_ids) if source_ids else None
+            nb_id_resolved = await resolve_notebook_id(client, nb_id)
+            sources = await resolve_source_ids(client, nb_id_resolved, source_ids)
 
             async def _generate():
                 return await client.artifacts.generate_video(
-                    nb_id,
+                    nb_id_resolved,
                     source_ids=sources,
                     language=resolve_language(language),
                     instructions=description or None,
@@ -472,7 +478,7 @@ def generate_video(
 
             result = await generate_with_retry(_generate, max_retries, "video", json_output)
             await handle_generation_result(
-                client, nb_id, result, "video", wait, json_output, timeout=600.0
+                client, nb_id_resolved, result, "video", wait, json_output, timeout=600.0
             )
 
     return _run()
@@ -540,11 +546,12 @@ def generate_slide_deck(
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            sources = list(source_ids) if source_ids else None
+            nb_id_resolved = await resolve_notebook_id(client, nb_id)
+            sources = await resolve_source_ids(client, nb_id_resolved, source_ids)
 
             async def _generate():
                 return await client.artifacts.generate_slide_deck(
-                    nb_id,
+                    nb_id_resolved,
                     source_ids=sources,
                     language=resolve_language(language),
                     instructions=description or None,
@@ -553,7 +560,9 @@ def generate_slide_deck(
                 )
 
             result = await generate_with_retry(_generate, max_retries, "slide deck", json_output)
-            await handle_generation_result(client, nb_id, result, "slide deck", wait, json_output)
+            await handle_generation_result(
+                client, nb_id_resolved, result, "slide deck", wait, json_output
+            )
 
     return _run()
 
@@ -610,11 +619,12 @@ def generate_quiz(
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            sources = list(source_ids) if source_ids else None
+            nb_id_resolved = await resolve_notebook_id(client, nb_id)
+            sources = await resolve_source_ids(client, nb_id_resolved, source_ids)
 
             async def _generate():
                 return await client.artifacts.generate_quiz(
-                    nb_id,
+                    nb_id_resolved,
                     source_ids=sources,
                     instructions=description or None,
                     quantity=quantity_map[quantity],
@@ -622,7 +632,9 @@ def generate_quiz(
                 )
 
             result = await generate_with_retry(_generate, max_retries, "quiz", json_output)
-            await handle_generation_result(client, nb_id, result, "quiz", wait, json_output)
+            await handle_generation_result(
+                client, nb_id_resolved, result, "quiz", wait, json_output
+            )
 
     return _run()
 
@@ -679,11 +691,12 @@ def generate_flashcards(
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            sources = list(source_ids) if source_ids else None
+            nb_id_resolved = await resolve_notebook_id(client, nb_id)
+            sources = await resolve_source_ids(client, nb_id_resolved, source_ids)
 
             async def _generate():
                 return await client.artifacts.generate_flashcards(
-                    nb_id,
+                    nb_id_resolved,
                     source_ids=sources,
                     instructions=description or None,
                     quantity=quantity_map[quantity],
@@ -691,7 +704,9 @@ def generate_flashcards(
                 )
 
             result = await generate_with_retry(_generate, max_retries, "flashcards", json_output)
-            await handle_generation_result(client, nb_id, result, "flashcards", wait, json_output)
+            await handle_generation_result(
+                client, nb_id_resolved, result, "flashcards", wait, json_output
+            )
 
     return _run()
 
@@ -758,11 +773,12 @@ def generate_infographic(
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            sources = list(source_ids) if source_ids else None
+            nb_id_resolved = await resolve_notebook_id(client, nb_id)
+            sources = await resolve_source_ids(client, nb_id_resolved, source_ids)
 
             async def _generate():
                 return await client.artifacts.generate_infographic(
-                    nb_id,
+                    nb_id_resolved,
                     source_ids=sources,
                     language=resolve_language(language),
                     instructions=description or None,
@@ -771,7 +787,9 @@ def generate_infographic(
                 )
 
             result = await generate_with_retry(_generate, max_retries, "infographic", json_output)
-            await handle_generation_result(client, nb_id, result, "infographic", wait, json_output)
+            await handle_generation_result(
+                client, nb_id_resolved, result, "infographic", wait, json_output
+            )
 
     return _run()
 
@@ -816,18 +834,21 @@ def generate_data_table(
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            sources = list(source_ids) if source_ids else None
+            nb_id_resolved = await resolve_notebook_id(client, nb_id)
+            sources = await resolve_source_ids(client, nb_id_resolved, source_ids)
 
             async def _generate():
                 return await client.artifacts.generate_data_table(
-                    nb_id,
+                    nb_id_resolved,
                     source_ids=sources,
                     language=resolve_language(language),
                     instructions=description,
                 )
 
             result = await generate_with_retry(_generate, max_retries, "data table", json_output)
-            await handle_generation_result(client, nb_id, result, "data table", wait, json_output)
+            await handle_generation_result(
+                client, nb_id_resolved, result, "data table", wait, json_output
+            )
 
     return _run()
 
@@ -853,14 +874,19 @@ def generate_mind_map(ctx, notebook_id, source_ids, json_output, client_auth):
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            sources = list(source_ids) if source_ids else None
+            nb_id_resolved = await resolve_notebook_id(client, nb_id)
+            sources = await resolve_source_ids(client, nb_id_resolved, source_ids)
 
             # Show status spinner only for console output
             if json_output:
-                result = await client.artifacts.generate_mind_map(nb_id, source_ids=sources)
+                result = await client.artifacts.generate_mind_map(
+                    nb_id_resolved, source_ids=sources
+                )
             else:
                 with console.status("Generating mind map..."):
-                    result = await client.artifacts.generate_mind_map(nb_id, source_ids=sources)
+                    result = await client.artifacts.generate_mind_map(
+                        nb_id_resolved, source_ids=sources
+                    )
 
             _output_mind_map_result(result, json_output)
 
@@ -964,17 +990,20 @@ def generate_report_cmd(
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            sources = list(source_ids) if source_ids else None
+            nb_id_resolved = await resolve_notebook_id(client, nb_id)
+            sources = await resolve_source_ids(client, nb_id_resolved, source_ids)
 
             async def _generate():
                 return await client.artifacts.generate_report(
-                    nb_id,
+                    nb_id_resolved,
                     source_ids=sources,
                     report_format=report_format_enum,
                     custom_prompt=custom_prompt,
                 )
 
             result = await generate_with_retry(_generate, max_retries, format_display, json_output)
-            await handle_generation_result(client, nb_id, result, format_display, wait, json_output)
+            await handle_generation_result(
+                client, nb_id_resolved, result, format_display, wait, json_output
+            )
 
     return _run()
