@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-01-26
+
+### Fixed
+- **CLI conversation reset** - Fixed conversation ID not resetting when switching notebooks (#97)
+- **UTF-8 file encoding** - Added explicit UTF-8 encoding to all file I/O operations (#93)
+- **Windows Playwright login** - Restored ProactorEventLoop for Playwright login on Windows (#91)
+
+### Infrastructure
+- Fixed E2E test teardown hook for pytest 8.x compatibility (#101)
+- Added 15-second delay between E2E generation tests to avoid rate limits (#95)
+
 ## [0.3.1] - 2026-01-23
 
 ### Fixed
@@ -271,7 +282,8 @@ This is the initial public release of `notebooklm-py`. While core functionality 
 - **Authentication expiry**: CSRF tokens expire after some time. Re-run `notebooklm login` if you encounter auth errors.
 - **Large file uploads**: Files over 50MB may fail or timeout. Split large documents if needed.
 
-[Unreleased]: https://github.com/teng-lin/notebooklm-py/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/teng-lin/notebooklm-py/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/teng-lin/notebooklm-py/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/teng-lin/notebooklm-py/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/teng-lin/notebooklm-py/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/teng-lin/notebooklm-py/compare/v0.2.0...v0.2.1
