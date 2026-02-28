@@ -394,3 +394,105 @@ class TestChatReferences:
         assert ref.start_char == 1000
         assert ref.end_char == 1500
         assert ref.chunk_id == "chunk-001"
+
+    @pytest.mark.asyncio
+    async def test_ask_returns_answer_when_marker_absent(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+    ):
+        """Test ask() extracts answer when API response lacks type_info[-1]==1 marker.
+
+        Regression test for issue #118: Google's API may change or omit the answer
+        marker, causing the parser to fall back to the longest unmarked text chunk.
+        """
+        import json
+        import re
+
+        # Response with no trailing `1` marker in type_info — simulates changed API format
+        inner_data = [
+            [
+                "This is a valid answer returned without the answer marker.",
+                None,
+                ["chunk-001", 12345],
+                None,
+                [[], None, None, []],  # type_info has no trailing 1
+            ]
+        ]
+        inner_json = json.dumps(inner_data)
+        chunk_json = json.dumps([["wrb.fr", None, inner_json]])
+        response_body = f")]}}'\n{len(chunk_json)}\n{chunk_json}\n"
+
+        httpx_mock.add_response(
+            url=re.compile(r".*GenerateFreeFormStreamed.*"),
+            content=response_body.encode(),
+            method="POST",
+        )
+
+        async with NotebookLMClient(auth_tokens) as client:
+            result = await client.chat.ask(
+                notebook_id="test_nb",
+                question="What does this say?",
+                source_ids=["src_001"],
+            )
+
+        assert result.answer == "This is a valid answer returned without the answer marker."
+        assert result.conversation_id is not None
+        assert result.is_follow_up is False
+
+    @pytest.mark.asyncio
+    async def test_ask_prefers_marked_over_unmarked_in_streaming_response(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+    ):
+        """Test ask() picks the marked answer when response has both marked and unmarked chunks.
+
+        Streaming responses can contain multiple chunks. The marked answer chunk
+        (type_info[-1]==1) must win even when an unmarked chunk has longer text.
+        """
+        import json
+        import re
+
+        # Streaming response: first chunk is a longer unmarked preamble,
+        # second chunk is the shorter but marked real answer.
+        preamble = [
+            [
+                "This is a long preamble or status message that is not the real answer to the question at all.",
+                None,
+                ["chunk-001", 11111],
+                None,
+                [[], None, None, []],  # no marker
+            ]
+        ]
+        answer = [
+            [
+                "The real answer.",
+                None,
+                ["chunk-002", 22222],
+                None,
+                [[], None, None, [], 1],  # marked
+            ]
+        ]
+
+        def make_chunk(inner_data):
+            inner_json = json.dumps(inner_data)
+            chunk_json = json.dumps([["wrb.fr", None, inner_json]])
+            return f"{len(chunk_json)}\n{chunk_json}"
+
+        response_body = f")]}}'\n{make_chunk(preamble)}\n{make_chunk(answer)}\n"
+
+        httpx_mock.add_response(
+            url=re.compile(r".*GenerateFreeFormStreamed.*"),
+            content=response_body.encode(),
+            method="POST",
+        )
+
+        async with NotebookLMClient(auth_tokens) as client:
+            result = await client.chat.ask(
+                notebook_id="test_nb",
+                question="What is the answer?",
+                source_ids=["src_001"],
+            )
+
+        assert result.answer == "The real answer."

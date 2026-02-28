@@ -27,9 +27,6 @@ _UUID_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-# Minimum answer length to be considered valid (filters out status messages)
-_MIN_ANSWER_LENGTH = 20
-
 
 class ChatAPI:
     """Operations for notebook chat/conversations.
@@ -316,15 +313,19 @@ class ChatAPI:
             response_text = response_text[4:]
 
         lines = response_text.strip().split("\n")
-        longest_answer = ""
+        best_marked_answer = ""
+        best_unmarked_answer = ""
         all_references: list[ChatReference] = []
 
         def process_chunk(json_str: str) -> None:
-            """Process a JSON chunk, updating longest_answer and all_references."""
-            nonlocal longest_answer
+            """Process a JSON chunk, updating best answers and all_references."""
+            nonlocal best_marked_answer, best_unmarked_answer
             text, is_answer, refs = self._extract_answer_and_refs_from_chunk(json_str)
-            if text and is_answer and len(text) > len(longest_answer):
-                longest_answer = text
+            if text:
+                if is_answer and len(text) > len(best_marked_answer):
+                    best_marked_answer = text
+                elif not is_answer and len(text) > len(best_unmarked_answer):
+                    best_unmarked_answer = text
             all_references.extend(refs)
 
         i = 0
@@ -344,8 +345,21 @@ class ChatAPI:
                 process_chunk(line)
                 i += 1
 
+        # Prefer marked answers; fall back to longest unmarked text
+        if best_marked_answer:
+            longest_answer = best_marked_answer
+        elif best_unmarked_answer:
+            logger.warning(
+                "No marked answer found; falling back to longest unmarked "
+                "text (%d chars). The API response format may have changed.",
+                len(best_unmarked_answer),
+            )
+            longest_answer = best_unmarked_answer
+        else:
+            longest_answer = ""
+
         if not longest_answer:
-            logger.debug(
+            logger.warning(
                 "No answer extracted from response (%d lines parsed)",
                 len(lines),
             )
@@ -404,18 +418,18 @@ class ChatAPI:
                     first = inner_data[0]
                     if isinstance(first, list) and len(first) > 0:
                         text = first[0]
-                        is_answer = False
-                        if isinstance(text, str) and len(text) > _MIN_ANSWER_LENGTH:
-                            if len(first) > 4 and isinstance(first[4], list):
-                                type_info = first[4]
-                                if len(type_info) > 0 and type_info[-1] == 1:
-                                    is_answer = True
+                        if not isinstance(text, str) or not text:
+                            continue
 
-                            # Extract references from first[4][3] - the detailed citation array
-                            # Each citation contains chunk ID, parent source ID, and cited text
-                            refs = self._parse_citations(first)
+                        is_answer = (
+                            len(first) > 4
+                            and isinstance(first[4], list)
+                            and len(first[4]) > 0
+                            and first[4][-1] == 1
+                        )
 
-                            return text, is_answer, refs
+                        refs = self._parse_citations(first)
+                        return text, is_answer, refs
             except json.JSONDecodeError:
                 continue
 
