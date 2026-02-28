@@ -661,7 +661,7 @@ print(f"Language set to: {result}")
 **Important:** Language is a **GLOBAL setting** that affects all notebooks in your account. Supported languages include:
 - `en` (English), `ja` (日本語), `zh_Hans` (中文简体), `zh_Hant` (中文繁體)
 - `ko` (한국어), `es` (Español), `fr` (Français), `de` (Deutsch), `pt_BR` (Português)
-- And [80+ other languages](cli-reference.md#language-commands)
+- And [over 70 other languages](cli-reference.md#language-commands-notebooklm-language-cmd)
 
 ---
 
