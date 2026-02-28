@@ -5,8 +5,9 @@ This script makes minimal API calls to exercise RPC methods and verify
 that the method IDs in rpc/types.py still match what the API returns.
 
 Exit codes:
-    0 - All RPC methods OK
+    0 - All RPC methods OK (or transient errors only)
     1 - One or more RPC methods have mismatched IDs
+    2 - Authentication or infrastructure failure (not an RPC problem)
 
 Environment variables:
     NOTEBOOKLM_AUTH_JSON - Playwright storage state JSON (required)
@@ -191,10 +192,10 @@ def load_auth() -> dict[str, str]:
             "Set NOTEBOOKLM_AUTH_JSON env var or run 'notebooklm login'",
             file=sys.stderr,
         )
-        sys.exit(1)
+        sys.exit(2)
     except ValueError as e:
         print(f"ERROR: Invalid authentication: {e}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(2)
     return cookies
 
 
@@ -887,10 +888,10 @@ async def run_health_check(full_mode: bool = False) -> list[CheckResult]:
         csrf_token, session_id = await fetch_tokens(cookies)
     except ValueError as e:
         print(f"ERROR: {e}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(2)
     except httpx.HTTPError as e:
         print(f"ERROR: Network error while fetching auth tokens: {e}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(2)
     auth = AuthTokens(cookies=cookies, csrf_token=csrf_token, session_id=session_id)
     print(f"Auth OK (CSRF token length: {len(auth.csrf_token)})")
     print()
