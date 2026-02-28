@@ -1,10 +1,12 @@
 """Integration tests for NotebooksAPI."""
 
+import json
+
 import pytest
 from pytest_httpx import HTTPXMock
 
 from notebooklm import Notebook, NotebookLMClient
-from notebooklm.rpc import RPCMethod
+from notebooklm.rpc import RPCError, RPCMethod
 
 
 class TestListNotebooks:
@@ -388,6 +390,75 @@ class TestNotebooksAPIAdditional:
         assert len(description.suggested_topics) == 2
         assert description.suggested_topics[0].question == "What are the main findings?"
         assert description.suggested_topics[0].prompt == "Explain the key findings"
+
+
+class TestGetNotebookFailures:
+    """Integration tests reproducing Issue #114 GET_NOTEBOOK failures.
+
+    Exercises the full NotebookLMClient → rpc_call → decode_response pipeline
+    with injected HTTP responses matching each failure scenario from Issue #114.
+    """
+
+    @pytest.mark.asyncio
+    async def test_empty_response_body(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+    ):
+        """Scenario A: Server returns empty body after anti-XSSI prefix."""
+        raw = b")]}'\n"
+        httpx_mock.add_response(content=raw)
+
+        async with NotebookLMClient(auth_tokens) as client:
+            with pytest.raises(RPCError, match="response contained no RPC data"):
+                await client.notebooks.get("nb_123")
+
+    @pytest.mark.asyncio
+    async def test_non_rpc_json_response(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+    ):
+        """Scenario B: Server returns JSON chunks but no RPC data."""
+        chunk = json.dumps({"error": "something"})
+        raw = f")]}}'\n{len(chunk)}\n{chunk}\n".encode()
+        httpx_mock.add_response(content=raw)
+
+        async with NotebookLMClient(auth_tokens) as client:
+            with pytest.raises(RPCError, match="response contained no RPC data"):
+                await client.notebooks.get("nb_123")
+
+    @pytest.mark.asyncio
+    async def test_null_result_data(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+    ):
+        """Scenario C: wrb.fr matches GET_NOTEBOOK ID but result_data is None."""
+        rpc_id = RPCMethod.GET_NOTEBOOK.value
+        chunk = json.dumps(["wrb.fr", rpc_id, None, None, None, None])
+        raw = f")]}}'\n{len(chunk)}\n{chunk}\n".encode()
+        httpx_mock.add_response(content=raw)
+
+        async with NotebookLMClient(auth_tokens) as client:
+            with pytest.raises(RPCError, match="returned null result data"):
+                await client.notebooks.get("nb_123")
+
+    @pytest.mark.asyncio
+    async def test_short_wrb_fr_item(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+    ):
+        """Scenario D: wrb.fr item has only 2 elements (skipped by extract)."""
+        rpc_id = RPCMethod.GET_NOTEBOOK.value
+        chunk = json.dumps(["wrb.fr", rpc_id])
+        raw = f")]}}'\n{len(chunk)}\n{chunk}\n".encode()
+        httpx_mock.add_response(content=raw)
+
+        async with NotebookLMClient(auth_tokens) as client:
+            with pytest.raises(RPCError, match="returned null result data"):
+                await client.notebooks.get("nb_123")
 
 
 class TestNotebookEdgeCases:
