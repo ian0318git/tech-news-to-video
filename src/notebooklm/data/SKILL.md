@@ -142,10 +142,13 @@ Before starting workflows, verify the CLI is ready:
 | Generate podcast (specific sources) | `notebooklm generate audio -s src_id1 -s src_id2` |
 | Generate video | `notebooklm generate video "instructions"` |
 | Generate quiz | `notebooklm generate quiz` |
+| Revise a slide | `notebooklm generate revise-slide "prompt" --artifact <id> --slide 0` |
 | Check artifact status | `notebooklm artifact list` |
 | Wait for completion | `notebooklm artifact wait <artifact_id>` |
 | Download audio | `notebooklm download audio ./output.mp3` |
 | Download video | `notebooklm download video ./output.mp4` |
+| Download slide deck (PDF) | `notebooklm download slide-deck ./slides.pdf` |
+| Download slide deck (PPTX) | `notebooklm download slide-deck ./slides.pptx --format pptx` |
 | Download report | `notebooklm download report ./report.md` |
 | Download mind map | `notebooklm download mind-map ./map.json` |
 | Download data table | `notebooklm download data-table ./data.csv` |
@@ -218,7 +221,8 @@ All generate commands support:
 |------|---------|---------|----------|
 | Podcast | `generate audio` | `--format [deep-dive\|brief\|critique\|debate]`, `--length [short\|default\|long]` | .mp3 |
 | Video | `generate video` | `--format [explainer\|brief]`, `--style [auto\|classic\|whiteboard\|kawaii\|anime\|watercolor\|retro-print\|heritage\|paper-craft]` | .mp4 |
-| Slide Deck | `generate slide-deck` | `--format [detailed\|presenter]`, `--length [default\|short]` | .pdf |
+| Slide Deck | `generate slide-deck` | `--format [detailed\|presenter]`, `--length [default\|short]` | .pdf / .pptx |
+| Slide Revision | `generate revise-slide "prompt" --artifact <id> --slide N` | `--wait`, `--notebook` | *(re-downloads parent deck)* |
 | Infographic | `generate infographic` | `--orientation [landscape\|portrait\|square]`, `--detail [concise\|standard\|detailed]` | .png |
 | Report | `generate report` | `--format [briefing-doc\|study-guide\|blog-post\|custom]` | .md |
 | Mind Map | `generate mind-map` | *(sync, instant)* | .json |
@@ -236,6 +240,8 @@ These capabilities are available via CLI but not in NotebookLM's web interface:
 | **Quiz/Flashcard export** | `download quiz --format json` | Export as JSON, Markdown, or HTML (web UI only shows interactive view) |
 | **Mind map extraction** | `download mind-map` | Export hierarchical JSON for visualization tools |
 | **Data table export** | `download data-table` | Download structured tables as CSV |
+| **Slide deck as PPTX** | `download slide-deck --format pptx` | Download slide deck as editable .pptx (web UI only offers PDF) |
+| **Slide revision** | `generate revise-slide "prompt" --artifact <id> --slide N` | Modify individual slides with a natural-language prompt |
 | **Source fulltext** | `source fulltext <id>` | Retrieve the indexed text content of any source |
 | **Programmatic sharing** | `share` commands | Manage sharing permissions without the UI |
 

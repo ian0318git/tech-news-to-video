@@ -14,6 +14,7 @@ import logging
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -799,6 +800,56 @@ class ArtifactsAPI:
         ]
         return await self._call_generate(notebook_id, params)
 
+    async def revise_slide(
+        self,
+        notebook_id: str,
+        artifact_id: str,
+        slide_index: int,
+        prompt: str,
+    ) -> GenerationStatus:
+        """Revise an individual slide in a completed slide deck using a prompt.
+
+        The slide deck must already be generated (status=COMPLETED) before
+        calling this method. Use poll_status() to wait for the revision to complete.
+
+        Args:
+            notebook_id: The notebook ID.
+            artifact_id: The slide deck artifact ID to revise.
+            slide_index: Zero-based index of the slide to revise.
+            prompt: Natural language instruction for the revision
+                    (e.g. "Move the title up", "Remove taxonomy section").
+
+        Returns:
+            GenerationStatus with task_id for polling.
+        """
+        if slide_index < 0:
+            raise ValidationError(f"slide_index must be >= 0, got {slide_index}")
+
+        params = [
+            [2],
+            artifact_id,
+            [[[slide_index, prompt]]],
+        ]
+        try:
+            result = await self._core.rpc_call(
+                RPCMethod.REVISE_SLIDE,
+                params,
+                source_path=f"/notebook/{notebook_id}",
+                allow_null=True,
+            )
+            if result is None:
+                logger.warning("REVISE_SLIDE returned null result for artifact %s", artifact_id)
+            return self._parse_generation_result(result)
+        except RPCError as e:
+            if e.rpc_code == "USER_DISPLAYABLE_ERROR":
+                return GenerationStatus(
+                    task_id="",
+                    status="failed",
+                    error=str(e),
+                    error_code=str(e.rpc_code) if e.rpc_code is not None else None,
+                )
+            raise
+
     async def generate_data_table(
         self,
         notebook_id: str,
@@ -1152,18 +1203,26 @@ class ArtifactsAPI:
             ) from e
 
     async def download_slide_deck(
-        self, notebook_id: str, output_path: str, artifact_id: str | None = None
+        self,
+        notebook_id: str,
+        output_path: str,
+        artifact_id: str | None = None,
+        output_format: str = "pdf",
     ) -> str:
-        """Download a slide deck as a PDF file.
+        """Download a slide deck as PDF or PPTX.
 
         Args:
             notebook_id: The notebook ID.
-            output_path: Path to save the PDF file.
+            output_path: Path to save the file.
             artifact_id: Specific artifact ID, or uses first completed slide deck.
+            output_format: Download format: "pdf" (default) or "pptx".
 
         Returns:
             The output path.
         """
+        if output_format not in ("pdf", "pptx"):
+            raise ValidationError(f"Invalid format '{output_format}'. Must be 'pdf' or 'pptx'.")
+
         artifacts_data = await self._list_raw(notebook_id)
 
         # Filter for completed slide deck artifacts
@@ -1186,26 +1245,39 @@ class ArtifactsAPI:
         if not slide_art:
             raise ArtifactNotReadyError("slide_deck")
 
-        # Extract PDF URL from metadata at index 16, position 3
-        # Structure: artifact[16] = [config, title, slides_list, pdf_url]
+        # Extract download URL from metadata at index 16
+        # Structure: artifact[16] = [config, title, slides_list, pdf_url, pptx_url]
         try:
             if len(slide_art) <= 16:
                 raise ArtifactParseError("slide_deck_artifact", details="Invalid structure")
 
             metadata = slide_art[16]
-            if not isinstance(metadata, list) or len(metadata) < 4:
+            if not isinstance(metadata, list):
                 raise ArtifactParseError("slide_deck_metadata", details="Invalid structure")
 
-            pdf_url = metadata[3]
-            if not isinstance(pdf_url, str) or not pdf_url.startswith("http"):
-                raise ArtifactDownloadError("slide_deck", details="Could not find PDF download URL")
+            if output_format == "pptx":
+                if len(metadata) < 5:
+                    raise ArtifactDownloadError(
+                        "slide_deck", details="PPTX URL not available in artifact data"
+                    )
+                url = metadata[4]
+            else:
+                if len(metadata) < 4:
+                    raise ArtifactParseError("slide_deck_metadata", details="Invalid structure")
+                url = metadata[3]
 
-            return await self._download_url(pdf_url, output_path)
+            if not isinstance(url, str) or not url.startswith("http"):
+                raise ArtifactDownloadError(
+                    "slide_deck",
+                    details=f"Could not find {output_format.upper()} download URL",
+                )
 
         except (IndexError, TypeError) as e:
             raise ArtifactParseError(
                 "slide_deck", details=f"Failed to parse structure: {e}", cause=e
             ) from e
+
+        return await self._download_url(url, output_path)
 
     async def _get_artifact_content(self, notebook_id: str, artifact_id: str) -> str | None:
         """Fetch artifact HTML content for quiz/flashcard types."""
@@ -1951,6 +2023,18 @@ class ArtifactsAPI:
         Raises:
             ArtifactDownloadError: If download fails or authentication expired.
         """
+        # Validate URL scheme and domain before sending auth cookies.
+        # httpx sends cookies to every request made by the client regardless of
+        # domain, so we must ensure the URL belongs to a trusted Google domain.
+        parsed = urlparse(url)
+        if parsed.scheme != "https":
+            raise ArtifactDownloadError("media", details=f"Download URL must use HTTPS: {url[:80]}")
+        trusted = (".google.com", ".googleusercontent.com", ".googleapis.com")
+        if not any(parsed.netloc == d.lstrip(".") or parsed.netloc.endswith(d) for d in trusted):
+            raise ArtifactDownloadError(
+                "media", details=f"Untrusted download domain: {parsed.netloc}"
+            )
+
         output_file = Path(output_path)
         output_file.parent.mkdir(parents=True, exist_ok=True)
 

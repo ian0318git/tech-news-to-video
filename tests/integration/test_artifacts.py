@@ -2,6 +2,7 @@
 
 import csv
 import json
+from unittest.mock import MagicMock, patch
 
 import pytest
 from pytest_httpx import HTTPXMock
@@ -152,6 +153,31 @@ class TestStudioContent:
 
         async with NotebookLMClient(auth_tokens) as client:
             result = await client.artifacts.generate_slide_deck(notebook_id="nb_123")
+
+        assert result is not None
+        assert result.task_id == "artifact_456"
+
+    @pytest.mark.asyncio
+    async def test_revise_slide(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+        build_rpc_response,
+    ):
+        """Test revise_slide calls REVISE_SLIDE RPC with correct params."""
+        revise_response = build_rpc_response(
+            RPCMethod.REVISE_SLIDE,
+            [["artifact_456", "Slide Deck", "2024-01-05", None, 1]],
+        )
+        httpx_mock.add_response(content=revise_response.encode())
+
+        async with NotebookLMClient(auth_tokens) as client:
+            result = await client.artifacts.revise_slide(
+                notebook_id="nb_123",
+                artifact_id="artifact_456",
+                slide_index=0,
+                prompt="Move the title up a bit",
+            )
 
         assert result is not None
         assert result.task_id == "artifact_456"
@@ -740,6 +766,48 @@ class TestArtifactErrorPaths:
         async with NotebookLMClient(auth_tokens) as client:
             with pytest.raises(ArtifactNotReadyError):
                 await client.artifacts.download_slide_deck("nb_123", "/tmp/slides")
+
+    @pytest.mark.asyncio
+    async def test_download_slide_deck_pptx(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+        build_rpc_response,
+        tmp_path,
+    ):
+        """Test download_slide_deck with format='pptx' downloads PPTX URL."""
+        pdf_url = "https://docs.googleusercontent.com/slides.pdf"
+        pptx_url = "https://docs.googleusercontent.com/slides.pptx"
+        slide_art = [
+            "artifact_456",
+            "Slide Deck",
+            8,
+            None,
+            3,  # COMPLETED
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            [None, "Title", [], pdf_url, pptx_url],  # art[16] with PPTX at [4]
+        ]
+        response = build_rpc_response(RPCMethod.LIST_ARTIFACTS, [[slide_art]])
+        httpx_mock.add_response(content=response.encode())
+        httpx_mock.add_response(content=b"pptx-content")
+
+        output = str(tmp_path / "slides.pptx")
+        with patch("notebooklm._artifacts.load_httpx_cookies", return_value=MagicMock()):
+            async with NotebookLMClient(auth_tokens) as client:
+                result = await client.artifacts.download_slide_deck(
+                    "nb_123", output, output_format="pptx"
+                )
+        assert result == output
 
     @pytest.mark.asyncio
     async def test_poll_status_in_progress(

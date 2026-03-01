@@ -138,7 +138,12 @@ async def run_diagnosis(notebook_id: str | None = None) -> None:
     cookies = load_auth()
 
     print("Fetching auth tokens...")
-    csrf_token, session_id = await fetch_tokens(cookies)
+    try:
+        csrf_token, session_id = await fetch_tokens(cookies)
+    except (ValueError, httpx.HTTPError) as e:
+        print(f"ERROR: Failed to fetch auth tokens: {e}")
+        print("Try running: notebooklm login")
+        sys.exit(1)
     auth = AuthTokens(cookies=cookies, csrf_token=csrf_token, session_id=session_id)
     print(f"Auth OK (CSRF length: {len(auth.csrf_token)})")
 
@@ -161,8 +166,8 @@ async def run_diagnosis(notebook_id: str | None = None) -> None:
                             notebook_id = first_nb[0][2] if len(first_nb[0]) > 2 else None
                         else:
                             notebook_id = first_nb[2] if len(first_nb) > 2 else None
-            except (IndexError, TypeError):
-                pass
+            except (IndexError, TypeError) as e:
+                print(f"  Warning: Could not extract notebook ID from LIST_NOTEBOOKS result: {e}")
 
             if not notebook_id:
                 print("\nERROR: Could not extract notebook ID from LIST_NOTEBOOKS.")

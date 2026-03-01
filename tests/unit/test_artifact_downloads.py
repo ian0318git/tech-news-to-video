@@ -395,7 +395,9 @@ class TestDownloadUrl:
                 patch.object(real_httpx, "AsyncClient", return_value=mock_client),
                 patch("notebooklm._artifacts.load_httpx_cookies", return_value=mock_cookies),
             ):
-                result = await api._download_url("https://other.example.com/file.mp4", output_path)
+                result = await api._download_url(
+                    "https://storage.googleapis.com/file.mp4", output_path
+                )
 
             assert result == output_path
             # Verify file was written with streaming content

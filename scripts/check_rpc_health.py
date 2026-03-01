@@ -472,6 +472,11 @@ def get_test_params(method: RPCMethod, notebook_id: str | None) -> list[Any] | N
     if method == RPCMethod.EXPORT_ARTIFACT:
         return [[notebook_id], "placeholder", 1]
 
+    if method == RPCMethod.REVISE_SLIDE:
+        # Params: [[2], artifact_id, [[[slide_index, prompt]]]]
+        # Will fail with placeholder artifact_id but still echoes method ID in error response
+        return [[2], "placeholder_artifact_id", [[[0, "RPC health check test"]]]]
+
     # Research operations (read-only - poll/import only)
     if method == RPCMethod.POLL_RESEARCH:
         return [[notebook_id], "placeholder_task_id"]

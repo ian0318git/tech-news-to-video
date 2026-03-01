@@ -48,6 +48,7 @@ class RPCMethod(str, Enum):
     EXPORT_ARTIFACT = "Krh3pd"
     SHARE_ARTIFACT = "RGP97b"
     GET_INTERACTIVE_HTML = "v9rmvd"  # Fetch quiz/flashcard HTML content
+    REVISE_SLIDE = "KmcKPe"  # Revise individual slide with prompt
 
     # Research
     START_FAST_RESEARCH = "Ljjv0c"

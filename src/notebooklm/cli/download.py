@@ -13,6 +13,8 @@ Commands:
 """
 
 import json
+from collections.abc import Awaitable, Callable
+from functools import partial
 from pathlib import Path
 from typing import Any, TypedDict
 
@@ -29,6 +31,10 @@ from .helpers import (
     resolve_notebook_id,
     run_async,
 )
+
+# Common signature shared by all artifact download functions.
+# Each function accepts (notebook_id, output_path, *, artifact_id=None, **kwargs).
+_DownloadFn = Callable[..., Awaitable[str]]
 
 
 class ArtifactConfig(TypedDict):
@@ -97,6 +103,7 @@ async def _download_artifacts_generic(
     dry_run: bool,
     force: bool,
     no_clobber: bool,
+    slide_format: str = "pdf",
 ) -> dict:
     """
     Generic artifact download implementation.
@@ -140,12 +147,22 @@ async def _download_artifacts_generic(
     csrf, session_id = await fetch_tokens(cookies)
     auth = AuthTokens(cookies=cookies, csrf_token=csrf, session_id=session_id)
 
+    # Adjust extension for PPTX format (must be outside _download() to avoid UnboundLocalError)
+    if artifact_type_name == "slide-deck" and slide_format == "pptx":
+        file_extension = ".pptx"
+        if output_path and not output_path.endswith(".pptx"):
+            click.echo(
+                f"Warning: output path '{output_path}' does not end with .pptx "
+                "but --format pptx was requested.",
+                err=True,
+            )
+
     async def _download() -> dict[str, Any]:
         async with NotebookLMClient(auth) as client:
             nb_id_resolved = await resolve_notebook_id(client, nb_id)
 
             # Setup download method dispatch
-            download_methods = {
+            download_methods: dict[str, _DownloadFn] = {
                 "audio": client.artifacts.download_audio,
                 "video": client.artifacts.download_video,
                 "infographic": client.artifacts.download_infographic,
@@ -154,9 +171,13 @@ async def _download_artifacts_generic(
                 "mind-map": client.artifacts.download_mind_map,
                 "data-table": client.artifacts.download_data_table,
             }
-            download_fn = download_methods.get(artifact_type_name)
+            download_fn: _DownloadFn | None = download_methods.get(artifact_type_name)
             if not download_fn:
                 raise ValueError(f"Unknown artifact type: {artifact_type_name}")
+
+            # For slide-deck with PPTX format, bind output_format="pptx"
+            if artifact_type_name == "slide-deck" and slide_format == "pptx":
+                download_fn = partial(client.artifacts.download_slide_deck, output_format="pptx")
 
             # Fetch artifacts
             all_artifacts = await client.artifacts.list(nb_id_resolved)
@@ -519,14 +540,24 @@ def download_video(ctx, **kwargs):
 @click.option("--dry-run", is_flag=True, help="Preview without downloading")
 @click.option("--force", is_flag=True, help="Overwrite existing files")
 @click.option("--no-clobber", is_flag=True, help="Skip if file exists")
+@click.option(
+    "--format",
+    "slide_format",
+    type=click.Choice(["pdf", "pptx"]),
+    default="pdf",
+    help="Download format: pdf (default) or pptx",
+)
 @click.pass_context
 def download_slide_deck(ctx, **kwargs):
-    """Download slide deck(s) as PDF files.
+    """Download slide deck(s) as PDF or PPTX.
 
     \b
     Examples:
       # Download latest slide deck to default filename
       notebooklm download slide-deck
+
+      # Download as PPTX
+      notebooklm download slide-deck --format pptx
 
       # Download to specific path
       notebooklm download slide-deck my-slides.pdf

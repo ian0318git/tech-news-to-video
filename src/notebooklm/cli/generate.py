@@ -567,6 +567,78 @@ def generate_slide_deck(
     return _run()
 
 
+@generate.command("revise-slide")
+@click.argument("description")
+@click.option(
+    "-n",
+    "--notebook",
+    "notebook_id",
+    default=None,
+    help="Notebook ID (uses current if not set)",
+)
+@click.option(
+    "-a",
+    "--artifact",
+    "artifact_id",
+    required=True,
+    help="Slide deck artifact ID to revise",
+)
+@click.option(
+    "--slide",
+    "slide_index",
+    type=int,
+    required=True,
+    help="Zero-based index of the slide to revise (0 = first slide)",
+)
+@click.option("--wait/--no-wait", default=False, help="Wait for completion (default: no-wait)")
+@retry_option
+@json_option
+@with_client
+def generate_revise_slide(
+    ctx,
+    description,
+    notebook_id,
+    artifact_id,
+    slide_index,
+    wait,
+    max_retries,
+    json_output,
+    client_auth,
+):
+    """Revise an individual slide in an existing slide deck.
+
+    DESCRIPTION is the natural language prompt for the revision.
+    The slide deck must already be generated before using this command.
+
+    \b
+    Example:
+      notebooklm generate revise-slide "Move the title up" --artifact <id> --slide 0
+      notebooklm generate revise-slide "Remove taxonomy" --artifact <id> --slide 3 --wait
+    """
+    nb_id = require_notebook(notebook_id)
+
+    async def _run():
+        async with NotebookLMClient(client_auth) as client:
+            nb_id_resolved = await resolve_notebook_id(client, nb_id)
+
+            async def _generate():
+                return await client.artifacts.revise_slide(
+                    nb_id_resolved,
+                    artifact_id=artifact_id,
+                    slide_index=slide_index,
+                    prompt=description,
+                )
+
+            result = await generate_with_retry(
+                _generate, max_retries, "slide revision", json_output
+            )
+            await handle_generation_result(
+                client, nb_id_resolved, result, "slide revision", wait, json_output
+            )
+
+    return _run()
+
+
 @generate.command("quiz")
 @click.argument("description", default="", required=False)
 @click.option(
