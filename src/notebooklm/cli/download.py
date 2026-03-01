@@ -23,7 +23,12 @@ import click
 from ..auth import AuthTokens, fetch_tokens, load_auth_from_storage
 from ..client import NotebookLMClient
 from ..types import Artifact, ArtifactType
-from .download_helpers import ArtifactDict, artifact_title_to_filename, select_artifact
+from .download_helpers import (
+    ArtifactDict,
+    artifact_title_to_filename,
+    resolve_partial_artifact_id,
+    select_artifact,
+)
 from .helpers import (
     console,
     handle_error,
@@ -84,6 +89,22 @@ def download():
       data-table   Download data table as CSV
     """
     pass
+
+
+async def _get_completed_artifacts_as_dicts(
+    client: NotebookLMClient, notebook_id: str, artifact_kind: ArtifactType
+) -> list[ArtifactDict]:
+    """Fetch all artifacts, filter by kind and completion, and return as dicts."""
+    all_artifacts = await client.artifacts.list(notebook_id)
+    return [
+        {
+            "id": a.id,
+            "title": a.title,
+            "created_at": int(a.created_at.timestamp()) if a.created_at else 0,
+        }
+        for a in all_artifacts
+        if isinstance(a, Artifact) and a.kind == artifact_kind and a.is_completed
+    ]
 
 
 async def _download_artifacts_generic(
@@ -179,31 +200,16 @@ async def _download_artifacts_generic(
             if artifact_type_name == "slide-deck" and slide_format == "pptx":
                 download_fn = partial(client.artifacts.download_slide_deck, output_format="pptx")
 
-            # Fetch artifacts
-            all_artifacts = await client.artifacts.list(nb_id_resolved)
+            # Fetch and filter artifacts by type and completed status
+            type_artifacts = await _get_completed_artifacts_as_dicts(
+                client, nb_id_resolved, artifact_kind
+            )
 
-            # Filter by type and completed status
-            completed_artifacts = [
-                a
-                for a in all_artifacts
-                if isinstance(a, Artifact) and a.kind == artifact_kind and a.is_completed
-            ]
-
-            if not completed_artifacts:
+            if not type_artifacts:
                 return {
                     "error": f"No completed {artifact_type_name} artifacts found",
                     "suggestion": f"Generate one with: notebooklm generate {artifact_type_name}",
                 }
-
-            # Convert to dict format for selection logic
-            type_artifacts: list[ArtifactDict] = [
-                {
-                    "id": a.id,
-                    "title": a.title,
-                    "created_at": int(a.created_at.timestamp()) if a.created_at else 0,
-                }
-                for a in completed_artifacts
-            ]
 
             # Helper for file conflict resolution
             def _resolve_conflict(path: Path) -> tuple[Path | None, dict | None]:
@@ -329,12 +335,17 @@ async def _download_artifacts_generic(
 
             # Single artifact selection
             try:
+                resolved_artifact_id = (
+                    resolve_partial_artifact_id(type_artifacts, artifact_id)
+                    if artifact_id
+                    else None
+                )
                 selected, reason = select_artifact(
                     type_artifacts,
                     latest=latest,
                     earliest=earliest,
                     name=name,
-                    artifact_id=artifact_id,
+                    artifact_id=resolved_artifact_id,
                 )
             except ValueError as e:
                 return {"error": str(e)}
@@ -786,12 +797,18 @@ async def _download_interactive(
         ext = FORMAT_EXTENSIONS[output_format]
         path = output_path or f"{artifact_type}{ext}"
 
+        resolved_artifact_id = artifact_id
+        if artifact_id:
+            kind = ArtifactType.QUIZ if artifact_type == "quiz" else ArtifactType.FLASHCARDS
+            type_artifacts = await _get_completed_artifacts_as_dicts(client, nb_id_resolved, kind)
+            resolved_artifact_id = resolve_partial_artifact_id(type_artifacts, artifact_id)
+
         if artifact_type == "quiz":
             return await client.artifacts.download_quiz(
-                nb_id_resolved, path, artifact_id=artifact_id, output_format=output_format
+                nb_id_resolved, path, artifact_id=resolved_artifact_id, output_format=output_format
             )
         return await client.artifacts.download_flashcards(
-            nb_id_resolved, path, artifact_id=artifact_id, output_format=output_format
+            nb_id_resolved, path, artifact_id=resolved_artifact_id, output_format=output_format
         )
 
 
