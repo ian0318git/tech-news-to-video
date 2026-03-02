@@ -16,12 +16,14 @@ from ..types import ChatMode
 from .helpers import (
     console,
     get_current_conversation,
+    get_current_exchange_id,
     get_current_notebook,
     json_output_response,
     require_notebook,
     resolve_notebook_id,
     resolve_source_ids,
     set_current_conversation,
+    set_current_exchange_id,
     with_client,
 )
 
@@ -150,19 +152,33 @@ def register_chat_commands(cli):
                     json_output=json_output,
                 )
 
-                # If no conversation ID yet, try to get the most recent one from server
-                if effective_conv_id is None and not new_conversation:
-                    effective_conv_id = await _get_latest_conversation_from_server(
-                        client, nb_id_resolved, json_output
-                    )
+                # Only use stored exchange_id when conv_id came from local cache
+                # (not from explicit --conversation-id flag, which may not match)
+                effective_exchange_id: str | None = None
+                if effective_conv_id and not conversation_id:
+                    effective_exchange_id = get_current_exchange_id()
+                elif not effective_conv_id:
+                    # If no conversation ID yet, try to get the most recent one from server
+                    if not new_conversation:
+                        effective_conv_id = await _get_latest_conversation_from_server(
+                            client, nb_id_resolved, json_output
+                        )
+                    # Don't use stored exchange_id for server-derived conversations
 
                 sources = await resolve_source_ids(client, nb_id_resolved, source_ids)
                 result = await client.chat.ask(
-                    nb_id_resolved, question, source_ids=sources, conversation_id=effective_conv_id
+                    nb_id_resolved,
+                    question,
+                    source_ids=sources,
+                    conversation_id=effective_conv_id,
+                    exchange_id=effective_exchange_id,
                 )
 
                 if result.conversation_id:
                     set_current_conversation(result.conversation_id)
+                    set_current_exchange_id(result.exchange_id)
+                else:
+                    set_current_exchange_id(None)
 
                 if json_output:
                     from dataclasses import asdict

@@ -62,6 +62,7 @@ class ChatAPI:
         question: str,
         source_ids: list[str] | None = None,
         conversation_id: str | None = None,
+        exchange_id: str | None = None,
     ) -> AskResult:
         """Ask the notebook a question.
 
@@ -70,9 +71,11 @@ class ChatAPI:
             question: The question to ask.
             source_ids: Specific source IDs to query. If None, uses all sources.
             conversation_id: Existing conversation ID for follow-up questions.
+            exchange_id: Exchange ID from previous response (enables server-side
+                context lookup for follow-ups without replaying history).
 
         Returns:
-            AskResult with answer, conversation_id, and turn info.
+            AskResult with answer, conversation_id, exchange_id, and turn info.
 
         Example:
             # New conversation
@@ -103,13 +106,15 @@ class ChatAPI:
 
         sources_array = [[[sid]] for sid in source_ids] if source_ids else []
 
-        params = [
+        params: list[Any] = [
             sources_array,
             question,
             conversation_history,
-            [2, None, [1]],
+            [2, None, [1], [1]],
             conversation_id,
         ]
+        if exchange_id is not None:
+            params += [None, None, exchange_id, 1]
 
         params_json = json.dumps(params, separators=(",", ":"))
         f_req = [None, params_json]
@@ -154,7 +159,9 @@ class ChatAPI:
                 original_error=e,
             ) from e
 
-        answer_text, references = self._parse_ask_response_with_references(response.text)
+        answer_text, references, new_exchange_id = self._parse_ask_response_with_references(
+            response.text
+        )
 
         turns = self._core.get_cached_conversation(conversation_id)
         if answer_text:
@@ -170,6 +177,7 @@ class ChatAPI:
             is_follow_up=not is_new_conversation,
             references=references,
             raw_response=response.text[:1000],
+            exchange_id=new_exchange_id,
         )
 
     async def get_conversation_turns(
@@ -410,11 +418,11 @@ class ChatAPI:
 
     def _parse_ask_response_with_references(
         self, response_text: str
-    ) -> tuple[str, list[ChatReference]]:
-        """Parse the streaming response to extract answer and references.
+    ) -> tuple[str, list[ChatReference], str | None]:
+        """Parse the streaming response to extract answer, references, and exchange ID.
 
         Returns:
-            Tuple of (answer_text, list of ChatReference objects).
+            Tuple of (answer_text, list of ChatReference objects, exchange_id or None).
         """
 
         if response_text.startswith(")]}'"):
@@ -424,17 +432,20 @@ class ChatAPI:
         best_marked_answer = ""
         best_unmarked_answer = ""
         all_references: list[ChatReference] = []
+        found_exchange_id: str | None = None
 
         def process_chunk(json_str: str) -> None:
             """Process a JSON chunk, updating best answers and all_references."""
-            nonlocal best_marked_answer, best_unmarked_answer
-            text, is_answer, refs = self._extract_answer_and_refs_from_chunk(json_str)
+            nonlocal best_marked_answer, best_unmarked_answer, found_exchange_id
+            text, is_answer, refs, exchange_id = self._extract_answer_and_refs_from_chunk(json_str)
             if text:
                 if is_answer and len(text) > len(best_marked_answer):
                     best_marked_answer = text
                 elif not is_answer and len(text) > len(best_unmarked_answer):
                     best_unmarked_answer = text
             all_references.extend(refs)
+            if exchange_id and not found_exchange_id:
+                found_exchange_id = exchange_id
 
         i = 0
         while i < len(lines):
@@ -477,17 +488,18 @@ class ChatAPI:
             if ref.citation_number is None:
                 ref.citation_number = idx
 
-        return longest_answer, all_references
+        return longest_answer, all_references, found_exchange_id
 
     def _extract_answer_and_refs_from_chunk(
         self, json_str: str
-    ) -> tuple[str | None, bool, list[ChatReference]]:
-        """Extract answer text and references from a response chunk.
+    ) -> tuple[str | None, bool, list[ChatReference], str | None]:
+        """Extract answer text, references, and exchange ID from a response chunk.
 
         Response structure (discovered via reverse engineering):
         - first[0]: answer text
         - first[1]: None
-        - first[2]: [chunk_id_1, chunk_id_2, ..., session_hash] - chunk IDs (NOT source IDs)
+        - first[2]: [conversation_id, exchange_id, numeric_hash]
+                    exchange_id is the server-assigned UUID for this exchange turn
         - first[3]: None
         - first[4]: Citation metadata
           - first[4][0]: Per-source citation positions with text spans
@@ -498,17 +510,17 @@ class ChatAPI:
             - cite[1][5][0][0][0]: parent SOURCE ID (this is the real source UUID)
 
         Returns:
-            Tuple of (text, is_answer, references).
+            Tuple of (text, is_answer, references, exchange_id).
         """
         refs: list[ChatReference] = []
 
         try:
             data = json.loads(json_str)
         except json.JSONDecodeError:
-            return None, False, refs
+            return None, False, refs, None
 
         if not isinstance(data, list):
-            return None, False, refs
+            return None, False, refs, None
 
         for item in data:
             if not isinstance(item, list) or len(item) < 3:
@@ -536,12 +548,22 @@ class ChatAPI:
                             and first[4][-1] == 1
                         )
 
+                        # Extract exchange_id from first[2][1]
+                        exchange_id = None
+                        if (
+                            len(first) > 2
+                            and isinstance(first[2], list)
+                            and len(first[2]) >= 2
+                            and isinstance(first[2][1], str)
+                        ):
+                            exchange_id = first[2][1]
+
                         refs = self._parse_citations(first)
-                        return text, is_answer, refs
+                        return text, is_answer, refs, exchange_id
             except json.JSONDecodeError:
                 continue
 
-        return None, False, refs
+        return None, False, refs, None
 
     def _parse_citations(self, first: list) -> list[ChatReference]:
         """Parse citation details from response structure.

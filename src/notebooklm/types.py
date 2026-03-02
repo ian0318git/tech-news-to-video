@@ -1036,6 +1036,9 @@ class AskResult:
         is_follow_up: Whether this was a follow-up question.
         references: List of source references cited in the answer.
         raw_response: First 1000 chars of raw API response (for debugging).
+        exchange_id: Server-assigned exchange UUID for this turn. When passed
+            back in follow-up requests, enables server-side context lookup
+            without replaying conversation history.
     """
 
     answer: str
@@ -1044,6 +1047,7 @@ class AskResult:
     is_follow_up: bool
     references: list["ChatReference"] = field(default_factory=list)
     raw_response: str = ""
+    exchange_id: str | None = None
 
 
 # =============================================================================

@@ -1,5 +1,6 @@
 """Tests for chat CLI commands (save-as-note, enhanced history)."""
 
+import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -18,7 +19,7 @@ def make_note(id="note_abc", title="Chat Note", content="The answer") -> Note:
 def make_ask_result(answer="The answer is 42.") -> AskResult:
     return AskResult(
         answer=answer,
-        conversation_id="conv_abc",
+        conversation_id="a1b2c3d4-0000-0000-0000-000000000001",
         turn_number=1,
         is_follow_up=False,
         references=[],
@@ -216,3 +217,71 @@ class TestHistoryCommand:
             flat = result.output.replace("\n", "")
             assert long_q in flat
             assert long_a in flat
+
+
+class TestAskExchangeIdPersistence:
+    def test_ask_cmd_saves_exchange_id_to_context(self, runner, mock_auth, tmp_path):
+        """ask command should persist exchange_id from result into context.json."""
+        context_file = tmp_path / "context.json"
+        context_file.write_text('{"notebook_id": "nb_123"}')
+
+        ask_result = AskResult(
+            answer="The answer.",
+            conversation_id="conv-uuid-123",
+            turn_number=1,
+            is_follow_up=False,
+            references=[],
+            raw_response="",
+            exchange_id="exch-uuid-456",
+        )
+
+        with patch_client_for_module("chat") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.chat.ask = AsyncMock(return_value=ask_result)
+            mock_client.chat.get_last_conversation_id = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            with (
+                patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch,
+                patch("notebooklm.cli.helpers.get_context_path", return_value=context_file),
+            ):
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["ask", "-n", "nb_123", "test question"])
+
+        assert result.exit_code == 0, result.output
+        ctx = json.loads(context_file.read_text())
+        assert ctx.get("exchange_id") == "exch-uuid-456"
+
+    def test_ask_cmd_clears_exchange_id_on_new_conversation(self, runner, mock_auth, tmp_path):
+        """--new flag should clear exchange_id from context."""
+        context_file = tmp_path / "context.json"
+        context_file.write_text(
+            '{"notebook_id": "nb_123", "exchange_id": "old-exch-id", "conversation_id": "old-conv"}'
+        )
+
+        ask_result = AskResult(
+            answer="Fresh answer.",
+            conversation_id="conv-new-123",
+            turn_number=1,
+            is_follow_up=False,
+            references=[],
+            raw_response="",
+            exchange_id="new-exch-uuid",
+        )
+
+        with patch_client_for_module("chat") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.chat.ask = AsyncMock(return_value=ask_result)
+            mock_client_cls.return_value = mock_client
+
+            with (
+                patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch,
+                patch("notebooklm.cli.helpers.get_context_path", return_value=context_file),
+            ):
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["ask", "-n", "nb_123", "--new", "fresh question"])
+
+        assert result.exit_code == 0, result.output
+        ctx = json.loads(context_file.read_text())
+        # After --new, exchange_id should be the NEW one from the response
+        assert ctx.get("exchange_id") == "new-exch-uuid"
