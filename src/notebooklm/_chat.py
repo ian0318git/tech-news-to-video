@@ -21,6 +21,8 @@ from .types import AskResult, ChatReference, ConversationTurn
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_BL = "boq_labs-tailwind-frontend_20260301.03_p0"
+
 # UUID pattern for validating source IDs (compiled once at module level)
 _UUID_PATTERN = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
@@ -112,9 +114,11 @@ class ChatAPI:
             conversation_history,
             [2, None, [1], [1]],
             conversation_id,
+            None,  # [5] - always null
+            exchange_id,  # [6] - None for new convs, exchange_id for follow-ups
+            notebook_id,  # [7] - required for server-side conversation persistence
+            1,  # [8] - always 1
         ]
-        if exchange_id is not None:
-            params += [None, None, exchange_id, 1]
 
         params_json = json.dumps(params, separators=(",", ":"))
         f_req = [None, params_json]
@@ -131,7 +135,7 @@ class ChatAPI:
 
         self._core._reqid_counter += 100000
         url_params = {
-            "bl": os.environ.get("NOTEBOOKLM_BL", "boq_labs-tailwind-frontend_20251221.14_p0"),
+            "bl": os.environ.get("NOTEBOOKLM_BL", _DEFAULT_BL),
             "hl": "en",
             "_reqid": str(self._core._reqid_counter),
             "rt": "c",
@@ -237,7 +241,9 @@ class ChatAPI:
                             return str(conv[0])
         return None
 
-    async def get_history(self, notebook_id: str, limit: int = 100) -> list[tuple[str, str]]:
+    async def get_history(
+        self, notebook_id: str, limit: int = 100
+    ) -> tuple[str | None, list[tuple[str, str]]]:
         """Get conversation history (all Q&A turns) from the server.
 
         Fetches the most recent conversation and retrieves all turns.
@@ -247,12 +253,13 @@ class ChatAPI:
             limit: Maximum number of turns to retrieve.
 
         Returns:
-            List of (question, answer) tuples, ordered oldest-first.
+            Tuple of (conversation_id, list of (question, answer) tuples ordered oldest-first).
+            conversation_id is None if no conversations exist.
         """
         logger.debug("Getting conversation history for notebook %s (limit=%d)", notebook_id, limit)
         conv_id = await self.get_last_conversation_id(notebook_id)
         if not conv_id:
-            return []
+            return None, []
 
         turns_data = await self.get_conversation_turns(notebook_id, conv_id, limit=limit)
         # API returns individual turns newest-first: [A2, Q2, A1, Q1, ...]
@@ -265,7 +272,7 @@ class ChatAPI:
             and isinstance(turns_data[0], list)
         ):
             turns_data = [list(reversed(turns_data[0]))]
-        return self._parse_turns_to_qa_pairs(turns_data)
+        return conv_id, self._parse_turns_to_qa_pairs(turns_data)
 
     @staticmethod
     def _parse_turns_to_qa_pairs(turns_data: Any) -> list[tuple[str, str]]:

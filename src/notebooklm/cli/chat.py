@@ -356,7 +356,7 @@ def register_chat_commands(cli):
 
                 nb_id = require_notebook(notebook_id)
                 nb_id_resolved = await resolve_notebook_id(client, nb_id)
-                qa_pairs = await client.chat.get_history(nb_id_resolved, limit=limit)
+                conv_id, qa_pairs = await client.chat.get_history(nb_id_resolved, limit=limit)
 
                 if save_as_note:
                     if not qa_pairs:
@@ -372,6 +372,7 @@ def register_chat_commands(cli):
                 if json_output:
                     data = {
                         "notebook_id": nb_id_resolved,
+                        "conversation_id": conv_id,
                         "count": len(qa_pairs),
                         "qa_pairs": [
                             {"turn": i, "question": q, "answer": a}
@@ -385,14 +386,17 @@ def register_chat_commands(cli):
                     console.print("[yellow]No conversation history[/yellow]")
                     return
 
+                header = "[bold cyan]Conversation History:[/bold cyan]"
+                if conv_id:
+                    header += f" [dim]{conv_id}[/dim]"
+                console.print(header)
+
                 if show_all:
-                    console.print("[bold cyan]Conversation History:[/bold cyan]\n")
                     for i, (question, answer) in enumerate(qa_pairs, 1):
                         console.print(f"[bold]#{i} Q:[/bold] {question}")
                         console.print(f"   A: {answer}\n")
                     return
 
-                console.print("[bold cyan]Conversation History:[/bold cyan]")
                 table = Table()
                 table.add_column("#", style="dim")
                 table.add_column("Question", style="white", max_width=50)

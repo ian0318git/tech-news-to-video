@@ -40,7 +40,7 @@ class TestNotebookOperations:
 
     @pytest.mark.asyncio
     async def test_get_conversation_history(self, client, read_only_notebook_id):
-        qa_pairs = await client.chat.get_history(read_only_notebook_id)
+        conv_id, qa_pairs = await client.chat.get_history(read_only_notebook_id)
         assert isinstance(qa_pairs, list)
 
 
