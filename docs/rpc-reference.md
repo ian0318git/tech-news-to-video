@@ -29,7 +29,8 @@
 | `R7cb6c` | CREATE_ARTIFACT | Unified artifact generation | `_artifacts.py` |
 | `gArtLc` | LIST_ARTIFACTS | List artifacts in a notebook | `_artifacts.py` |
 | `V5N4be` | DELETE_ARTIFACT | Delete artifact | `_artifacts.py` |
-| `hPTbtc` | GET_CONVERSATION_HISTORY | Get chat history | `_chat.py` |
+| `hPTbtc` | GET_LAST_CONVERSATION_ID | Get most recent conversation ID | `_chat.py` |
+| `khqZz` | GET_CONVERSATION_TURNS | Get Q&A turns for a conversation | `_chat.py` |
 | `CYK0Xb` | CREATE_NOTE | Create a note (placeholder) | `_notes.py` |
 | `cYAfTb` | UPDATE_NOTE | Update note content/title | `_notes.py` |
 | `AH0mwd` | DELETE_NOTE | Delete a note | `_notes.py` |
@@ -395,9 +396,12 @@ params = [
 ]
 ```
 
-### RPC: GET_CONVERSATION_HISTORY (hPTbtc)
+### RPC: GET_LAST_CONVERSATION_ID (hPTbtc)
 
-**Source:** `_chat.py::get_history()`
+**Source:** `_chat.py::get_last_conversation_id()`
+
+Returns only the most recent conversation ID — not a full history list. Use
+`GET_CONVERSATION_TURNS` to fetch the actual messages for a given conversation.
 
 ```python
 params = [
@@ -407,6 +411,30 @@ params = [
     limit,        # 3: Max conversations (e.g., 20)
 ]
 ```
+
+**Response:** `[[[conv_id], [conv_id], ...]]` — each entry is a list containing only the conversation ID.
+
+---
+
+### RPC: GET_CONVERSATION_TURNS (khqZz)
+
+**Source:** `_chat.py::get_conversation_turns()`
+
+Returns the Q&A turns for a specific conversation. Turns are ordered newest-first.
+
+```python
+params = [
+    [],              # 0: Empty
+    None,            # 1
+    None,            # 2
+    conversation_id, # 3
+    limit,           # 4: Max turns to return (e.g., 2 for latest Q&A pair)
+]
+```
+
+**Response turn structure:**
+- `turn[2] == 1`: User question — text is at `turn[3]`
+- `turn[2] == 2`: AI answer — text is at `turn[4][0][0]`
 
 ---
 

@@ -40,8 +40,8 @@ class TestNotebookOperations:
 
     @pytest.mark.asyncio
     async def test_get_conversation_history(self, client, read_only_notebook_id):
-        history = await client.chat.get_history(read_only_notebook_id)
-        assert history is not None
+        qa_pairs = await client.chat.get_history(read_only_notebook_id)
+        assert isinstance(qa_pairs, list)
 
 
 @requires_auth

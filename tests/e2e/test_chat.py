@@ -149,6 +149,106 @@ class TestChatE2E:
 
 @pytest.mark.e2e
 @requires_auth
+class TestChatHistoryE2E:
+    """E2E tests for chat history and conversation turns API (khqZz RPC)."""
+
+    @pytest.mark.asyncio
+    async def test_get_conversation_turns_returns_qa(self, client, multi_source_notebook_id):
+        """get_conversation_turns returns Q&A turns for a conversation."""
+        ask_result = await client.chat.ask(
+            multi_source_notebook_id,
+            "What is the main topic of these sources?",
+        )
+        assert ask_result.conversation_id
+
+        turns_data = await client.chat.get_conversation_turns(
+            multi_source_notebook_id,
+            ask_result.conversation_id,
+            limit=2,
+        )
+
+        assert turns_data is not None
+        assert isinstance(turns_data[0], list)
+        turns = turns_data[0]
+        assert len(turns) >= 1
+
+        turn_types = [turn[2] for turn in turns if isinstance(turn, list) and len(turn) > 2]
+        assert any(t in (1, 2) for t in turn_types), "Expected question or answer turns"
+
+    @pytest.mark.asyncio
+    async def test_get_conversation_turns_question_text(self, client, multi_source_notebook_id):
+        """get_conversation_turns includes the original question text."""
+        question = "What topics are covered in detail?"
+        ask_result = await client.chat.ask(multi_source_notebook_id, question)
+        assert ask_result.conversation_id
+
+        turns_data = await client.chat.get_conversation_turns(
+            multi_source_notebook_id,
+            ask_result.conversation_id,
+            limit=2,
+        )
+
+        assert turns_data is not None
+        turns = turns_data[0]
+        question_turns = [t for t in turns if isinstance(t, list) and len(t) > 3 and t[2] == 1]
+        assert question_turns, "No question turn found in response"
+        assert question_turns[0][3] == question
+
+    @pytest.mark.asyncio
+    async def test_get_conversation_turns_answer_text(self, client, multi_source_notebook_id):
+        """get_conversation_turns includes the AI answer text."""
+        ask_result = await client.chat.ask(
+            multi_source_notebook_id,
+            "Briefly describe what you know about this notebook.",
+        )
+        assert ask_result.conversation_id
+        assert ask_result.answer
+
+        turns_data = await client.chat.get_conversation_turns(
+            multi_source_notebook_id,
+            ask_result.conversation_id,
+            limit=2,
+        )
+
+        assert turns_data is not None
+        turns = turns_data[0]
+        answer_turns = [t for t in turns if isinstance(t, list) and len(t) > 4 and t[2] == 2]
+        assert answer_turns, "No answer turn found in response"
+        answer_text = answer_turns[0][4][0][0]
+        assert isinstance(answer_text, str)
+        assert len(answer_text) > 0
+
+    @pytest.mark.asyncio
+    async def test_get_last_conversation_id(self, client, multi_source_notebook_id):
+        """get_last_conversation_id returns the conversation created by ask."""
+        ask_result = await client.chat.ask(
+            multi_source_notebook_id,
+            "What is one key concept in these sources?",
+        )
+        assert ask_result.conversation_id
+
+        conv_id = await client.chat.get_last_conversation_id(multi_source_notebook_id)
+        assert conv_id == ask_result.conversation_id
+
+    @pytest.mark.asyncio
+    async def test_get_history_returns_qa_pairs(self, client, multi_source_notebook_id):
+        """Full flow: ask → get_history returns Q&A pairs."""
+        question = "List one important topic from the sources."
+        ask_result = await client.chat.ask(multi_source_notebook_id, question)
+        assert ask_result.conversation_id
+
+        qa_pairs = await client.chat.get_history(multi_source_notebook_id)
+        assert qa_pairs, "get_history returned no Q&A pairs"
+        assert isinstance(qa_pairs, list)
+
+        # Each entry is a (question, answer) tuple
+        q, a = qa_pairs[-1]  # most recent Q&A
+        assert isinstance(q, str) and q, "Question should be non-empty string"
+        assert isinstance(a, str) and a, "Answer should be non-empty string"
+
+
+@pytest.mark.e2e
+@requires_auth
 class TestChatReferencesE2E:
     """E2E tests specifically for chat references and citations."""
 

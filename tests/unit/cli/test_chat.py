@@ -26,12 +26,10 @@ def make_ask_result(answer="The answer is 42.") -> AskResult:
     )
 
 
-# Realistic history: history[0] = list of conversations
-MOCK_HISTORY = [
-    [
-        ["conv_001", "What is ML?", "ML is a type of AI.", 1704067200],
-        ["conv_002", "Explain AI", "AI stands for Artificial Intelligence.", 1704153600],
-    ]
+# get_history now returns list of (question, answer) tuples
+MOCK_QA_PAIRS = [
+    ("What is ML?", "ML is a type of AI."),
+    ("Explain AI", "AI stands for Artificial Intelligence."),
 ]
 
 
@@ -58,7 +56,7 @@ class TestAskSaveAsNote:
         with patch_client_for_module("chat") as mock_client_cls:
             mock_client = create_mock_client()
             mock_client.chat.ask = AsyncMock(return_value=make_ask_result())
-            mock_client.chat.get_history = AsyncMock(return_value=None)
+            mock_client.chat.get_last_conversation_id = AsyncMock(return_value=None)
             mock_client.notes.create = AsyncMock(return_value=make_note())
             mock_client_cls.return_value = mock_client
 
@@ -78,7 +76,7 @@ class TestAskSaveAsNote:
         with patch_client_for_module("chat") as mock_client_cls:
             mock_client = create_mock_client()
             mock_client.chat.ask = AsyncMock(return_value=make_ask_result())
-            mock_client.chat.get_history = AsyncMock(return_value=None)
+            mock_client.chat.get_last_conversation_id = AsyncMock(return_value=None)
             mock_client.notes.create = AsyncMock(return_value=make_note(title="My Title"))
             mock_client_cls.return_value = mock_client
 
@@ -106,7 +104,7 @@ class TestAskSaveAsNote:
         with patch_client_for_module("chat") as mock_client_cls:
             mock_client = create_mock_client()
             mock_client.chat.ask = AsyncMock(return_value=make_ask_result())
-            mock_client.chat.get_history = AsyncMock(return_value=None)
+            mock_client.chat.get_last_conversation_id = AsyncMock(return_value=None)
             mock_client.notes.create = AsyncMock(return_value=make_note())
             mock_client_cls.return_value = mock_client
 
@@ -119,10 +117,10 @@ class TestAskSaveAsNote:
 
 
 class TestHistoryCommand:
-    def test_history_shows_conversations_with_previews(self, runner, mock_auth):
+    def test_history_shows_qa_pairs(self, runner, mock_auth):
         with patch_client_for_module("chat") as mock_client_cls:
             mock_client = create_mock_client()
-            mock_client.chat.get_history = AsyncMock(return_value=MOCK_HISTORY)
+            mock_client.chat.get_history = AsyncMock(return_value=MOCK_QA_PAIRS)
             mock_client_cls.return_value = mock_client
 
             with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:
@@ -130,14 +128,13 @@ class TestHistoryCommand:
                 result = runner.invoke(cli, ["history", "-n", "nb_123"])
 
             assert result.exit_code == 0, result.output
-            assert "conv_001" in result.output
-            assert "conv_002" in result.output
             assert "What is ML?" in result.output
+            assert "Explain AI" in result.output
 
-    def test_history_save_all_creates_note(self, runner, mock_auth):
+    def test_history_save_creates_note(self, runner, mock_auth):
         with patch_client_for_module("chat") as mock_client_cls:
             mock_client = create_mock_client()
-            mock_client.chat.get_history = AsyncMock(return_value=MOCK_HISTORY)
+            mock_client.chat.get_history = AsyncMock(return_value=MOCK_QA_PAIRS)
             mock_client.notes.create = AsyncMock(return_value=make_note())
             mock_client_cls.return_value = mock_client
 
@@ -148,30 +145,74 @@ class TestHistoryCommand:
             assert result.exit_code == 0, result.output
             mock_client.notes.create.assert_awaited_once()
 
-    def test_history_save_by_conversation_id(self, runner, mock_auth):
+    def test_history_empty_shows_message(self, runner, mock_auth):
         with patch_client_for_module("chat") as mock_client_cls:
             mock_client = create_mock_client()
-            mock_client.chat.get_history = AsyncMock(return_value=MOCK_HISTORY)
-            mock_client.notes.create = AsyncMock(return_value=make_note())
+            mock_client.chat.get_history = AsyncMock(return_value=[])
             mock_client_cls.return_value = mock_client
 
             with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:
                 mock_fetch.return_value = ("csrf", "session")
-                result = runner.invoke(cli, ["history", "--save", "-c", "conv_001", "-n", "nb_123"])
+                result = runner.invoke(cli, ["history", "-n", "nb_123"])
 
             assert result.exit_code == 0, result.output
-            mock_client.notes.create.assert_awaited_once()
+            assert "No conversation history" in result.output
 
-    def test_history_save_unknown_conversation_id_fails(self, runner, mock_auth):
+    def test_history_json_outputs_valid_json(self, runner, mock_auth):
         with patch_client_for_module("chat") as mock_client_cls:
             mock_client = create_mock_client()
-            mock_client.chat.get_history = AsyncMock(return_value=MOCK_HISTORY)
+            mock_client.chat.get_history = AsyncMock(return_value=MOCK_QA_PAIRS)
             mock_client_cls.return_value = mock_client
 
             with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:
                 mock_fetch.return_value = ("csrf", "session")
-                result = runner.invoke(
-                    cli, ["history", "--save", "-c", "conv_unknown", "-n", "nb_123"]
-                )
+                result = runner.invoke(cli, ["history", "--json", "-n", "nb_123"])
 
-            assert result.exit_code != 0
+            assert result.exit_code == 0, result.output
+            import json
+
+            data = json.loads(result.output)
+            assert data["count"] == 2
+            assert data["notebook_id"] == "nb_123"
+            assert len(data["qa_pairs"]) == 2
+            assert data["qa_pairs"][0]["turn"] == 1
+            assert data["qa_pairs"][0]["question"] == "What is ML?"
+            assert data["qa_pairs"][0]["answer"] == "ML is a type of AI."
+            assert data["qa_pairs"][1]["turn"] == 2
+
+    def test_history_json_empty(self, runner, mock_auth):
+        with patch_client_for_module("chat") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.chat.get_history = AsyncMock(return_value=[])
+            mock_client_cls.return_value = mock_client
+
+            with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["history", "--json", "-n", "nb_123"])
+
+            assert result.exit_code == 0, result.output
+            import json
+
+            data = json.loads(result.output)
+            assert data["count"] == 0
+            assert data["qa_pairs"] == []
+
+    def test_history_show_all_outputs_full_text(self, runner, mock_auth):
+        long_q = "Q" * 100
+        long_a = "A" * 100
+        pairs = [(long_q, long_a)]
+
+        with patch_client_for_module("chat") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.chat.get_history = AsyncMock(return_value=pairs)
+            mock_client_cls.return_value = mock_client
+
+            with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["history", "--show-all", "-n", "nb_123"])
+
+            assert result.exit_code == 0, result.output
+            # Rich may wrap long lines, so strip newlines and check full content
+            flat = result.output.replace("\n", "")
+            assert long_q in flat
+            assert long_a in flat

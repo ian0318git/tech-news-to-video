@@ -64,7 +64,8 @@ class RPCMethod(str, Enum):
     DELETE_NOTE = "AH0mwd"
 
     # Conversation
-    GET_CONVERSATION_HISTORY = "hPTbtc"
+    GET_LAST_CONVERSATION_ID = "hPTbtc"  # Returns only the most recent conversation ID
+    GET_CONVERSATION_TURNS = "khqZz"  # Returns full Q&A turns for a conversation
 
     # Sharing operations (notebook-level)
     SHARE_NOTEBOOK = "QDyure"  # Set notebook visibility (restricted/anyone with link)

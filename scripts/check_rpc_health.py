@@ -434,11 +434,15 @@ def get_test_params(method: RPCMethod, notebook_id: str | None) -> list[Any] | N
 
     # Methods that take [[notebook_id]] as the only param
     if method in (
-        RPCMethod.GET_CONVERSATION_HISTORY,
+        RPCMethod.LIST_CONVERSATIONS,
         RPCMethod.GET_NOTES_AND_MIND_MAPS,
         RPCMethod.DISCOVER_SOURCES,
     ):
         return [[notebook_id]]
+
+    # GET_CONVERSATION_TURNS: placeholder conv ID - API echoes RPC ID even in error response
+    if method == RPCMethod.GET_CONVERSATION_TURNS:
+        return [[], None, None, "placeholder_conv_id", 2]
 
     # LIST_ARTIFACTS has special params
     if method == RPCMethod.LIST_ARTIFACTS:

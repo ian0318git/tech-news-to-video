@@ -172,23 +172,131 @@ class ChatAPI:
             raw_response=response.text[:1000],
         )
 
-    async def get_history(self, notebook_id: str, limit: int = 20) -> Any:
-        """Get conversation history from the API.
+    async def get_conversation_turns(
+        self, notebook_id: str, conversation_id: str, limit: int = 2
+    ) -> Any:
+        """Get turns (individual messages) for a specific conversation.
 
         Args:
             notebook_id: The notebook ID.
-            limit: Maximum number of conversations to retrieve.
+            conversation_id: The conversation ID to fetch turns for.
+            limit: Maximum number of turns to retrieve. Turns are returned
+                newest-first, so limit=2 gives the latest Q&A pair.
 
         Returns:
-            Raw conversation history data from API.
+            Raw turn data from API. Each turn has:
+              turn[2] == 1: user question, text at turn[3]
+              turn[2] == 2: AI answer, text at turn[4][0][0]
         """
-        logger.debug("Getting conversation history for notebook %s (limit=%d)", notebook_id, limit)
-        params: list[Any] = [[], None, notebook_id, limit]
+        logger.debug(
+            "Getting conversation turns for %s (conversation=%s, limit=%d)",
+            notebook_id,
+            conversation_id,
+            limit,
+        )
+        params: list[Any] = [[], None, None, conversation_id, limit]
         return await self._core.rpc_call(
-            RPCMethod.GET_CONVERSATION_HISTORY,
+            RPCMethod.GET_CONVERSATION_TURNS,
             params,
             source_path=f"/notebook/{notebook_id}",
         )
+
+    async def get_last_conversation_id(self, notebook_id: str) -> str | None:
+        """Get the most recent conversation ID from the API.
+
+        The underlying RPC (hPTbtc) only returns the last conversation ID,
+        not a full conversation list.
+
+        Args:
+            notebook_id: The notebook ID.
+
+        Returns:
+            The most recent conversation ID, or None if no conversations exist.
+        """
+        logger.debug("Getting last conversation ID for notebook %s", notebook_id)
+        params: list[Any] = [[], None, notebook_id, 1]
+        raw = await self._core.rpc_call(
+            RPCMethod.GET_LAST_CONVERSATION_ID,
+            params,
+            source_path=f"/notebook/{notebook_id}",
+        )
+        # Response structure: [[[conv_id]]]
+        if raw and isinstance(raw, list):
+            for group in raw:
+                if isinstance(group, list):
+                    for conv in group:
+                        if isinstance(conv, list) and conv:
+                            return str(conv[0])
+        return None
+
+    async def get_history(self, notebook_id: str, limit: int = 100) -> list[tuple[str, str]]:
+        """Get conversation history (all Q&A turns) from the server.
+
+        Fetches the most recent conversation and retrieves all turns.
+
+        Args:
+            notebook_id: The notebook ID.
+            limit: Maximum number of turns to retrieve.
+
+        Returns:
+            List of (question, answer) tuples, ordered oldest-first.
+        """
+        logger.debug("Getting conversation history for notebook %s (limit=%d)", notebook_id, limit)
+        conv_id = await self.get_last_conversation_id(notebook_id)
+        if not conv_id:
+            return []
+
+        turns_data = await self.get_conversation_turns(notebook_id, conv_id, limit=limit)
+        # API returns individual turns newest-first: [A2, Q2, A1, Q1, ...]
+        # Reverse to chronological order [Q1, A1, Q2, A2, ...] so the
+        # Q→A forward-pairing parser works correctly.
+        if (
+            turns_data
+            and isinstance(turns_data, list)
+            and turns_data[0]
+            and isinstance(turns_data[0], list)
+        ):
+            turns_data = [list(reversed(turns_data[0]))]
+        return self._parse_turns_to_qa_pairs(turns_data)
+
+    @staticmethod
+    def _parse_turns_to_qa_pairs(turns_data: Any) -> list[tuple[str, str]]:
+        """Parse raw turn data into (question, answer) pairs in array order.
+
+        Pairs are returned in the same order as the input data (newest-first
+        from the API). Callers should reverse if oldest-first is needed.
+        Each user question (turn[2]==1) is followed by its AI answer (turn[2]==2).
+        """
+        if not turns_data or not isinstance(turns_data, list):
+            return []
+        first = turns_data[0]
+        if not isinstance(first, list):
+            return []
+
+        turns = first
+
+        pairs: list[tuple[str, str]] = []
+        i = 0
+        while i < len(turns):
+            turn = turns[i]
+            if not isinstance(turn, list) or len(turn) < 3:
+                i += 1
+                continue
+            if turn[2] == 1 and len(turn) > 3:
+                q = str(turn[3] or "")
+                a = ""
+                # Look for the answer immediately following
+                if i + 1 < len(turns):
+                    next_turn = turns[i + 1]
+                    if isinstance(next_turn, list) and len(next_turn) > 4 and next_turn[2] == 2:
+                        try:
+                            a = str(next_turn[4][0][0] or "")
+                        except (IndexError, TypeError):
+                            pass
+                        i += 1  # skip the answer turn
+                pairs.append((q, a))
+            i += 1
+        return pairs
 
     def get_cached_turns(self, conversation_id: str) -> list[ConversationTurn]:
         """Get locally cached conversation turns.

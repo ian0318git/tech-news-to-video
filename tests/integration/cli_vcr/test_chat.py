@@ -40,35 +40,47 @@ class TestHistoryCommand:
 
     @notebooklm_vcr.use_cassette("chat_get_history.yaml")
     def test_history(self, runner, mock_auth_for_vcr, mock_context):
-        """History command shows chat history with Q&A previews."""
+        """History command shows Q&A turns from last conversation."""
         result = runner.invoke(cli, ["history"])
         assert_command_success(result)
+
+
+class TestGetConversationTurnsCommand:
+    """Test conversation turns fetching via GET_CONVERSATION_TURNS (khqZz) RPC.
+
+    Cassette: chat_get_conversation_turns.yaml
+    Notebook: f59447f4-2a13-4d64-9df8-bc89c615c7bd
+    Conversation: b1556695-010e-4fe3-a841-a6efa7fe0697
+
+    The cassette captures two sequential batchexecute calls:
+      1. hPTbtc (GET_LAST_CONVERSATION_ID) → returns one conversation ID
+      2. khqZz (GET_CONVERSATION_TURNS) → returns Q&A turns for that conversation
+    """
+
+    @notebooklm_vcr.use_cassette(
+        "chat_get_conversation_turns.yaml",
+        match_on=["method", "scheme", "host", "port", "path", "rpcids"],
+    )
+    def test_history_shows_qa_previews(self, runner, mock_auth_for_vcr, mock_context):
+        """history command shows Q&A preview columns populated from khqZz turns API."""
+        # Use the full UUID directly so resolve_notebook_id skips LIST_NOTEBOOKS
+        result = runner.invoke(cli, ["history", "-n", "f59447f4-2a13-4d64-9df8-bc89c615c7bd"])
+        assert result.exit_code == 0, result.output
+        assert "What question should I" in result.output
+        assert "Based on the sources" in result.output
 
     @pytest.mark.skip(
         reason=(
             "Cassette not yet recorded. To record: set NOTEBOOKLM_VCR_RECORD=1 and run "
             "'notebooklm history --save' against real API. "
-            "Cassette must capture GET_CONVERSATION_HISTORY + CREATE_NOTE + UPDATE_NOTE."
+            "Cassette must capture GET_LAST_CONVERSATION_ID + GET_CONVERSATION_TURNS "
+            "+ CREATE_NOTE + UPDATE_NOTE."
         )
     )
     def test_history_save(self, runner, mock_auth_for_vcr, mock_context):
         """'history --save' saves all conversation history as a note."""
         with notebooklm_vcr.use_cassette("chat_history_save.yaml"):
             result = runner.invoke(cli, ["history", "--save"])
-            assert result.exit_code == 0
-            assert "Saved as note" in result.output
-
-    @pytest.mark.skip(
-        reason=(
-            "Cassette not yet recorded. To record: set NOTEBOOKLM_VCR_RECORD=1 and run "
-            "'notebooklm history --save -c <id>' against real API. "
-            "Cassette must capture GET_CONVERSATION_HISTORY + CREATE_NOTE + UPDATE_NOTE."
-        )
-    )
-    def test_history_save_single_conversation(self, runner, mock_auth_for_vcr, mock_context):
-        """'history --save -c <id>' saves one conversation as a note."""
-        with notebooklm_vcr.use_cassette("chat_history_save_single.yaml"):
-            result = runner.invoke(cli, ["history", "--save", "-c", "conv_001"])
             assert result.exit_code == 0
             assert "Saved as note" in result.output
 
