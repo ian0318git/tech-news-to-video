@@ -7,6 +7,7 @@ import pytest
 from click.testing import CliRunner
 
 from notebooklm.notebooklm_cli import cli
+from notebooklm.rpc.types import ReportFormat
 
 from .conftest import create_mock_client, patch_client_for_module
 
@@ -412,6 +413,100 @@ class TestGenerateReport:
                 )
 
             assert result.exit_code == 0
+
+    @pytest.mark.parametrize(
+        "format_name,extra_text,expected_format",
+        [
+            ("briefing-doc", "Focus on financial metrics", ReportFormat.BRIEFING_DOC),
+            ("study-guide", "Target audience: beginners", ReportFormat.STUDY_GUIDE),
+            ("blog-post", "Keep it conversational", ReportFormat.BLOG_POST),
+        ],
+    )
+    def test_generate_report_append(
+        self, runner, mock_auth, format_name, extra_text, expected_format
+    ):
+        """--append passes extra_instructions while keeping built-in format."""
+        with patch_client_for_module("generate") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.artifacts.generate_report = AsyncMock(
+                return_value={"artifact_id": "report_123", "status": "processing"}
+            )
+            mock_client_cls.return_value = mock_client
+
+            with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli,
+                    [
+                        "generate",
+                        "report",
+                        "--format",
+                        format_name,
+                        "--append",
+                        extra_text,
+                        "-n",
+                        "nb_123",
+                    ],
+                )
+
+            assert result.exit_code == 0
+            call_kwargs = mock_client.artifacts.generate_report.call_args.kwargs
+            assert call_kwargs["extra_instructions"] == extra_text
+            assert call_kwargs["report_format"] == expected_format
+            assert call_kwargs["custom_prompt"] is None
+
+    def test_generate_report_append_with_custom_warns(self, runner, mock_auth):
+        """--append with --format custom prints a warning and clears extra_instructions."""
+        with patch_client_for_module("generate") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.artifacts.generate_report = AsyncMock(
+                return_value={"artifact_id": "report_123", "status": "processing"}
+            )
+            mock_client_cls.return_value = mock_client
+
+            with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli,
+                    [
+                        "generate",
+                        "report",
+                        "--format",
+                        "custom",
+                        "--append",
+                        "extra",
+                        "-n",
+                        "nb_123",
+                    ],
+                )
+
+            assert result.exit_code == 0
+            assert "Warning" in result.output
+            assert "--format custom" in result.output
+            call_kwargs = mock_client.artifacts.generate_report.call_args.kwargs
+            assert call_kwargs["extra_instructions"] is None
+
+    def test_generate_report_append_with_description_warns(self, runner, mock_auth):
+        """--append with a description arg (auto-promoted to custom) warns and clears extra_instructions."""
+        with patch_client_for_module("generate") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.artifacts.generate_report = AsyncMock(
+                return_value={"artifact_id": "report_123", "status": "processing"}
+            )
+            mock_client_cls.return_value = mock_client
+
+            with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli,
+                    ["generate", "report", "My custom prompt", "--append", "extra", "-n", "nb_123"],
+                )
+
+            assert result.exit_code == 0
+            assert "Warning" in result.output
+            call_kwargs = mock_client.artifacts.generate_report.call_args.kwargs
+            assert call_kwargs["extra_instructions"] is None
+            assert call_kwargs["report_format"] == ReportFormat.CUSTOM
 
 
 # =============================================================================

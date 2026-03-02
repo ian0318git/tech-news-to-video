@@ -472,6 +472,7 @@ class ArtifactsAPI:
         source_ids: builtins.list[str] | None = None,
         language: str = "en",
         custom_prompt: str | None = None,
+        extra_instructions: str | None = None,
     ) -> GenerationStatus:
         """Generate a report artifact.
 
@@ -480,7 +481,11 @@ class ArtifactsAPI:
             report_format: BRIEFING_DOC, STUDY_GUIDE, BLOG_POST, or CUSTOM.
             source_ids: Source IDs to include. If None, uses all sources.
             language: Language code (default: "en").
-            custom_prompt: Required for CUSTOM format.
+            custom_prompt: Prompt for CUSTOM format. Falls back to a generic
+                default if None.
+            extra_instructions: Additional instructions appended to the built-in
+                template prompt. Ignored when report_format is CUSTOM; for custom
+                reports, embed all instructions in custom_prompt instead.
 
         Returns:
             GenerationStatus with task_id for polling.
@@ -525,6 +530,8 @@ class ArtifactsAPI:
         }
 
         config = format_configs[report_format]
+        if extra_instructions and report_format != ReportFormat.CUSTOM:
+            config = {**config, "prompt": f"{config['prompt']}\n\n{extra_instructions}"}
         source_ids_triple = [[[sid]] for sid in source_ids] if source_ids else []
         source_ids_double = [[sid] for sid in source_ids] if source_ids else []
 
@@ -561,6 +568,7 @@ class ArtifactsAPI:
         notebook_id: str,
         source_ids: builtins.list[str] | None = None,
         language: str = "en",
+        extra_instructions: str | None = None,
     ) -> GenerationStatus:
         """Generate a study guide report.
 
@@ -570,6 +578,7 @@ class ArtifactsAPI:
             notebook_id: The notebook ID.
             source_ids: Source IDs to include. If None, uses all sources.
             language: Language code (default: "en").
+            extra_instructions: Additional instructions appended to the default template.
 
         Returns:
             GenerationStatus with task_id for polling.
@@ -579,6 +588,7 @@ class ArtifactsAPI:
             report_format=ReportFormat.STUDY_GUIDE,
             source_ids=source_ids,
             language=language,
+            extra_instructions=extra_instructions,
         )
 
     async def generate_quiz(

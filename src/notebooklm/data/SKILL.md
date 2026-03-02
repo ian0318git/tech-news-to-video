@@ -141,6 +141,8 @@ Before starting workflows, verify the CLI is ready:
 | Generate podcast (JSON) | `notebooklm generate audio --json` |
 | Generate podcast (specific sources) | `notebooklm generate audio -s src_id1 -s src_id2` |
 | Generate video | `notebooklm generate video "instructions"` |
+| Generate report | `notebooklm generate report --format briefing-doc` |
+| Generate report (append instructions) | `notebooklm generate report --format study-guide --append "Target audience: beginners"` |
 | Generate quiz | `notebooklm generate quiz` |
 | Revise a slide | `notebooklm generate revise-slide "prompt" --artifact <id> --slide 0` |
 | Check artifact status | `notebooklm artifact list` |
@@ -224,7 +226,7 @@ All generate commands support:
 | Slide Deck | `generate slide-deck` | `--format [detailed\|presenter]`, `--length [default\|short]` | .pdf / .pptx |
 | Slide Revision | `generate revise-slide "prompt" --artifact <id> --slide N` | `--wait`, `--notebook` | *(re-downloads parent deck)* |
 | Infographic | `generate infographic` | `--orientation [landscape\|portrait\|square]`, `--detail [concise\|standard\|detailed]` | .png |
-| Report | `generate report` | `--format [briefing-doc\|study-guide\|blog-post\|custom]` | .md |
+| Report | `generate report` | `--format [briefing-doc\|study-guide\|blog-post\|custom]`, `--append "extra instructions"` | .md |
 | Mind Map | `generate mind-map` | *(sync, instant)* | .json |
 | Data Table | `generate data-table` | description required | .csv |
 | Quiz | `generate quiz` | `--difficulty [easy\|medium\|hard]`, `--quantity [fewer\|standard\|more]` | .json/.md/.html |
@@ -242,6 +244,7 @@ These capabilities are available via CLI but not in NotebookLM's web interface:
 | **Data table export** | `download data-table` | Download structured tables as CSV |
 | **Slide deck as PPTX** | `download slide-deck --format pptx` | Download slide deck as editable .pptx (web UI only offers PDF) |
 | **Slide revision** | `generate revise-slide "prompt" --artifact <id> --slide N` | Modify individual slides with a natural-language prompt |
+| **Report template append** | `generate report --format study-guide --append "..."` | Append custom instructions to built-in format templates without losing the format type |
 | **Source fulltext** | `source fulltext <id>` | Retrieve the indexed text content of any source |
 | **Programmatic sharing** | `share` commands | Manage sharing permissions without the UI |
 

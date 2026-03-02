@@ -1007,6 +1007,12 @@ def _output_mind_map_result(result: Any, json_output: bool) -> None:
 )
 @click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
 @click.option("--language", default=None, help="Output language (default: from config or 'en')")
+@click.option(
+    "--append",
+    "append_instructions",
+    default=None,
+    help="Append extra instructions to the built-in prompt for non-custom formats. Has no effect with --format custom.",
+)
 @click.option("--wait/--no-wait", default=False, help="Wait for completion (default: no-wait)")
 @retry_option
 @json_option
@@ -1018,6 +1024,7 @@ def generate_report_cmd(
     notebook_id,
     source_ids,
     language,
+    append_instructions,
     wait,
     max_retries,
     json_output,
@@ -1034,6 +1041,8 @@ def generate_report_cmd(
       notebooklm generate report --format study-guide         # study guide
       notebooklm generate report -s src_001 -s src_002        # from specific sources
       notebooklm generate report "Create a white paper..."    # custom report
+      notebooklm generate report --format briefing-doc --append "Focus on AI trends"
+      notebooklm generate report --format study-guide --append "Target audience: beginners"
     """
     nb_id = require_notebook(notebook_id)
 
@@ -1046,6 +1055,13 @@ def generate_report_cmd(
             custom_prompt = description
         else:
             custom_prompt = description
+
+    if append_instructions and actual_format == "custom":
+        click.echo(
+            "Warning: --append has no effect with --format custom. Use the description argument instead.",
+            err=True,
+        )
+        append_instructions = None
 
     format_map = {
         "briefing-doc": ReportFormat.BRIEFING_DOC,
@@ -1074,6 +1090,7 @@ def generate_report_cmd(
                     language=resolve_language(language),
                     report_format=report_format_enum,
                     custom_prompt=custom_prompt,
+                    extra_instructions=append_instructions,
                 )
 
             result = await generate_with_retry(_generate, max_retries, format_display, json_output)
