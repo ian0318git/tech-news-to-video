@@ -4,6 +4,7 @@ Provides operations for asking questions, managing conversations, and
 retrieving conversation history.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -225,54 +226,81 @@ class ChatAPI:
         Returns:
             The most recent conversation ID, or None if no conversations exist.
         """
-        logger.debug("Getting last conversation ID for notebook %s", notebook_id)
-        params: list[Any] = [[], None, notebook_id, 1]
+        ids = await self._get_conversation_ids(notebook_id, limit=1)
+        return ids[0] if ids else None
+
+    async def _get_conversation_ids(self, notebook_id: str, limit: int = 20) -> list[str]:
+        """Fetch up to ``limit`` conversation IDs for a notebook (newest-first).
+
+        Args:
+            notebook_id: The notebook ID.
+            limit: Maximum number of conversation IDs to retrieve.
+
+        Returns:
+            List of conversation ID strings, most recent first.
+        """
+        logger.debug("Getting conversation IDs for notebook %s (limit=%d)", notebook_id, limit)
+        params: list[Any] = [[], None, notebook_id, limit]
         raw = await self._core.rpc_call(
             RPCMethod.GET_LAST_CONVERSATION_ID,
             params,
             source_path=f"/notebook/{notebook_id}",
         )
-        # Response structure: [[[conv_id]]]
+        # Response structure: [[[conv_id_1], [conv_id_2], ...]]
+        ids: list[str] = []
         if raw and isinstance(raw, list):
             for group in raw:
                 if isinstance(group, list):
                     for conv in group:
-                        if isinstance(conv, list) and conv:
-                            return str(conv[0])
-        return None
+                        if isinstance(conv, list) and conv and isinstance(conv[0], str):
+                            ids.append(conv[0])
+        return ids
 
     async def get_history(
         self, notebook_id: str, limit: int = 100
-    ) -> tuple[str | None, list[tuple[str, str]]]:
-        """Get conversation history (all Q&A turns) from the server.
+    ) -> list[tuple[str, list[tuple[str, str]]]]:
+        """Get conversation history grouped by conversation, newest-first.
 
-        Fetches the most recent conversation and retrieves all turns.
+        Fetches all available conversations and their Q&A turns.
 
         Args:
             notebook_id: The notebook ID.
-            limit: Maximum number of turns to retrieve.
+            limit: Maximum number of Q&A turns to retrieve per conversation.
 
         Returns:
-            Tuple of (conversation_id, list of (question, answer) tuples ordered oldest-first).
-            conversation_id is None if no conversations exist.
+            List of (conversation_id, qa_pairs) tuples, newest conversation first.
+            Each qa_pairs list is ordered oldest-first within the conversation.
+            Returns an empty list if no conversations exist.
         """
         logger.debug("Getting conversation history for notebook %s (limit=%d)", notebook_id, limit)
-        conv_id = await self.get_last_conversation_id(notebook_id)
-        if not conv_id:
-            return None, []
+        conv_ids = await self._get_conversation_ids(notebook_id)
+        if not conv_ids:
+            return []
 
-        turns_data = await self.get_conversation_turns(notebook_id, conv_id, limit=limit)
-        # API returns individual turns newest-first: [A2, Q2, A1, Q1, ...]
-        # Reverse to chronological order [Q1, A1, Q2, A2, ...] so the
-        # Q→A forward-pairing parser works correctly.
-        if (
-            turns_data
-            and isinstance(turns_data, list)
-            and turns_data[0]
-            and isinstance(turns_data[0], list)
-        ):
-            turns_data = [list(reversed(turns_data[0]))]
-        return conv_id, self._parse_turns_to_qa_pairs(turns_data)
+        all_turns = await asyncio.gather(
+            *[
+                self.get_conversation_turns(notebook_id, conv_id, limit=limit)
+                for conv_id in conv_ids
+            ],
+            return_exceptions=True,
+        )
+        result: list[tuple[str, list[tuple[str, str]]]] = []
+        for conv_id, turns_data in zip(conv_ids, all_turns, strict=True):
+            if isinstance(turns_data, Exception):
+                logger.warning("Failed to fetch turns for conversation %s: %s", conv_id, turns_data)
+                continue
+            # API returns individual turns newest-first: [A2, Q2, A1, Q1, ...]
+            # Reverse to chronological order [Q1, A1, Q2, A2, ...] so the
+            # Q→A forward-pairing parser works correctly.
+            if (
+                turns_data
+                and isinstance(turns_data, list)
+                and turns_data[0]
+                and isinstance(turns_data[0], list)
+            ):
+                turns_data = [list(reversed(turns_data[0]))]
+            result.append((conv_id, self._parse_turns_to_qa_pairs(turns_data)))
+        return result
 
     @staticmethod
     def _parse_turns_to_qa_pairs(turns_data: Any) -> list[tuple[str, str]]:

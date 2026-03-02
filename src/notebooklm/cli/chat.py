@@ -356,14 +356,14 @@ def register_chat_commands(cli):
 
                 nb_id = require_notebook(notebook_id)
                 nb_id_resolved = await resolve_notebook_id(client, nb_id)
-                conv_id, qa_pairs = await client.chat.get_history(nb_id_resolved, limit=limit)
+                conversations = await client.chat.get_history(nb_id_resolved, limit=limit)
 
                 if save_as_note:
-                    if not qa_pairs:
+                    if not conversations:
                         raise click.ClickException(
                             "No conversation history found for this notebook."
                         )
-                    content = _format_all_qa(qa_pairs)
+                    content = _format_conversations(conversations)
                     title = note_title or "Chat History"
                     note = await client.notes.create(nb_id_resolved, title, content)
                     console.print(f"[green]Saved as note: {note.title} ({note.id[:8]}...)[/green]")
@@ -372,38 +372,44 @@ def register_chat_commands(cli):
                 if json_output:
                     data = {
                         "notebook_id": nb_id_resolved,
-                        "conversation_id": conv_id,
-                        "count": len(qa_pairs),
-                        "qa_pairs": [
-                            {"turn": i, "question": q, "answer": a}
-                            for i, (q, a) in enumerate(qa_pairs, 1)
+                        "conversations": [
+                            {
+                                "conversation_id": conv_id,
+                                "count": len(qa_pairs),
+                                "qa_pairs": [
+                                    {"turn": i, "question": q, "answer": a}
+                                    for i, (q, a) in enumerate(qa_pairs, 1)
+                                ],
+                            }
+                            for conv_id, qa_pairs in conversations
                         ],
                     }
                     json_output_response(data)
                     return
 
-                if not qa_pairs:
+                if not conversations:
                     console.print("[yellow]No conversation history[/yellow]")
                     return
 
-                header = "[bold cyan]Conversation History:[/bold cyan]"
-                if conv_id:
-                    header += f" [dim]{conv_id}[/dim]"
-                console.print(header)
+                console.print("[bold cyan]Conversation History:[/bold cyan]")
 
                 if show_all:
-                    for i, (question, answer) in enumerate(qa_pairs, 1):
-                        console.print(f"[bold]#{i} Q:[/bold] {question}")
-                        console.print(f"   A: {answer}\n")
+                    for conv_id, qa_pairs in conversations:
+                        console.print(f"\n[bold]── {conv_id} ──[/bold]")
+                        for i, (question, answer) in enumerate(qa_pairs, 1):
+                            console.print(f"[bold]#{i} Q:[/bold] {question}")
+                            console.print(f"   A: {answer}\n")
                     return
 
-                table = Table()
-                table.add_column("#", style="dim")
-                table.add_column("Question", style="white", max_width=50)
-                table.add_column("Answer preview", style="dim", max_width=50)
-                for i, (question, answer) in enumerate(qa_pairs, 1):
-                    table.add_row(str(i), question[:50], answer[:50])
-                console.print(table)
+                for conv_id, qa_pairs in conversations:
+                    console.print(f"\n[dim]── {conv_id} ──[/dim]")
+                    table = Table()
+                    table.add_column("#", style="dim", width=4)
+                    table.add_column("Question", style="white", max_width=50)
+                    table.add_column("Answer preview", style="dim", max_width=50)
+                    for i, (question, answer) in enumerate(qa_pairs, 1):
+                        table.add_row(str(i), question[:50], answer[:50])
+                    console.print(table)
                 console.print("\n[dim]Use 'notebooklm history --save' to save as a note.[/dim]")
 
         return _run()
@@ -419,10 +425,12 @@ def _format_single_qa(question: str, answer: str) -> str:
     return "\n\n".join(parts)
 
 
-def _format_all_qa(qa_results: list[tuple[str, str]]) -> str:
-    """Format multiple Q&A pairs as note content."""
-    sections = []
-    for i, (question, answer) in enumerate(qa_results, 1):
-        section = f"## Turn {i}\n\n{_format_single_qa(question, answer)}"
-        sections.append(section)
-    return "\n\n---\n\n".join(sections)
+def _format_conversations(conversations: list[tuple[str, list[tuple[str, str]]]]) -> str:
+    """Format conversation history preserving conversation boundaries."""
+    conv_sections = []
+    for conv_id, qa_pairs in conversations:
+        turns = []
+        for i, (question, answer) in enumerate(qa_pairs, 1):
+            turns.append(f"### Turn {i}\n\n{_format_single_qa(question, answer)}")
+        conv_sections.append(f"## Conversation {conv_id}\n\n" + "\n\n---\n\n".join(turns))
+    return "\n\n===\n\n".join(conv_sections)

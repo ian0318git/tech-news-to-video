@@ -212,32 +212,6 @@ class TestFormatHelpers:
         result = _format_single_qa("", "")
         assert result == ""
 
-    def test_format_all_qa_single_pair(self):
-        from notebooklm.cli.chat import _format_all_qa
-
-        result = _format_all_qa([("Q1?", "A1.")])
-        assert "## Turn 1" in result
-        assert "**Q:** Q1?" in result
-        assert "**A:** A1." in result
-        assert "---" not in result  # no separator for single item
-
-    def test_format_all_qa_multiple_pairs(self):
-        from notebooklm.cli.chat import _format_all_qa
-
-        pairs = [("Q1?", "A1."), ("Q2?", "A2.")]
-        result = _format_all_qa(pairs)
-        assert "## Turn 1" in result
-        assert "## Turn 2" in result
-        assert "**Q:** Q1?" in result
-        assert "**Q:** Q2?" in result
-        assert "---" in result  # separator between turns
-
-    def test_format_all_qa_empty_list(self):
-        from notebooklm.cli.chat import _format_all_qa
-
-        result = _format_all_qa([])
-        assert result == ""
-
 
 class TestDetermineConversationId:
     """Tests for _determine_conversation_id CLI helper."""

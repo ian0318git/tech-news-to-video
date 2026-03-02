@@ -27,11 +27,13 @@ def make_ask_result(answer="The answer is 42.") -> AskResult:
     )
 
 
-# get_history now returns list of (question, answer) tuples
+# get_history returns list of (conversation_id, [(question, answer), ...])
+MOCK_CONV_ID = "conv-abc123"
 MOCK_QA_PAIRS = [
     ("What is ML?", "ML is a type of AI."),
     ("Explain AI", "AI stands for Artificial Intelligence."),
 ]
+MOCK_HISTORY = [(MOCK_CONV_ID, MOCK_QA_PAIRS)]
 
 
 @pytest.fixture
@@ -121,7 +123,7 @@ class TestHistoryCommand:
     def test_history_shows_qa_pairs(self, runner, mock_auth):
         with patch_client_for_module("chat") as mock_client_cls:
             mock_client = create_mock_client()
-            mock_client.chat.get_history = AsyncMock(return_value=("conv_test_id", MOCK_QA_PAIRS))
+            mock_client.chat.get_history = AsyncMock(return_value=MOCK_HISTORY)
             mock_client_cls.return_value = mock_client
 
             with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:
@@ -135,7 +137,7 @@ class TestHistoryCommand:
     def test_history_save_creates_note(self, runner, mock_auth):
         with patch_client_for_module("chat") as mock_client_cls:
             mock_client = create_mock_client()
-            mock_client.chat.get_history = AsyncMock(return_value=("conv_test_id", MOCK_QA_PAIRS))
+            mock_client.chat.get_history = AsyncMock(return_value=MOCK_HISTORY)
             mock_client.notes.create = AsyncMock(return_value=make_note())
             mock_client_cls.return_value = mock_client
 
@@ -149,7 +151,7 @@ class TestHistoryCommand:
     def test_history_empty_shows_message(self, runner, mock_auth):
         with patch_client_for_module("chat") as mock_client_cls:
             mock_client = create_mock_client()
-            mock_client.chat.get_history = AsyncMock(return_value=(None, []))
+            mock_client.chat.get_history = AsyncMock(return_value=[])
             mock_client_cls.return_value = mock_client
 
             with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:
@@ -162,7 +164,7 @@ class TestHistoryCommand:
     def test_history_json_outputs_valid_json(self, runner, mock_auth):
         with patch_client_for_module("chat") as mock_client_cls:
             mock_client = create_mock_client()
-            mock_client.chat.get_history = AsyncMock(return_value=("conv_test_id", MOCK_QA_PAIRS))
+            mock_client.chat.get_history = AsyncMock(return_value=MOCK_HISTORY)
             mock_client_cls.return_value = mock_client
 
             with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:
@@ -173,19 +175,20 @@ class TestHistoryCommand:
             import json
 
             data = json.loads(result.output)
-            assert data["count"] == 2
             assert data["notebook_id"] == "nb_123"
-            assert data["conversation_id"] == "conv_test_id"
-            assert len(data["qa_pairs"]) == 2
-            assert data["qa_pairs"][0]["turn"] == 1
-            assert data["qa_pairs"][0]["question"] == "What is ML?"
-            assert data["qa_pairs"][0]["answer"] == "ML is a type of AI."
-            assert data["qa_pairs"][1]["turn"] == 2
+            assert len(data["conversations"]) == 1
+            conv = data["conversations"][0]
+            assert conv["conversation_id"] == MOCK_CONV_ID
+            assert conv["count"] == 2
+            assert conv["qa_pairs"][0]["turn"] == 1
+            assert conv["qa_pairs"][0]["question"] == "What is ML?"
+            assert conv["qa_pairs"][0]["answer"] == "ML is a type of AI."
+            assert conv["qa_pairs"][1]["turn"] == 2
 
     def test_history_json_empty(self, runner, mock_auth):
         with patch_client_for_module("chat") as mock_client_cls:
             mock_client = create_mock_client()
-            mock_client.chat.get_history = AsyncMock(return_value=(None, []))
+            mock_client.chat.get_history = AsyncMock(return_value=[])
             mock_client_cls.return_value = mock_client
 
             with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:
@@ -196,8 +199,7 @@ class TestHistoryCommand:
             import json
 
             data = json.loads(result.output)
-            assert data["count"] == 0
-            assert data["qa_pairs"] == []
+            assert data["conversations"] == []
 
     def test_history_show_all_outputs_full_text(self, runner, mock_auth):
         long_q = "Q" * 100
@@ -206,7 +208,7 @@ class TestHistoryCommand:
 
         with patch_client_for_module("chat") as mock_client_cls:
             mock_client = create_mock_client()
-            mock_client.chat.get_history = AsyncMock(return_value=("conv_test_id", pairs))
+            mock_client.chat.get_history = AsyncMock(return_value=[(MOCK_CONV_ID, pairs)])
             mock_client_cls.return_value = mock_client
 
             with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:

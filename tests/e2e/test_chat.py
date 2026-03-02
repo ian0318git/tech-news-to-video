@@ -237,10 +237,11 @@ class TestChatHistoryE2E:
         ask_result = await client.chat.ask(multi_source_notebook_id, question)
         assert ask_result.conversation_id
 
-        conv_id, qa_pairs = await client.chat.get_history(multi_source_notebook_id)
-        assert qa_pairs, "get_history returned no Q&A pairs"
-        assert isinstance(qa_pairs, list)
-        assert conv_id is not None, "get_history should return a conversation ID"
+        conversations = await client.chat.get_history(multi_source_notebook_id)
+        assert conversations, "get_history returned no conversations"
+        conv_id, qa_pairs = conversations[0]
+        assert conv_id is not None
+        assert qa_pairs, "conversation has no Q&A pairs"
 
         # Each entry is a (question, answer) tuple
         q, a = qa_pairs[-1]  # most recent Q&A
