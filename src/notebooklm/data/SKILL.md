@@ -100,7 +100,8 @@ Before starting workflows, verify the CLI is ready:
 - `notebooklm research wait` - wait for research (in subagent context)
 - `notebooklm use <id>` - set context (⚠️ SINGLE-AGENT ONLY - use `-n` flag in parallel workflows)
 - `notebooklm create` - create notebook
-- `notebooklm ask "..."` - chat queries
+- `notebooklm ask "..."` - chat queries (without `--save-as-note`)
+- `notebooklm history` - display conversation history (read-only)
 - `notebooklm source add` - add sources
 
 **Ask before running:**
@@ -110,6 +111,8 @@ Before starting workflows, verify the CLI is ready:
 - `notebooklm artifact wait` - long-running (when in main conversation)
 - `notebooklm source wait` - long-running (when in main conversation)
 - `notebooklm research wait` - long-running (when in main conversation)
+- `notebooklm ask "..." --save-as-note` - writes a note
+- `notebooklm history --save` - writes a note
 
 ## Quick Reference
 
@@ -135,6 +138,12 @@ Before starting workflows, verify the CLI is ready:
 | Chat (new conversation) | `notebooklm ask "question" --new` |
 | Chat (specific sources) | `notebooklm ask "question" -s src_id1 -s src_id2` |
 | Chat (with references) | `notebooklm ask "question" --json` |
+| Chat (save answer as note) | `notebooklm ask "question" --save-as-note` |
+| Chat (save with title) | `notebooklm ask "question" --save-as-note --note-title "Title"` |
+| Show conversation history | `notebooklm history` |
+| Save all history as note | `notebooklm history --save` |
+| Save one conversation as note | `notebooklm history --save -c <conversation_id>` |
+| Save history with title | `notebooklm history --save --note-title "My Research"` |
 | Get source fulltext | `notebooklm source fulltext <source_id>` |
 | Get source guide | `notebooklm source guide <source_id>` |
 | Generate podcast | `notebooklm generate audio "instructions"` |
@@ -246,6 +255,7 @@ These capabilities are available via CLI but not in NotebookLM's web interface:
 | **Slide revision** | `generate revise-slide "prompt" --artifact <id> --slide N` | Modify individual slides with a natural-language prompt |
 | **Report template append** | `generate report --format study-guide --append "..."` | Append custom instructions to built-in format templates without losing the format type |
 | **Source fulltext** | `source fulltext <id>` | Retrieve the indexed text content of any source |
+| **Save chat to note** | `ask "..." --save-as-note` / `history --save` | Save Q&A answers or conversation history as notebook notes |
 | **Programmatic sharing** | `share` commands | Manage sharing permissions without the UI |
 
 ## Common Workflows

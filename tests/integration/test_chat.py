@@ -22,8 +22,10 @@ class TestChatAPI:
         response = build_rpc_response(
             RPCMethod.GET_CONVERSATION_HISTORY,
             [
-                ["conv_001", "What is ML?", "Machine learning is...", 1704067200],
-                ["conv_002", "Explain AI", "Artificial intelligence...", 1704153600],
+                [
+                    ["conv_001", "What is ML?", "Machine learning is...", 1704067200],
+                    ["conv_002", "Explain AI", "Artificial intelligence...", 1704153600],
+                ]
             ],
         )
         httpx_mock.add_response(content=response.encode())
@@ -32,8 +34,108 @@ class TestChatAPI:
             result = await client.chat.get_history("nb_123")
 
         assert result is not None
+        # history[0] is the list of conversations
+        assert len(result[0]) == 2
+        assert result[0][0][0] == "conv_001"
+        assert result[0][1][0] == "conv_002"
         request = httpx_mock.get_request()
         assert RPCMethod.GET_CONVERSATION_HISTORY in str(request.url)
+
+    @pytest.mark.asyncio
+    async def test_history_save_all_as_note(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+        build_rpc_response,
+    ):
+        """Test the combined get_history + notes.create flow for 'history --save'."""
+        history_response = build_rpc_response(
+            RPCMethod.GET_CONVERSATION_HISTORY,
+            [
+                [
+                    ["conv_001", "What is ML?", "Machine learning is a type of AI.", 1704067200],
+                    [
+                        "conv_002",
+                        "Explain AI",
+                        "AI stands for Artificial Intelligence.",
+                        1704153600,
+                    ],
+                ]
+            ],
+        )
+        create_response = build_rpc_response(RPCMethod.CREATE_NOTE, [["new_note_id"]])
+        update_response = build_rpc_response(RPCMethod.UPDATE_NOTE, None)
+
+        httpx_mock.add_response(content=history_response.encode())
+        httpx_mock.add_response(content=create_response.encode())
+        httpx_mock.add_response(content=update_response.encode())
+
+        async with NotebookLMClient(auth_tokens) as client:
+            history = await client.chat.get_history("nb_123")
+            conversations = history[0]
+
+            # Simulate what 'history --save' does: format and create note
+            content_parts = []
+            for i, conv in enumerate(conversations, 1):
+                q = str(conv[1]) if len(conv) > 1 else ""
+                a = str(conv[2]) if len(conv) > 2 else ""
+                content_parts.append(f"## Conversation {i}\n\n**Q:** {q}\n\n**A:** {a}")
+            content = "\n\n---\n\n".join(content_parts)
+
+            note = await client.notes.create("nb_123", "Chat History", content)
+
+        assert note.id == "new_note_id"
+        assert note.title == "Chat History"
+        assert "What is ML?" in note.content
+        assert "Explain AI" in note.content
+
+        requests = httpx_mock.get_requests()
+        assert RPCMethod.GET_CONVERSATION_HISTORY in str(requests[0].url)
+        assert RPCMethod.CREATE_NOTE in str(requests[1].url)
+        assert RPCMethod.UPDATE_NOTE in str(requests[2].url)
+
+    @pytest.mark.asyncio
+    async def test_history_save_single_conversation_as_note(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+        build_rpc_response,
+    ):
+        """Test the combined get_history + notes.create flow for 'history --save -c <id>'."""
+        history_response = build_rpc_response(
+            RPCMethod.GET_CONVERSATION_HISTORY,
+            [
+                [
+                    ["conv_001", "What is ML?", "Machine learning is a type of AI.", 1704067200],
+                    [
+                        "conv_002",
+                        "Explain AI",
+                        "AI stands for Artificial Intelligence.",
+                        1704153600,
+                    ],
+                ]
+            ],
+        )
+        create_response = build_rpc_response(RPCMethod.CREATE_NOTE, [["note_from_conv"]])
+        update_response = build_rpc_response(RPCMethod.UPDATE_NOTE, None)
+
+        httpx_mock.add_response(content=history_response.encode())
+        httpx_mock.add_response(content=create_response.encode())
+        httpx_mock.add_response(content=update_response.encode())
+
+        async with NotebookLMClient(auth_tokens) as client:
+            history = await client.chat.get_history("nb_123")
+            # Find only conv_001
+            conv = next(c for c in history[0] if c[0] == "conv_001")
+            content = f"**Q:** {conv[1]}\n\n**A:** {conv[2]}"
+            note = await client.notes.create("nb_123", f"Chat: {conv[1][:50]}", content)
+
+        assert note.id == "note_from_conv"
+        assert "What is ML?" in note.title
+        assert "What is ML?" in note.content
+        assert "Machine learning" in note.content
+        # Should NOT contain the second conversation
+        assert "Explain AI" not in note.content
 
     @pytest.mark.asyncio
     async def test_get_history_empty(

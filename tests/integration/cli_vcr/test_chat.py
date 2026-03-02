@@ -40,7 +40,52 @@ class TestHistoryCommand:
 
     @notebooklm_vcr.use_cassette("chat_get_history.yaml")
     def test_history(self, runner, mock_auth_for_vcr, mock_context):
-        """History command shows chat history from real client."""
+        """History command shows chat history with Q&A previews."""
         result = runner.invoke(cli, ["history"])
-        # allow_no_context=True: cassette may not match mock notebook ID
         assert_command_success(result)
+
+    @pytest.mark.skip(
+        reason=(
+            "Cassette not yet recorded. To record: set NOTEBOOKLM_VCR_RECORD=1 and run "
+            "'notebooklm history --save' against real API. "
+            "Cassette must capture GET_CONVERSATION_HISTORY + CREATE_NOTE + UPDATE_NOTE."
+        )
+    )
+    def test_history_save(self, runner, mock_auth_for_vcr, mock_context):
+        """'history --save' saves all conversation history as a note."""
+        with notebooklm_vcr.use_cassette("chat_history_save.yaml"):
+            result = runner.invoke(cli, ["history", "--save"])
+            assert result.exit_code == 0
+            assert "Saved as note" in result.output
+
+    @pytest.mark.skip(
+        reason=(
+            "Cassette not yet recorded. To record: set NOTEBOOKLM_VCR_RECORD=1 and run "
+            "'notebooklm history --save -c <id>' against real API. "
+            "Cassette must capture GET_CONVERSATION_HISTORY + CREATE_NOTE + UPDATE_NOTE."
+        )
+    )
+    def test_history_save_single_conversation(self, runner, mock_auth_for_vcr, mock_context):
+        """'history --save -c <id>' saves one conversation as a note."""
+        with notebooklm_vcr.use_cassette("chat_history_save_single.yaml"):
+            result = runner.invoke(cli, ["history", "--save", "-c", "conv_001"])
+            assert result.exit_code == 0
+            assert "Saved as note" in result.output
+
+
+class TestAskSaveAsNoteCommand:
+    """Test 'notebooklm ask --save-as-note' command."""
+
+    @pytest.mark.skip(
+        reason=(
+            "Cassette not yet recorded. To record: set NOTEBOOKLM_VCR_RECORD=1 and run "
+            "'notebooklm ask \"...\" --save-as-note' against real API. "
+            "Cassette must capture GenerateFreeFormStreamed + CREATE_NOTE + UPDATE_NOTE."
+        )
+    )
+    def test_ask_save_as_note(self, runner, mock_auth_for_vcr, mock_context):
+        """'ask --save-as-note' saves the answer as a note."""
+        with notebooklm_vcr.use_cassette("chat_ask_save_as_note.yaml"):
+            result = runner.invoke(cli, ["ask", "What is this about?", "--save-as-note"])
+            assert result.exit_code == 0
+            assert "Saved as note" in result.output

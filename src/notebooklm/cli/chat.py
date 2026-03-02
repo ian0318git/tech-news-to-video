@@ -109,6 +109,8 @@ def register_chat_commands(cli):
     @click.option(
         "--json", "json_output", is_flag=True, help="Output as JSON (includes references)"
     )
+    @click.option("--save-as-note", is_flag=True, help="Save response as a note")
+    @click.option("--note-title", default=None, help="Note title (use with --save-as-note)")
     @with_client
     def ask_cmd(
         ctx,
@@ -118,6 +120,8 @@ def register_chat_commands(cli):
         new_conversation,
         source_ids,
         json_output,
+        save_as_note,
+        note_title,
         client_auth,
     ):
         """Ask a notebook a question.
@@ -132,7 +136,8 @@ def register_chat_commands(cli):
           notebooklm ask --new "start fresh question"
           notebooklm ask -c <id> "continue this one"
           notebooklm ask -s src_001 -s src_002 "question about specific sources"
-          notebooklm ask "explain X" --json     # Get answer with source references
+          notebooklm ask "explain X" --json             # Get answer with source references
+          notebooklm ask "explain X" --save-as-note     # Save response as a note
         """
         nb_id = require_notebook(notebook_id)
 
@@ -168,16 +173,30 @@ def register_chat_commands(cli):
                     # Exclude raw_response from CLI output for brevity
                     del data["raw_response"]
                     json_output_response(data)
-                    return
-
-                console.print("[bold cyan]Answer:[/bold cyan]")
-                console.print(result.answer)
-                if result.is_follow_up:
-                    console.print(
-                        f"\n[dim]Conversation: {result.conversation_id} (turn {result.turn_number or '?'})[/dim]"
-                    )
+                    if not save_as_note:
+                        return
                 else:
-                    console.print(f"\n[dim]New conversation: {result.conversation_id}[/dim]")
+                    console.print("[bold cyan]Answer:[/bold cyan]")
+                    console.print(result.answer)
+                    if result.is_follow_up:
+                        console.print(
+                            f"\n[dim]Conversation: {result.conversation_id} (turn {result.turn_number or '?'})[/dim]"
+                        )
+                    else:
+                        console.print(f"\n[dim]New conversation: {result.conversation_id}[/dim]")
+
+                if save_as_note:
+                    if not result.answer:
+                        console.print("[yellow]Warning: No answer to save as note[/yellow]")
+                        return
+                    try:
+                        title = note_title or f"Chat: {question[:50]}"
+                        note = await client.notes.create(nb_id_resolved, title, result.answer)
+                        console.print(
+                            f"\n[dim]Saved as note: {note.title} ({note.id[:8]}...)[/dim]"
+                        )
+                    except Exception as e:
+                        console.print(f"[yellow]Warning: Failed to save note: {e}[/yellow]")
 
         return _run()
 
@@ -278,17 +297,30 @@ def register_chat_commands(cli):
         default=None,
         help="Notebook ID (uses current if not set)",
     )
-    @click.option("--limit", "-l", default=20, help="Number of messages")
+    @click.option("--limit", "-l", default=20, help="Number of conversations to show")
     @click.option("--clear", "clear_cache", is_flag=True, help="Clear local conversation cache")
+    @click.option("--save", "save_as_note", is_flag=True, help="Save history as a note")
+    @click.option(
+        "-c",
+        "--conversation-id",
+        default=None,
+        help="With --save: save only this specific conversation",
+    )
+    @click.option("-t", "--note-title", "note_title", default=None, help="Note title (with --save)")
     @with_client
-    def history_cmd(ctx, notebook_id, limit, clear_cache, client_auth):
-        """Get conversation history or clear local cache.
+    def history_cmd(
+        ctx, notebook_id, limit, clear_cache, save_as_note, conversation_id, note_title, client_auth
+    ):
+        """Get conversation history or save it as a note.
 
         \b
         Example:
-          notebooklm history              # Show history for current notebook
-          notebooklm history -n nb123     # Show history for specific notebook
-          notebooklm history --clear      # Clear local cache
+          notebooklm history                      # Show history for current notebook
+          notebooklm history -n nb123             # Show history for specific notebook
+          notebooklm history --clear              # Clear local cache
+          notebooklm history --save               # Save all history as a note
+          notebooklm history --save -c <id>       # Save one conversation as a note
+          notebooklm history --save --note-title "Summary"  # Save with custom title
         """
 
         async def _run():
@@ -303,28 +335,87 @@ def register_chat_commands(cli):
 
                 nb_id = require_notebook(notebook_id)
                 nb_id_resolved = await resolve_notebook_id(client, nb_id)
-                history = await client.chat.get_history(nb_id_resolved, limit=limit)
+                # When saving, fetch a large history to avoid truncating with the display limit
+                fetch_limit = 1000 if save_as_note else limit
+                history = await client.chat.get_history(nb_id_resolved, limit=fetch_limit)
+                conversations = history[0] if history and isinstance(history[0], list) else []
 
-                if history:
-                    console.print("[bold cyan]Conversation History:[/bold cyan]")
-                    try:
-                        conversations = history[0] if history else []
-                        if conversations:
-                            table = Table()
-                            table.add_column("#", style="dim")
-                            table.add_column("Conversation ID", style="cyan")
-                            for i, conv in enumerate(conversations, 1):
-                                conv_id = conv[0] if isinstance(conv, list) and conv else str(conv)
-                                table.add_row(str(i), conv_id)
-                            console.print(table)
-                            console.print(
-                                "\n[dim]Note: Only conversation IDs available. Use 'notebooklm ask -c <id>' to continue.[/dim]"
+                if save_as_note:
+                    if not conversations:
+                        raise click.ClickException(
+                            "No conversation history found for this notebook."
+                        )
+                    if conversation_id:
+                        conv = _find_conversation(conversations, conversation_id)
+                        if conv is None:
+                            raise click.ClickException(
+                                f"Conversation '{conversation_id}' not found. "
+                                "Run 'notebooklm history' to see available IDs."
                             )
-                        else:
-                            console.print("[yellow]No conversations found[/yellow]")
-                    except (IndexError, TypeError):
-                        console.print(history)
-                else:
+                        content = _format_single_conversation(conv)
+                        title = (
+                            note_title
+                            or f"Chat: {str(conv[1])[:50] if len(conv) > 1 and conv[1] else 'Conversation'}"
+                        )
+                    else:
+                        content = _format_all_conversations(conversations)
+                        title = note_title or "Chat History"
+                    note = await client.notes.create(nb_id_resolved, title, content)
+                    console.print(f"[green]Saved as note: {note.title} ({note.id[:8]}...)[/green]")
+                    return
+
+                if not conversations:
                     console.print("[yellow]No conversation history[/yellow]")
+                    return
+
+                console.print("[bold cyan]Conversation History:[/bold cyan]")
+                table = Table()
+                table.add_column("#", style="dim")
+                table.add_column("Conversation ID", style="cyan")
+                table.add_column("Question", style="white", max_width=40)
+                table.add_column("Answer preview", style="dim", max_width=40)
+                for i, conv in enumerate(conversations, 1):
+                    if not isinstance(conv, list) or len(conv) < 1:
+                        continue
+                    conv_id = str(conv[0])
+                    question = str(conv[1])[:40] if len(conv) > 1 and conv[1] else ""
+                    answer = str(conv[2])[:40] if len(conv) > 2 and conv[2] else ""
+                    table.add_row(str(i), conv_id, question, answer)
+                console.print(table)
+                console.print(
+                    "\n[dim]Use 'notebooklm ask -c <id>' to continue a conversation. "
+                    "Use 'notebooklm history --save' to save as a note.[/dim]"
+                )
 
         return _run()
+
+
+def _find_conversation(conversations: list, conversation_id: str) -> list | None:
+    """Find a conversation entry by ID."""
+    for conv in conversations:
+        if isinstance(conv, list) and conv and str(conv[0]) == conversation_id:
+            return conv
+    return None
+
+
+def _format_single_conversation(conv: list) -> str:
+    """Format one conversation as note content."""
+    question = str(conv[1]) if len(conv) > 1 and conv[1] else ""
+    answer = str(conv[2]) if len(conv) > 2 and conv[2] else ""
+    parts = []
+    if question:
+        parts.append(f"**Q:** {question}")
+    if answer:
+        parts.append(f"**A:** {answer}")
+    return "\n\n".join(parts)
+
+
+def _format_all_conversations(conversations: list) -> str:
+    """Format all conversations as note content."""
+    sections = []
+    for i, conv in enumerate(conversations, 1):
+        if not isinstance(conv, list) or not conv:
+            continue
+        section = f"## Conversation {i}\n\n{_format_single_conversation(conv)}"
+        sections.append(section)
+    return "\n\n---\n\n".join(sections)
