@@ -4,7 +4,6 @@ Provides operations for asking questions, managing conversations, and
 retrieving conversation history.
 """
 
-import asyncio
 import json
 import logging
 import os
@@ -65,7 +64,6 @@ class ChatAPI:
         question: str,
         source_ids: list[str] | None = None,
         conversation_id: str | None = None,
-        exchange_id: str | None = None,
     ) -> AskResult:
         """Ask the notebook a question.
 
@@ -74,11 +72,9 @@ class ChatAPI:
             question: The question to ask.
             source_ids: Specific source IDs to query. If None, uses all sources.
             conversation_id: Existing conversation ID for follow-up questions.
-            exchange_id: Exchange ID from previous response (enables server-side
-                context lookup for follow-ups without replaying history).
 
         Returns:
-            AskResult with answer, conversation_id, exchange_id, and turn info.
+            AskResult with answer, conversation_id, and turn info.
 
         Example:
             # New conversation
@@ -116,7 +112,7 @@ class ChatAPI:
             [2, None, [1], [1]],
             conversation_id,
             None,  # [5] - always null
-            exchange_id,  # [6] - None for new convs, exchange_id for follow-ups
+            None,  # [6] - always null
             notebook_id,  # [7] - required for server-side conversation persistence
             1,  # [8] - always 1
         ]
@@ -164,9 +160,7 @@ class ChatAPI:
                 original_error=e,
             ) from e
 
-        answer_text, references, new_exchange_id = self._parse_ask_response_with_references(
-            response.text
-        )
+        answer_text, references = self._parse_ask_response_with_references(response.text)
 
         turns = self._core.get_cached_conversation(conversation_id)
         if answer_text:
@@ -182,7 +176,6 @@ class ChatAPI:
             is_follow_up=not is_new_conversation,
             references=references,
             raw_response=response.text[:1000],
-            exchange_id=new_exchange_id,
         )
 
     async def get_conversation_turns(
@@ -214,11 +207,10 @@ class ChatAPI:
             source_path=f"/notebook/{notebook_id}",
         )
 
-    async def get_last_conversation_id(self, notebook_id: str) -> str | None:
+    async def get_conversation_id(self, notebook_id: str) -> str | None:
         """Get the most recent conversation ID from the API.
 
-        The underlying RPC (hPTbtc) only returns the last conversation ID,
-        not a full conversation list.
+        The underlying RPC (hPTbtc) returns the last conversation ID for a notebook.
 
         Args:
             notebook_id: The notebook ID.
@@ -226,81 +218,65 @@ class ChatAPI:
         Returns:
             The most recent conversation ID, or None if no conversations exist.
         """
-        ids = await self._get_conversation_ids(notebook_id, limit=1)
-        return ids[0] if ids else None
-
-    async def _get_conversation_ids(self, notebook_id: str, limit: int = 20) -> list[str]:
-        """Fetch up to ``limit`` conversation IDs for a notebook (newest-first).
-
-        Args:
-            notebook_id: The notebook ID.
-            limit: Maximum number of conversation IDs to retrieve.
-
-        Returns:
-            List of conversation ID strings, most recent first.
-        """
-        logger.debug("Getting conversation IDs for notebook %s (limit=%d)", notebook_id, limit)
-        params: list[Any] = [[], None, notebook_id, limit]
+        logger.debug("Getting conversation ID for notebook %s", notebook_id)
+        params: list[Any] = [[], None, notebook_id, 1]
         raw = await self._core.rpc_call(
             RPCMethod.GET_LAST_CONVERSATION_ID,
             params,
             source_path=f"/notebook/{notebook_id}",
         )
-        # Response structure: [[[conv_id_1], [conv_id_2], ...]]
-        ids: list[str] = []
+        # Response structure: [[[conv_id]]]
         if raw and isinstance(raw, list):
             for group in raw:
                 if isinstance(group, list):
                     for conv in group:
                         if isinstance(conv, list) and conv and isinstance(conv[0], str):
-                            ids.append(conv[0])
-        return ids
+                            return conv[0]
+            logger.debug(
+                "No conversation ID found in response (API structure may have changed): %s",
+                raw,
+            )
+        return None
 
     async def get_history(
-        self, notebook_id: str, limit: int = 100
-    ) -> list[tuple[str, list[tuple[str, str]]]]:
-        """Get conversation history grouped by conversation, newest-first.
-
-        Fetches all available conversations and their Q&A turns.
+        self,
+        notebook_id: str,
+        limit: int = 100,
+        conversation_id: str | None = None,
+    ) -> list[tuple[str, str]]:
+        """Get Q&A history for the most recent conversation.
 
         Args:
             notebook_id: The notebook ID.
-            limit: Maximum number of Q&A turns to retrieve per conversation.
+            limit: Maximum number of Q&A turns to retrieve.
+            conversation_id: Use this conversation ID instead of fetching it.
+                Defaults to the most recent conversation if not provided.
 
         Returns:
-            List of (conversation_id, qa_pairs) tuples, newest conversation first.
-            Each qa_pairs list is ordered oldest-first within the conversation.
+            List of (question, answer) pairs, oldest-first.
             Returns an empty list if no conversations exist.
         """
         logger.debug("Getting conversation history for notebook %s (limit=%d)", notebook_id, limit)
-        conv_ids = await self._get_conversation_ids(notebook_id)
-        if not conv_ids:
+        conv_id = conversation_id or await self.get_conversation_id(notebook_id)
+        if not conv_id:
             return []
 
-        all_turns = await asyncio.gather(
-            *[
-                self.get_conversation_turns(notebook_id, conv_id, limit=limit)
-                for conv_id in conv_ids
-            ],
-            return_exceptions=True,
-        )
-        result: list[tuple[str, list[tuple[str, str]]]] = []
-        for conv_id, turns_data in zip(conv_ids, all_turns, strict=True):
-            if isinstance(turns_data, Exception):
-                logger.warning("Failed to fetch turns for conversation %s: %s", conv_id, turns_data)
-                continue
-            # API returns individual turns newest-first: [A2, Q2, A1, Q1, ...]
-            # Reverse to chronological order [Q1, A1, Q2, A2, ...] so the
-            # Q→A forward-pairing parser works correctly.
-            if (
-                turns_data
-                and isinstance(turns_data, list)
-                and turns_data[0]
-                and isinstance(turns_data[0], list)
-            ):
-                turns_data = [list(reversed(turns_data[0]))]
-            result.append((conv_id, self._parse_turns_to_qa_pairs(turns_data)))
-        return result
+        try:
+            turns_data = await self.get_conversation_turns(notebook_id, conv_id, limit=limit)
+        except (ChatError, NetworkError) as e:
+            logger.warning("Failed to fetch conversation turns for %s: %s", notebook_id, e)
+            return []
+        # API returns individual turns newest-first: [A2, Q2, A1, Q1, ...]
+        # Reverse to chronological order [Q1, A1, Q2, A2, ...] so the
+        # Q→A forward-pairing parser works correctly.
+        if (
+            turns_data
+            and isinstance(turns_data, list)
+            and turns_data[0]
+            and isinstance(turns_data[0], list)
+        ):
+            turns_data = [list(reversed(turns_data[0]))]
+        return self._parse_turns_to_qa_pairs(turns_data)
 
     @staticmethod
     def _parse_turns_to_qa_pairs(turns_data: Any) -> list[tuple[str, str]]:
@@ -453,11 +429,11 @@ class ChatAPI:
 
     def _parse_ask_response_with_references(
         self, response_text: str
-    ) -> tuple[str, list[ChatReference], str | None]:
-        """Parse the streaming response to extract answer, references, and exchange ID.
+    ) -> tuple[str, list[ChatReference]]:
+        """Parse the streaming response to extract answer and references.
 
         Returns:
-            Tuple of (answer_text, list of ChatReference objects, exchange_id or None).
+            Tuple of (answer_text, list of ChatReference objects).
         """
 
         if response_text.startswith(")]}'"):
@@ -467,20 +443,17 @@ class ChatAPI:
         best_marked_answer = ""
         best_unmarked_answer = ""
         all_references: list[ChatReference] = []
-        found_exchange_id: str | None = None
 
         def process_chunk(json_str: str) -> None:
             """Process a JSON chunk, updating best answers and all_references."""
-            nonlocal best_marked_answer, best_unmarked_answer, found_exchange_id
-            text, is_answer, refs, exchange_id = self._extract_answer_and_refs_from_chunk(json_str)
+            nonlocal best_marked_answer, best_unmarked_answer
+            text, is_answer, refs = self._extract_answer_and_refs_from_chunk(json_str)
             if text:
                 if is_answer and len(text) > len(best_marked_answer):
                     best_marked_answer = text
                 elif not is_answer and len(text) > len(best_unmarked_answer):
                     best_unmarked_answer = text
             all_references.extend(refs)
-            if exchange_id and not found_exchange_id:
-                found_exchange_id = exchange_id
 
         i = 0
         while i < len(lines):
@@ -523,18 +496,17 @@ class ChatAPI:
             if ref.citation_number is None:
                 ref.citation_number = idx
 
-        return longest_answer, all_references, found_exchange_id
+        return longest_answer, all_references
 
     def _extract_answer_and_refs_from_chunk(
         self, json_str: str
-    ) -> tuple[str | None, bool, list[ChatReference], str | None]:
-        """Extract answer text, references, and exchange ID from a response chunk.
+    ) -> tuple[str | None, bool, list[ChatReference]]:
+        """Extract answer text and references from a response chunk.
 
         Response structure (discovered via reverse engineering):
         - first[0]: answer text
         - first[1]: None
-        - first[2]: [conversation_id, exchange_id, numeric_hash]
-                    exchange_id is the server-assigned UUID for this exchange turn
+        - first[2]: [conversation_id, numeric_hash]
         - first[3]: None
         - first[4]: Citation metadata
           - first[4][0]: Per-source citation positions with text spans
@@ -545,17 +517,17 @@ class ChatAPI:
             - cite[1][5][0][0][0]: parent SOURCE ID (this is the real source UUID)
 
         Returns:
-            Tuple of (text, is_answer, references, exchange_id).
+            Tuple of (text, is_answer, references).
         """
         refs: list[ChatReference] = []
 
         try:
             data = json.loads(json_str)
         except json.JSONDecodeError:
-            return None, False, refs, None
+            return None, False, refs
 
         if not isinstance(data, list):
-            return None, False, refs, None
+            return None, False, refs
 
         for item in data:
             if not isinstance(item, list) or len(item) < 3:
@@ -583,22 +555,12 @@ class ChatAPI:
                             and first[4][-1] == 1
                         )
 
-                        # Extract exchange_id from first[2][1]
-                        exchange_id = None
-                        if (
-                            len(first) > 2
-                            and isinstance(first[2], list)
-                            and len(first[2]) >= 2
-                            and isinstance(first[2][1], str)
-                        ):
-                            exchange_id = first[2][1]
-
                         refs = self._parse_citations(first)
-                        return text, is_answer, refs, exchange_id
+                        return text, is_answer, refs
             except json.JSONDecodeError:
                 continue
 
-        return None, False, refs, None
+        return None, False, refs
 
     def _parse_citations(self, first: list) -> list[ChatReference]:
         """Parse citation details from response structure.

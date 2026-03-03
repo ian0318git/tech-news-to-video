@@ -15,7 +15,6 @@ from notebooklm.cli.helpers import (
     # Auth helpers
     get_client,
     get_current_conversation,
-    get_current_exchange_id,
     # Context helpers
     get_current_notebook,
     get_source_type_display,
@@ -28,7 +27,6 @@ from notebooklm.cli.helpers import (
     require_notebook,
     run_async,
     set_current_conversation,
-    set_current_exchange_id,
     set_current_notebook,
     # Decorator
     with_client,
@@ -321,37 +319,14 @@ class TestContextManagement:
             result = get_current_notebook()
             assert result is None
 
-    def test_get_current_exchange_id_returns_none_when_missing(self, tmp_path):
+    def test_set_current_notebook_clears_conversation_on_switch(self, tmp_path):
         context_file = tmp_path / "context.json"
-        context_file.write_text('{"notebook_id": "nb_123"}')
-        with patch("notebooklm.cli.helpers.get_context_path", return_value=context_file):
-            assert get_current_exchange_id() is None
-
-    def test_set_and_get_current_exchange_id(self, tmp_path):
-        context_file = tmp_path / "context.json"
-        context_file.write_text('{"notebook_id": "nb_123"}')
-        with patch("notebooklm.cli.helpers.get_context_path", return_value=context_file):
-            set_current_exchange_id("exch-uuid-789")
-            assert get_current_exchange_id() == "exch-uuid-789"
-
-    def test_set_current_exchange_id_none_clears_it(self, tmp_path):
-        context_file = tmp_path / "context.json"
-        context_file.write_text('{"notebook_id": "nb_123", "exchange_id": "exch-uuid-789"}')
-        with patch("notebooklm.cli.helpers.get_context_path", return_value=context_file):
-            set_current_exchange_id(None)
-            assert get_current_exchange_id() is None
-
-    def test_set_current_notebook_clears_exchange_id_on_switch(self, tmp_path):
-        context_file = tmp_path / "context.json"
-        context_file.write_text(
-            '{"notebook_id": "nb_old", "conversation_id": "conv_1", "exchange_id": "exch_1"}'
-        )
+        context_file.write_text('{"notebook_id": "nb_old", "conversation_id": "conv_1"}')
         with patch("notebooklm.cli.helpers.get_context_path", return_value=context_file):
             set_current_notebook("nb_new", title="New Notebook")
             data = json.loads(context_file.read_text())
             assert data["notebook_id"] == "nb_new"
             assert "conversation_id" not in data
-            assert "exchange_id" not in data
 
 
 class TestRequireNotebook:

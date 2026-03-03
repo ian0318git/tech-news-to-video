@@ -1,7 +1,7 @@
 # RPC & UI Reference
 
 **Status:** Active
-**Last Updated:** 2026-01-18
+**Last Updated:** 2026-03-02
 **Source of Truth:** `src/notebooklm/rpc/types.py`
 **Purpose:** Complete reference for RPC methods, UI selectors, and payload structures
 
@@ -29,7 +29,7 @@
 | `R7cb6c` | CREATE_ARTIFACT | Unified artifact generation | `_artifacts.py` |
 | `gArtLc` | LIST_ARTIFACTS | List artifacts in a notebook | `_artifacts.py` |
 | `V5N4be` | DELETE_ARTIFACT | Delete artifact | `_artifacts.py` |
-| `hPTbtc` | GET_LAST_CONVERSATION_ID | Get most recent conversation ID | `_chat.py` |
+| `hPTbtc` | GET_CONVERSATION_ID | Get most recent conversation ID | `_chat.py` |
 | `khqZz` | GET_CONVERSATION_TURNS | Get Q&A turns for a conversation | `_chat.py` |
 | `CYK0Xb` | CREATE_NOTE | Create a note (placeholder) | `_notes.py` |
 | `cYAfTb` | UPDATE_NOTE | Update note content/title | `_notes.py` |
@@ -396,23 +396,24 @@ params = [
 ]
 ```
 
-### RPC: GET_LAST_CONVERSATION_ID (hPTbtc)
+### RPC: GET_CONVERSATION_ID (hPTbtc)
 
-**Source:** `_chat.py::get_last_conversation_id()`
+**Source:** `_chat.py::get_conversation_id()`
 
-Returns only the most recent conversation ID — not a full history list. Use
-`GET_CONVERSATION_TURNS` to fetch the actual messages for a given conversation.
+Returns the most recent conversation ID for a notebook. The server always returns
+exactly one ID regardless of the `limit` param. Use `GET_CONVERSATION_TURNS` to
+fetch the actual messages for the returned conversation.
 
 ```python
 params = [
     [],           # 0: Empty sources array
     None,         # 1
     notebook_id,  # 2
-    limit,        # 3: Max conversations (e.g., 20)
+    1,            # 3: Limit (server ignores this; always returns one ID)
 ]
 ```
 
-**Response:** `[[[conv_id], [conv_id], ...]]` — each entry is a list containing only the conversation ID.
+**Response:** `[[[conv_id]]]` — single entry list containing the conversation ID.
 
 ---
 

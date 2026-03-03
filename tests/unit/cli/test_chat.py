@@ -1,6 +1,5 @@
 """Tests for chat CLI commands (save-as-note, enhanced history)."""
 
-import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -27,13 +26,13 @@ def make_ask_result(answer="The answer is 42.") -> AskResult:
     )
 
 
-# get_history returns list of (conversation_id, [(question, answer), ...])
+# get_history returns flat list of (question, answer) pairs
 MOCK_CONV_ID = "conv-abc123"
 MOCK_QA_PAIRS = [
     ("What is ML?", "ML is a type of AI."),
     ("Explain AI", "AI stands for Artificial Intelligence."),
 ]
-MOCK_HISTORY = [(MOCK_CONV_ID, MOCK_QA_PAIRS)]
+MOCK_HISTORY = MOCK_QA_PAIRS
 
 
 @pytest.fixture
@@ -59,7 +58,7 @@ class TestAskSaveAsNote:
         with patch_client_for_module("chat") as mock_client_cls:
             mock_client = create_mock_client()
             mock_client.chat.ask = AsyncMock(return_value=make_ask_result())
-            mock_client.chat.get_last_conversation_id = AsyncMock(return_value=None)
+            mock_client.chat.get_conversation_id = AsyncMock(return_value=None)
             mock_client.notes.create = AsyncMock(return_value=make_note())
             mock_client_cls.return_value = mock_client
 
@@ -79,7 +78,7 @@ class TestAskSaveAsNote:
         with patch_client_for_module("chat") as mock_client_cls:
             mock_client = create_mock_client()
             mock_client.chat.ask = AsyncMock(return_value=make_ask_result())
-            mock_client.chat.get_last_conversation_id = AsyncMock(return_value=None)
+            mock_client.chat.get_conversation_id = AsyncMock(return_value=None)
             mock_client.notes.create = AsyncMock(return_value=make_note(title="My Title"))
             mock_client_cls.return_value = mock_client
 
@@ -107,7 +106,7 @@ class TestAskSaveAsNote:
         with patch_client_for_module("chat") as mock_client_cls:
             mock_client = create_mock_client()
             mock_client.chat.ask = AsyncMock(return_value=make_ask_result())
-            mock_client.chat.get_last_conversation_id = AsyncMock(return_value=None)
+            mock_client.chat.get_conversation_id = AsyncMock(return_value=None)
             mock_client.notes.create = AsyncMock(return_value=make_note())
             mock_client_cls.return_value = mock_client
 
@@ -124,6 +123,7 @@ class TestHistoryCommand:
         with patch_client_for_module("chat") as mock_client_cls:
             mock_client = create_mock_client()
             mock_client.chat.get_history = AsyncMock(return_value=MOCK_HISTORY)
+            mock_client.chat.get_conversation_id = AsyncMock(return_value=MOCK_CONV_ID)
             mock_client_cls.return_value = mock_client
 
             with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:
@@ -137,6 +137,7 @@ class TestHistoryCommand:
     def test_history_save_creates_note(self, runner, mock_auth):
         with patch_client_for_module("chat") as mock_client_cls:
             mock_client = create_mock_client()
+            mock_client.chat.get_conversation_id = AsyncMock(return_value=MOCK_CONV_ID)
             mock_client.chat.get_history = AsyncMock(return_value=MOCK_HISTORY)
             mock_client.notes.create = AsyncMock(return_value=make_note())
             mock_client_cls.return_value = mock_client
@@ -151,6 +152,7 @@ class TestHistoryCommand:
     def test_history_empty_shows_message(self, runner, mock_auth):
         with patch_client_for_module("chat") as mock_client_cls:
             mock_client = create_mock_client()
+            mock_client.chat.get_conversation_id = AsyncMock(return_value=None)
             mock_client.chat.get_history = AsyncMock(return_value=[])
             mock_client_cls.return_value = mock_client
 
@@ -165,6 +167,7 @@ class TestHistoryCommand:
         with patch_client_for_module("chat") as mock_client_cls:
             mock_client = create_mock_client()
             mock_client.chat.get_history = AsyncMock(return_value=MOCK_HISTORY)
+            mock_client.chat.get_conversation_id = AsyncMock(return_value=MOCK_CONV_ID)
             mock_client_cls.return_value = mock_client
 
             with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:
@@ -176,19 +179,18 @@ class TestHistoryCommand:
 
             data = json.loads(result.output)
             assert data["notebook_id"] == "nb_123"
-            assert len(data["conversations"]) == 1
-            conv = data["conversations"][0]
-            assert conv["conversation_id"] == MOCK_CONV_ID
-            assert conv["count"] == 2
-            assert conv["qa_pairs"][0]["turn"] == 1
-            assert conv["qa_pairs"][0]["question"] == "What is ML?"
-            assert conv["qa_pairs"][0]["answer"] == "ML is a type of AI."
-            assert conv["qa_pairs"][1]["turn"] == 2
+            assert data["conversation_id"] == MOCK_CONV_ID
+            assert data["count"] == 2
+            assert data["qa_pairs"][0]["turn"] == 1
+            assert data["qa_pairs"][0]["question"] == "What is ML?"
+            assert data["qa_pairs"][0]["answer"] == "ML is a type of AI."
+            assert data["qa_pairs"][1]["turn"] == 2
 
     def test_history_json_empty(self, runner, mock_auth):
         with patch_client_for_module("chat") as mock_client_cls:
             mock_client = create_mock_client()
             mock_client.chat.get_history = AsyncMock(return_value=[])
+            mock_client.chat.get_conversation_id = AsyncMock(return_value=None)
             mock_client_cls.return_value = mock_client
 
             with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:
@@ -199,7 +201,8 @@ class TestHistoryCommand:
             import json
 
             data = json.loads(result.output)
-            assert data["conversations"] == []
+            assert data["qa_pairs"] == []
+            assert data["count"] == 0
 
     def test_history_show_all_outputs_full_text(self, runner, mock_auth):
         long_q = "Q" * 100
@@ -208,7 +211,8 @@ class TestHistoryCommand:
 
         with patch_client_for_module("chat") as mock_client_cls:
             mock_client = create_mock_client()
-            mock_client.chat.get_history = AsyncMock(return_value=[(MOCK_CONV_ID, pairs)])
+            mock_client.chat.get_history = AsyncMock(return_value=pairs)
+            mock_client.chat.get_conversation_id = AsyncMock(return_value=MOCK_CONV_ID)
             mock_client_cls.return_value = mock_client
 
             with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:
@@ -222,26 +226,28 @@ class TestHistoryCommand:
             assert long_a in flat
 
 
-class TestAskExchangeIdPersistence:
-    def test_ask_cmd_saves_exchange_id_to_context(self, runner, mock_auth, tmp_path):
-        """ask command should persist exchange_id from result into context.json."""
+class TestAskServerResumed:
+    def test_ask_shows_resumed_when_no_local_conv_but_server_has_one(
+        self, runner, mock_auth, tmp_path
+    ):
+        """When context has no conv ID but server returns one, output should say 'Resumed'."""
         context_file = tmp_path / "context.json"
         context_file.write_text('{"notebook_id": "nb_123"}')
 
+        # is_follow_up=True because ask() was called with a conversation_id from server
         ask_result = AskResult(
             answer="The answer.",
-            conversation_id="conv-uuid-123",
+            conversation_id="conv-server-abc",
             turn_number=1,
-            is_follow_up=False,
+            is_follow_up=True,
             references=[],
             raw_response="",
-            exchange_id="exch-uuid-456",
         )
 
         with patch_client_for_module("chat") as mock_client_cls:
             mock_client = create_mock_client()
             mock_client.chat.ask = AsyncMock(return_value=ask_result)
-            mock_client.chat.get_last_conversation_id = AsyncMock(return_value=None)
+            mock_client.chat.get_conversation_id = AsyncMock(return_value="conv-server-abc")
             mock_client_cls.return_value = mock_client
 
             with (
@@ -249,27 +255,24 @@ class TestAskExchangeIdPersistence:
                 patch("notebooklm.cli.helpers.get_context_path", return_value=context_file),
             ):
                 mock_fetch.return_value = ("csrf", "session")
-                result = runner.invoke(cli, ["ask", "-n", "nb_123", "test question"])
+                result = runner.invoke(cli, ["ask", "-n", "nb_123", "question"])
 
         assert result.exit_code == 0, result.output
-        ctx = json.loads(context_file.read_text())
-        assert ctx.get("exchange_id") == "exch-uuid-456"
+        assert "Resumed conversation:" in result.output
+        assert "(turn 1)" not in result.output
 
-    def test_ask_cmd_clears_exchange_id_on_new_conversation(self, runner, mock_auth, tmp_path):
-        """--new flag should clear exchange_id from context."""
+    def test_ask_shows_turn_number_for_local_follow_up(self, runner, mock_auth, tmp_path):
+        """When context has a local conv ID, follow-up should show turn number."""
         context_file = tmp_path / "context.json"
-        context_file.write_text(
-            '{"notebook_id": "nb_123", "exchange_id": "old-exch-id", "conversation_id": "old-conv"}'
-        )
+        context_file.write_text('{"notebook_id": "nb_123", "conversation_id": "conv-local-abc"}')
 
         ask_result = AskResult(
-            answer="Fresh answer.",
-            conversation_id="conv-new-123",
-            turn_number=1,
-            is_follow_up=False,
+            answer="The answer.",
+            conversation_id="conv-local-abc",
+            turn_number=2,
+            is_follow_up=True,
             references=[],
             raw_response="",
-            exchange_id="new-exch-uuid",
         )
 
         with patch_client_for_module("chat") as mock_client_cls:
@@ -282,9 +285,8 @@ class TestAskExchangeIdPersistence:
                 patch("notebooklm.cli.helpers.get_context_path", return_value=context_file),
             ):
                 mock_fetch.return_value = ("csrf", "session")
-                result = runner.invoke(cli, ["ask", "-n", "nb_123", "--new", "fresh question"])
+                result = runner.invoke(cli, ["ask", "-n", "nb_123", "follow-up question"])
 
         assert result.exit_code == 0, result.output
-        ctx = json.loads(context_file.read_text())
-        # After --new, exchange_id should be the NEW one from the response
-        assert ctx.get("exchange_id") == "new-exch-uuid"
+        assert "Conversation: conv-local-abc (turn 2)" in result.output
+        assert "Resumed" not in result.output

@@ -216,23 +216,10 @@ class TestFormatHelpers:
 class TestDetermineConversationId:
     """Tests for _determine_conversation_id CLI helper."""
 
-    def test_new_conversation_returns_none(self):
-        from notebooklm.cli.chat import _determine_conversation_id
-
-        result = _determine_conversation_id(
-            new_conversation=True,
-            explicit_conversation_id=None,
-            explicit_notebook_id=None,
-            resolved_notebook_id="nb_123",
-            json_output=True,
-        )
-        assert result is None
-
     def test_explicit_conversation_id_used(self):
         from notebooklm.cli.chat import _determine_conversation_id
 
         result = _determine_conversation_id(
-            new_conversation=False,
             explicit_conversation_id="conv_explicit",
             explicit_notebook_id=None,
             resolved_notebook_id="nb_123",
@@ -245,7 +232,6 @@ class TestDetermineConversationId:
 
         with patch("notebooklm.cli.chat.get_current_notebook", return_value="nb_old"):
             result = _determine_conversation_id(
-                new_conversation=False,
                 explicit_conversation_id=None,
                 explicit_notebook_id="nb_new",
                 resolved_notebook_id="nb_new",
@@ -261,7 +247,6 @@ class TestDetermineConversationId:
             patch("notebooklm.cli.chat.get_current_conversation", return_value="conv_cached"),
         ):
             result = _determine_conversation_id(
-                new_conversation=False,
                 explicit_conversation_id=None,
                 explicit_notebook_id="nb_123",
                 resolved_notebook_id="nb_123",
@@ -274,7 +259,6 @@ class TestDetermineConversationId:
 
         with patch("notebooklm.cli.chat.get_current_conversation", return_value="conv_cached"):
             result = _determine_conversation_id(
-                new_conversation=False,
                 explicit_conversation_id=None,
                 explicit_notebook_id=None,
                 resolved_notebook_id="nb_123",
@@ -291,7 +275,7 @@ class TestGetLatestConversationFromServer:
         from notebooklm.cli.chat import _get_latest_conversation_from_server
 
         client = MagicMock()
-        client.chat.get_last_conversation_id = AsyncMock(return_value="conv_from_server")
+        client.chat.get_conversation_id = AsyncMock(return_value="conv_from_server")
 
         result = await _get_latest_conversation_from_server(client, "nb_123", json_output=True)
         assert result == "conv_from_server"
@@ -301,7 +285,7 @@ class TestGetLatestConversationFromServer:
         from notebooklm.cli.chat import _get_latest_conversation_from_server
 
         client = MagicMock()
-        client.chat.get_last_conversation_id = AsyncMock(return_value=None)
+        client.chat.get_conversation_id = AsyncMock(return_value=None)
 
         result = await _get_latest_conversation_from_server(client, "nb_123", json_output=True)
         assert result is None
@@ -311,7 +295,7 @@ class TestGetLatestConversationFromServer:
         from notebooklm.cli.chat import _get_latest_conversation_from_server
 
         client = MagicMock()
-        client.chat.get_last_conversation_id = AsyncMock(side_effect=RuntimeError("Network error"))
+        client.chat.get_conversation_id = AsyncMock(side_effect=RuntimeError("Network error"))
 
         result = await _get_latest_conversation_from_server(client, "nb_123", json_output=True)
         assert result is None

@@ -716,25 +716,6 @@ class TestAskResult:
 
         assert result.references == []
 
-    def test_ask_result_has_exchange_id_field(self):
-        result = AskResult(
-            answer="The answer",
-            conversation_id="conv-uuid-here",
-            turn_number=1,
-            is_follow_up=False,
-        )
-        assert result.exchange_id is None  # optional, defaults to None
-
-    def test_ask_result_exchange_id_can_be_set(self):
-        result = AskResult(
-            answer="The answer",
-            conversation_id="conv-uuid-here",
-            turn_number=1,
-            is_follow_up=False,
-            exchange_id="exch-uuid-here",
-        )
-        assert result.exchange_id == "exch-uuid-here"
-
 
 class TestChatReference:
     def test_creation_minimal(self):

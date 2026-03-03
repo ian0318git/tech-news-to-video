@@ -16,14 +16,12 @@ from ..types import ChatMode
 from .helpers import (
     console,
     get_current_conversation,
-    get_current_exchange_id,
     get_current_notebook,
     json_output_response,
     require_notebook,
     resolve_notebook_id,
     resolve_source_ids,
     set_current_conversation,
-    set_current_exchange_id,
     with_client,
 )
 
@@ -32,7 +30,6 @@ logger = logging.getLogger(__name__)
 
 def _determine_conversation_id(
     *,
-    new_conversation: bool,
     explicit_conversation_id: str | None,
     explicit_notebook_id: str | None,
     resolved_notebook_id: str,
@@ -40,14 +37,9 @@ def _determine_conversation_id(
 ) -> str | None:
     """Determine which conversation ID to use for the ask command.
 
-    Returns None if a new conversation should be started, otherwise returns
+    Returns None if no cached conversation exists, otherwise returns
     the conversation ID to continue.
     """
-    if new_conversation:
-        if not json_output:
-            console.print("[dim]Starting new conversation...[/dim]")
-        return None
-
     if explicit_conversation_id:
         return explicit_conversation_id
 
@@ -69,7 +61,7 @@ async def _get_latest_conversation_from_server(
     Returns None if unavailable or empty.
     """
     try:
-        conv_id = await client.chat.get_last_conversation_id(notebook_id)
+        conv_id = await client.chat.get_conversation_id(notebook_id)
         if conv_id:
             if not json_output:
                 console.print(f"[dim]Continuing conversation {conv_id[:8]}...[/dim]")
@@ -98,7 +90,6 @@ def register_chat_commands(cli):
         help="Notebook ID (uses current if not set)",
     )
     @click.option("--conversation-id", "-c", default=None, help="Continue a specific conversation")
-    @click.option("--new", "new_conversation", is_flag=True, help="Start a new conversation")
     @click.option(
         "--source",
         "-s",
@@ -117,7 +108,6 @@ def register_chat_commands(cli):
         question,
         notebook_id,
         conversation_id,
-        new_conversation,
         source_ids,
         json_output,
         save_as_note,
@@ -133,7 +123,6 @@ def register_chat_commands(cli):
         \b
         Example:
           notebooklm ask "what are the main themes?"
-          notebooklm ask --new "start fresh question"
           notebooklm ask -c <id> "continue this one"
           notebooklm ask -s src_001 -s src_002 "question about specific sources"
           notebooklm ask "explain X" --json             # Get answer with source references
@@ -145,25 +134,20 @@ def register_chat_commands(cli):
             async with NotebookLMClient(client_auth) as client:
                 nb_id_resolved = await resolve_notebook_id(client, nb_id)
                 effective_conv_id = _determine_conversation_id(
-                    new_conversation=new_conversation,
                     explicit_conversation_id=conversation_id,
                     explicit_notebook_id=notebook_id,
                     resolved_notebook_id=nb_id_resolved,
                     json_output=json_output,
                 )
 
-                # Only use stored exchange_id when conv_id came from local cache
-                # (not from explicit --conversation-id flag, which may not match)
-                effective_exchange_id: str | None = None
-                if effective_conv_id and not conversation_id:
-                    effective_exchange_id = get_current_exchange_id()
-                elif not effective_conv_id:
+                resumed_from_server = False
+                if not effective_conv_id:
                     # If no conversation ID yet, try to get the most recent one from server
-                    if not new_conversation:
-                        effective_conv_id = await _get_latest_conversation_from_server(
-                            client, nb_id_resolved, json_output
-                        )
-                    # Don't use stored exchange_id for server-derived conversations
+                    effective_conv_id = await _get_latest_conversation_from_server(
+                        client, nb_id_resolved, json_output
+                    )
+                    if effective_conv_id:
+                        resumed_from_server = True
 
                 sources = await resolve_source_ids(client, nb_id_resolved, source_ids)
                 result = await client.chat.ask(
@@ -171,14 +155,10 @@ def register_chat_commands(cli):
                     question,
                     source_ids=sources,
                     conversation_id=effective_conv_id,
-                    exchange_id=effective_exchange_id,
                 )
 
                 if result.conversation_id:
                     set_current_conversation(result.conversation_id)
-                    set_current_exchange_id(result.exchange_id)
-                else:
-                    set_current_exchange_id(None)
 
                 if json_output:
                     from dataclasses import asdict
@@ -192,7 +172,11 @@ def register_chat_commands(cli):
                 else:
                     console.print("[bold cyan]Answer:[/bold cyan]")
                     console.print(result.answer)
-                    if result.is_follow_up:
+                    if result.is_follow_up and resumed_from_server:
+                        console.print(
+                            f"\n[dim]Resumed conversation: {result.conversation_id}[/dim]"
+                        )
+                    elif result.is_follow_up:
                         console.print(
                             f"\n[dim]Conversation: {result.conversation_id} (turn {result.turn_number or '?'})[/dim]"
                         )
@@ -356,14 +340,17 @@ def register_chat_commands(cli):
 
                 nb_id = require_notebook(notebook_id)
                 nb_id_resolved = await resolve_notebook_id(client, nb_id)
-                conversations = await client.chat.get_history(nb_id_resolved, limit=limit)
+                conv_id = await client.chat.get_conversation_id(nb_id_resolved)
+                qa_pairs = await client.chat.get_history(
+                    nb_id_resolved, limit=limit, conversation_id=conv_id
+                )
 
                 if save_as_note:
-                    if not conversations:
+                    if not qa_pairs:
                         raise click.ClickException(
                             "No conversation history found for this notebook."
                         )
-                    content = _format_conversations(conversations)
+                    content = _format_history(qa_pairs)
                     title = note_title or "Chat History"
                     note = await client.notes.create(nb_id_resolved, title, content)
                     console.print(f"[green]Saved as note: {note.title} ({note.id[:8]}...)[/green]")
@@ -372,44 +359,39 @@ def register_chat_commands(cli):
                 if json_output:
                     data = {
                         "notebook_id": nb_id_resolved,
-                        "conversations": [
-                            {
-                                "conversation_id": conv_id,
-                                "count": len(qa_pairs),
-                                "qa_pairs": [
-                                    {"turn": i, "question": q, "answer": a}
-                                    for i, (q, a) in enumerate(qa_pairs, 1)
-                                ],
-                            }
-                            for conv_id, qa_pairs in conversations
+                        "conversation_id": conv_id,
+                        "count": len(qa_pairs),
+                        "qa_pairs": [
+                            {"turn": i, "question": q, "answer": a}
+                            for i, (q, a) in enumerate(qa_pairs, 1)
                         ],
                     }
                     json_output_response(data)
                     return
 
-                if not conversations:
+                if not qa_pairs:
                     console.print("[yellow]No conversation history[/yellow]")
                     return
 
                 console.print("[bold cyan]Conversation History:[/bold cyan]")
 
                 if show_all:
-                    for conv_id, qa_pairs in conversations:
+                    if conv_id:
                         console.print(f"\n[bold]── {conv_id} ──[/bold]")
-                        for i, (question, answer) in enumerate(qa_pairs, 1):
-                            console.print(f"[bold]#{i} Q:[/bold] {question}")
-                            console.print(f"   A: {answer}\n")
+                    for i, (question, answer) in enumerate(qa_pairs, 1):
+                        console.print(f"[bold]#{i} Q:[/bold] {question}")
+                        console.print(f"   A: {answer}\n")
                     return
 
-                for conv_id, qa_pairs in conversations:
+                if conv_id:
                     console.print(f"\n[dim]── {conv_id} ──[/dim]")
-                    table = Table()
-                    table.add_column("#", style="dim", width=4)
-                    table.add_column("Question", style="white", max_width=50)
-                    table.add_column("Answer preview", style="dim", max_width=50)
-                    for i, (question, answer) in enumerate(qa_pairs, 1):
-                        table.add_row(str(i), question[:50], answer[:50])
-                    console.print(table)
+                table = Table()
+                table.add_column("#", style="dim", width=4)
+                table.add_column("Question", style="white", max_width=50)
+                table.add_column("Answer preview", style="dim", max_width=50)
+                for i, (question, answer) in enumerate(qa_pairs, 1):
+                    table.add_row(str(i), question[:50], answer[:50])
+                console.print(table)
                 console.print("\n[dim]Use 'notebooklm history --save' to save as a note.[/dim]")
 
         return _run()
@@ -425,12 +407,9 @@ def _format_single_qa(question: str, answer: str) -> str:
     return "\n\n".join(parts)
 
 
-def _format_conversations(conversations: list[tuple[str, list[tuple[str, str]]]]) -> str:
-    """Format conversation history preserving conversation boundaries."""
-    conv_sections = []
-    for conv_id, qa_pairs in conversations:
-        turns = []
-        for i, (question, answer) in enumerate(qa_pairs, 1):
-            turns.append(f"### Turn {i}\n\n{_format_single_qa(question, answer)}")
-        conv_sections.append(f"## Conversation {conv_id}\n\n" + "\n\n---\n\n".join(turns))
-    return "\n\n===\n\n".join(conv_sections)
+def _format_history(qa_pairs: list[tuple[str, str]]) -> str:
+    """Format Q&A history as note content."""
+    turns = []
+    for i, (question, answer) in enumerate(qa_pairs, 1):
+        turns.append(f"### Turn {i}\n\n{_format_single_qa(question, answer)}")
+    return "\n\n---\n\n".join(turns)

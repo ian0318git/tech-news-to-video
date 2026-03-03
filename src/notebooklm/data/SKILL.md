@@ -135,14 +135,13 @@ Before starting workflows, verify the CLI is ready:
 | Check research status | `notebooklm research status` |
 | Wait for research | `notebooklm research wait --import-all` |
 | Chat | `notebooklm ask "question"` |
-| Chat (new conversation) | `notebooklm ask "question" --new` |
 | Chat (specific sources) | `notebooklm ask "question" -s src_id1 -s src_id2` |
 | Chat (with references) | `notebooklm ask "question" --json` |
 | Chat (save answer as note) | `notebooklm ask "question" --save-as-note` |
 | Chat (save with title) | `notebooklm ask "question" --save-as-note --note-title "Title"` |
 | Show conversation history | `notebooklm history` |
 | Save all history as note | `notebooklm history --save` |
-| Save one conversation as note | `notebooklm history --save -c <conversation_id>` |
+| Continue specific conversation | `notebooklm ask "question" -c <conversation_id>` |
 | Save history with title | `notebooklm history --save --note-title "My Research"` |
 | Get source fulltext | `notebooklm source fulltext <source_id>` |
 | Get source guide | `notebooklm source guide <source_id>` |
@@ -172,7 +171,7 @@ Before starting workflows, verify the CLI is ready:
 | Get language | `notebooklm language get` |
 | Set language | `notebooklm language set zh_Hans` |
 
-**Parallel safety:** Use explicit notebook IDs in parallel workflows. Commands supporting `-n` shorthand: `artifact wait`, `source wait`, `research wait/status`, `download *`. Download commands also support `-a/--artifact`. Other commands use `--notebook`. For chat, use `--new` to start fresh conversations (avoids conversation ID conflicts).
+**Parallel safety:** Use explicit notebook IDs in parallel workflows. Commands supporting `-n` shorthand: `artifact wait`, `source wait`, `research wait/status`, `download *`. Download commands also support `-a/--artifact`. Other commands use `--notebook`. For chat, use `-c <conversation_id>` to target a specific conversation.
 
 **Partial IDs:** Use first 6+ characters of UUIDs. Must be unique prefix (fails if ambiguous). Works for: `use`, `delete`, `wait` commands. For automation, prefer full UUIDs to avoid ambiguity.
 

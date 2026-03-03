@@ -12,13 +12,13 @@ class TestChatAPI:
     """Integration tests for the ChatAPI."""
 
     @pytest.mark.asyncio
-    async def test_get_last_conversation_id(
+    async def test_get_conversation_id(
         self,
         auth_tokens,
         httpx_mock: HTTPXMock,
         build_rpc_response,
     ):
-        """Test get_last_conversation_id returns the most recent conversation ID."""
+        """Test get_conversation_id returns the most recent conversation ID."""
         response = build_rpc_response(
             RPCMethod.GET_LAST_CONVERSATION_ID,
             [[["conv_001"]]],
@@ -26,7 +26,7 @@ class TestChatAPI:
         httpx_mock.add_response(content=response.encode())
 
         async with NotebookLMClient(auth_tokens) as client:
-            result = await client.chat.get_last_conversation_id("nb_123")
+            result = await client.chat.get_conversation_id("nb_123")
 
         assert result == "conv_001"
         request = httpx_mock.get_request()
@@ -39,8 +39,8 @@ class TestChatAPI:
         httpx_mock: HTTPXMock,
         build_rpc_response,
     ):
-        """Test get_history returns Q&A pairs from the last conversation."""
-        # First call: get_last_conversation_id
+        """Test get_history returns flat Q&A pairs from the most recent conversation."""
+        # First call: get_conversation_id
         id_response = build_rpc_response(
             RPCMethod.GET_LAST_CONVERSATION_ID,
             [[["conv_001"]]],
@@ -62,96 +62,12 @@ class TestChatAPI:
         httpx_mock.add_response(content=turns_response.encode())
 
         async with NotebookLMClient(auth_tokens) as client:
-            conversations = await client.chat.get_history("nb_123")
+            qa_pairs = await client.chat.get_history("nb_123")
 
-        assert len(conversations) == 1
-        conv_id, qa_pairs = conversations[0]
-        assert conv_id == "conv_001"
         # get_history reverses API order to return oldest-first
         assert len(qa_pairs) == 2
         assert qa_pairs[0] == ("First question?", "Answer to first question.")
         assert qa_pairs[1] == ("Second question?", "Answer to second question.")
-
-    @pytest.mark.asyncio
-    async def test_get_history_multiple_conversations(
-        self,
-        auth_tokens,
-        httpx_mock: HTTPXMock,
-        build_rpc_response,
-    ):
-        """Test get_history returns multiple conversations when the API provides them."""
-        # First call: _get_conversation_ids returns two IDs
-        id_response = build_rpc_response(
-            RPCMethod.GET_LAST_CONVERSATION_ID,
-            [[["conv_001"], ["conv_002"]]],
-        )
-        # Parallel turn fetches (asyncio.gather) — order matches conv_ids
-        turns_conv1 = build_rpc_response(
-            RPCMethod.GET_CONVERSATION_TURNS,
-            [
-                [
-                    [None, None, 2, None, [["Answer A."]]],
-                    [None, None, 1, "Question A?"],
-                ]
-            ],
-        )
-        turns_conv2 = build_rpc_response(
-            RPCMethod.GET_CONVERSATION_TURNS,
-            [
-                [
-                    [None, None, 2, None, [["Answer B."]]],
-                    [None, None, 1, "Question B?"],
-                ]
-            ],
-        )
-        httpx_mock.add_response(content=id_response.encode())
-        httpx_mock.add_response(content=turns_conv1.encode())
-        httpx_mock.add_response(content=turns_conv2.encode())
-
-        async with NotebookLMClient(auth_tokens) as client:
-            conversations = await client.chat.get_history("nb_123")
-
-        assert len(conversations) == 2
-        conv_id1, qa1 = conversations[0]
-        conv_id2, qa2 = conversations[1]
-        assert conv_id1 == "conv_001"
-        assert conv_id2 == "conv_002"
-        assert qa1 == [("Question A?", "Answer A.")]
-        assert qa2 == [("Question B?", "Answer B.")]
-
-    @pytest.mark.asyncio
-    async def test_get_history_skips_failed_conversations(
-        self,
-        auth_tokens,
-        httpx_mock: HTTPXMock,
-        build_rpc_response,
-    ):
-        """Test get_history skips individual conversations whose turn fetch fails."""
-        id_response = build_rpc_response(
-            RPCMethod.GET_LAST_CONVERSATION_ID,
-            [[["conv_001"], ["conv_002"]]],
-        )
-        turns_conv1 = build_rpc_response(
-            RPCMethod.GET_CONVERSATION_TURNS,
-            [
-                [
-                    [None, None, 2, None, [["Good answer."]]],
-                    [None, None, 1, "Good question?"],
-                ]
-            ],
-        )
-        httpx_mock.add_response(content=id_response.encode())
-        httpx_mock.add_response(content=turns_conv1.encode())
-        httpx_mock.add_response(status_code=500)  # conv_002 fails
-
-        async with NotebookLMClient(auth_tokens) as client:
-            conversations = await client.chat.get_history("nb_123")
-
-        # Only the successful conversation is returned
-        assert len(conversations) == 1
-        conv_id, qa_pairs = conversations[0]
-        assert conv_id == "conv_001"
-        assert qa_pairs == [("Good question?", "Good answer.")]
 
     @pytest.mark.asyncio
     async def test_get_conversation_turns(
@@ -228,9 +144,9 @@ class TestChatAPI:
         httpx_mock.add_response(content=response.encode())
 
         async with NotebookLMClient(auth_tokens) as client:
-            result = await client.chat.get_history("nb_123")
+            qa_pairs = await client.chat.get_history("nb_123")
 
-        assert result == []
+        assert qa_pairs == []
 
     @pytest.mark.asyncio
     async def test_configure_default_mode(

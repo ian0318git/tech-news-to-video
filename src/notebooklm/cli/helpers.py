@@ -177,19 +177,11 @@ def set_current_notebook(
 ):
     """Set the current notebook context.
 
-    If switching to a different notebook, the cached conversation_id is cleared
-    since conversations are notebook-specific.
+    conversation_id is never preserved — the server owns the canonical ID per
+    notebook, and a stale local value would silently use the wrong UUID.
     """
     context_file = get_context_path()
     context_file.parent.mkdir(parents=True, exist_ok=True)
-
-    # Read existing context if available
-    current_context: dict = {}
-    if context_file.exists():
-        try:
-            current_context = json.loads(context_file.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            pass  # Start with fresh context if file is corrupt
 
     data: dict[str, str | bool] = {"notebook_id": notebook_id}
     if title:
@@ -198,12 +190,6 @@ def set_current_notebook(
         data["is_owner"] = is_owner
     if created_at:
         data["created_at"] = created_at
-
-    # Preserve conversation_id and exchange_id only if staying in the same notebook
-    if current_context.get("notebook_id") == notebook_id:
-        for key in ("conversation_id", "exchange_id"):
-            if key in current_context:
-                data[key] = current_context[key]
 
     context_file.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
@@ -223,16 +209,6 @@ def get_current_conversation() -> str | None:
 def set_current_conversation(conversation_id: str | None):
     """Set or clear the current conversation ID in context."""
     _set_context_value("conversation_id", conversation_id)
-
-
-def get_current_exchange_id() -> str | None:
-    """Get the current exchange ID from context."""
-    return _get_context_value("exchange_id")
-
-
-def set_current_exchange_id(exchange_id: str | None) -> None:
-    """Set or clear the current exchange ID in context."""
-    _set_context_value("exchange_id", exchange_id)
 
 
 def validate_id(entity_id: str, entity_name: str = "ID") -> str:

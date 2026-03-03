@@ -278,7 +278,7 @@ class TestAnswerExtraction:
             ]
         ]
 
-        answer, refs, _ = chat_api._parse_ask_response_with_references(
+        answer, refs = chat_api._parse_ask_response_with_references(
             self._build_response(inner_data)
         )
         assert answer == "This is a valid answer from NotebookLM about the topic."
@@ -295,7 +295,7 @@ class TestAnswerExtraction:
             ]
         ]
 
-        answer, refs, _ = chat_api._parse_ask_response_with_references(
+        answer, refs = chat_api._parse_ask_response_with_references(
             self._build_response(inner_data)
         )
         assert answer == "The answer text that should be extracted regardless of marker."
@@ -315,7 +315,7 @@ class TestAnswerExtraction:
             ]
         ]
 
-        answer, refs, _ = chat_api._parse_ask_response_with_references(
+        answer, refs = chat_api._parse_ask_response_with_references(
             self._build_response(inner_data)
         )
         assert answer == "OK"
@@ -332,7 +332,7 @@ class TestAnswerExtraction:
             ]
         ]
 
-        answer, refs, _ = chat_api._parse_ask_response_with_references(
+        answer, refs = chat_api._parse_ask_response_with_references(
             self._build_response(inner_data)
         )
         assert answer == "An answer with no type_info metadata at all in the response."
@@ -360,7 +360,7 @@ class TestAnswerExtraction:
             ]
         ]
 
-        answer, refs, _ = chat_api._parse_ask_response_with_references(
+        answer, refs = chat_api._parse_ask_response_with_references(
             self._build_response(unmarked_data, marked_data)
         )
         assert answer == "The actual short answer."
@@ -408,7 +408,7 @@ class TestAnswerExtraction:
             ]
         ]
 
-        answer, refs, _ = chat_api._parse_ask_response_with_references(
+        answer, refs = chat_api._parse_ask_response_with_references(
             self._build_response(empty_data, none_data, int_data, valid_data)
         )
         assert answer == "The valid answer after invalid chunks."
@@ -434,7 +434,7 @@ class TestAnswerExtraction:
             ]
         ]
 
-        answer, refs, _ = chat_api._parse_ask_response_with_references(
+        answer, refs = chat_api._parse_ask_response_with_references(
             self._build_response(unmarked_data, marked_data)
         )
         assert answer == "This is the real answer with proper marker."
