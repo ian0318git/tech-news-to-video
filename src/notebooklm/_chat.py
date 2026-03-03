@@ -160,7 +160,13 @@ class ChatAPI:
                 original_error=e,
             ) from e
 
-        answer_text, references = self._parse_ask_response_with_references(response.text)
+        answer_text, references, server_conv_id = self._parse_ask_response_with_references(
+            response.text
+        )
+        # Prefer the conversation ID returned by the server over our locally generated UUID,
+        # so that get_conversation_id() and get_conversation_turns() stay in sync.
+        if server_conv_id:
+            conversation_id = server_conv_id
 
         turns = self._core.get_cached_conversation(conversation_id)
         if answer_text:
@@ -429,11 +435,12 @@ class ChatAPI:
 
     def _parse_ask_response_with_references(
         self, response_text: str
-    ) -> tuple[str, list[ChatReference]]:
-        """Parse the streaming response to extract answer and references.
+    ) -> tuple[str, list[ChatReference], str | None]:
+        """Parse the streaming response to extract answer, references, and conversation ID.
 
         Returns:
-            Tuple of (answer_text, list of ChatReference objects).
+            Tuple of (answer_text, list of ChatReference objects, server_conversation_id).
+            server_conversation_id is None if not present in the response.
         """
 
         if response_text.startswith(")]}'"):
@@ -443,17 +450,20 @@ class ChatAPI:
         best_marked_answer = ""
         best_unmarked_answer = ""
         all_references: list[ChatReference] = []
+        server_conv_id: str | None = None
 
         def process_chunk(json_str: str) -> None:
             """Process a JSON chunk, updating best answers and all_references."""
-            nonlocal best_marked_answer, best_unmarked_answer
-            text, is_answer, refs = self._extract_answer_and_refs_from_chunk(json_str)
+            nonlocal best_marked_answer, best_unmarked_answer, server_conv_id
+            text, is_answer, refs, conv_id = self._extract_answer_and_refs_from_chunk(json_str)
             if text:
                 if is_answer and len(text) > len(best_marked_answer):
                     best_marked_answer = text
                 elif not is_answer and len(text) > len(best_unmarked_answer):
                     best_unmarked_answer = text
             all_references.extend(refs)
+            if conv_id:
+                server_conv_id = conv_id
 
         i = 0
         while i < len(lines):
@@ -496,12 +506,12 @@ class ChatAPI:
             if ref.citation_number is None:
                 ref.citation_number = idx
 
-        return longest_answer, all_references
+        return longest_answer, all_references, server_conv_id
 
     def _extract_answer_and_refs_from_chunk(
         self, json_str: str
-    ) -> tuple[str | None, bool, list[ChatReference]]:
-        """Extract answer text and references from a response chunk.
+    ) -> tuple[str | None, bool, list[ChatReference], str | None]:
+        """Extract answer text, references, and conversation ID from a response chunk.
 
         Response structure (discovered via reverse engineering):
         - first[0]: answer text
@@ -516,18 +526,21 @@ class ChatAPI:
             - cite[1][4]: array of [text_passage, char_positions] items
             - cite[1][5][0][0][0]: parent SOURCE ID (this is the real source UUID)
 
+        When item[2] is null and item[5] contains a UserDisplayableError, raises
+        ChatError with a rate-limit message.
+
         Returns:
-            Tuple of (text, is_answer, references).
+            Tuple of (text, is_answer, references, server_conversation_id).
         """
         refs: list[ChatReference] = []
 
         try:
             data = json.loads(json_str)
         except json.JSONDecodeError:
-            return None, False, refs
+            return None, False, refs, None
 
         if not isinstance(data, list):
-            return None, False, refs
+            return None, False, refs, None
 
         for item in data:
             if not isinstance(item, list) or len(item) < 3:
@@ -537,6 +550,9 @@ class ChatAPI:
 
             inner_json = item[2]
             if not isinstance(inner_json, str):
+                # item[2] is null — check item[5] for a server-side error payload
+                if len(item) > 5 and isinstance(item[5], list):
+                    self._raise_if_rate_limited(item[5])
                 continue
 
             try:
@@ -555,12 +571,46 @@ class ChatAPI:
                             and first[4][-1] == 1
                         )
 
+                        # Extract the server-assigned conversation ID from first[2]
+                        server_conv_id: str | None = None
+                        if (
+                            len(first) > 2
+                            and isinstance(first[2], list)
+                            and first[2]
+                            and isinstance(first[2][0], str)
+                        ):
+                            server_conv_id = first[2][0]
+
                         refs = self._parse_citations(first)
-                        return text, is_answer, refs
+                        return text, is_answer, refs, server_conv_id
             except json.JSONDecodeError:
                 continue
 
-        return None, False, refs
+        return None, False, refs, None
+
+    def _raise_if_rate_limited(self, error_payload: list) -> None:
+        """Raise ChatError if the payload contains a UserDisplayableError.
+
+        Args:
+            error_payload: The item[5] list from a wrb.fr response chunk.
+
+        Raises:
+            ChatError: When a UserDisplayableError is detected.
+        """
+        try:
+            # Structure: [8, None, [["type.googleapis.com/.../UserDisplayableError", ...]]]
+            if len(error_payload) > 2 and isinstance(error_payload[2], list):
+                for entry in error_payload[2]:
+                    if isinstance(entry, list) and entry and isinstance(entry[0], str):
+                        if "UserDisplayableError" in entry[0]:
+                            raise ChatError(
+                                "Chat request was rate limited or rejected by the API. "
+                                "Wait a few seconds and try again."
+                            )
+        except ChatError:
+            raise
+        except Exception:
+            pass  # Ignore parse failures; let normal empty-answer handling proceed
 
     def _parse_citations(self, first: list) -> list[ChatReference]:
         """Parse citation details from response structure.

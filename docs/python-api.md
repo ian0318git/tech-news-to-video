@@ -1,7 +1,7 @@
 # Python API Reference
 
 **Status:** Active
-**Last Updated:** 2026-01-20
+**Last Updated:** 2026-03-02
 
 Complete reference for the `notebooklm` Python library.
 
@@ -486,7 +486,8 @@ else:
 |--------|------------|---------|-------------|
 | `ask(notebook_id, question, ...)` | `str, str, ...` | `AskResult` | Ask a question |
 | `configure(notebook_id, ...)` | `str, ...` | `bool` | Set chat persona |
-| `get_history(notebook_id)` | `str` | `list[ConversationTurn]` | Get conversation |
+| `get_history(notebook_id, limit=100, conversation_id=None)` | `str, int, str` | `list[tuple[str, str]]` | Get Q&A pairs from most recent conversation |
+| `get_conversation_id(notebook_id)` | `str` | `str \| None` | Get most recent conversation ID from server |
 
 **ask() Parameters:**
 ```python
