@@ -221,6 +221,11 @@ def register_session_commands(cli):
 
             input("[Press ENTER when logged in] ")
 
+            # Force .google.com cookies for regional users (e.g. UK lands on
+            # .google.co.uk). Use "load" not "networkidle" to avoid analytics hangs.
+            page.goto("https://accounts.google.com/", wait_until="load")
+            page.goto("https://notebooklm.google.com/", wait_until="load")
+
             current_url = page.url
             if "notebooklm.google.com" not in current_url:
                 console.print(f"[yellow]Warning: Current URL is {current_url}[/yellow]")
