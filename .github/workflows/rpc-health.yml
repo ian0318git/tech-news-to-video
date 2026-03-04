@@ -44,7 +44,7 @@ jobs:
         NOTEBOOKLM_READ_ONLY_NOTEBOOK_ID: ${{ secrets.NOTEBOOKLM_READ_ONLY_NOTEBOOK_ID }}
         NOTEBOOKLM_GENERATION_NOTEBOOK_ID: ${{ secrets.NOTEBOOKLM_GENERATION_NOTEBOOK_ID }}
       run: |
-        set -o pipefail
+        set +e
         python scripts/check_rpc_health.py --full 2>&1 | tee health-report.txt
         exit_code=${PIPESTATUS[0]}
         echo "exit_code=${exit_code}" >> "$GITHUB_OUTPUT"
