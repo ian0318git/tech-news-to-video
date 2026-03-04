@@ -254,13 +254,15 @@ class TestGetNotebookDescription:
     async def test_get_notebook_description_parses_response(self, mock_client):
         """Test get_notebook_description parses full response."""
         mock_response = [
-            ["This notebook explores **AI** and **machine learning**."],
             [
+                ["This notebook explores **AI** and **machine learning**."],
                 [
-                    ["What is the future of AI?", "Create a detailed briefing..."],
-                    ["How does ML work?", "Explain the fundamentals..."],
-                ]
-            ],
+                    [
+                        ["What is the future of AI?", "Create a detailed briefing..."],
+                        ["How does ML work?", "Explain the fundamentals..."],
+                    ]
+                ],
+            ]
         ]
         mock_client._core.rpc_call = AsyncMock(return_value=mock_response)
 

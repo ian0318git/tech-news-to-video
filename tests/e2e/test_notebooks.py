@@ -60,7 +60,7 @@ class TestNotebookDescription:
         description = await client.notebooks.get_description(read_only_notebook_id)
 
         assert isinstance(description, NotebookDescription)
-        assert description.summary is not None
+        assert description.summary, "Expected non-empty summary from get_description"
         assert isinstance(description.suggested_topics, list)
 
 
@@ -92,8 +92,7 @@ class TestNotebookSummary:
     async def test_get_summary(self, client, read_only_notebook_id):
         """Test getting notebook summary."""
         summary = await client.notebooks.get_summary(read_only_notebook_id)
-        # Summary may be empty string if not generated yet
-        assert isinstance(summary, str)
+        assert summary, "Expected non-empty summary from get_summary"
 
     @pytest.mark.asyncio
     @pytest.mark.readonly

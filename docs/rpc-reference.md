@@ -928,11 +928,15 @@ await rpc_call(
 
 # Response structure:
 # [
-#     [summary_text],           # [0][0]: Summary string
-#     [[                        # [1][0]: Suggested topics array
-#         [question, prompt],   # Each topic has question and prompt
-#         ...
-#     ]],
+#     [                             # [0]: Outer container
+#         [summary_text],           # [0][0]: Summary wrapped in list; text at [0][0][0]
+#         [[                        # [0][1][0]: Suggested topics array
+#             [question, prompt],   # Each topic has question and prompt
+#             ...
+#         ]],
+#         null, null, null,
+#         [[question, score], ...], # [0][5]: Topics with relevance scores
+#     ]
 # ]
 ```
 
