@@ -469,14 +469,16 @@ def with_client(f):
             return elapsed
 
         try:
-            auth = get_auth_tokens(ctx)
+            try:
+                auth = get_auth_tokens(ctx)
+            except FileNotFoundError:
+                log_result("failed", "not authenticated")
+                handle_auth_error(json_output)
+                return  # unreachable (handle_auth_error raises SystemExit), but keeps mypy happy
             coro = f(ctx, *args, client_auth=auth, **kwargs)
             result = run_async(coro)
             log_result("completed")
             return result
-        except FileNotFoundError:
-            log_result("failed", "not authenticated")
-            handle_auth_error(json_output)
         except Exception as e:
             log_result("failed", str(e))
             if json_output:

@@ -447,6 +447,36 @@ class TestWithClientDecorator:
         assert result.exit_code == 1
         assert "login" in result.output.lower()
 
+    def test_decorator_file_not_found_in_command_not_treated_as_auth_error(self):
+        """Test that FileNotFoundError from command logic is NOT treated as auth error.
+
+        Regression test for GitHub issue #153: `source add --type file` with a
+        missing file was incorrectly showing 'Not logged in' because the
+        with_client decorator caught all FileNotFoundError as auth errors.
+        """
+        import click
+        from click.testing import CliRunner
+
+        @click.command()
+        @with_client
+        def test_cmd(ctx, client_auth):
+            async def _run():
+                raise FileNotFoundError("File not found: /tmp/nonexistent.pdf")
+
+            return _run()
+
+        runner = CliRunner()
+        with patch("notebooklm.cli.helpers.load_auth_from_storage") as mock_load:
+            mock_load.return_value = {"SID": "test"}
+            with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(test_cmd)
+
+        assert result.exit_code == 1
+        # Should show the actual file error, NOT an auth error
+        assert "File not found" in result.output
+        assert "login" not in result.output.lower()
+
     def test_decorator_handles_exception_non_json(self):
         """Test error handling in non-JSON mode"""
         import click
