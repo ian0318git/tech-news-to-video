@@ -244,6 +244,7 @@ __all__ = [
     # Dataclasses
     "Notebook",
     "NotebookDescription",
+    "NotebookMetadata",
     "SuggestedTopic",
     "Source",
     "SourceFulltext",
@@ -387,6 +388,42 @@ class NotebookDescription:
             summary=data.get("summary", ""),
             suggested_topics=topics,
         )
+
+
+@dataclass
+class NotebookMetadata:
+    """Combined notebook metadata with sources list.
+
+    This is a composite type that extends Notebook with a list of
+    simplified source information for export/overview purposes.
+
+    Attributes:
+        id: Notebook ID.
+        title: Notebook title.
+        created_at: When the notebook was created.
+        is_owner: Whether the current user is the owner.
+        sources: List of simplified source information.
+    """
+
+    id: str
+    title: str
+    created_at: datetime | None = None
+    is_owner: bool = True
+    sources: list[dict] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for JSON serialization.
+
+        Returns:
+            Dictionary with all fields in the format specified in the issue.
+        """
+        return {
+            "id": self.id,
+            "title": self.title,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "is_owner": self.is_owner,
+            "sources": self.sources,
+        }
 
 
 # =============================================================================
