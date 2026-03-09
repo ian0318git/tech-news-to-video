@@ -5,7 +5,7 @@ from typing import Any
 
 from ._core import ClientCore
 from .rpc import RPCMethod
-from .types import Notebook, NotebookDescription, SuggestedTopic
+from .types import Notebook, NotebookDescription, NotebookMetadata, SuggestedTopic
 
 logger = logging.getLogger(__name__)
 
@@ -200,6 +200,56 @@ class NotebooksAPI:
                 pass
 
         return NotebookDescription(summary=summary, suggested_topics=suggested_topics)
+
+    async def get_metadata(self, notebook_id: str) -> NotebookMetadata:
+        """Get notebook metadata with sources list.
+
+        This combines notebook details with a simplified sources list,
+        useful for export/overview of notebook contents.
+
+        Args:
+            notebook_id: The notebook ID.
+
+        Returns:
+            NotebookMetadata with notebook details and simplified sources list.
+
+        Example:
+            metadata = await client.notebooks.get_metadata(notebook_id)
+            print(f"Notebook: {metadata.title}")
+            print(f"Sources: {len(metadata.sources)}")
+            # Export to JSON
+            import json
+            print(json.dumps(metadata.to_dict(), indent=2))
+        """
+        # Get notebook details
+        notebook = await self.get(notebook_id)
+
+        # Get sources list
+        from ._sources import SourcesAPI
+
+        sources_api = SourcesAPI(self._core)
+        sources = await sources_api.list(notebook_id)
+
+        # Build simplified source info
+        simplified_sources = []
+        for source in sources:
+            source_info = {
+                "type": str(source.kind),  # SourceType is a str enum
+            }
+            if source.title:
+                source_info["title"] = source.title
+            if source.url:
+                source_info["url"] = source.url
+            simplified_sources.append(source_info)
+
+        # Build metadata object
+        return NotebookMetadata(
+            id=notebook.id,
+            title=notebook.title,
+            created_at=notebook.created_at,
+            is_owner=notebook.is_owner,
+            sources=simplified_sources,
+        )
 
     async def remove_from_recent(self, notebook_id: str) -> None:
         """Remove a notebook from the recently viewed list.
