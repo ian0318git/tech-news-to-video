@@ -6,6 +6,7 @@ Commands:
     delete     Delete a notebook
     rename     Rename a notebook
     summary    Get notebook summary with AI-generated insights
+    metadata   Export notebook metadata with sources list
 
 Note: Sharing commands moved to 'share' command group.
 """
@@ -196,5 +197,87 @@ def register_notebook_commands(cli):
                             console.print(f"  {i}. {topic.question}")
                 else:
                     console.print("[yellow]No summary available[/yellow]")
+
+        return _run()
+
+    @cli.command("metadata")
+    @click.option(
+        "-n",
+        "--notebook",
+        "notebook_id",
+        default=None,
+        help="Notebook ID (uses current if not set). Supports partial IDs.",
+    )
+    @click.option(
+        "--json", "json_output", is_flag=True, default=True, help="Output as JSON (default: True)"
+    )
+    @click.option(
+        "--no-json",
+        "human_output",
+        is_flag=True,
+        help="Output in human-readable format instead of JSON",
+    )
+    @with_client
+    def metadata_cmd(ctx, notebook_id, json_output, human_output, client_auth):
+        """Export notebook metadata with sources list.
+
+        Outputs notebook details (id, title, created_at, is_owner) along with
+        a simplified list of sources (type, title, url).
+
+        By default, outputs as JSON for easy parsing and export.
+        Use --no-json for human-readable text format.
+
+        NOTEBOOK_ID supports partial matching (e.g., 'abc' matches 'abc123...').
+
+        \b
+        Examples:
+          notebooklm metadata              # JSON for current notebook
+          notebooklm metadata -n abc       # JSON for notebook starting with 'abc'
+          notebooklm metadata --no-json    # Human-readable format
+          notebooklm metadata -n abc --no-json  # Human-readable for specific notebook
+        """
+        notebook_id = require_notebook(notebook_id)
+
+        async def _run():
+            async with NotebookLMClient(client_auth) as client:
+                # If --no-json flag is set, use human-readable format
+                output_format = "human" if human_output else "json"
+
+                # Resolve partial ID
+                resolved_id = await resolve_notebook_id(client, notebook_id)
+
+                # Get metadata
+                metadata = await client.notebooks.get_metadata(resolved_id)
+
+                if output_format == "json":
+                    # JSON output (default)
+                    data = metadata.to_dict()
+                    json_output_response(data)
+                else:
+                    # Human-readable output
+                    console.print(f"[bold cyan]Notebook:[/bold cyan] {metadata.title}")
+                    console.print(f"[dim]ID:[/dim] {metadata.id}")
+                    if metadata.created_at:
+                        console.print(
+                            f"[dim]Created:[/dim] {metadata.created_at.strftime('%Y-%m-%d %H:%M')}"
+                        )
+                    owner_status = "Owner" if metadata.is_owner else "Shared"
+                    console.print(f"[dim]Access:[/dim] {owner_status}")
+
+                    console.print(f"\n[bold]Sources ({len(metadata.sources)}):[/bold]")
+                    if not metadata.sources:
+                        console.print("[dim]  No sources[/dim]")
+                    else:
+                        for i, source in enumerate(metadata.sources, 1):
+                            source_type = source.get("type", "unknown")
+                            title = source.get("title", "(untitled)")
+                            url = source.get("url", "")
+
+                            # Format source line
+                            if url:
+                                console.print(f"  {i}. [{source_type}] {title}")
+                                console.print(f"     {url}")
+                            else:
+                                console.print(f"  {i}. [{source_type}] {title}")
 
         return _run()
