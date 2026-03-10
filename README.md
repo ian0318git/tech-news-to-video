@@ -144,6 +144,7 @@ notebooklm download video ./overview.mp4
 notebooklm download quiz --format markdown ./quiz.md
 notebooklm download flashcards --format json ./cards.json
 notebooklm download slide-deck ./slides.pdf
+notebooklm download infographic ./infographic.png
 notebooklm download mind-map ./mindmap.json
 notebooklm download data-table ./data.csv
 ```
