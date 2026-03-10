@@ -425,35 +425,48 @@ class NotebookDescription:
 class NotebookMetadata:
     """Combined notebook metadata with sources list.
 
-    This is a composite type that extends Notebook with a list of
-    simplified source information for export/overview purposes.
+    This composes a Notebook with a list of simplified source information
+    for export/overview purposes.
 
     Attributes:
-        id: Notebook ID.
-        title: Notebook title.
-        created_at: When the notebook was created.
-        is_owner: Whether the current user is the owner.
+        notebook: The notebook object with all its details.
         sources: List of simplified source information.
     """
 
-    id: str
-    title: str
-    created_at: datetime | None = None
-    is_owner: bool = True
-    sources: list[dict] = field(default_factory=list)
+    notebook: Notebook
+    sources: list[SourceSummary] = field(default_factory=list)
+
+    @property
+    def id(self) -> str:
+        """Get notebook ID."""
+        return self.notebook.id
+
+    @property
+    def title(self) -> str:
+        """Get notebook title."""
+        return self.notebook.title
+
+    @property
+    def created_at(self) -> datetime | None:
+        """Get creation timestamp."""
+        return self.notebook.created_at
+
+    @property
+    def is_owner(self) -> bool:
+        """Get owner status."""
+        return self.notebook.is_owner
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization.
 
-        Returns:
-            Dictionary with all fields in the format specified in the issue.
+        Flattens notebook fields for backward compatibility with issue spec.
         """
         return {
             "id": self.id,
             "title": self.title,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "is_owner": self.is_owner,
-            "sources": self.sources,
+            "sources": [s.to_dict() for s in self.sources],
         }
 
 
