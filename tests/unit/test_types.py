@@ -882,3 +882,127 @@ class TestSourceFulltext:
         assert len(matches) == 1
         context, pos = matches[0]
         assert pos == 19
+
+
+class TestSourceSummary:
+    """Tests for SourceSummary dataclass."""
+
+    def test_to_dict_with_all_fields(self):
+        """Test serialization with all fields present."""
+        from notebooklm.types import SourceSummary, SourceType
+
+        summary = SourceSummary(
+            kind=SourceType.PDF,
+            title="Test PDF",
+            url="https://example.com/test.pdf",
+        )
+
+        result = summary.to_dict()
+        assert result == {
+            "type": "pdf",
+            "title": "Test PDF",
+            "url": "https://example.com/test.pdf",
+        }
+
+    def test_to_dict_with_missing_fields(self):
+        """Test serialization with missing optional fields."""
+        from notebooklm.types import SourceSummary, SourceType
+
+        summary = SourceSummary(kind=SourceType.PASTED_TEXT)
+
+        result = summary.to_dict()
+        assert result == {
+            "type": "pasted_text",
+            "title": None,
+            "url": None,
+        }
+
+    def test_to_dict_consistent_schema(self):
+        """Test that schema is always consistent (all keys present)."""
+        from notebooklm.types import SourceSummary, SourceType
+
+        # All keys should be present even when values are None
+        summary1 = SourceSummary(kind=SourceType.PDF, title="test.pdf")
+        summary2 = SourceSummary(kind=SourceType.WEB_PAGE, url="https://example.com")
+
+        dict1 = summary1.to_dict()
+        dict2 = summary2.to_dict()
+
+        # Both should have the same keys
+        assert set(dict1.keys()) == set(dict2.keys())
+        assert set(dict1.keys()) == {"type", "title", "url"}
+
+
+class TestNotebookMetadata:
+    """Tests for NotebookMetadata dataclass."""
+
+    def test_to_dict_serialization(self):
+        """Test serialization to dictionary format."""
+        from datetime import datetime
+
+        from notebooklm.types import Notebook, NotebookMetadata, SourceSummary, SourceType
+
+        notebook = Notebook(
+            id="nb_123",
+            title="Test Notebook",
+            created_at=datetime(2024, 1, 1, 12, 0),
+            is_owner=True,
+        )
+        metadata = NotebookMetadata(
+            notebook=notebook,
+            sources=[
+                SourceSummary(kind=SourceType.PDF, title="test.pdf"),
+                SourceSummary(kind=SourceType.WEB_PAGE, title="Example", url="https://example.com"),
+            ],
+        )
+
+        result = metadata.to_dict()
+        assert result == {
+            "id": "nb_123",
+            "title": "Test Notebook",
+            "created_at": "2024-01-01T12:00:00",
+            "is_owner": True,
+            "sources": [
+                {"type": "pdf", "title": "test.pdf", "url": None},
+                {"type": "web_page", "title": "Example", "url": "https://example.com"},
+            ],
+        }
+
+    def test_properties_proxy_to_notebook(self):
+        """Test that properties proxy to the underlying Notebook."""
+        from datetime import datetime
+
+        from notebooklm.types import Notebook, NotebookMetadata
+
+        notebook = Notebook(
+            id="nb_456",
+            title="Proxy Test",
+            created_at=datetime(2024, 2, 1),
+            is_owner=False,
+        )
+        metadata = NotebookMetadata(notebook=notebook)
+
+        assert metadata.id == "nb_456"
+        assert metadata.title == "Proxy Test"
+        assert metadata.created_at == datetime(2024, 2, 1)
+        assert metadata.is_owner is False
+
+    def test_to_dict_with_none_created_at(self):
+        """Test serialization when created_at is None."""
+        from notebooklm.types import Notebook, NotebookMetadata
+
+        notebook = Notebook(id="nb_789", title="No Timestamp", created_at=None)
+        metadata = NotebookMetadata(notebook=notebook, sources=[])
+
+        result = metadata.to_dict()
+        assert result["created_at"] is None
+
+    def test_empty_sources_list(self):
+        """Test metadata with empty sources list."""
+        from notebooklm.types import Notebook, NotebookMetadata
+
+        notebook = Notebook(id="nb_empty", title="Empty Notebook")
+        metadata = NotebookMetadata(notebook=notebook, sources=[])
+
+        assert len(metadata.sources) == 0
+        assert metadata.to_dict()["sources"] == []
