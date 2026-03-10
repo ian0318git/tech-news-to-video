@@ -209,52 +209,45 @@ def register_notebook_commands(cli):
         help="Notebook ID (uses current if not set). Supports partial IDs.",
     )
     @click.option(
-        "--json", "json_output", is_flag=True, default=True, help="Output as JSON (default: True)"
-    )
-    @click.option(
-        "--no-json",
-        "human_output",
+        "--json",
+        "json_output",
         is_flag=True,
-        help="Output in human-readable format instead of JSON",
+        help="Output as JSON (default: human-readable)",
     )
     @with_client
-    def metadata_cmd(ctx, notebook_id, json_output, human_output, client_auth):
+    def metadata_cmd(ctx, notebook_id, json_output, client_auth):
         """Export notebook metadata with sources list.
 
         Outputs notebook details (id, title, created_at, is_owner) along with
         a simplified list of sources (type, title, url).
 
-        By default, outputs as JSON for easy parsing and export.
-        Use --no-json for human-readable text format.
+        By default, outputs in human-readable format. Use --json for machine parsing.
 
         NOTEBOOK_ID supports partial matching (e.g., 'abc' matches 'abc123...').
 
         \b
         Examples:
-          notebooklm metadata              # JSON for current notebook
-          notebooklm metadata -n abc       # JSON for notebook starting with 'abc'
-          notebooklm metadata --no-json    # Human-readable format
-          notebooklm metadata -n abc --no-json  # Human-readable for specific notebook
+          notebooklm metadata              # Human-readable for current notebook
+          notebooklm metadata -n abc       # Human-readable for notebook starting with 'abc'
+          notebooklm metadata --json       # JSON output
+          notebooklm metadata -n abc --json  # JSON for specific notebook
         """
         notebook_id = require_notebook(notebook_id)
 
         async def _run():
             async with NotebookLMClient(client_auth) as client:
-                # If --no-json flag is set, use human-readable format
-                output_format = "human" if human_output else "json"
-
                 # Resolve partial ID
                 resolved_id = await resolve_notebook_id(client, notebook_id)
 
-                # Get metadata
-                metadata = await client.notebooks.get_metadata(resolved_id)
+                # Get metadata (use client method, not notebooks.get_metadata)
+                metadata = await client.get_notebook_metadata(resolved_id)
 
-                if output_format == "json":
-                    # JSON output (default)
+                if json_output:
+                    # JSON output
                     data = metadata.to_dict()
                     json_output_response(data)
                 else:
-                    # Human-readable output
+                    # Human-readable output (default)
                     console.print(f"[bold cyan]Notebook:[/bold cyan] {metadata.title}")
                     console.print(f"[dim]ID:[/dim] {metadata.id}")
                     if metadata.created_at:
@@ -269,15 +262,12 @@ def register_notebook_commands(cli):
                         console.print("[dim]  No sources[/dim]")
                     else:
                         for i, source in enumerate(metadata.sources, 1):
-                            source_type = source.get("type", "unknown")
-                            title = source.get("title", "(untitled)")
-                            url = source.get("url", "")
+                            source_type = source.kind.value
+                            title = source.title or "(untitled)"
 
-                            # Format source line
-                            if url:
-                                console.print(f"  {i}. [{source_type}] {title}")
-                                console.print(f"     {url}")
-                            else:
-                                console.print(f"  {i}. [{source_type}] {title}")
+                            # Always print the source line
+                            console.print(f"  {i}. [{source_type}] {title}")
+                            if source.url:
+                                console.print(f"     {source.url}")
 
         return _run()
