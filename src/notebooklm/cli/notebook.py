@@ -265,8 +265,14 @@ def register_notebook_commands(cli):
                             source_type = source.kind.value
                             title = source.title or "(untitled)"
 
-                            # Always print the source line
-                            console.print(f"  {i}. [{source_type}] {title}")
+                            # Always print the source line (use Text to avoid Rich markup interpretation)
+                            from rich.text import Text
+
+                            console.print(
+                                Text(f"  {i}. "),
+                                Text(f"[{source_type}]", style="default"),
+                                Text(f" {title}"),
+                            )
                             if source.url:
                                 console.print(f"     {source.url}")
 

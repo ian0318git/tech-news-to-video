@@ -647,17 +647,28 @@ class TestNotebookMetadata:
                 title="Test Notebook",
                 created_at=datetime(2024, 1, 1),
             )
+            # Override notebooks.list to return only our test notebook (avoid partial ID conflicts)
+            mock_client.notebooks.list = AsyncMock(return_value=[notebook])
+
             metadata = NotebookMetadata(
                 notebook=notebook,
                 sources=[
                     SourceSummary(kind=SourceType.PDF, title="test.pdf"),
                 ],
             )
-            mock_client.get_notebook_metadata = AsyncMock(return_value=metadata)
+
+            # Use side_effect to avoid potential pickling issues with enums
+            async def return_metadata(nb_id):
+                return metadata
+
+            mock_client.get_notebook_metadata = AsyncMock(side_effect=return_metadata)
             mock_client.notebooks.get = AsyncMock(return_value=notebook)
             mock_client_cls.return_value = mock_client
 
-            with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:
+            with (
+                patch("notebooklm.cli.helpers.get_current_notebook", return_value="nb_1"),
+                patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch,
+            ):
                 mock_fetch.return_value = ("csrf", "session")
                 result = runner.invoke(cli, ["metadata"])
 
@@ -674,19 +685,31 @@ class TestNotebookMetadata:
         with patch_main_cli_client() as mock_client_cls:
             mock_client = create_mock_client()
             notebook = Notebook(id="nb_1", title="Test Notebook")
+            # Override notebooks.list to return only our test notebook
+            mock_client.notebooks.list = AsyncMock(return_value=[notebook])
+
             metadata = NotebookMetadata(
                 notebook=notebook,
                 sources=[SourceSummary(kind=SourceType.PDF, title="test.pdf")],
             )
-            mock_client.get_notebook_metadata = AsyncMock(return_value=metadata)
+
+            # Use side_effect to avoid potential pickling issues with enums
+            async def return_metadata(nb_id):
+                return metadata
+
+            mock_client.get_notebook_metadata = AsyncMock(side_effect=return_metadata)
             mock_client.notebooks.get = AsyncMock(return_value=notebook)
             mock_client_cls.return_value = mock_client
 
-            with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:
+            with (
+                patch("notebooklm.cli.helpers.get_current_notebook", return_value="nb_1"),
+                patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch,
+            ):
                 mock_fetch.return_value = ("csrf", "session")
                 result = runner.invoke(cli, ["metadata", "--json"])
 
             assert result.exit_code == 0
+            # JSON output should be valid JSON (without Rich markup in JSON mode)
             data = json.loads(result.output)
             assert data["id"] == "nb_1"
             assert data["title"] == "Test Notebook"
@@ -699,12 +722,18 @@ class TestNotebookMetadata:
         with patch_main_cli_client() as mock_client_cls:
             mock_client = create_mock_client()
             notebook = Notebook(id="nb_empty", title="Empty Notebook")
+            # Override notebooks.list to return only our test notebook
+            mock_client.notebooks.list = AsyncMock(return_value=[notebook])
+
             metadata = NotebookMetadata(notebook=notebook, sources=[])
             mock_client.get_notebook_metadata = AsyncMock(return_value=metadata)
             mock_client.notebooks.get = AsyncMock(return_value=notebook)
             mock_client_cls.return_value = mock_client
 
-            with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:
+            with (
+                patch("notebooklm.cli.helpers.get_current_notebook", return_value="nb_empty"),
+                patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch,
+            ):
                 mock_fetch.return_value = ("csrf", "session")
                 result = runner.invoke(cli, ["metadata"])
 
@@ -718,6 +747,9 @@ class TestNotebookMetadata:
         with patch_main_cli_client() as mock_client_cls:
             mock_client = create_mock_client()
             notebook = Notebook(id="nb_url", title="URL Notebook")
+            # Override notebooks.list to return only our test notebook
+            mock_client.notebooks.list = AsyncMock(return_value=[notebook])
+
             metadata = NotebookMetadata(
                 notebook=notebook,
                 sources=[
@@ -732,7 +764,10 @@ class TestNotebookMetadata:
             mock_client.notebooks.get = AsyncMock(return_value=notebook)
             mock_client_cls.return_value = mock_client
 
-            with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:
+            with (
+                patch("notebooklm.cli.helpers.get_current_notebook", return_value="nb_url"),
+                patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch,
+            ):
                 mock_fetch.return_value = ("csrf", "session")
                 result = runner.invoke(cli, ["metadata"])
 
