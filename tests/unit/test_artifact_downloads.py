@@ -9,6 +9,7 @@ import pytest
 from notebooklm._artifacts import ArtifactsAPI
 from notebooklm.auth import AuthTokens
 from notebooklm.types import (
+    ArtifactDownloadError,
     ArtifactNotFoundError,
     ArtifactNotReadyError,
     ArtifactParseError,
@@ -403,6 +404,44 @@ class TestDownloadUrl:
             # Verify file was written with streaming content
             with open(output_path, "rb") as f:
                 assert f.read() == content
+
+    @pytest.mark.asyncio
+    async def test_download_url_empty_response_raises(self, mock_artifacts_api):
+        """Test that a 0-byte download raises ArtifactDownloadError."""
+        api, mock_core = mock_artifacts_api
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = os.path.join(tmpdir, "file.mp4")
+
+            import httpx as real_httpx
+
+            # Mock streaming response that yields no bytes
+            async def mock_aiter_bytes(chunk_size=8192):
+                if False:
+                    yield  # pragma: no cover -- makes this an async generator
+
+            mock_response = MagicMock()
+            mock_response.headers = {"content-type": "video/mp4"}
+            mock_response.raise_for_status = MagicMock()
+            mock_response.aiter_bytes = mock_aiter_bytes
+            mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+            mock_response.__aexit__ = AsyncMock(return_value=None)
+
+            mock_client = AsyncMock()
+            mock_client.stream = MagicMock(return_value=mock_response)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+
+            mock_cookies = MagicMock()
+            with (
+                patch.object(real_httpx, "AsyncClient", return_value=mock_client),
+                patch("notebooklm._artifacts.load_httpx_cookies", return_value=mock_cookies),
+                pytest.raises(ArtifactDownloadError, match="0 bytes"),
+            ):
+                await api._download_url("https://storage.googleapis.com/file.mp4", output_path)
+
+            # Verify no file was left behind
+            assert not os.path.exists(output_path)
 
 
 class TestDownloadReport:

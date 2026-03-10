@@ -2085,6 +2085,12 @@ class ArtifactsAPI:
                             f.write(chunk)
                             total_bytes += len(chunk)
 
+                    if total_bytes == 0:
+                        raise ArtifactDownloadError(
+                            "media",
+                            details="Download produced 0 bytes -- the remote file may be missing or empty",
+                        )
+
                     # Only move to final location on success
                     temp_file.rename(output_file)
                     logger.debug("Downloaded %s (%d bytes)", url[:60], total_bytes)
