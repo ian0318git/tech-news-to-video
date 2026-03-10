@@ -248,6 +248,7 @@ __all__ = [
     "SuggestedTopic",
     "Source",
     "SourceFulltext",
+    "SourceSummary",
     "Artifact",
     "GenerationStatus",
     "ReportSuggestion",
@@ -319,6 +320,36 @@ class ChatMode(Enum):
 # =============================================================================
 # Notebook Types
 # =============================================================================
+
+
+@dataclass
+class SourceSummary:
+    """Simplified source information for metadata export.
+
+    This type provides a minimal representation of a source for
+    notebook metadata export, focusing on the most commonly needed fields.
+
+    Attributes:
+        kind: Source type (e.g., "pdf", "web_page", "youtube").
+        title: Source title if available.
+        url: Source URL if applicable (web/YouTube sources).
+    """
+
+    kind: SourceType
+    title: str | None = None
+    url: str | None = None
+
+    def to_dict(self) -> dict[str, str | None]:
+        """Convert to dictionary for JSON serialization.
+
+        Always includes all keys with null for missing values
+        to ensure consistent schema across all source entries.
+        """
+        return {
+            "type": self.kind.value,
+            "title": self.title,
+            "url": self.url,
+        }
 
 
 @dataclass
