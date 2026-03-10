@@ -23,13 +23,19 @@ class NotebooksAPI:
             await client.notebooks.rename(new_nb.id, "Better Title")
     """
 
-    def __init__(self, core: ClientCore):
+    def __init__(self, core: ClientCore, sources_api: "SourcesAPI | None" = None):
         """Initialize the notebooks API.
 
         Args:
             core: The core client infrastructure.
+            sources_api: Optional sources API for cross-API calls. If None,
+                         creates a new instance (for backward compatibility).
         """
         self._core = core
+        # Lazy import to avoid circular dependency
+        from ._sources import SourcesAPI
+
+        self._sources = sources_api or SourcesAPI(core)
 
     async def list(self) -> list[Notebook]:
         """List all notebooks.
