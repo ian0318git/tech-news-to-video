@@ -539,6 +539,34 @@ def download_video(ctx, **kwargs):
     _run_artifact_download(ctx, "video", **kwargs)
 
 
+@download.command("cinematic-video")
+@click.argument("output_path", required=False, type=click.Path())
+@click.option("-n", "--notebook", help="Notebook ID (uses current context if not set)")
+@click.option("--latest", is_flag=True, help="Download latest (default behavior)")
+@click.option("--earliest", is_flag=True, help="Download earliest")
+@click.option("--all", "download_all", is_flag=True, help="Download all artifacts")
+@click.option("--name", help="Filter by artifact title (fuzzy match)")
+@click.option("-a", "--artifact", "artifact_id", help="Select by artifact ID")
+@click.option("--json", "json_output", is_flag=True, help="Output JSON instead of text")
+@click.option("--dry-run", is_flag=True, help="Preview without downloading")
+@click.option("--force", is_flag=True, help="Overwrite existing files")
+@click.option("--no-clobber", is_flag=True, help="Skip if file exists")
+@click.pass_context
+def download_cinematic_video(ctx, **kwargs):
+    """Download cinematic video overview(s) to file.
+
+    Cinematic videos share the same artifact type as standard videos.
+    This command is an alias for 'download video'.
+
+    \b
+    Examples:
+      notebooklm download cinematic-video
+      notebooklm download cinematic-video my-cinematic.mp4
+      notebooklm download cinematic-video --all ./video/
+    """
+    _run_artifact_download(ctx, "video", **kwargs)
+
+
 @download.command("slide-deck")
 @click.argument("output_path", required=False, type=click.Path())
 @click.option("-n", "--notebook", help="Notebook ID (uses current context if not set)")

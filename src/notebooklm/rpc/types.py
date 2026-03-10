@@ -166,6 +166,7 @@ class VideoFormat(int, Enum):
 
     EXPLAINER = 1
     BRIEF = 2
+    CINEMATIC = 3
 
 
 class VideoStyle(int, Enum):

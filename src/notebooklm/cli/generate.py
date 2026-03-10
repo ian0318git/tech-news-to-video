@@ -1,9 +1,10 @@
 """Generate content CLI commands.
 
 Commands:
-    audio        Generate audio overview (podcast)
-    video        Generate video overview
-    slide-deck   Generate slide deck
+    audio            Generate audio overview (podcast)
+    video            Generate video overview
+    cinematic-video  Generate cinematic video overview (AI documentary footage)
+    slide-deck       Generate slide deck
     quiz         Generate quiz
     flashcards   Generate flashcards
     infographic  Generate infographic
@@ -479,6 +480,70 @@ def generate_video(
             result = await generate_with_retry(_generate, max_retries, "video", json_output)
             await handle_generation_result(
                 client, nb_id_resolved, result, "video", wait, json_output, timeout=600.0
+            )
+
+    return _run()
+
+
+@generate.command("cinematic-video")
+@click.argument("description", default="", required=False)
+@click.option(
+    "-n",
+    "--notebook",
+    "notebook_id",
+    default=None,
+    help="Notebook ID (uses current if not set)",
+)
+@click.option("--language", default=None, help="Output language (default: from config or 'en')")
+@click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
+@click.option("--wait/--no-wait", default=False, help="Wait for completion (default: no-wait)")
+@retry_option
+@json_option
+@with_client
+def generate_cinematic_video(
+    ctx,
+    description,
+    notebook_id,
+    language,
+    source_ids,
+    wait,
+    max_retries,
+    json_output,
+    client_auth,
+):
+    """Generate cinematic video overview (AI-generated documentary footage).
+
+    Uses Veo 3 AI to create documentary-style cinematic video overviews
+    instead of slide-deck style animations. Requires Google AI Ultra.
+
+    \b
+    Use --json for machine-readable output.
+
+    \b
+    Example:
+      notebooklm generate cinematic-video "documentary about quantum physics"
+      notebooklm generate cinematic-video -s src_001 "from specific source"
+    """
+    nb_id = require_notebook(notebook_id)
+
+    async def _run():
+        async with NotebookLMClient(client_auth) as client:
+            nb_id_resolved = await resolve_notebook_id(client, nb_id)
+            sources = await resolve_source_ids(client, nb_id_resolved, source_ids)
+
+            async def _generate():
+                return await client.artifacts.generate_cinematic_video(
+                    nb_id_resolved,
+                    source_ids=sources,
+                    language=resolve_language(language),
+                    instructions=description or None,
+                )
+
+            result = await generate_with_retry(
+                _generate, max_retries, "cinematic-video", json_output
+            )
+            await handle_generation_result(
+                client, nb_id_resolved, result, "cinematic-video", wait, json_output, timeout=1800.0
             )
 
     return _run()
