@@ -118,6 +118,7 @@ from .types import (
     Source,
     SourceFulltext,
     SourceStatus,
+    SourceSummary,
     SourceType,
     # Enums for configuration
     SuggestedTopic,
@@ -141,6 +142,7 @@ __all__ = [
     "SuggestedTopic",
     "Source",
     "SourceFulltext",
+    "SourceSummary",
     "Artifact",
     "GenerationStatus",
     "ReportSuggestion",
