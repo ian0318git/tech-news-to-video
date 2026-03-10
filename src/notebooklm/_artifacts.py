@@ -507,7 +507,7 @@ class ArtifactsAPI:
             [
                 None,
                 None,
-                3,  # ArtifactTypeCode.VIDEO
+                ArtifactTypeCode.VIDEO.value,
                 source_ids_triple,
                 None,
                 None,
