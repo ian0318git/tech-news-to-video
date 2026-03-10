@@ -199,12 +199,25 @@ class TestGenerateCinematicVideo:
 
             assert result.exit_code == 0
 
-    def test_generate_cinematic_video_no_style_option(self, runner, mock_auth):
-        """Cinematic video should not accept --style (it's not a valid option)."""
-        result = runner.invoke(
-            cli, ["generate", "cinematic-video", "--style", "anime", "-n", "nb_123"]
-        )
-        assert result.exit_code != 0
+    def test_generate_cinematic_video_ignores_style(self, runner, mock_auth):
+        """Cinematic video accepts --style (inherited from video) but ignores it."""
+        with patch_client_for_module("generate") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.artifacts.generate_cinematic_video = AsyncMock(
+                return_value={"artifact_id": "cin_123", "status": "processing"}
+            )
+            mock_client_cls.return_value = mock_client
+
+            with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli,
+                    ["generate", "cinematic-video", "--style", "anime", "-n", "nb_123"],
+                )
+
+            assert result.exit_code == 0
+            # Should call generate_cinematic_video (not generate_video) despite --style
+            mock_client.artifacts.generate_cinematic_video.assert_called_once()
 
 
 # =============================================================================
