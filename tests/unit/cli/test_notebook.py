@@ -624,3 +624,117 @@ class TestNotebookCommandsExist:
             result.output.split("Commands:")[1] if "Commands:" in result.output else ""
         )
         assert "  notebook " not in commands_section.lower()
+
+
+# =============================================================================
+# METADATA COMMAND TESTS
+# =============================================================================
+
+
+class TestNotebookMetadata:
+    """Tests for the metadata command."""
+
+    def test_metadata_human_readable(self, runner, mock_auth):
+        """Test human-readable output (default)."""
+        from datetime import datetime
+
+        from notebooklm.types import Notebook, NotebookMetadata, SourceSummary, SourceType
+
+        with patch_main_cli_client() as mock_client_cls:
+            mock_client = create_mock_client()
+            notebook = Notebook(
+                id="nb_1",
+                title="Test Notebook",
+                created_at=datetime(2024, 1, 1),
+            )
+            metadata = NotebookMetadata(
+                notebook=notebook,
+                sources=[
+                    SourceSummary(kind=SourceType.PDF, title="test.pdf"),
+                ],
+            )
+            mock_client.get_notebook_metadata = AsyncMock(return_value=metadata)
+            mock_client.notebooks.get = AsyncMock(return_value=notebook)
+            mock_client_cls.return_value = mock_client
+
+            with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["metadata"])
+
+            assert result.exit_code == 0
+            assert "Test Notebook" in result.output
+            assert "[pdf]" in result.output
+            assert "nb_1" in result.output
+
+    def test_metadata_json_output(self, runner, mock_auth):
+        """Test JSON output with --json flag."""
+
+        from notebooklm.types import Notebook, NotebookMetadata, SourceSummary, SourceType
+
+        with patch_main_cli_client() as mock_client_cls:
+            mock_client = create_mock_client()
+            notebook = Notebook(id="nb_1", title="Test Notebook")
+            metadata = NotebookMetadata(
+                notebook=notebook,
+                sources=[SourceSummary(kind=SourceType.PDF, title="test.pdf")],
+            )
+            mock_client.get_notebook_metadata = AsyncMock(return_value=metadata)
+            mock_client.notebooks.get = AsyncMock(return_value=notebook)
+            mock_client_cls.return_value = mock_client
+
+            with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["metadata", "--json"])
+
+            assert result.exit_code == 0
+            data = json.loads(result.output)
+            assert data["id"] == "nb_1"
+            assert data["title"] == "Test Notebook"
+            assert data["sources"][0]["type"] == "pdf"
+
+    def test_metadata_empty_sources(self, runner, mock_auth):
+        """Test metadata with no sources."""
+        from notebooklm.types import Notebook, NotebookMetadata
+
+        with patch_main_cli_client() as mock_client_cls:
+            mock_client = create_mock_client()
+            notebook = Notebook(id="nb_empty", title="Empty Notebook")
+            metadata = NotebookMetadata(notebook=notebook, sources=[])
+            mock_client.get_notebook_metadata = AsyncMock(return_value=metadata)
+            mock_client.notebooks.get = AsyncMock(return_value=notebook)
+            mock_client_cls.return_value = mock_client
+
+            with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["metadata"])
+
+            assert result.exit_code == 0
+            assert "No sources" in result.output
+
+    def test_metadata_with_url_source(self, runner, mock_auth):
+        """Test metadata with URL source displays URL."""
+        from notebooklm.types import Notebook, NotebookMetadata, SourceSummary, SourceType
+
+        with patch_main_cli_client() as mock_client_cls:
+            mock_client = create_mock_client()
+            notebook = Notebook(id="nb_url", title="URL Notebook")
+            metadata = NotebookMetadata(
+                notebook=notebook,
+                sources=[
+                    SourceSummary(
+                        kind=SourceType.WEB_PAGE,
+                        title="Example Site",
+                        url="https://example.com",
+                    )
+                ],
+            )
+            mock_client.get_notebook_metadata = AsyncMock(return_value=metadata)
+            mock_client.notebooks.get = AsyncMock(return_value=notebook)
+            mock_client_cls.return_value = mock_client
+
+            with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["metadata"])
+
+            assert result.exit_code == 0
+            assert "https://example.com" in result.output
