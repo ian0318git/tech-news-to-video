@@ -1,11 +1,14 @@
 """Notebook operations API."""
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ._core import ClientCore
 from .rpc import RPCMethod
 from .types import Notebook, NotebookDescription, SuggestedTopic
+
+if TYPE_CHECKING:
+    from ._sources import SourcesAPI
 
 logger = logging.getLogger(__name__)
 
