@@ -698,3 +698,133 @@ class TestShareEdgeCases:
             url = client.notebooks.get_share_url("nb_123", artifact_id="art_789")
 
         assert url == "https://notebooklm.google.com/notebook/nb_123?artifactId=art_789"
+
+
+class TestGetNotebookMetadata:
+    """Integration tests for get_notebook_metadata()."""
+
+    @pytest.mark.asyncio
+    async def test_get_metadata_with_sources(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+        build_rpc_response,
+    ):
+        """Test get_notebook_metadata() with sources."""
+        # Mock notebook response
+        notebook_response = build_rpc_response(
+            RPCMethod.GET_NOTEBOOK,
+            [
+                "Test Notebook",
+                [],
+                "nb_123",
+                "📓",
+                None,
+                [None, None, None, None, None, [1704067200, 0]],
+            ],
+        )
+
+        # Mock sources list response
+        sources_response = build_rpc_response(
+            RPCMethod.LIST_SOURCES,
+            [
+                [
+                    ["src_1", "Test PDF", "https://example.com/test.pdf", 2, [1, "pdf"]],
+                    ["src_2", "Example Site", "https://example.com", 2, [2, "web_page"]],
+                ],
+                "nb_123",
+            ],
+        )
+
+        httpx_mock.add_response(content=notebook_response.encode())
+        httpx_mock.add_response(content=sources_response.encode())
+
+        async with NotebookLMClient(auth_tokens) as client:
+            metadata = await client.get_notebook_metadata("nb_123")
+
+        assert metadata.id == "nb_123"
+        assert metadata.title == "Test Notebook"
+        assert len(metadata.sources) == 2
+        assert metadata.sources[0].kind.value == "pdf"
+        assert metadata.sources[0].title == "Test PDF"
+        assert metadata.sources[1].kind.value == "web_page"
+
+    @pytest.mark.asyncio
+    async def test_get_metadata_empty_sources(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+        build_rpc_response,
+    ):
+        """Test get_notebook_metadata() with empty sources list."""
+        notebook_response = build_rpc_response(
+            RPCMethod.GET_NOTEBOOK,
+            ["Empty Notebook", [], "nb_empty", "📓"],
+        )
+        sources_response = build_rpc_response(RPCMethod.LIST_SOURCES, [[], "nb_empty"])
+
+        httpx_mock.add_response(content=notebook_response.encode())
+        httpx_mock.add_response(content=sources_response.encode())
+
+        async with NotebookLMClient(auth_tokens) as client:
+            metadata = await client.get_notebook_metadata("nb_empty")
+
+        assert metadata.id == "nb_empty"
+        assert len(metadata.sources) == 0
+
+    @pytest.mark.asyncio
+    async def test_get_metadata_concurrent_calls(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+        build_rpc_response,
+    ):
+        """Test that notebook and sources are fetched concurrently using asyncio.gather."""
+        notebook_response = build_rpc_response(
+            RPCMethod.GET_NOTEBOOK,
+            ["Concurrent Test", [], "nb_concurrent", "📓"],
+        )
+        sources_response = build_rpc_response(
+            RPCMethod.LIST_SOURCES,
+            [[["src_1", "Source", "", 2, [1, "pdf"]]], "nb_concurrent"],
+        )
+
+        httpx_mock.add_response(content=notebook_response.encode())
+        httpx_mock.add_response(content=sources_response.encode())
+
+        async with NotebookLMClient(auth_tokens) as client:
+            metadata = await client.get_notebook_metadata("nb_concurrent")
+
+        # Both responses should be processed
+        assert metadata.id == "nb_concurrent"
+        assert len(metadata.sources) == 1
+
+    @pytest.mark.asyncio
+    async def test_get_metadata_to_dict(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+        build_rpc_response,
+    ):
+        """Test that to_dict() produces correct JSON structure."""
+        notebook_response = build_rpc_response(
+            RPCMethod.GET_NOTEBOOK,
+            ["Dict Test", [], "nb_dict", "📓"],
+        )
+        sources_response = build_rpc_response(
+            RPCMethod.LIST_SOURCES,
+            [[["src_1", "Test", "https://test.com", 2, [2, "web_page"]]], "nb_dict"],
+        )
+
+        httpx_mock.add_response(content=notebook_response.encode())
+        httpx_mock.add_response(content=sources_response.encode())
+
+        async with NotebookLMClient(auth_tokens) as client:
+            metadata = await client.get_notebook_metadata("nb_dict")
+
+        result = metadata.to_dict()
+        assert result["id"] == "nb_dict"
+        assert result["title"] == "Dict Test"
+        assert result["sources"] == [
+            {"type": "web_page", "title": "Test", "url": "https://test.com"}
+        ]
