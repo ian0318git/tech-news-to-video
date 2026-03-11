@@ -374,12 +374,19 @@ class TestGenerateInfographic:
                         "portrait",
                         "--detail",
                         "detailed",
+                        "--style",
+                        "anime",
                         "-n",
                         "nb_123",
                     ],
                 )
 
             assert result.exit_code == 0
+            mock_client.artifacts.generate_infographic.assert_awaited_once()
+            kwargs = mock_client.artifacts.generate_infographic.await_args.kwargs
+            assert kwargs["orientation"].name == "PORTRAIT"
+            assert kwargs["detail_level"].name == "DETAILED"
+            assert kwargs["style"].name == "ANIME"
 
 
 # =============================================================================

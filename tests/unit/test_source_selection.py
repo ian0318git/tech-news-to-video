@@ -17,6 +17,7 @@ import pytest
 from notebooklm._artifacts import ArtifactsAPI
 from notebooklm._chat import ChatAPI
 from notebooklm.auth import AuthTokens
+from notebooklm.rpc import InfographicStyle
 
 
 @pytest.fixture
@@ -417,6 +418,27 @@ class TestArtifactsSourceSelection:
         source_ids_triple = inner_params[3]
 
         assert source_ids_triple == [[["src_info_1"]], [["src_info_2"]]]
+
+    @pytest.mark.asyncio
+    async def test_generate_infographic_style_encoding(self, mock_core, mock_notes_api):
+        """Test generate_infographic encodes style in config slot 5."""
+        api = ArtifactsAPI(mock_core, mock_notes_api)
+
+        mock_core.rpc_call.return_value = [["artifact_info", "Infographic", 7, None, 1]]
+
+        await api.generate_infographic(
+            notebook_id="nb_123",
+            source_ids=["src_info_1"],
+            style=InfographicStyle.PROFESSIONAL,
+        )
+
+        call_args = mock_core.rpc_call.call_args
+        params = call_args.args[1]
+
+        inner_params = params[2]
+        infographic_config = inner_params[14][0]
+
+        assert infographic_config[5] == InfographicStyle.PROFESSIONAL.value
 
     @pytest.mark.asyncio
     async def test_generate_slide_deck_source_encoding(self, mock_core, mock_notes_api):

@@ -221,6 +221,25 @@ class InfographicDetail(int, Enum):
     DETAILED = 3
 
 
+class InfographicStyle(int, Enum):
+    """Infographic visual style options.
+
+    Values differ from VideoStyle — shared names (ANIME, KAWAII) have different codes.
+    """
+
+    AUTO_SELECT = 1
+    SKETCH_NOTE = 2
+    PROFESSIONAL = 3
+    BENTO_GRID = 4
+    EDITORIAL = 5
+    INSTRUCTIONAL = 6
+    BRICKS = 7
+    CLAY = 8
+    ANIME = 9
+    KAWAII = 10
+    SCIENTIFIC = 11
+
+
 class SlideDeckFormat(int, Enum):
     """Slide deck format options."""
 
