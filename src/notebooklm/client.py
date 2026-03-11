@@ -116,63 +116,6 @@ class NotebookLMClient:
         """Check if the client is connected."""
         return self._core.is_open
 
-    async def get_notebook_metadata(self, notebook_id: str):
-        """Get notebook metadata with sources list.
-
-        This combines notebook details with a simplified sources list,
-        useful for export/overview of notebook contents.
-
-        Uses asyncio.gather to fetch notebook and sources concurrently
-        for better performance.
-
-        Args:
-            notebook_id: The notebook ID.
-
-        Returns:
-            NotebookMetadata with notebook details and simplified sources list.
-
-        Example:
-            metadata = await client.get_notebook_metadata(notebook_id)
-            print(f"Notebook: {metadata.title}")
-            print(f"Sources: {len(metadata.sources)}")
-            # Export to JSON
-            import json
-            print(json.dumps(metadata.to_dict(), indent=2))
-        """
-        import asyncio
-
-        # Get notebook details and sources list concurrently
-        notebook, sources = await asyncio.gather(
-            self.notebooks.get(notebook_id),
-            self.sources.list(notebook_id),
-        )
-
-        # Warn on potential data loss
-        if notebook.sources_count > 0 and len(sources) == 0:
-            logger.warning(
-                "Notebook %s reports %d sources but listing returned empty",
-                notebook_id,
-                notebook.sources_count,
-            )
-
-        # Build simplified source info
-        from .types import NotebookMetadata, SourceSummary
-
-        simplified_sources = [
-            SourceSummary(
-                kind=source.kind,
-                title=source.title,
-                url=source.url,
-            )
-            for source in sources
-        ]
-
-        # Build metadata object
-        return NotebookMetadata(
-            notebook=notebook,
-            sources=simplified_sources,
-        )
-
     @classmethod
     async def from_storage(
         cls, path: str | None = None, timeout: float = DEFAULT_TIMEOUT
