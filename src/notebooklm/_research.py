@@ -288,36 +288,38 @@ class ResearchAPI:
         if not sources:
             return []
 
-        effective_task_id = task_id
-        for source in sources:
-            research_task_id = source.get("research_task_id")
-            if isinstance(research_task_id, str) and research_task_id:
-                effective_task_id = research_task_id
-                break
+        research_task_ids = {
+            research_task_id
+            for source in sources
+            if isinstance((research_task_id := source.get("research_task_id")), str)
+            and research_task_id
+        }
+        if len(research_task_ids) > 1:
+            raise ValidationError(
+                "Cannot import sources from multiple research tasks in one batch."
+            )
+        effective_task_id = next(iter(research_task_ids), task_id)
 
-        report_source = next(
-            (
-                source
-                for source in sources
-                if source.get("result_type") == 5
-                and isinstance(source.get("title"), str)
-                and isinstance(source.get("report_markdown"), str)
-                and source.get("report_markdown")
-            ),
-            None,
-        )
+        report_sources = [
+            source
+            for source in sources
+            if source.get("result_type") == 5
+            and isinstance(source.get("title"), str)
+            and isinstance(source.get("report_markdown"), str)
+            and source.get("report_markdown")
+        ]
         valid_sources = [s for s in sources if s.get("url")]
-        skipped_count = len(sources) - len(valid_sources) - (1 if report_source else 0)
+        skipped_count = len(sources) - len(valid_sources) - len(report_sources)
         if skipped_count > 0:
             logger.warning(
                 "Skipping %d source(s) that cannot be imported (missing URLs or report entries)",
                 skipped_count,
             )
-        if not valid_sources and not report_source:
+        if not valid_sources and not report_sources:
             return []
 
         source_array = []
-        if report_source:
+        for report_source in report_sources:
             source_array.append(
                 self._build_report_import_entry(
                     report_source["title"], report_source["report_markdown"]

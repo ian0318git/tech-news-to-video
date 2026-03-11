@@ -325,6 +325,84 @@ class TestResearch:
         assert '"report_123","nb_123",[[null,["Deep Research Report","# Deep report body"],null,3' in request_body
         assert '["http://example.com","Web Source"]' in request_body
 
+    @pytest.mark.asyncio
+    async def test_import_sources_rejects_mixed_research_task_ids(self, auth_tokens):
+        """Test that import_sources rejects batches spanning multiple research tasks."""
+        from notebooklm.exceptions import ValidationError
+
+        async with NotebookLMClient(auth_tokens) as client:
+            sources = [
+                {
+                    "title": "Deep Research Report",
+                    "result_type": 5,
+                    "report_markdown": "# Deep report body",
+                    "research_task_id": "report_123",
+                },
+                {
+                    "url": "http://example.com",
+                    "title": "Web Source",
+                    "result_type": 1,
+                    "research_task_id": "report_456",
+                },
+            ]
+            with pytest.raises(ValidationError, match="multiple research tasks"):
+                await client.research.import_sources(
+                    notebook_id="nb_123",
+                    task_id="task_123",
+                    sources=sources,
+                )
+
+    @pytest.mark.asyncio
+    async def test_import_sources_includes_multiple_report_entries(
+        self, auth_tokens, httpx_mock, build_rpc_response
+    ):
+        """Test that import_sources preserves all valid report entries in one batch."""
+        response_body = build_rpc_response(
+            RPCMethod.IMPORT_RESEARCH,
+            [
+                [
+                    [["report_src_001"], "Deep Research Report 1"],
+                    [["report_src_002"], "Deep Research Report 2"],
+                    [["src_001"], "Web Source"],
+                ]
+            ],
+        )
+        httpx_mock.add_response(content=response_body.encode(), method="POST")
+
+        async with NotebookLMClient(auth_tokens) as client:
+            sources = [
+                {
+                    "title": "Deep Research Report 1",
+                    "result_type": 5,
+                    "report_markdown": "# Deep report body 1",
+                    "research_task_id": "report_123",
+                },
+                {
+                    "title": "Deep Research Report 2",
+                    "result_type": 5,
+                    "report_markdown": "# Deep report body 2",
+                    "research_task_id": "report_123",
+                },
+                {
+                    "url": "http://example.com",
+                    "title": "Web Source",
+                    "result_type": 1,
+                    "research_task_id": "report_123",
+                },
+            ]
+            result = await client.research.import_sources(
+                notebook_id="nb_123",
+                task_id="task_123",
+                sources=sources,
+            )
+
+        assert len(result) == 3
+        request = httpx_mock.get_request()
+        request_body = unquote(request.content.decode())
+        assert '["Deep Research Report 1","# Deep report body 1"]' in request_body
+        assert '["Deep Research Report 2","# Deep report body 2"]' in request_body
+        assert '["http://example.com","Web Source"]' in request_body
+
 
     @pytest.mark.asyncio
     async def test_import_sources_empty_response(self, auth_tokens, httpx_mock, build_rpc_response):
