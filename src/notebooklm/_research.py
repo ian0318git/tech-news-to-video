@@ -69,7 +69,13 @@ class ResearchAPI:
 
     @staticmethod
     def _extract_legacy_report_chunks(src: list[Any]) -> str:
-        """Join multi-part legacy report chunks from src[6]."""
+        """Join legacy deep-research report chunks stored in ``src[6]``.
+
+        Legacy deep-research payloads store report markdown as a list of one or
+        more string chunks at index 6. Non-string values are ignored. Returns an
+        empty string when the field is missing, malformed, or contains no
+        string chunks.
+        """
         if len(src) <= 6 or not isinstance(src[6], list):
             return ""
         chunks = [chunk for chunk in src[6] if isinstance(chunk, str) and chunk]
@@ -147,7 +153,22 @@ class ResearchAPI:
             notebook_id: The notebook ID.
 
         Returns:
-            Dictionary with status, query, sources, and summary.
+            Dictionary representing the latest parsed research task for the
+            notebook. Includes:
+            - ``task_id``: task/report identifier for the latest task
+            - ``status``: ``in_progress``, ``completed``, or ``no_research``
+            - ``query``: original research query text
+            - ``sources``: parsed source dictionaries for the latest task
+            - ``summary``: summary text when present
+            - ``report``: extracted deep-research report markdown when present
+            - ``tasks``: additive list of all parsed research tasks, each with
+              the same shape as the top-level latest-task fields
+
+            Each source dictionary may include:
+            - ``url`` and ``title``
+            - ``result_type``
+            - ``research_task_id``: task/report ID that produced the source
+            - ``report_markdown`` for deep-research report entries
         """
         logger.debug("Polling research status for notebook %s", notebook_id)
         params = [None, None, notebook_id]
@@ -199,6 +220,7 @@ class ResearchAPI:
                 title = ""
                 url = ""
                 source_report = ""
+                parsed_source = None
 
                 # Fast research: [url, title, desc, type, ...]
                 # Deep research (legacy): [None, title, None, type, ..., [report_markdown]]
@@ -244,8 +266,8 @@ class ResearchAPI:
                     report = source_report
                 elif not report:
                     report = self._extract_legacy_report_chunks(src)
-                    if report and parsed_sources and parsed_sources[-1]["title"] == title:
-                        parsed_sources[-1]["report_markdown"] = report
+                    if report and parsed_source is not None:
+                        parsed_source["report_markdown"] = report
 
             # NOTE: Research status codes differ from artifact status codes
             # Research: 1=in_progress, 2=completed, 6=completed (deep research)
@@ -321,7 +343,8 @@ class ResearchAPI:
             and isinstance(source.get("report_markdown"), str)
             and source.get("report_markdown")
         ]
-        valid_sources = [s for s in sources if s.get("url")]
+        report_source_ids = {id(source) for source in report_sources}
+        valid_sources = [s for s in sources if s.get("url") and id(s) not in report_source_ids]
         skipped_count = len(sources) - len(valid_sources) - len(report_sources)
         if skipped_count > 0:
             logger.warning(
