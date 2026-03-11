@@ -6,6 +6,7 @@ Commands:
     delete     Delete a notebook
     rename     Rename a notebook
     summary    Get notebook summary with AI-generated insights
+    metadata   Export notebook metadata with sources list
 
 Note: Sharing commands moved to 'share' command group.
 """
@@ -196,5 +197,83 @@ def register_notebook_commands(cli):
                             console.print(f"  {i}. {topic.question}")
                 else:
                     console.print("[yellow]No summary available[/yellow]")
+
+        return _run()
+
+    @cli.command("metadata")
+    @click.option(
+        "-n",
+        "--notebook",
+        "notebook_id",
+        default=None,
+        help="Notebook ID (uses current if not set). Supports partial IDs.",
+    )
+    @click.option(
+        "--json",
+        "json_output",
+        is_flag=True,
+        help="Output as JSON (default: human-readable)",
+    )
+    @with_client
+    def metadata_cmd(ctx, notebook_id, json_output, client_auth):
+        """Export notebook metadata with sources list.
+
+        Outputs notebook details (id, title, created_at, is_owner) along with
+        a simplified list of sources (type, title, url).
+
+        By default, outputs in human-readable format. Use --json for machine parsing.
+
+        NOTEBOOK_ID supports partial matching (e.g., 'abc' matches 'abc123...').
+
+        \b
+        Examples:
+          notebooklm metadata              # Human-readable for current notebook
+          notebooklm metadata -n abc       # Human-readable for notebook starting with 'abc'
+          notebooklm metadata --json       # JSON output
+          notebooklm metadata -n abc --json  # JSON for specific notebook
+        """
+        notebook_id = require_notebook(notebook_id)
+
+        async def _run():
+            async with NotebookLMClient(client_auth) as client:
+                # Resolve partial ID
+                resolved_id = await resolve_notebook_id(client, notebook_id)
+
+                # Get metadata (use notebooks.get_metadata)
+                metadata = await client.notebooks.get_metadata(resolved_id)
+
+                if json_output:
+                    # JSON output
+                    data = metadata.to_dict()
+                    json_output_response(data)
+                else:
+                    # Human-readable output (default)
+                    console.print(f"[bold cyan]Notebook:[/bold cyan] {metadata.title}")
+                    console.print(f"[dim]ID:[/dim] {metadata.id}")
+                    if metadata.created_at:
+                        console.print(
+                            f"[dim]Created:[/dim] {metadata.created_at.strftime('%Y-%m-%d %H:%M')}"
+                        )
+                    owner_status = "Owner" if metadata.is_owner else "Shared"
+                    console.print(f"[dim]Access:[/dim] {owner_status}")
+
+                    console.print(f"\n[bold]Sources ({len(metadata.sources)}):[/bold]")
+                    if not metadata.sources:
+                        console.print("[dim]  No sources[/dim]")
+                    else:
+                        for i, source in enumerate(metadata.sources, 1):
+                            source_type = source.kind.value
+                            title = source.title or "(untitled)"
+
+                            # Always print the source line (use Text to avoid Rich markup interpretation)
+                            from rich.text import Text
+
+                            console.print(
+                                Text(f"  {i}. "),
+                                Text(f"[{source_type}]", style="default"),
+                                Text(f" {title}"),
+                            )
+                            if source.url:
+                                console.print(f"     {source.url}")
 
         return _run()

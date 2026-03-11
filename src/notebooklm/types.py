@@ -245,9 +245,11 @@ __all__ = [
     # Dataclasses
     "Notebook",
     "NotebookDescription",
+    "NotebookMetadata",
     "SuggestedTopic",
     "Source",
     "SourceFulltext",
+    "SourceSummary",
     "Artifact",
     "GenerationStatus",
     "ReportSuggestion",
@@ -323,6 +325,36 @@ class ChatMode(Enum):
 
 
 @dataclass
+class SourceSummary:
+    """Simplified source information for metadata export.
+
+    This type provides a minimal representation of a source for
+    notebook metadata export, focusing on the most commonly needed fields.
+
+    Attributes:
+        kind: Source type (e.g., "pdf", "web_page", "youtube").
+        title: Source title if available.
+        url: Source URL if applicable (web/YouTube sources).
+    """
+
+    kind: SourceType
+    title: str | None = None
+    url: str | None = None
+
+    def to_dict(self) -> dict[str, str | None]:
+        """Convert to dictionary for JSON serialization.
+
+        Always includes all keys with null for missing values
+        to ensure consistent schema across all source entries.
+        """
+        return {
+            "type": self.kind.value,
+            "title": self.title,
+            "url": self.url,
+        }
+
+
+@dataclass
 class Notebook:
     """Represents a NotebookLM notebook."""
 
@@ -389,6 +421,55 @@ class NotebookDescription:
             summary=data.get("summary", ""),
             suggested_topics=topics,
         )
+
+
+@dataclass
+class NotebookMetadata:
+    """Combined notebook metadata with sources list.
+
+    This composes a Notebook with a list of simplified source information
+    for export/overview purposes.
+
+    Attributes:
+        notebook: The notebook object with all its details.
+        sources: List of simplified source information.
+    """
+
+    notebook: Notebook
+    sources: list[SourceSummary] = field(default_factory=list)
+
+    @property
+    def id(self) -> str:
+        """Get notebook ID."""
+        return self.notebook.id
+
+    @property
+    def title(self) -> str:
+        """Get notebook title."""
+        return self.notebook.title
+
+    @property
+    def created_at(self) -> datetime | None:
+        """Get creation timestamp."""
+        return self.notebook.created_at
+
+    @property
+    def is_owner(self) -> bool:
+        """Get owner status."""
+        return self.notebook.is_owner
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for JSON serialization.
+
+        Flattens notebook fields for backward compatibility with issue spec.
+        """
+        return {
+            "id": self.id,
+            "title": self.title,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "is_owner": self.is_owner,
+            "sources": [s.to_dict() for s in self.sources],
+        }
 
 
 # =============================================================================

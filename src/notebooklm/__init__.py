@@ -104,6 +104,7 @@ from .types import (
     Note,
     Notebook,
     NotebookDescription,
+    NotebookMetadata,
     QuizDifficulty,
     QuizQuantity,
     ReportFormat,
@@ -118,6 +119,7 @@ from .types import (
     Source,
     SourceFulltext,
     SourceStatus,
+    SourceSummary,
     SourceType,
     # Enums for configuration
     SuggestedTopic,
@@ -137,9 +139,11 @@ __all__ = [
     # Types
     "Notebook",
     "NotebookDescription",
+    "NotebookMetadata",
     "SuggestedTopic",
     "Source",
     "SourceFulltext",
+    "SourceSummary",
     "Artifact",
     "GenerationStatus",
     "ReportSuggestion",
