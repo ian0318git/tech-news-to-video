@@ -179,7 +179,7 @@ class ResearchAPI:
         )
 
         if not result or not isinstance(result, list) or len(result) == 0:
-            return {"status": "no_research"}
+            return {"status": "no_research", "tasks": []}
 
         # Unwrap if needed
         if isinstance(result[0], list) and len(result[0]) > 0 and isinstance(result[0][0], list):

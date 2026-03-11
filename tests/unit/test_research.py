@@ -6,6 +6,7 @@ from urllib.parse import parse_qs
 import pytest
 
 from notebooklm import NotebookLMClient
+from notebooklm._research import ResearchAPI
 from notebooklm.auth import AuthTokens
 from notebooklm.rpc import RPCMethod
 
@@ -25,6 +26,84 @@ def auth_tokens():
         csrf_token="test_csrf",
         session_id="test_session",
     )
+
+
+class TestParseResultType:
+    """Tests for ResearchAPI._parse_result_type static method."""
+
+    def test_int_passthrough(self):
+        assert ResearchAPI._parse_result_type(5) == 5
+
+    def test_known_string_alias(self):
+        assert ResearchAPI._parse_result_type("web") == 1
+        assert ResearchAPI._parse_result_type("drive") == 2
+        assert ResearchAPI._parse_result_type("report") == 5
+
+    def test_case_insensitive(self):
+        assert ResearchAPI._parse_result_type("WEB") == 1
+        assert ResearchAPI._parse_result_type("Drive") == 2
+
+    def test_unknown_string_preserved(self):
+        assert ResearchAPI._parse_result_type("video") == "video"
+
+    def test_none_defaults_to_1(self):
+        assert ResearchAPI._parse_result_type(None) == 1
+
+    def test_float_defaults_to_1(self):
+        assert ResearchAPI._parse_result_type(3.14) == 1
+
+    def test_list_defaults_to_1(self):
+        assert ResearchAPI._parse_result_type([]) == 1
+
+
+class TestBuildImportEntries:
+    """Tests for import entry builder static methods."""
+
+    def test_build_report_import_entry(self):
+        entry = ResearchAPI._build_report_import_entry("Title", "# Markdown")
+        assert entry[1] == ["Title", "# Markdown"]
+        assert entry[3] == 3
+        assert entry[10] == 3
+        assert entry[0] is None
+
+    def test_build_web_import_entry(self):
+        entry = ResearchAPI._build_web_import_entry("https://example.com", "Example")
+        assert entry[2] == ["https://example.com", "Example"]
+        assert entry[10] == 2
+        assert entry[0] is None
+        assert entry[1] is None
+
+
+class TestExtractLegacyReportChunks:
+    """Tests for _extract_legacy_report_chunks static method."""
+
+    def test_missing_index_6(self):
+        assert ResearchAPI._extract_legacy_report_chunks([None, "t", None, 5, None, None]) == ""
+
+    def test_index_6_not_list(self):
+        assert (
+            ResearchAPI._extract_legacy_report_chunks([None, "t", None, 5, None, None, "str"]) == ""
+        )
+
+    def test_single_chunk(self):
+        assert (
+            ResearchAPI._extract_legacy_report_chunks([None, "t", None, 5, None, None, ["chunk"]])
+            == "chunk"
+        )
+
+    def test_multiple_chunks_joined(self):
+        src = [None, "t", None, 5, None, None, ["a", "b", "c"]]
+        assert ResearchAPI._extract_legacy_report_chunks(src) == "a\n\nb\n\nc"
+
+    def test_filters_non_string_and_empty(self):
+        src = [None, "t", None, 5, None, None, ["real", None, "", 42, "also_real"]]
+        assert ResearchAPI._extract_legacy_report_chunks(src) == "real\n\nalso_real"
+
+    def test_all_empty_returns_empty(self):
+        assert (
+            ResearchAPI._extract_legacy_report_chunks([None, "t", None, 5, None, None, ["", None]])
+            == ""
+        )
 
 
 class TestResearch:
@@ -626,3 +705,77 @@ class TestResearch:
             assert imported[0]["id"] == "report_src_001"
             assert imported[1]["id"] == "deep_src_001"
             assert imported[2]["id"] == "deep_src_002"
+
+    @pytest.mark.asyncio
+    async def test_poll_no_research_returns_tasks_key(
+        self, auth_tokens, httpx_mock, build_rpc_response
+    ):
+        """Both no_research return paths include a 'tasks' key for API consistency."""
+        # Early return path (empty response)
+        response_body = build_rpc_response(RPCMethod.POLL_RESEARCH, [])
+        httpx_mock.add_response(content=response_body.encode(), method="POST")
+
+        async with NotebookLMClient(auth_tokens) as client:
+            result = await client.research.poll("nb_123")
+
+        assert result["status"] == "no_research"
+        assert result["tasks"] == []
+
+    @pytest.mark.asyncio
+    async def test_poll_no_research_all_invalid_returns_tasks_key(
+        self, auth_tokens, httpx_mock, build_rpc_response
+    ):
+        """Late no_research return (all tasks invalid) also includes 'tasks' key."""
+        response_body = build_rpc_response(RPCMethod.POLL_RESEARCH, [[42, "not_a_list"]])
+        httpx_mock.add_response(content=response_body.encode(), method="POST")
+
+        async with NotebookLMClient(auth_tokens) as client:
+            result = await client.research.poll("nb_123")
+
+        assert result["status"] == "no_research"
+        assert result["tasks"] == []
+
+    @pytest.mark.asyncio
+    async def test_poll_unknown_string_result_type_preserved(
+        self, auth_tokens, httpx_mock, build_rpc_response
+    ):
+        """Unknown string result_type tags are preserved as-is in source dicts."""
+        sources = [["http://example.com", "Video Source", "desc", "video"]]
+        task_info = [None, ["query", 1], 1, [sources, "Summary"], 2]
+        response_body = build_rpc_response(RPCMethod.POLL_RESEARCH, [[["task_123", task_info]]])
+        httpx_mock.add_response(content=response_body.encode(), method="POST")
+
+        async with NotebookLMClient(auth_tokens) as client:
+            result = await client.research.poll("nb_123")
+
+        assert result["sources"][0]["result_type"] == "video"
+
+    @pytest.mark.asyncio
+    async def test_poll_legacy_report_mixed_chunks(
+        self, auth_tokens, httpx_mock, build_rpc_response
+    ):
+        """Legacy report chunks filter out non-string and empty values."""
+        sources = [[None, "Report Title", None, 5, None, None, ["chunk1", None, "", "chunk2"]]]
+        task_info = [None, ["query", 1], 1, [sources, ""], 2]
+        response_body = build_rpc_response(RPCMethod.POLL_RESEARCH, [[["task_123", task_info]]])
+        httpx_mock.add_response(content=response_body.encode(), method="POST")
+
+        async with NotebookLMClient(auth_tokens) as client:
+            result = await client.research.poll("nb_123")
+
+        assert result["report"] == "chunk1\n\nchunk2"
+
+    @pytest.mark.asyncio
+    async def test_poll_source_single_element_list_title_dropped(
+        self, auth_tokens, httpx_mock, build_rpc_response
+    ):
+        """Deep source with src[1] as single-element list is correctly dropped."""
+        sources = [[None, ["title_only"], None, 5]]
+        task_info = [None, ["query", 1], 1, [sources, ""], 2]
+        response_body = build_rpc_response(RPCMethod.POLL_RESEARCH, [[["task_123", task_info]]])
+        httpx_mock.add_response(content=response_body.encode(), method="POST")
+
+        async with NotebookLMClient(auth_tokens) as client:
+            result = await client.research.poll("nb_123")
+
+        assert result["sources"] == []
