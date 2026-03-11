@@ -661,7 +661,7 @@ class TestNotebookMetadata:
             async def return_metadata(nb_id):
                 return metadata
 
-            mock_client.get_notebook_metadata = AsyncMock(side_effect=return_metadata)
+            mock_client.notebooks.get_metadata = AsyncMock(side_effect=return_metadata)
             mock_client.notebooks.get = AsyncMock(return_value=notebook)
             mock_client_cls.return_value = mock_client
 
@@ -697,7 +697,7 @@ class TestNotebookMetadata:
             async def return_metadata(nb_id):
                 return metadata
 
-            mock_client.get_notebook_metadata = AsyncMock(side_effect=return_metadata)
+            mock_client.notebooks.get_metadata = AsyncMock(side_effect=return_metadata)
             mock_client.notebooks.get = AsyncMock(return_value=notebook)
             mock_client_cls.return_value = mock_client
 
@@ -726,7 +726,7 @@ class TestNotebookMetadata:
             mock_client.notebooks.list = AsyncMock(return_value=[notebook])
 
             metadata = NotebookMetadata(notebook=notebook, sources=[])
-            mock_client.get_notebook_metadata = AsyncMock(return_value=metadata)
+            mock_client.notebooks.get_metadata = AsyncMock(return_value=metadata)
             mock_client.notebooks.get = AsyncMock(return_value=notebook)
             mock_client_cls.return_value = mock_client
 
@@ -756,11 +756,11 @@ class TestNotebookMetadata:
                     SourceSummary(
                         kind=SourceType.WEB_PAGE,
                         title="Example Site",
-                        url="https://example.com",
+                        url="https://example.com/article",
                     )
                 ],
             )
-            mock_client.get_notebook_metadata = AsyncMock(return_value=metadata)
+            mock_client.notebooks.get_metadata = AsyncMock(return_value=metadata)
             mock_client.notebooks.get = AsyncMock(return_value=notebook)
             mock_client_cls.return_value = mock_client
 
