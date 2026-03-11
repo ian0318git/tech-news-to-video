@@ -1,5 +1,7 @@
 """Tests for research functionality."""
 
+from urllib.parse import unquote
+
 import pytest
 
 from notebooklm import NotebookLMClient
@@ -173,7 +175,39 @@ class TestResearch:
         assert result["sources"][0]["title"] == "Deep Research Finding"
         assert result["sources"][0]["url"] == ""
         assert result["sources"][0]["result_type"] == 5
+        assert result["sources"][0]["research_task_id"] == "task_123"
+        assert result["sources"][0]["report_markdown"] == "# Report markdown"
         assert result["report"] == "# Report markdown"
+
+    @pytest.mark.asyncio
+    async def test_poll_deep_research_current_report_shape(
+        self, auth_tokens, httpx_mock, build_rpc_response
+    ):
+        """Test poll parses the current report payload shape from deep research."""
+        sources = [
+            [
+                None,
+                ["Deep Research Report", "# Current report markdown"],
+                None,
+                5,
+                None,
+                None,
+                None,
+            ]
+        ]
+        task_info = [None, ["deep query", 1], 1, [sources, "Deep summary"], 6]
+        response_body = build_rpc_response(RPCMethod.POLL_RESEARCH, [[["report_123", task_info]]])
+        httpx_mock.add_response(content=response_body.encode(), method="POST")
+
+        async with NotebookLMClient(auth_tokens) as client:
+            result = await client.research.poll("nb_123")
+
+        assert result["status"] == "completed"
+        assert result["task_id"] == "report_123"
+        assert result["sources"][0]["title"] == "Deep Research Report"
+        assert result["sources"][0]["report_markdown"] == "# Current report markdown"
+        assert result["sources"][0]["research_task_id"] == "report_123"
+        assert result["report"] == "# Current report markdown"
 
     @pytest.mark.asyncio
     async def test_poll_fast_research_string_drive_result_type(
@@ -209,7 +243,7 @@ class TestResearch:
     async def test_import_sources_skips_result_type_5(
         self, auth_tokens, httpx_mock, build_rpc_response
     ):
-        """Test that import_sources filters out sources with result_type=5."""
+        """Test that import_sources keeps importable report entries and skips the rest."""
         response_body = build_rpc_response(
             RPCMethod.IMPORT_RESEARCH, [[[["src_001"], "Web Source"]]]
         )
@@ -218,7 +252,7 @@ class TestResearch:
         async with NotebookLMClient(auth_tokens) as client:
             sources = [
                 {"url": "http://example.com", "title": "Web Source", "result_type": 1},
-                {"url": "http://report.example.com", "title": "Report", "result_type": 5},
+                {"title": "Report Without Body", "result_type": 5},
             ]
             result = await client.research.import_sources(
                 notebook_id="nb_123", task_id="task_123", sources=sources
@@ -252,6 +286,45 @@ class TestResearch:
 
         # Sources without URLs are filtered out, no RPC call made
         assert result == []
+
+    @pytest.mark.asyncio
+    async def test_import_sources_includes_deep_research_report_entry(
+        self, auth_tokens, httpx_mock, build_rpc_response
+    ):
+        """Test that deep research imports prepend the report entry and use the polled task id."""
+        response_body = build_rpc_response(
+            RPCMethod.IMPORT_RESEARCH,
+            [[[["report_src_001"], "Deep Research Report"], [["src_001"], "Web Source"]]],
+        )
+        httpx_mock.add_response(content=response_body.encode(), method="POST")
+
+        async with NotebookLMClient(auth_tokens) as client:
+            sources = [
+                {
+                    "title": "Deep Research Report",
+                    "result_type": 5,
+                    "report_markdown": "# Deep report body",
+                    "research_task_id": "report_123",
+                },
+                {
+                    "url": "http://example.com",
+                    "title": "Web Source",
+                    "result_type": 1,
+                    "research_task_id": "report_123",
+                },
+            ]
+            result = await client.research.import_sources(
+                notebook_id="nb_123",
+                task_id="task_123",
+                sources=sources,
+            )
+
+        assert len(result) == 2
+        request = httpx_mock.get_request()
+        request_body = unquote(request.content.decode())
+        assert '"report_123","nb_123",[[null,["Deep Research Report","# Deep report body"],null,3' in request_body
+        assert '["http://example.com","Web Source"]' in request_body
+
 
     @pytest.mark.asyncio
     async def test_import_sources_empty_response(self, auth_tokens, httpx_mock, build_rpc_response):
@@ -349,8 +422,9 @@ class TestResearch:
         Deep research sources typically have URLs. Sources without URLs are
         filtered out before import (they cause batch failures).
         """
-        # Deep research format: [url, title, description, type]
+        # Deep research format includes a special report entry and web sources.
         poll_sources = [
+            [None, ["Deep Research Report", "# Deep report body"], None, 5, None, None, None],
             ["https://example.com/ai-ethics", "Deep Finding: AI Ethics", "Description", 2],
             ["https://example.com/ml-trends", "Deep Finding: ML Trends", "Description", 2],
             [None, "Synthetic Summary", "No URL", 2],  # This will be filtered out
@@ -365,7 +439,7 @@ class TestResearch:
         )
         httpx_mock.add_response(
             content=build_rpc_response(
-                RPCMethod.POLL_RESEARCH, [[["task_deep_456", task_info]]]
+                RPCMethod.POLL_RESEARCH, [[["report_789", task_info]]]
             ).encode(),
             method="POST",
         )
@@ -374,6 +448,7 @@ class TestResearch:
                 RPCMethod.IMPORT_RESEARCH,
                 [
                     [
+                        [["report_src_001"], "Deep Research Report"],
                         [["deep_src_001"], "Deep Finding: AI Ethics"],
                         [["deep_src_002"], "Deep Finding: ML Trends"],
                     ]
@@ -392,8 +467,9 @@ class TestResearch:
 
             poll_result = await client.research.poll("nb_123")
             assert poll_result["status"] == "completed"
+            assert poll_result["task_id"] == "report_789"
             sources = poll_result["sources"]
-            assert len(sources) == 3
+            assert len(sources) == 4
 
             # Sources with URLs can be imported; sources without URLs are filtered
             sources_with_urls = [s for s in sources if s.get("url")]
@@ -405,6 +481,7 @@ class TestResearch:
                 sources=sources,  # Pass all, filtering happens internally
             )
 
-            assert len(imported) == 2
-            assert imported[0]["id"] == "deep_src_001"
-            assert imported[1]["id"] == "deep_src_002"
+            assert len(imported) == 3
+            assert imported[0]["id"] == "report_src_001"
+            assert imported[1]["id"] == "deep_src_001"
+            assert imported[2]["id"] == "deep_src_002"

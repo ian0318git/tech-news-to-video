@@ -57,6 +57,16 @@ class ResearchAPI:
             return _RESEARCH_RESULT_TYPE_ALIASES.get(value.lower(), value)
         return 1
 
+    @staticmethod
+    def _build_report_import_entry(title: str, markdown: str) -> list[Any]:
+        """Build the special deep-research report entry used by IMPORT_RESEARCH."""
+        return [None, [title, markdown], None, 3, None, None, None, None, None, None, 3]
+
+    @staticmethod
+    def _build_web_import_entry(url: str, title: str) -> list[Any]:
+        """Build a standard web-source import entry used by IMPORT_RESEARCH."""
+        return [None, None, [url, title], None, None, None, None, None, None, None, 2]
+
     async def start(
         self,
         notebook_id: str,
@@ -180,33 +190,58 @@ class ResearchAPI:
 
                 title = ""
                 url = ""
+                source_report = ""
 
                 # Fast research: [url, title, desc, type, ...]
-                # Deep research: [None, title, None, type, ..., [report_markdown]]
+                # Deep research (legacy): [None, title, None, type, ..., [report_markdown]]
+                # Deep research (current): [None, [title, report_markdown], None, type, ...]
                 # src[3] is the authoritative result_type when present.
                 # Legacy payloads use string tags such as "web"/"drive".
                 result_type = self._parse_result_type(src[3]) if len(src) > 3 else 1
-                if src[0] is None and len(src) > 1 and isinstance(src[1], str):
-                    title = src[1]
-                    url = ""
-                    if result_type == 1:
-                        result_type = 5  # deep research report entry (fallback)
+                if src[0] is None and len(src) > 1:
+                    if (
+                        isinstance(src[1], list)
+                        and len(src[1]) >= 2
+                        and isinstance(src[1][0], str)
+                        and isinstance(src[1][1], str)
+                    ):
+                        title = src[1][0]
+                        source_report = src[1][1]
+                        url = ""
+                        if result_type == 1:
+                            result_type = 5  # deep research report entry (fallback)
+                    elif isinstance(src[1], str):
+                        title = src[1]
+                        url = ""
+                        if result_type == 1:
+                            result_type = 5  # deep research report entry (fallback)
                 elif isinstance(src[0], str) or len(src) >= 3:
                     url = src[0] if isinstance(src[0], str) else ""
                     title = src[1] if len(src) > 1 and isinstance(src[1], str) else ""
 
                 if title or url:
-                    parsed_sources.append({"url": url, "title": title, "result_type": result_type})
+                    parsed_source = {
+                        "url": url,
+                        "title": title,
+                        "result_type": result_type,
+                        "research_task_id": task_id,
+                    }
+                    if source_report:
+                        parsed_source["report_markdown"] = source_report
+                    parsed_sources.append(parsed_source)
 
                 # Extract report markdown from src[6][0] (first match wins)
                 if (
                     not report
+                    and not source_report
                     and len(src) > 6
                     and isinstance(src[6], list)
                     and len(src[6]) > 0
                     and isinstance(src[6][0], str)
                 ):
                     report = src[6][0]
+                elif not report and source_report:
+                    report = source_report
 
             # NOTE: Research status codes differ from artifact status codes
             # Research: 1=in_progress, 2=completed, 6=completed (deep research)
@@ -228,7 +263,7 @@ class ResearchAPI:
         self,
         notebook_id: str,
         task_id: str,
-        sources: list[dict[str, str]],
+        sources: list[dict[str, Any]],
     ) -> list[dict[str, str]]:
         """Import selected research sources into the notebook.
 
@@ -236,6 +271,8 @@ class ResearchAPI:
             notebook_id: The notebook ID.
             task_id: The research task ID.
             sources: List of sources to import, each with 'url' and 'title'.
+                Deep research results from poll() may also include a report
+                entry with 'report_markdown' and 'research_task_id'.
 
         Returns:
             List of imported sources with 'id' and 'title'.
@@ -251,37 +288,47 @@ class ResearchAPI:
         if not sources:
             return []
 
-        # Filter out sources without URLs and deep research report entries (result_type=5)
-        # - sources without URLs cause the entire batch to fail
-        # - result_type=5 entries are report summaries, not importable web sources
-        valid_sources = [s for s in sources if s.get("result_type") != 5 and s.get("url")]
-        skipped_count = len(sources) - len(valid_sources)
+        effective_task_id = task_id
+        for source in sources:
+            research_task_id = source.get("research_task_id")
+            if isinstance(research_task_id, str) and research_task_id:
+                effective_task_id = research_task_id
+                break
+
+        report_source = next(
+            (
+                source
+                for source in sources
+                if source.get("result_type") == 5
+                and isinstance(source.get("title"), str)
+                and isinstance(source.get("report_markdown"), str)
+                and source.get("report_markdown")
+            ),
+            None,
+        )
+        valid_sources = [s for s in sources if s.get("url")]
+        skipped_count = len(sources) - len(valid_sources) - (1 if report_source else 0)
         if skipped_count > 0:
             logger.warning(
                 "Skipping %d source(s) that cannot be imported (missing URLs or report entries)",
                 skipped_count,
             )
-        if not valid_sources:
+        if not valid_sources and not report_source:
             return []
 
-        source_array = [
-            [
-                None,
-                None,
-                [src["url"], src.get("title", "Untitled")],
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                2,
-            ]
+        source_array = []
+        if report_source:
+            source_array.append(
+                self._build_report_import_entry(
+                    report_source["title"], report_source["report_markdown"]
+                )
+            )
+        source_array.extend(
+            self._build_web_import_entry(src["url"], src.get("title", "Untitled"))
             for src in valid_sources
-        ]
+        )
 
-        params = [None, [1], task_id, notebook_id, source_array]
+        params = [None, [1], effective_task_id, notebook_id, source_array]
 
         result = await self._core.rpc_call(
             RPCMethod.IMPORT_RESEARCH,
