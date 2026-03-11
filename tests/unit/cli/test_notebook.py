@@ -772,4 +772,5 @@ class TestNotebookMetadata:
                 result = runner.invoke(cli, ["metadata"])
 
             assert result.exit_code == 0
-            assert "https://example.com" in result.output
+            output_lines = result.output.splitlines()
+            assert "     https://example.com/article" in output_lines
