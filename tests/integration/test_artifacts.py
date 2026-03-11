@@ -128,6 +128,42 @@ class TestStudioContent:
         assert result.task_id == "artifact_456"
 
     @pytest.mark.asyncio
+    async def test_generate_cinematic_video(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+        build_rpc_response,
+    ):
+        notebook_response = build_rpc_response(
+            RPCMethod.GET_NOTEBOOK,
+            [
+                [
+                    "Test Notebook",
+                    [[["source_123"], "Source", [None, 0], [None, 2]]],
+                    "nb_123",
+                    "📘",
+                    None,
+                    [None, None, None, None, None, [1704067200, 0]],
+                ]
+            ],
+        )
+        cinematic_response = build_rpc_response(
+            RPCMethod.CREATE_ARTIFACT,
+            [["artifact_789", "Cinematic Video Overview", "2026-03-09", None, 1]],
+        )
+        httpx_mock.add_response(content=notebook_response.encode())
+        httpx_mock.add_response(content=cinematic_response.encode())
+
+        async with NotebookLMClient(auth_tokens) as client:
+            result = await client.artifacts.generate_cinematic_video(
+                notebook_id="nb_123",
+                instructions="documentary about quantum physics",
+            )
+
+        assert result is not None
+        assert result.task_id == "artifact_789"
+
+    @pytest.mark.asyncio
     async def test_generate_slide_deck(
         self,
         auth_tokens,

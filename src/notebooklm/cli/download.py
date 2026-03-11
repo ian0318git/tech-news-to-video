@@ -539,6 +539,21 @@ def download_video(ctx, **kwargs):
     _run_artifact_download(ctx, "video", **kwargs)
 
 
+# Cinematic videos share ArtifactTypeCode.VIDEO with standard videos, so
+# 'download cinematic-video' is a thin alias reusing download_video's params.
+_cinematic_video_cmd = click.Command(
+    name="cinematic-video",
+    callback=download_video.callback,
+    params=list(download_video.params),
+    help=(
+        "Download cinematic video overview(s) to file.\n\n"
+        "Alias for 'download video' — cinematic and standard videos share\n"
+        "the same artifact type."
+    ),
+)
+download.add_command(_cinematic_video_cmd)
+
+
 @download.command("slide-deck")
 @click.argument("output_path", required=False, type=click.Path())
 @click.option("-n", "--notebook", help="Notebook ID (uses current context if not set)")

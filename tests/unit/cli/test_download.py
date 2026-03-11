@@ -399,6 +399,43 @@ class TestDownloadCommandsExist:
         assert "OUTPUT_PATH" in result.output
         assert "--notebook" in result.output or "-n" in result.output
 
+    def test_download_cinematic_video_alias_exists(self, runner):
+        """Verify 'download cinematic-video' alias is registered and shows help."""
+        result = runner.invoke(cli, ["download", "cinematic-video", "--help"])
+        assert result.exit_code == 0
+        assert "cinematic" in result.output.lower()
+
+    def test_download_cinematic_video_alias_callable(self, runner, mock_auth, tmp_path):
+        """Verify 'download cinematic-video' alias invokes download video logic."""
+        with patch_client_for_module("download") as mock_client_cls:
+            mock_client = create_mock_client()
+
+            output_file = tmp_path / "cinematic.mp4"
+
+            async def mock_download_video(notebook_id, output_path, artifact_id=None):
+                Path(output_path).write_bytes(b"fake cinematic content")
+                return output_path
+
+            mock_client.artifacts.list = AsyncMock(
+                return_value=[make_artifact("cin_1", "My Cinematic Video", 3)]
+            )
+            mock_client.artifacts.download_video = mock_download_video
+            mock_client_cls.return_value = mock_client
+
+            with (
+                patch.object(download_module, "fetch_tokens", new_callable=AsyncMock) as mock_fetch,
+                patch.object(download_module, "load_auth_from_storage") as mock_load,
+            ):
+                mock_load.return_value = {"SID": "test", "HSID": "test", "SSID": "test"}
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli,
+                    ["download", "cinematic-video", str(output_file), "-n", "nb_123"],
+                )
+
+            assert result.exit_code == 0, result.output
+            assert output_file.exists()
+
 
 # =============================================================================
 # FLAG CONFLICT VALIDATION TESTS

@@ -1,9 +1,10 @@
 """Generate content CLI commands.
 
 Commands:
-    audio        Generate audio overview (podcast)
-    video        Generate video overview
-    slide-deck   Generate slide deck
+    audio            Generate audio overview (podcast)
+    video            Generate video overview
+    cinematic-video  Generate cinematic video overview (AI documentary footage)
+    slide-deck       Generate slide deck
     quiz         Generate quiz
     flashcards   Generate flashcards
     infographic  Generate infographic
@@ -397,7 +398,7 @@ def generate_audio(
 @click.option(
     "--format",
     "video_format",
-    type=click.Choice(["explainer", "brief"]),
+    type=click.Choice(["explainer", "brief", "cinematic"]),
     default="explainer",
 )
 @click.option(
@@ -438,6 +439,9 @@ def generate_video(
 ):
     """Generate video overview.
 
+    Use --format cinematic for AI-generated documentary footage (Veo 3).
+    Cinematic videos ignore --style and take ~30-40 min (requires AI Ultra).
+
     \b
     Use --json for machine-readable output.
 
@@ -445,10 +449,19 @@ def generate_video(
     Example:
       notebooklm generate video "a funny explainer for kids age 5"
       notebooklm generate video "professional presentation" --style classic
+      notebooklm generate video --format cinematic "documentary overview"
       notebooklm generate video -s src_001 "from specific source"
     """
+    # Auto-select cinematic format when invoked as 'generate cinematic-video'
+    if ctx.info_name == "cinematic-video":
+        video_format = "cinematic"
+
     nb_id = require_notebook(notebook_id)
-    format_map = {"explainer": VideoFormat.EXPLAINER, "brief": VideoFormat.BRIEF}
+    format_map = {
+        "explainer": VideoFormat.EXPLAINER,
+        "brief": VideoFormat.BRIEF,
+        "cinematic": VideoFormat.CINEMATIC,
+    }
     style_map = {
         "auto": VideoStyle.AUTO_SELECT,
         "classic": VideoStyle.CLASSIC,
@@ -460,6 +473,7 @@ def generate_video(
         "heritage": VideoStyle.HERITAGE,
         "paper-craft": VideoStyle.PAPER_CRAFT,
     }
+    is_cinematic = video_format == "cinematic"
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
@@ -467,6 +481,13 @@ def generate_video(
             sources = await resolve_source_ids(client, nb_id_resolved, source_ids)
 
             async def _generate():
+                if is_cinematic:
+                    return await client.artifacts.generate_cinematic_video(
+                        nb_id_resolved,
+                        source_ids=sources,
+                        language=resolve_language(language),
+                        instructions=description or None,
+                    )
                 return await client.artifacts.generate_video(
                     nb_id_resolved,
                     source_ids=sources,
@@ -476,12 +497,30 @@ def generate_video(
                     video_style=style_map[style],
                 )
 
+            timeout = 1800.0 if is_cinematic else 600.0
             result = await generate_with_retry(_generate, max_retries, "video", json_output)
             await handle_generation_result(
-                client, nb_id_resolved, result, "video", wait, json_output, timeout=600.0
+                client, nb_id_resolved, result, "video", wait, json_output, timeout=timeout
             )
 
     return _run()
+
+
+# Convenience alias: 'generate cinematic-video' delegates to 'generate video --format cinematic'.
+# Reuses generate_video's callback/params so changes stay in sync automatically.
+_cinematic_video_gen_cmd = click.Command(
+    name="cinematic-video",
+    callback=generate_video.callback,
+    params=list(generate_video.params),
+    help=(
+        "Generate cinematic video overview (AI-generated documentary footage).\n\n"
+        "Alias for 'generate video --format cinematic'. Uses Veo 3 AI to create\n"
+        "documentary-style videos. Requires Google AI Ultra.\n\n"
+        "Example:\n"
+        '  notebooklm generate cinematic-video "documentary about quantum physics"'
+    ),
+)
+generate.add_command(_cinematic_video_gen_cmd)
 
 
 @generate.command("slide-deck")
