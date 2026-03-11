@@ -26,6 +26,7 @@ from ..auth import (
     fetch_tokens,
     load_auth_from_storage,
 )
+from ..exceptions import RPCTimeoutError
 from ..paths import get_browser_profile_dir, get_context_path
 from ..types import ArtifactType
 
@@ -79,6 +80,54 @@ def cli_name_to_artifact_type(name: str) -> ArtifactType | None:
 def run_async(coro):
     """Run async coroutine in sync context."""
     return asyncio.run(coro)
+
+
+async def import_with_retry(
+    client,
+    notebook_id: str,
+    task_id: str,
+    sources: list[dict],
+    *,
+    max_elapsed: float = 1800,
+    initial_delay: float = 5,
+    backoff_factor: float = 2,
+    max_delay: float = 60,
+    json_output: bool = False,
+) -> list[dict[str, str]]:
+    """Retry research import on RPC timeouts with exponential backoff.
+
+    This is intentionally CLI-only policy. Library consumers calling
+    `client.research.import_sources()` directly still get one-shot behavior.
+    """
+    started_at = time.monotonic()
+    delay = initial_delay
+    attempt = 1
+
+    while True:
+        try:
+            return await client.research.import_sources(notebook_id, task_id, sources)
+        except RPCTimeoutError:
+            elapsed = time.monotonic() - started_at
+            remaining = max_elapsed - elapsed
+            if remaining <= 0:
+                raise
+
+            sleep_for = min(delay, max_delay, remaining)
+            logger.warning(
+                "IMPORT_RESEARCH timed out for notebook %s; retrying in %.1fs (attempt %d, %.1fs elapsed)",
+                notebook_id,
+                sleep_for,
+                attempt + 1,
+                elapsed,
+            )
+            if not json_output:
+                console.print(
+                    f"[yellow]Import timed out; retrying in {sleep_for:.0f}s "
+                    f"(attempt {attempt + 1})[/yellow]"
+                )
+            await asyncio.sleep(sleep_for)
+            delay = min(delay * backoff_factor, max_delay)
+            attempt += 1
 
 
 # =============================================================================
@@ -514,27 +563,72 @@ def json_error_response(code: str, message: str, extra: dict | None = None) -> N
     raise SystemExit(1)
 
 
+_RESULT_TYPE_LABELS = {
+    1: "Web",
+    2: "Drive",
+    5: "Report",
+    "web": "Web",
+    "drive": "Drive",
+    "report": "Report",
+}
+
+
 def display_research_sources(sources: list[dict], max_display: int = 10) -> None:
     """Display research sources in a formatted table.
 
     Args:
-        sources: List of source dicts with 'title' and 'url' keys
+        sources: List of source dicts with 'title', 'url', and optional 'result_type' keys
         max_display: Maximum sources to show before truncating (default 10)
     """
     console.print(f"[bold]Found {len(sources)} sources[/bold]")
 
     if sources:
+        # Only show Type column if any source has result_type
+        has_types = any("result_type" in s for s in sources)
+
         table = Table(show_header=True, header_style="bold")
         table.add_column("Title", style="cyan")
+        if has_types:
+            table.add_column("Type", style="yellow")
         table.add_column("URL", style="dim")
         for src in sources[:max_display]:
-            table.add_row(
-                src.get("title", "Untitled")[:50],
-                src.get("url", "")[:60],
-            )
+            row = [src.get("title", "Untitled")[:50]]
+            if has_types:
+                rt: int | None = src.get("result_type")
+                label = (
+                    _RESULT_TYPE_LABELS.get(rt, str(rt) if rt is not None else "")
+                    if rt is not None
+                    else ""
+                )
+                row.append(label)
+            row.append(src.get("url", "")[:60])
+            table.add_row(*row)
         if len(sources) > max_display:
-            table.add_row(f"... and {len(sources) - max_display} more", "")
+            extra_row = [f"... and {len(sources) - max_display} more"]
+            if has_types:
+                extra_row.append("")
+            extra_row.append("")
+            table.add_row(*extra_row)
         console.print(table)
+
+
+def display_report(report: str, max_chars: int = 1000, json_hint: bool = True) -> None:
+    """Display a research report, truncated for terminal output.
+
+    Args:
+        report: The report markdown text.
+        max_chars: Maximum characters to display (default 1000).
+        json_hint: Whether to suggest --json for full output in truncation message.
+    """
+    if not report:
+        return
+    console.print("\n[bold]Report:[/bold]")
+    console.print(report[:max_chars], markup=False)
+    if len(report) > max_chars:
+        hint = " use --json for full report" if json_hint else ""
+        console.print(
+            f"[dim]... (truncated,{hint})[/dim]" if hint else "[dim]... (truncated)[/dim]"
+        )
 
 
 # =============================================================================

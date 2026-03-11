@@ -152,7 +152,9 @@ class TestResearchAPI:
         assert len(result["sources"]) == 2
         assert result["sources"][0]["url"] == "https://example.com"
         assert result["sources"][0]["title"] == "Quantum Guide"
+        assert result["sources"][0]["result_type"] == 1
         assert "Summary" in result["summary"]
+        assert "report" in result
 
     @pytest.mark.asyncio
     async def test_poll_in_progress(
@@ -420,7 +422,8 @@ class TestPollEdgeCases:
         httpx_mock: HTTPXMock,
         build_rpc_response,
     ):
-        """Lines 171-172: deep research source where src[0] is None — title extracted, url=''."""
+        """Lines 171-172: deep research source where src[0] is None — title extracted, url=''.
+        Also tests report extraction from src[6]."""
         response = build_rpc_response(
             RPCMethod.POLL_RESEARCH,
             [
@@ -432,7 +435,15 @@ class TestPollEdgeCases:
                         None,
                         [
                             [
-                                [None, "Deep Research Title", None, "web"],
+                                [
+                                    None,
+                                    "Deep Research Title",
+                                    None,
+                                    5,
+                                    None,
+                                    None,
+                                    ["# Deep Report\nContent here"],
+                                ],
                             ],
                             "Deep summary",
                         ],
@@ -450,6 +461,44 @@ class TestPollEdgeCases:
         assert len(result["sources"]) == 1
         assert result["sources"][0]["title"] == "Deep Research Title"
         assert result["sources"][0]["url"] == ""
+        assert result["sources"][0]["result_type"] == 5
+        assert result["report"] == "# Deep Report\nContent here"
+
+    @pytest.mark.asyncio
+    async def test_poll_status_code_6_is_completed(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+        build_rpc_response,
+    ):
+        """Status code 6 (deep research) should be treated as completed."""
+        response = build_rpc_response(
+            RPCMethod.POLL_RESEARCH,
+            [
+                [
+                    "task_deep6",
+                    [
+                        None,
+                        ["deep query"],
+                        None,
+                        [
+                            [
+                                ["https://example.com", "Web Source", "desc", 1],
+                            ],
+                            "Summary",
+                        ],
+                        6,  # status code 6 = completed (deep research)
+                    ],
+                ]
+            ],
+        )
+        httpx_mock.add_response(content=response.encode())
+
+        async with NotebookLMClient(auth_tokens) as client:
+            result = await client.research.poll("nb_123")
+
+        assert result["status"] == "completed"
+        assert result["task_id"] == "task_deep6"
 
     @pytest.mark.asyncio
     async def test_poll_fast_research_source_with_url(
@@ -567,6 +616,37 @@ class TestImportSourcesEdgeCases:
             )
 
         assert result == []
+
+    @pytest.mark.asyncio
+    async def test_import_sources_skips_deep_report_type(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+        build_rpc_response,
+    ):
+        """Sources with result_type=5 (deep research report) are filtered out even with URL."""
+        response = build_rpc_response(
+            RPCMethod.IMPORT_RESEARCH,
+            [
+                [
+                    [["src_web"], "Web Source"],
+                ]
+            ],
+        )
+        httpx_mock.add_response(content=response.encode())
+
+        async with NotebookLMClient(auth_tokens) as client:
+            result = await client.research.import_sources(
+                "nb_123",
+                "task_123",
+                [
+                    {"url": "https://web.com", "title": "Web Source", "result_type": 1},
+                    {"url": "https://report.com", "title": "Report Entry", "result_type": 5},
+                ],
+            )
+
+        assert len(result) == 1
+        assert result[0]["id"] == "src_web"
 
     @pytest.mark.asyncio
     async def test_import_sources_filters_some_no_url(

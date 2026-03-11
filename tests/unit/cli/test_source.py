@@ -1,5 +1,6 @@
 """Tests for source CLI commands."""
 
+import importlib
 import json
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -17,6 +18,8 @@ from notebooklm.types import (
 )
 
 from .conftest import create_mock_client, patch_client_for_module
+
+source_module = importlib.import_module("notebooklm.cli.source")
 
 
 @pytest.fixture
@@ -437,6 +440,56 @@ class TestSourceAddDrive:
                 )
 
             assert result.exit_code == 0
+
+
+# =============================================================================
+# SOURCE ADD-RESEARCH TESTS
+# =============================================================================
+
+
+class TestSourceAddResearch:
+    def test_add_research_with_import_all_uses_retry_helper(self, runner, mock_auth):
+        with (
+            patch_client_for_module("source") as mock_client_cls,
+            patch.object(source_module, "import_with_retry", new_callable=AsyncMock) as mock_import,
+        ):
+            mock_client = create_mock_client()
+            mock_client.research.start = AsyncMock(return_value={"task_id": "task_123"})
+            mock_client.research.poll = AsyncMock(
+                return_value={
+                    "status": "completed",
+                    "task_id": "task_123",
+                    "sources": [{"title": "Source 1", "url": "http://example.com"}],
+                    "report": "# Report",
+                }
+            )
+            mock_import.return_value = [{"id": "src_1", "title": "Source 1"}]
+            mock_client_cls.return_value = mock_client
+
+            with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli,
+                    [
+                        "source",
+                        "add-research",
+                        "AI papers",
+                        "--mode",
+                        "deep",
+                        "--import-all",
+                        "-n",
+                        "nb_123",
+                    ],
+                )
+
+        assert result.exit_code == 0
+        assert "Imported 1 sources" in result.output
+        mock_import.assert_awaited_once_with(
+            mock_client,
+            "nb_123",
+            "task_123",
+            [{"title": "Source 1", "url": "http://example.com"}],
+        )
 
 
 # =============================================================================

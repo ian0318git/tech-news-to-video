@@ -9,28 +9,26 @@ from notebooklm import Artifact
 from notebooklm.cli.helpers import (
     clear_context,
     cli_name_to_artifact_type,
-    # Type display helpers
+    display_report,
+    display_research_sources,
     get_artifact_type_display,
     get_auth_tokens,
-    # Auth helpers
     get_client,
     get_current_conversation,
-    # Context helpers
     get_current_notebook,
     get_source_type_display,
     handle_auth_error,
-    # Error handling
     handle_error,
+    import_with_retry,
     json_error_response,
-    # Output helpers
     json_output_response,
     require_notebook,
     run_async,
     set_current_conversation,
     set_current_notebook,
-    # Decorator
     with_client,
 )
+from notebooklm.exceptions import RPCTimeoutError
 from notebooklm.types import ArtifactType
 
 # =============================================================================
@@ -397,6 +395,58 @@ class TestHandleAuthError:
         assert data["code"] == "AUTH_REQUIRED"
 
 
+class TestDisplayReport:
+    def test_prints_markdown_as_literal_text(self):
+        report = "See [NotebookLM](https://example.com) and [1]"
+
+        with patch("notebooklm.cli.helpers.console") as mock_console:
+            display_report(report, max_chars=1000)
+
+        assert mock_console.print.call_count == 2
+        assert mock_console.print.call_args_list[0].args[0] == "\n[bold]Report:[/bold]"
+        assert mock_console.print.call_args_list[1].args[0] == report
+        assert mock_console.print.call_args_list[1].kwargs["markup"] is False
+
+    def test_truncates_report_and_shows_json_hint(self):
+        report = "abcdef"
+
+        with patch("notebooklm.cli.helpers.console") as mock_console:
+            display_report(report, max_chars=3, json_hint=True)
+
+        assert mock_console.print.call_count == 3
+        assert mock_console.print.call_args_list[1].args[0] == "abc"
+        assert mock_console.print.call_args_list[1].kwargs["markup"] is False
+        assert mock_console.print.call_args_list[2].args[0] == (
+            "[dim]... (truncated, use --json for full report)[/dim]"
+        )
+
+    def test_truncates_report_without_json_hint(self):
+        report = "abcdef"
+
+        with patch("notebooklm.cli.helpers.console") as mock_console:
+            display_report(report, max_chars=3, json_hint=False)
+
+        assert mock_console.print.call_args_list[2].args[0] == "[dim]... (truncated)[/dim]"
+
+
+class TestDisplayResearchSources:
+    def test_shows_string_result_type_labels(self):
+        sources = [
+            {"title": "Web Result", "url": "https://example.com", "result_type": "web"},
+            {"title": "Drive Result", "url": "https://drive.example.com", "result_type": "drive"},
+        ]
+
+        with patch("notebooklm.cli.helpers.console") as mock_console:
+            display_research_sources(sources)
+
+        assert mock_console.print.call_count == 2
+        table = mock_console.print.call_args_list[1].args[0]
+        columns = [column.header for column in table.columns]
+        assert columns == ["Title", "Type", "URL"]
+        type_cells = table.columns[1]._cells
+        assert type_cells == ["Web", "Drive"]
+
+
 # =============================================================================
 # WITH_CLIENT DECORATOR TESTS
 # =============================================================================
@@ -586,3 +636,97 @@ class TestRunAsync:
 
         result = run_async(sample_coro())
         assert result == "result"
+
+
+class TestImportWithRetry:
+    @pytest.mark.asyncio
+    async def test_retries_rpc_timeout_then_succeeds(self):
+        client = MagicMock()
+        client.research.import_sources = AsyncMock(
+            side_effect=[
+                RPCTimeoutError("Timed out", timeout_seconds=30.0),
+                [{"id": "src_1", "title": "Source 1"}],
+            ]
+        )
+
+        with (
+            patch("notebooklm.cli.helpers.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+            patch("notebooklm.cli.helpers.console") as mock_console,
+        ):
+            imported = await import_with_retry(
+                client,
+                "nb_123",
+                "task_123",
+                [{"url": "https://example.com", "title": "Source 1"}],
+                initial_delay=5,
+                max_delay=60,
+            )
+
+        assert imported == [{"id": "src_1", "title": "Source 1"}]
+        assert client.research.import_sources.await_count == 2
+        mock_sleep.assert_awaited_once_with(5)
+        mock_console.print.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_retries_silently_for_json_output(self):
+        client = MagicMock()
+        client.research.import_sources = AsyncMock(
+            side_effect=[
+                RPCTimeoutError("Timed out", timeout_seconds=30.0),
+                [],
+            ]
+        )
+
+        with (
+            patch("notebooklm.cli.helpers.asyncio.sleep", new_callable=AsyncMock),
+            patch("notebooklm.cli.helpers.console") as mock_console,
+        ):
+            await import_with_retry(
+                client,
+                "nb_123",
+                "task_123",
+                [{"url": "https://example.com", "title": "Source 1"}],
+                json_output=True,
+            )
+
+        mock_console.print.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_raises_after_elapsed_budget(self):
+        client = MagicMock()
+        error = RPCTimeoutError("Timed out", timeout_seconds=30.0)
+        client.research.import_sources = AsyncMock(side_effect=error)
+
+        with (
+            patch("notebooklm.cli.helpers.time.monotonic", side_effect=[0.0, 1801.0]),
+            patch("notebooklm.cli.helpers.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+            pytest.raises(RPCTimeoutError),
+        ):
+            await import_with_retry(
+                client,
+                "nb_123",
+                "task_123",
+                [{"url": "https://example.com", "title": "Source 1"}],
+                max_elapsed=1800,
+            )
+
+        mock_sleep.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_does_not_retry_non_timeout_error(self):
+        client = MagicMock()
+        client.research.import_sources = AsyncMock(side_effect=ValueError("boom"))
+
+        with (
+            patch("notebooklm.cli.helpers.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+            pytest.raises(ValueError, match="boom"),
+        ):
+            await import_with_retry(
+                client,
+                "nb_123",
+                "task_123",
+                [{"url": "https://example.com", "title": "Source 1"}],
+            )
+
+        assert client.research.import_sources.await_count == 1
+        mock_sleep.assert_not_awaited()

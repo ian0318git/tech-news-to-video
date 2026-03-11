@@ -12,7 +12,9 @@ import click
 from ..client import NotebookLMClient
 from .helpers import (
     console,
+    display_report,
     display_research_sources,
+    import_with_retry,
     json_output_response,
     require_notebook,
     resolve_notebook_id,
@@ -90,6 +92,8 @@ def research_status(ctx, notebook_id, json_output, client_auth):
 
                 if summary:
                     console.print(f"\n[bold]Summary:[/bold]\n{summary[:500]}")
+
+                display_report(status.get("report", ""))
 
                 console.print("\n[dim]Use 'research wait --import-all' to import sources[/dim]")
             else:
@@ -173,16 +177,24 @@ def research_wait(ctx, notebook_id, timeout, interval, import_all, json_output, 
             sources = status.get("sources", [])
             query = status.get("query", "")
 
+            report = status.get("report", "")
+
             if json_output:
                 result = {
                     "status": "completed",
                     "query": query,
                     "sources_found": len(sources),
                     "sources": sources,
+                    "report": report,
                 }
                 if import_all and sources and task_id:
-                    imported = await client.research.import_sources(
-                        nb_id_resolved, task_id, sources
+                    imported = await import_with_retry(
+                        client,
+                        nb_id_resolved,
+                        task_id,
+                        sources,
+                        max_elapsed=timeout,
+                        json_output=True,
                     )
                     result["imported"] = len(imported)
                     result["imported_sources"] = imported
@@ -191,10 +203,16 @@ def research_wait(ctx, notebook_id, timeout, interval, import_all, json_output, 
                 console.print(f"[green]✓ Research completed:[/green] {query}")
                 display_research_sources(sources)
 
+                display_report(report)
+
                 if import_all and sources and task_id:
                     with console.status("Importing sources..."):
-                        imported = await client.research.import_sources(
-                            nb_id_resolved, task_id, sources
+                        imported = await import_with_retry(
+                            client,
+                            nb_id_resolved,
+                            task_id,
+                            sources,
+                            max_elapsed=timeout,
                         )
                     console.print(f"[green]Imported {len(imported)} sources[/green]")
 
