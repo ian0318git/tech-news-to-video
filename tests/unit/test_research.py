@@ -50,7 +50,9 @@ class TestResearch:
         assert result["status"] == "completed"
         assert len(result["sources"]) == 1
         assert result["sources"][0]["url"] == "http://example.com"
+        assert result["sources"][0]["result_type"] == 1
         assert result["summary"] == "Summary text"
+        assert result["report"] == ""
 
     @pytest.mark.asyncio
     async def test_import_research(self, auth_tokens, httpx_mock, build_rpc_response):
@@ -158,7 +160,7 @@ class TestResearch:
     @pytest.mark.asyncio
     async def test_poll_deep_research_sources(self, auth_tokens, httpx_mock, build_rpc_response):
         """Test poll parses deep research sources (title only, no URL)."""
-        sources = [[None, "Deep Research Finding", None, 2]]
+        sources = [[None, "Deep Research Finding", None, 5, None, None, ["# Report markdown"]]]
         task_info = [None, ["deep query", 1], 1, [sources, "Deep summary"], 2]
         response_body = build_rpc_response(RPCMethod.POLL_RESEARCH, [[["task_123", task_info]]])
         httpx_mock.add_response(content=response_body.encode(), method="POST")
@@ -170,6 +172,42 @@ class TestResearch:
         assert len(result["sources"]) == 1
         assert result["sources"][0]["title"] == "Deep Research Finding"
         assert result["sources"][0]["url"] == ""
+        assert result["sources"][0]["result_type"] == 5
+        assert result["report"] == "# Report markdown"
+
+    @pytest.mark.asyncio
+    async def test_poll_status_code_6_completed(self, auth_tokens, httpx_mock, build_rpc_response):
+        """Test that status code 6 (deep research) is treated as completed."""
+        task_info = [None, ["query", 1], 1, [[], ""], 6]
+        response_body = build_rpc_response(RPCMethod.POLL_RESEARCH, [[["task_123", task_info]]])
+        httpx_mock.add_response(content=response_body.encode(), method="POST")
+
+        async with NotebookLMClient(auth_tokens) as client:
+            result = await client.research.poll("nb_123")
+
+        assert result["status"] == "completed"
+
+    @pytest.mark.asyncio
+    async def test_import_sources_skips_result_type_5(
+        self, auth_tokens, httpx_mock, build_rpc_response
+    ):
+        """Test that import_sources filters out sources with result_type=5."""
+        response_body = build_rpc_response(
+            RPCMethod.IMPORT_RESEARCH, [[[["src_001"], "Web Source"]]]
+        )
+        httpx_mock.add_response(content=response_body.encode(), method="POST")
+
+        async with NotebookLMClient(auth_tokens) as client:
+            sources = [
+                {"url": "http://example.com", "title": "Web Source", "result_type": 1},
+                {"url": "http://report.example.com", "title": "Report", "result_type": 5},
+            ]
+            result = await client.research.import_sources(
+                notebook_id="nb_123", task_id="task_123", sources=sources
+            )
+
+        assert len(result) == 1
+        assert result[0]["id"] == "src_001"
 
     @pytest.mark.asyncio
     async def test_import_empty_sources(self, auth_tokens):
@@ -274,6 +312,7 @@ class TestResearch:
             for src in sources:
                 assert "url" in src
                 assert "title" in src
+                assert "result_type" in src
 
             imported = await client.research.import_sources(
                 notebook_id="nb_123", task_id=task_id, sources=sources[:2]

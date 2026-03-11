@@ -25,6 +25,7 @@ from ..client import NotebookLMClient
 from ..types import source_status_to_str
 from .helpers import (
     console,
+    display_report,
     display_research_sources,
     get_source_type_display,
     json_output_response,
@@ -475,6 +476,8 @@ def source_add_research(
                 sources = status.get("sources", [])
                 console.print()
                 display_research_sources(sources)
+
+                display_report(status.get("report", ""), json_hint=False)
 
                 if import_all and sources and task_id:
                     imported = await client.research.import_sources(

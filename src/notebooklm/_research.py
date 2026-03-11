@@ -158,6 +158,7 @@ class ResearchAPI:
                     summary = sources_and_summary[1]
 
             parsed_sources = []
+            report = ""
             for src in sources_data:
                 if not isinstance(src, list) or len(src) < 2:
                     continue
@@ -166,21 +167,35 @@ class ResearchAPI:
                 url = ""
 
                 # Fast research: [url, title, desc, type, ...]
-                # Deep research: [None, title, None, type, ..., [report]]
+                # Deep research: [None, title, None, type, ..., [report_markdown]]
+                # src[3] is the authoritative result_type when present
+                result_type = src[3] if len(src) > 3 and isinstance(src[3], int) else 1
                 if src[0] is None and len(src) > 1 and isinstance(src[1], str):
                     title = src[1]
                     url = ""
+                    if result_type == 1:
+                        result_type = 5  # deep research report entry (fallback)
                 elif isinstance(src[0], str) or len(src) >= 3:
                     url = src[0] if isinstance(src[0], str) else ""
                     title = src[1] if len(src) > 1 and isinstance(src[1], str) else ""
 
                 if title or url:
-                    parsed_sources.append({"url": url, "title": title})
+                    parsed_sources.append({"url": url, "title": title, "result_type": result_type})
+
+                # Extract report markdown from src[6][0] (first match wins)
+                if (
+                    not report
+                    and len(src) > 6
+                    and isinstance(src[6], list)
+                    and len(src[6]) > 0
+                    and isinstance(src[6][0], str)
+                ):
+                    report = src[6][0]
 
             # NOTE: Research status codes differ from artifact status codes
-            # Research: 1=in_progress, 2=completed
+            # Research: 1=in_progress, 2=completed, 6=completed (deep research)
             # Artifacts: 1=in_progress, 2=pending, 3=completed
-            status = "completed" if status_code == 2 else "in_progress"
+            status = "completed" if status_code in (2, 6) else "in_progress"
 
             return {
                 "task_id": task_id,
@@ -188,6 +203,7 @@ class ResearchAPI:
                 "query": query_text,
                 "sources": parsed_sources,
                 "summary": summary,
+                "report": report,
             }
 
         return {"status": "no_research"}
@@ -219,8 +235,10 @@ class ResearchAPI:
         if not sources:
             return []
 
-        # Filter out sources without URLs - these cause the entire batch to fail
-        valid_sources = [s for s in sources if s.get("url")]
+        # Filter out sources without URLs and deep research report entries (result_type=5)
+        # - sources without URLs cause the entire batch to fail
+        # - result_type=5 entries are report summaries, not importable web sources
+        valid_sources = [s for s in sources if s.get("result_type") != 5 and s.get("url")]
         skipped_count = len(sources) - len(valid_sources)
         if skipped_count > 0:
             logger.warning("Skipping %d source(s) without URLs (cannot be imported)", skipped_count)

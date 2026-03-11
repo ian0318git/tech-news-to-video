@@ -50,6 +50,7 @@ class TestResearchStatus:
                         {"title": "Source 2", "url": "http://example.com/2"},
                     ],
                     "summary": "This is a summary of the research results.",
+                    "report": "# Research Report\nDetailed findings here.",
                 }
             )
             mock_client_cls.return_value = mock_client
@@ -60,6 +61,7 @@ class TestResearchStatus:
         assert "Research completed" in result.output
         assert "Found 2 sources" in result.output
         assert "Source 1" in result.output
+        assert "Research Report" in result.output
 
     def test_status_completed_with_many_sources(self, runner, mock_auth, mock_fetch_tokens):
         """Test that more than 10 sources shows truncation message."""
@@ -131,6 +133,7 @@ class TestResearchWait:
                     "task_id": "task_123",
                     "query": "AI research",
                     "sources": [{"title": "Source 1", "url": "http://example.com"}],
+                    "report": "# Test Report",
                 }
             )
             mock_client_cls.return_value = mock_client
@@ -140,6 +143,7 @@ class TestResearchWait:
         assert result.exit_code == 0
         assert "Research completed" in result.output
         assert "Found 1 sources" in result.output
+        assert "Test Report" in result.output
 
     def test_wait_no_research(self, runner, mock_auth, mock_fetch_tokens):
         with patch_client_for_module("research") as mock_client_cls:
@@ -198,6 +202,7 @@ class TestResearchWait:
                     "task_id": "task_123",
                     "query": "AI research",
                     "sources": [{"title": "Source 1", "url": "http://example.com"}],
+                    "report": "# JSON Report",
                 }
             )
             mock_client_cls.return_value = mock_client
@@ -208,6 +213,7 @@ class TestResearchWait:
         data = json.loads(result.output)
         assert data["status"] == "completed"
         assert data["sources_found"] == 1
+        assert data["report"] == "# JSON Report"
 
     def test_wait_json_output_with_import(self, runner, mock_auth, mock_fetch_tokens):
         with patch_client_for_module("research") as mock_client_cls:

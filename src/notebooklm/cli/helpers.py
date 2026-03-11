@@ -514,27 +514,68 @@ def json_error_response(code: str, message: str, extra: dict | None = None) -> N
     raise SystemExit(1)
 
 
+_RESULT_TYPE_LABELS = {
+    1: "Web",
+    2: "Drive",
+    5: "Report",
+}
+
+
 def display_research_sources(sources: list[dict], max_display: int = 10) -> None:
     """Display research sources in a formatted table.
 
     Args:
-        sources: List of source dicts with 'title' and 'url' keys
+        sources: List of source dicts with 'title', 'url', and optional 'result_type' keys
         max_display: Maximum sources to show before truncating (default 10)
     """
     console.print(f"[bold]Found {len(sources)} sources[/bold]")
 
     if sources:
+        # Only show Type column if any source has result_type
+        has_types = any("result_type" in s for s in sources)
+
         table = Table(show_header=True, header_style="bold")
         table.add_column("Title", style="cyan")
+        if has_types:
+            table.add_column("Type", style="yellow")
         table.add_column("URL", style="dim")
         for src in sources[:max_display]:
-            table.add_row(
-                src.get("title", "Untitled")[:50],
-                src.get("url", "")[:60],
-            )
+            row = [src.get("title", "Untitled")[:50]]
+            if has_types:
+                rt: int | None = src.get("result_type")
+                label = (
+                    _RESULT_TYPE_LABELS.get(rt, str(rt) if rt is not None else "")
+                    if rt is not None
+                    else ""
+                )
+                row.append(label)
+            row.append(src.get("url", "")[:60])
+            table.add_row(*row)
         if len(sources) > max_display:
-            table.add_row(f"... and {len(sources) - max_display} more", "")
+            extra_row = [f"... and {len(sources) - max_display} more"]
+            if has_types:
+                extra_row.append("")
+            extra_row.append("")
+            table.add_row(*extra_row)
         console.print(table)
+
+
+def display_report(report: str, max_chars: int = 1000, json_hint: bool = True) -> None:
+    """Display a research report, truncated for terminal output.
+
+    Args:
+        report: The report markdown text.
+        max_chars: Maximum characters to display (default 1000).
+        json_hint: Whether to suggest --json for full output in truncation message.
+    """
+    if not report:
+        return
+    console.print(f"\n[bold]Report:[/bold]\n{report[:max_chars]}")
+    if len(report) > max_chars:
+        hint = " use --json for full report" if json_hint else ""
+        console.print(
+            f"[dim]... (truncated,{hint})[/dim]" if hint else "[dim]... (truncated)[/dim]"
+        )
 
 
 # =============================================================================

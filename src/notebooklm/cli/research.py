@@ -12,6 +12,7 @@ import click
 from ..client import NotebookLMClient
 from .helpers import (
     console,
+    display_report,
     display_research_sources,
     json_output_response,
     require_notebook,
@@ -90,6 +91,8 @@ def research_status(ctx, notebook_id, json_output, client_auth):
 
                 if summary:
                     console.print(f"\n[bold]Summary:[/bold]\n{summary[:500]}")
+
+                display_report(status.get("report", ""))
 
                 console.print("\n[dim]Use 'research wait --import-all' to import sources[/dim]")
             else:
@@ -173,12 +176,15 @@ def research_wait(ctx, notebook_id, timeout, interval, import_all, json_output, 
             sources = status.get("sources", [])
             query = status.get("query", "")
 
+            report = status.get("report", "")
+
             if json_output:
                 result = {
                     "status": "completed",
                     "query": query,
                     "sources_found": len(sources),
                     "sources": sources,
+                    "report": report,
                 }
                 if import_all and sources and task_id:
                     imported = await client.research.import_sources(
@@ -190,6 +196,8 @@ def research_wait(ctx, notebook_id, timeout, interval, import_all, json_output, 
             else:
                 console.print(f"[green]✓ Research completed:[/green] {query}")
                 display_research_sources(sources)
+
+                display_report(report)
 
                 if import_all and sources and task_id:
                     with console.status("Importing sources..."):
