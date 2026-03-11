@@ -67,6 +67,14 @@ class ResearchAPI:
         """Build a standard web-source import entry used by IMPORT_RESEARCH."""
         return [None, None, [url, title], None, None, None, None, None, None, None, 2]
 
+    @staticmethod
+    def _extract_legacy_report_chunks(src: list[Any]) -> str:
+        """Join multi-part legacy report chunks from src[6]."""
+        if len(src) <= 6 or not isinstance(src[6], list):
+            return ""
+        chunks = [chunk for chunk in src[6] if isinstance(chunk, str) and chunk]
+        return "\n\n".join(chunks)
+
     async def start(
         self,
         notebook_id: str,
@@ -156,7 +164,7 @@ class ResearchAPI:
         if isinstance(result[0], list) and len(result[0]) > 0 and isinstance(result[0][0], list):
             result = result[0]
 
-        # Find most recent task
+        parsed_tasks = []
         for task_data in result:
             if not isinstance(task_data, list) or len(task_data) < 2:
                 continue
@@ -230,34 +238,39 @@ class ResearchAPI:
                         parsed_source["report_markdown"] = source_report
                     parsed_sources.append(parsed_source)
 
-                # Extract report markdown from src[6][0] (first match wins)
-                if (
-                    not report
-                    and not source_report
-                    and len(src) > 6
-                    and isinstance(src[6], list)
-                    and len(src[6]) > 0
-                    and isinstance(src[6][0], str)
-                ):
-                    report = src[6][0]
-                elif not report and source_report:
+                # Current payloads inline report markdown in src[1][1].
+                # Legacy payloads keep it in src[6] as one or more chunks.
+                if not report and source_report:
                     report = source_report
+                elif not report:
+                    report = self._extract_legacy_report_chunks(src)
+                    if report and parsed_sources and parsed_sources[-1]["title"] == title:
+                        parsed_sources[-1]["report_markdown"] = report
 
             # NOTE: Research status codes differ from artifact status codes
             # Research: 1=in_progress, 2=completed, 6=completed (deep research)
             # Artifacts: 1=in_progress, 2=pending, 3=completed
             status = "completed" if status_code in (2, 6) else "in_progress"
 
+            parsed_tasks.append(
+                {
+                    "task_id": task_id,
+                    "status": status,
+                    "query": query_text,
+                    "sources": parsed_sources,
+                    "summary": summary,
+                    "report": report,
+                }
+            )
+
+        if parsed_tasks:
+            latest_task = parsed_tasks[0]
             return {
-                "task_id": task_id,
-                "status": status,
-                "query": query_text,
-                "sources": parsed_sources,
-                "summary": summary,
-                "report": report,
+                **latest_task,
+                "tasks": parsed_tasks,
             }
 
-        return {"status": "no_research"}
+        return {"status": "no_research", "tasks": []}
 
     async def import_sources(
         self,

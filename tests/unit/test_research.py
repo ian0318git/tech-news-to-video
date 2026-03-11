@@ -1,12 +1,20 @@
 """Tests for research functionality."""
 
-from urllib.parse import unquote
+import json
+from urllib.parse import parse_qs
 
 import pytest
 
 from notebooklm import NotebookLMClient
 from notebooklm.auth import AuthTokens
 from notebooklm.rpc import RPCMethod
+
+
+def _extract_request_params(request) -> list:
+    """Decode the nested batchexecute request params from a mocked request."""
+    body = parse_qs(request.content.decode())
+    f_req = json.loads(body["f.req"][0])
+    return json.loads(f_req[0][0][1])
 
 
 @pytest.fixture
@@ -55,6 +63,8 @@ class TestResearch:
         assert result["sources"][0]["result_type"] == 1
         assert result["summary"] == "Summary text"
         assert result["report"] == ""
+        assert len(result["tasks"]) == 1
+        assert result["tasks"][0]["task_id"] == "task_123"
 
     @pytest.mark.asyncio
     async def test_import_research(self, auth_tokens, httpx_mock, build_rpc_response):
@@ -178,6 +188,45 @@ class TestResearch:
         assert result["sources"][0]["research_task_id"] == "task_123"
         assert result["sources"][0]["report_markdown"] == "# Report markdown"
         assert result["report"] == "# Report markdown"
+
+    @pytest.mark.asyncio
+    async def test_poll_returns_all_tasks(self, auth_tokens, httpx_mock, build_rpc_response):
+        """Test poll preserves all parsed research tasks in an additive tasks field."""
+        latest_sources = [["http://example.com/latest", "Latest", "Description", 1]]
+        older_sources = [["http://example.com/older", "Older", "Description", 1]]
+        latest_task = [None, ["latest query", 1], 1, [latest_sources, "Latest summary"], 2]
+        older_task = [None, ["older query", 1], 1, [older_sources, "Older summary"], 2]
+        response_body = build_rpc_response(
+            RPCMethod.POLL_RESEARCH,
+            [[["task_latest", latest_task], ["task_older", older_task]]],
+        )
+        httpx_mock.add_response(content=response_body.encode(), method="POST")
+
+        async with NotebookLMClient(auth_tokens) as client:
+            result = await client.research.poll("nb_123")
+
+        assert result["task_id"] == "task_latest"
+        assert result["query"] == "latest query"
+        assert len(result["tasks"]) == 2
+        assert result["tasks"][0]["task_id"] == "task_latest"
+        assert result["tasks"][1]["task_id"] == "task_older"
+        assert result["tasks"][1]["query"] == "older query"
+
+    @pytest.mark.asyncio
+    async def test_poll_joins_legacy_report_chunks(
+        self, auth_tokens, httpx_mock, build_rpc_response
+    ):
+        """Test poll joins multiple legacy report chunks instead of truncating to the first one."""
+        sources = [[None, "Deep Research Finding", None, 5, None, None, ["chunk one", "chunk two"]]]
+        task_info = [None, ["deep query", 1], 1, [sources, "Deep summary"], 2]
+        response_body = build_rpc_response(RPCMethod.POLL_RESEARCH, [[["task_123", task_info]]])
+        httpx_mock.add_response(content=response_body.encode(), method="POST")
+
+        async with NotebookLMClient(auth_tokens) as client:
+            result = await client.research.poll("nb_123")
+
+        assert result["report"] == "chunk one\n\nchunk two"
+        assert result["tasks"][0]["report"] == "chunk one\n\nchunk two"
 
     @pytest.mark.asyncio
     async def test_poll_deep_research_current_report_shape(
@@ -321,12 +370,23 @@ class TestResearch:
 
         assert len(result) == 2
         request = httpx_mock.get_request()
-        request_body = unquote(request.content.decode())
-        assert (
-            '"report_123","nb_123",[[null,["Deep Research Report","# Deep report body"],null,3'
-            in request_body
-        )
-        assert '["http://example.com","Web Source"]' in request_body
+        params = _extract_request_params(request)
+        assert params[2] == "report_123"
+        assert params[3] == "nb_123"
+        assert params[4][0] == [
+            None,
+            ["Deep Research Report", "# Deep report body"],
+            None,
+            3,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            3,
+        ]
+        assert params[4][1][2] == ["http://example.com", "Web Source"]
 
     @pytest.mark.asyncio
     async def test_import_sources_rejects_mixed_research_task_ids(self, auth_tokens):
@@ -401,10 +461,11 @@ class TestResearch:
 
         assert len(result) == 3
         request = httpx_mock.get_request()
-        request_body = unquote(request.content.decode())
-        assert '["Deep Research Report 1","# Deep report body 1"]' in request_body
-        assert '["Deep Research Report 2","# Deep report body 2"]' in request_body
-        assert '["http://example.com","Web Source"]' in request_body
+        params = _extract_request_params(request)
+        assert params[2] == "report_123"
+        assert params[4][0][1] == ["Deep Research Report 1", "# Deep report body 1"]
+        assert params[4][1][1] == ["Deep Research Report 2", "# Deep report body 2"]
+        assert params[4][2][2] == ["http://example.com", "Web Source"]
 
     @pytest.mark.asyncio
     async def test_import_sources_empty_response(self, auth_tokens, httpx_mock, build_rpc_response):
