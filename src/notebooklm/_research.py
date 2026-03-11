@@ -258,8 +258,7 @@ class ResearchAPI:
         skipped_count = len(sources) - len(valid_sources)
         if skipped_count > 0:
             logger.warning(
-                "Skipping %d source(s) that cannot be imported "
-                "(missing URLs or report entries)",
+                "Skipping %d source(s) that cannot be imported (missing URLs or report entries)",
                 skipped_count,
             )
         if not valid_sources:
