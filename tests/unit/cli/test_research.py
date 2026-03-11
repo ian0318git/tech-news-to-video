@@ -1,11 +1,14 @@
 """Tests for research CLI commands."""
 
+import importlib
 import json
 from unittest.mock import AsyncMock, patch
 
 from notebooklm.notebooklm_cli import cli
 
 from .conftest import create_mock_client, patch_client_for_module
+
+research_module = importlib.import_module("notebooklm.cli.research")
 
 # =============================================================================
 # RESEARCH STATUS TESTS
@@ -174,8 +177,8 @@ class TestResearchWait:
     def test_wait_with_import_all(self, runner, mock_auth, mock_fetch_tokens):
         with (
             patch_client_for_module("research") as mock_client_cls,
-            patch(
-                "notebooklm.cli.research.import_with_retry", new_callable=AsyncMock
+            patch.object(
+                research_module, "import_with_retry", new_callable=AsyncMock
             ) as mock_import,
         ):
             mock_client = create_mock_client()
@@ -227,8 +230,8 @@ class TestResearchWait:
     def test_wait_json_output_with_import(self, runner, mock_auth, mock_fetch_tokens):
         with (
             patch_client_for_module("research") as mock_client_cls,
-            patch(
-                "notebooklm.cli.research.import_with_retry", new_callable=AsyncMock
+            patch.object(
+                research_module, "import_with_retry", new_callable=AsyncMock
             ) as mock_import,
         ):
             mock_client = create_mock_client()
