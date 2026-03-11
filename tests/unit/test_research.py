@@ -322,7 +322,10 @@ class TestResearch:
         assert len(result) == 2
         request = httpx_mock.get_request()
         request_body = unquote(request.content.decode())
-        assert '"report_123","nb_123",[[null,["Deep Research Report","# Deep report body"],null,3' in request_body
+        assert (
+            '"report_123","nb_123",[[null,["Deep Research Report","# Deep report body"],null,3'
+            in request_body
+        )
         assert '["http://example.com","Web Source"]' in request_body
 
     @pytest.mark.asyncio
@@ -402,7 +405,6 @@ class TestResearch:
         assert '["Deep Research Report 1","# Deep report body 1"]' in request_body
         assert '["Deep Research Report 2","# Deep report body 2"]' in request_body
         assert '["http://example.com","Web Source"]' in request_body
-
 
     @pytest.mark.asyncio
     async def test_import_sources_empty_response(self, auth_tokens, httpx_mock, build_rpc_response):
