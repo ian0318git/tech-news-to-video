@@ -9,28 +9,22 @@ from notebooklm import Artifact
 from notebooklm.cli.helpers import (
     clear_context,
     cli_name_to_artifact_type,
-    # Type display helpers
-    display_research_sources,
     display_report,
+    display_research_sources,
     get_artifact_type_display,
     get_auth_tokens,
-    # Auth helpers
     get_client,
     get_current_conversation,
-    # Context helpers
     get_current_notebook,
     get_source_type_display,
     handle_auth_error,
-    # Error handling
     handle_error,
     json_error_response,
-    # Output helpers
     json_output_response,
     require_notebook,
     run_async,
     set_current_conversation,
     set_current_notebook,
-    # Decorator
     with_client,
 )
 from notebooklm.types import ArtifactType
