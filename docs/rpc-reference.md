@@ -1218,6 +1218,14 @@ await rpc_call(
 # Response: [task_id, report_id, ...]
 ```
 
+Deep research is not complete after `QA9ei` alone. In the observed browser/client
+flow, the returned `report_id` later becomes important during polling and import:
+
+1. `QA9ei` starts the deep research job and returns `[task_id, report_id, ...]`
+2. `e3bVqc` polls the notebook for all research tasks and exposes the report content
+3. `LBwxtb` imports the report entry plus selected web sources using the later
+   polled deep-research task ID, which commonly matches the earlier `report_id`
+
 ### RPC: POLL_RESEARCH (e3bVqc)
 
 **Source:** `_research.py::poll()`
@@ -1238,17 +1246,35 @@ await rpc_call(
     source_path=f"/notebook/{notebook_id}",
 )
 
-# Response structure (per task):
+# Response structure:
 # [
 #     [task_id, [
 #         ...,
 #         query_info,           # [1]: [query_text, ...]
 #         ...,
 #         sources_and_summary,  # [3]: [[sources], summary_text]
-#         status_code,          # [4]: 2=completed, other=in_progress
+#         status_code,          # [4]: 2=completed, 6=completed (deep), other=in_progress
 #     ]],
 #     ...
 # ]
+#
+# sources_and_summary[0] can contain a mix of:
+#
+# Fast research web source:
+# [url, title, desc, type, ...]
+#
+# Deep research report source (current shape):
+# [None, [title, report_markdown], None, type, ...]
+#
+# Deep research report source (legacy shape):
+# [None, title, None, type, None, None, [chunk1, chunk2, ...]]
+#
+# Notes:
+# - The RPC returns all research tasks for the notebook, not just the latest one.
+# - The client exposes all parsed tasks via an additive `tasks` field and keeps the
+#   top-level return value backward-compatible as the latest task.
+# - For deep research, sources parsed from poll() carry `research_task_id`, which is
+#   later used by IMPORT_RESEARCH.
 ```
 
 ### RPC: IMPORT_RESEARCH (LBwxtb)
@@ -1259,27 +1285,43 @@ Import selected research sources into the notebook.
 
 ```python
 # Build source array from selected sources
+# Deep research imports prepend a special report entry before regular web sources.
 source_array = []
-for src in sources:
-    source_data = [
-        None,           # 0
-        None,           # 1
-        [url, title],   # 2: URL and title
-        None,           # 3
-        None,           # 4
-        None,           # 5
-        None,           # 6
-        None,           # 7
-        None,           # 8
-        None,           # 9
-        2,              # 10: Fixed value
-    ]
-    source_array.append(source_data)
+
+# Deep research report entry:
+source_array.append([
+    None,                 # 0
+    [title, markdown],    # 1: Report title and full markdown body
+    None,                 # 2
+    3,                    # 3: Special report marker
+    None,                 # 4
+    None,                 # 5
+    None,                 # 6
+    None,                 # 7
+    None,                 # 8
+    None,                 # 9
+    3,                    # 10: Special report marker
+])
+
+# Standard web source entry:
+source_array.append([
+    None,           # 0
+    None,           # 1
+    [url, title],   # 2: URL and title
+    None,           # 3
+    None,           # 4
+    None,           # 5
+    None,           # 6
+    None,           # 7
+    None,           # 8
+    None,           # 9
+    2,              # 10: Standard web-source marker
+])
 
 params = [
     None,           # 0
     [1],            # 1: Fixed flag
-    task_id,        # 2: Research task ID
+    task_id,        # 2: Research task ID (for deep research, use the polled task ID)
     notebook_id,    # 3: Notebook ID
     source_array,   # 4: Array of sources to import
 ]
@@ -1291,7 +1333,13 @@ await rpc_call(
     source_path=f"/notebook/{notebook_id}",
 )
 
-# Response: Imported sources with IDs
+# Response: Imported notebook sources with IDs
+#
+# Notes:
+# - Deep research report preservation depends on importing the special report entry,
+#   not just the URL sources.
+# - The browser/client flow uses the later polled deep-research task ID here rather
+#   than blindly reusing the original task ID returned by START_DEEP_RESEARCH.
 ```
 
 ---
