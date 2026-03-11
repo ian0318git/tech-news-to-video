@@ -29,6 +29,7 @@ from .rpc import (
     ExportType,
     InfographicDetail,
     InfographicOrientation,
+    InfographicStyle,
     QuizDifficulty,
     QuizQuantity,
     ReportFormat,
@@ -775,6 +776,7 @@ class ArtifactsAPI:
         instructions: str | None = None,
         orientation: InfographicOrientation | None = None,
         detail_level: InfographicDetail | None = None,
+        style: InfographicStyle | None = None,
     ) -> GenerationStatus:
         """Generate an infographic.
 
@@ -785,6 +787,7 @@ class ArtifactsAPI:
             instructions: Custom instructions for infographic generation.
             orientation: LANDSCAPE, PORTRAIT, or SQUARE.
             detail_level: CONCISE, STANDARD, or DETAILED.
+            style: Visual style preset for the infographic.
 
         Returns:
             GenerationStatus with task_id for polling.
@@ -795,6 +798,7 @@ class ArtifactsAPI:
         source_ids_triple = [[[sid]] for sid in source_ids] if source_ids else []
         orientation_code = orientation.value if orientation else None
         detail_code = detail_level.value if detail_level else None
+        style_code = style.value if style else None
 
         params = [
             [2],
@@ -814,7 +818,7 @@ class ArtifactsAPI:
                 None,
                 None,
                 None,
-                [[instructions, language, None, orientation_code, detail_code]],
+                [[instructions, language, None, orientation_code, detail_code, style_code]],
             ],
         ]
         return await self._call_generate(notebook_id, params)

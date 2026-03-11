@@ -9,7 +9,15 @@ from pytest_httpx import HTTPXMock
 
 from notebooklm import NotebookLMClient
 from notebooklm.exceptions import ValidationError
-from notebooklm.rpc import AudioFormat, AudioLength, RPCError, RPCMethod, VideoFormat, VideoStyle
+from notebooklm.rpc import (
+    AudioFormat,
+    AudioLength,
+    InfographicStyle,
+    RPCError,
+    RPCMethod,
+    VideoFormat,
+    VideoStyle,
+)
 from notebooklm.types import (
     ArtifactNotReadyError,
     ArtifactParseError,
@@ -495,6 +503,42 @@ class TestArtifactsAPI:
 
         assert result is not None
         assert result.task_id == "ig_123"
+
+    @pytest.mark.asyncio
+    async def test_generate_infographic_with_style(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+        build_rpc_response,
+    ):
+        """Test generating infographic with a specific visual style."""
+        notebook_response = build_rpc_response(
+            RPCMethod.GET_NOTEBOOK,
+            [
+                [
+                    "Test Notebook",
+                    [[["source_123"], "Source", [None, 0], [None, 2]]],
+                    "nb_123",
+                    "📘",
+                    None,
+                    [None, None, None, None, None, [1704067200, 0]],
+                ]
+            ],
+        )
+        infographic_response = build_rpc_response(
+            RPCMethod.CREATE_ARTIFACT, [["ig_456", "Infographic", "2024-01-05", None, 1]]
+        )
+        httpx_mock.add_response(content=notebook_response.encode())
+        httpx_mock.add_response(content=infographic_response.encode())
+
+        async with NotebookLMClient(auth_tokens) as client:
+            result = await client.artifacts.generate_infographic(
+                "nb_123",
+                style=InfographicStyle.PROFESSIONAL,
+            )
+
+        assert result is not None
+        assert result.task_id == "ig_456"
 
     @pytest.mark.asyncio
     async def test_generate_data_table(

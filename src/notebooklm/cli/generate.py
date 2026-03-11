@@ -26,6 +26,7 @@ from ..types import (
     GenerationStatus,
     InfographicDetail,
     InfographicOrientation,
+    InfographicStyle,
     QuizDifficulty,
     QuizQuantity,
     ReportFormat,
@@ -52,6 +53,20 @@ DEFAULT_LANGUAGE = "en"
 RETRY_INITIAL_DELAY = 60.0  # seconds
 RETRY_MAX_DELAY = 300.0  # 5 minutes
 RETRY_BACKOFF_MULTIPLIER = 2.0
+
+_INFOGRAPHIC_STYLE_MAP = {
+    "auto": InfographicStyle.AUTO_SELECT,
+    "sketch-note": InfographicStyle.SKETCH_NOTE,
+    "professional": InfographicStyle.PROFESSIONAL,
+    "bento-grid": InfographicStyle.BENTO_GRID,
+    "editorial": InfographicStyle.EDITORIAL,
+    "instructional": InfographicStyle.INSTRUCTIONAL,
+    "bricks": InfographicStyle.BRICKS,
+    "clay": InfographicStyle.CLAY,
+    "anime": InfographicStyle.ANIME,
+    "kawaii": InfographicStyle.KAWAII,
+    "scientific": InfographicStyle.SCIENTIFIC,
+}
 
 
 def calculate_backoff_delay(
@@ -841,6 +856,11 @@ def generate_flashcards(
     type=click.Choice(["concise", "standard", "detailed"]),
     default="standard",
 )
+@click.option(
+    "--style",
+    type=click.Choice(list(_INFOGRAPHIC_STYLE_MAP)),
+    default="auto",
+)
 @click.option("--language", default=None, help="Output language (default: from config or 'en')")
 @click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
 @click.option("--wait/--no-wait", default=False, help="Wait for completion (default: no-wait)")
@@ -853,6 +873,7 @@ def generate_infographic(
     notebook_id,
     orientation,
     detail,
+    style,
     language,
     source_ids,
     wait,
@@ -895,6 +916,7 @@ def generate_infographic(
                     instructions=description or None,
                     orientation=orientation_map[orientation],
                     detail_level=detail_map[detail],
+                    style=_INFOGRAPHIC_STYLE_MAP[style],
                 )
 
             result = await generate_with_retry(_generate, max_retries, "infographic", json_output)
