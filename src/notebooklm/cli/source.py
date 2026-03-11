@@ -28,6 +28,7 @@ from .helpers import (
     display_report,
     display_research_sources,
     get_source_type_display,
+    import_with_retry,
     json_output_response,
     require_notebook,
     resolve_notebook_id,
@@ -480,8 +481,11 @@ def source_add_research(
                 display_report(status.get("report", ""), json_hint=False)
 
                 if import_all and sources and task_id:
-                    imported = await client.research.import_sources(
-                        nb_id_resolved, task_id, sources
+                    imported = await import_with_retry(
+                        client,
+                        nb_id_resolved,
+                        task_id,
+                        sources,
                     )
                     console.print(f"[green]Imported {len(imported)} sources[/green]")
             else:

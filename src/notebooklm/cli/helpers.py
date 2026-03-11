@@ -26,6 +26,7 @@ from ..auth import (
     fetch_tokens,
     load_auth_from_storage,
 )
+from ..exceptions import RPCTimeoutError
 from ..paths import get_browser_profile_dir, get_context_path
 from ..types import ArtifactType
 
@@ -79,6 +80,54 @@ def cli_name_to_artifact_type(name: str) -> ArtifactType | None:
 def run_async(coro):
     """Run async coroutine in sync context."""
     return asyncio.run(coro)
+
+
+async def import_with_retry(
+    client,
+    notebook_id: str,
+    task_id: str,
+    sources: list[dict],
+    *,
+    max_elapsed: float = 1800,
+    initial_delay: float = 5,
+    backoff_factor: float = 2,
+    max_delay: float = 60,
+    json_output: bool = False,
+) -> list[dict[str, str]]:
+    """Retry research import on RPC timeouts with exponential backoff.
+
+    This is intentionally CLI-only policy. Library consumers calling
+    `client.research.import_sources()` directly still get one-shot behavior.
+    """
+    started_at = time.monotonic()
+    delay = initial_delay
+    attempt = 1
+
+    while True:
+        try:
+            return await client.research.import_sources(notebook_id, task_id, sources)
+        except RPCTimeoutError:
+            elapsed = time.monotonic() - started_at
+            remaining = max_elapsed - elapsed
+            if remaining <= 0:
+                raise
+
+            sleep_for = min(delay, max_delay, remaining)
+            logger.warning(
+                "IMPORT_RESEARCH timed out for notebook %s; retrying in %.1fs (attempt %d, %.1fs elapsed)",
+                notebook_id,
+                sleep_for,
+                attempt + 1,
+                elapsed,
+            )
+            if not json_output:
+                console.print(
+                    f"[yellow]Import timed out; retrying in {sleep_for:.0f}s "
+                    f"(attempt {attempt + 1})[/yellow]"
+                )
+            await asyncio.sleep(sleep_for)
+            delay = min(delay * backoff_factor, max_delay)
+            attempt += 1
 
 
 # =============================================================================

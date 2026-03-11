@@ -14,6 +14,7 @@ from .helpers import (
     console,
     display_report,
     display_research_sources,
+    import_with_retry,
     json_output_response,
     require_notebook,
     resolve_notebook_id,
@@ -187,8 +188,13 @@ def research_wait(ctx, notebook_id, timeout, interval, import_all, json_output, 
                     "report": report,
                 }
                 if import_all and sources and task_id:
-                    imported = await client.research.import_sources(
-                        nb_id_resolved, task_id, sources
+                    imported = await import_with_retry(
+                        client,
+                        nb_id_resolved,
+                        task_id,
+                        sources,
+                        max_elapsed=timeout,
+                        json_output=True,
                     )
                     result["imported"] = len(imported)
                     result["imported_sources"] = imported
@@ -201,8 +207,12 @@ def research_wait(ctx, notebook_id, timeout, interval, import_all, json_output, 
 
                 if import_all and sources and task_id:
                     with console.status("Importing sources..."):
-                        imported = await client.research.import_sources(
-                            nb_id_resolved, task_id, sources
+                        imported = await import_with_retry(
+                            client,
+                            nb_id_resolved,
+                            task_id,
+                            sources,
+                            max_elapsed=timeout,
                         )
                     console.print(f"[green]Imported {len(imported)} sources[/green]")
 
