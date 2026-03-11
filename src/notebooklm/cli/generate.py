@@ -54,6 +54,20 @@ RETRY_INITIAL_DELAY = 60.0  # seconds
 RETRY_MAX_DELAY = 300.0  # 5 minutes
 RETRY_BACKOFF_MULTIPLIER = 2.0
 
+_INFOGRAPHIC_STYLE_MAP = {
+    "auto": InfographicStyle.AUTO_SELECT,
+    "sketch-note": InfographicStyle.SKETCH_NOTE,
+    "professional": InfographicStyle.PROFESSIONAL,
+    "bento-grid": InfographicStyle.BENTO_GRID,
+    "editorial": InfographicStyle.EDITORIAL,
+    "instructional": InfographicStyle.INSTRUCTIONAL,
+    "bricks": InfographicStyle.BRICKS,
+    "clay": InfographicStyle.CLAY,
+    "anime": InfographicStyle.ANIME,
+    "kawaii": InfographicStyle.KAWAII,
+    "scientific": InfographicStyle.SCIENTIFIC,
+}
+
 
 def calculate_backoff_delay(
     attempt: int,
@@ -844,21 +858,7 @@ def generate_flashcards(
 )
 @click.option(
     "--style",
-    type=click.Choice(
-        [
-            "auto",
-            "sketch-note",
-            "professional",
-            "bento-grid",
-            "editorial",
-            "instructional",
-            "bricks",
-            "clay",
-            "anime",
-            "kawaii",
-            "scientific",
-        ]
-    ),
+    type=click.Choice(list(_INFOGRAPHIC_STYLE_MAP)),
     default="auto",
 )
 @click.option("--language", default=None, help="Output language (default: from config or 'en')")
@@ -902,19 +902,6 @@ def generate_infographic(
         "standard": InfographicDetail.STANDARD,
         "detailed": InfographicDetail.DETAILED,
     }
-    style_map = {
-        "auto": InfographicStyle.AUTO_SELECT,
-        "sketch-note": InfographicStyle.SKETCH_NOTE,
-        "professional": InfographicStyle.PROFESSIONAL,
-        "bento-grid": InfographicStyle.BENTO_GRID,
-        "editorial": InfographicStyle.EDITORIAL,
-        "instructional": InfographicStyle.INSTRUCTIONAL,
-        "bricks": InfographicStyle.BRICKS,
-        "clay": InfographicStyle.CLAY,
-        "anime": InfographicStyle.ANIME,
-        "kawaii": InfographicStyle.KAWAII,
-        "scientific": InfographicStyle.SCIENTIFIC,
-    }
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
@@ -929,7 +916,7 @@ def generate_infographic(
                     instructions=description or None,
                     orientation=orientation_map[orientation],
                     detail_level=detail_map[detail],
-                    style=style_map[style],
+                    style=_INFOGRAPHIC_STYLE_MAP[style],
                 )
 
             result = await generate_with_retry(_generate, max_retries, "infographic", json_output)
