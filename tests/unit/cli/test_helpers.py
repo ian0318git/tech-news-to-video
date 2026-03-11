@@ -10,6 +10,8 @@ from notebooklm.cli.helpers import (
     clear_context,
     cli_name_to_artifact_type,
     # Type display helpers
+    display_research_sources,
+    display_report,
     get_artifact_type_display,
     get_auth_tokens,
     # Auth helpers
@@ -395,6 +397,58 @@ class TestHandleAuthError:
         data = json.loads(captured.out)
         assert data["error"] is True
         assert data["code"] == "AUTH_REQUIRED"
+
+
+class TestDisplayReport:
+    def test_prints_markdown_as_literal_text(self):
+        report = "See [NotebookLM](https://example.com) and [1]"
+
+        with patch("notebooklm.cli.helpers.console") as mock_console:
+            display_report(report, max_chars=1000)
+
+        assert mock_console.print.call_count == 2
+        assert mock_console.print.call_args_list[0].args[0] == "\n[bold]Report:[/bold]"
+        assert mock_console.print.call_args_list[1].args[0] == report
+        assert mock_console.print.call_args_list[1].kwargs["markup"] is False
+
+    def test_truncates_report_and_shows_json_hint(self):
+        report = "abcdef"
+
+        with patch("notebooklm.cli.helpers.console") as mock_console:
+            display_report(report, max_chars=3, json_hint=True)
+
+        assert mock_console.print.call_count == 3
+        assert mock_console.print.call_args_list[1].args[0] == "abc"
+        assert mock_console.print.call_args_list[1].kwargs["markup"] is False
+        assert mock_console.print.call_args_list[2].args[0] == (
+            "[dim]... (truncated, use --json for full report)[/dim]"
+        )
+
+    def test_truncates_report_without_json_hint(self):
+        report = "abcdef"
+
+        with patch("notebooklm.cli.helpers.console") as mock_console:
+            display_report(report, max_chars=3, json_hint=False)
+
+        assert mock_console.print.call_args_list[2].args[0] == "[dim]... (truncated)[/dim]"
+
+
+class TestDisplayResearchSources:
+    def test_shows_string_result_type_labels(self):
+        sources = [
+            {"title": "Web Result", "url": "https://example.com", "result_type": "web"},
+            {"title": "Drive Result", "url": "https://drive.example.com", "result_type": "drive"},
+        ]
+
+        with patch("notebooklm.cli.helpers.console") as mock_console:
+            display_research_sources(sources)
+
+        assert mock_console.print.call_count == 2
+        table = mock_console.print.call_args_list[1].args[0]
+        columns = [column.header for column in table.columns]
+        assert columns == ["Title", "Type", "URL"]
+        type_cells = table.columns[1]._cells
+        assert type_cells == ["Web", "Drive"]
 
 
 # =============================================================================

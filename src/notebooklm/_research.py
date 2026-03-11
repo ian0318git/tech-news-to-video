@@ -13,6 +13,12 @@ from .rpc import RPCMethod
 
 logger = logging.getLogger(__name__)
 
+_RESEARCH_RESULT_TYPE_ALIASES = {
+    "web": 1,
+    "drive": 2,
+    "report": 5,
+}
+
 
 class ResearchAPI:
     """Operations for research sessions (web/drive search).
@@ -41,6 +47,15 @@ class ResearchAPI:
             core: The core client infrastructure.
         """
         self._core = core
+
+    @staticmethod
+    def _parse_result_type(value: Any) -> int | str:
+        """Normalize known research source type tags while keeping unknown tags intact."""
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str):
+            return _RESEARCH_RESULT_TYPE_ALIASES.get(value.lower(), value)
+        return 1
 
     async def start(
         self,
@@ -168,8 +183,9 @@ class ResearchAPI:
 
                 # Fast research: [url, title, desc, type, ...]
                 # Deep research: [None, title, None, type, ..., [report_markdown]]
-                # src[3] is the authoritative result_type when present
-                result_type = src[3] if len(src) > 3 and isinstance(src[3], int) else 1
+                # src[3] is the authoritative result_type when present.
+                # Legacy payloads use string tags such as "web"/"drive".
+                result_type = self._parse_result_type(src[3]) if len(src) > 3 else 1
                 if src[0] is None and len(src) > 1 and isinstance(src[1], str):
                     title = src[1]
                     url = ""
@@ -241,7 +257,11 @@ class ResearchAPI:
         valid_sources = [s for s in sources if s.get("result_type") != 5 and s.get("url")]
         skipped_count = len(sources) - len(valid_sources)
         if skipped_count > 0:
-            logger.warning("Skipping %d source(s) without URLs (cannot be imported)", skipped_count)
+            logger.warning(
+                "Skipping %d source(s) that cannot be imported "
+                "(missing URLs or report entries)",
+                skipped_count,
+            )
         if not valid_sources:
             return []
 

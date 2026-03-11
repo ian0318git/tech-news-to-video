@@ -176,6 +176,24 @@ class TestResearch:
         assert result["report"] == "# Report markdown"
 
     @pytest.mark.asyncio
+    async def test_poll_fast_research_string_drive_result_type(
+        self, auth_tokens, httpx_mock, build_rpc_response
+    ):
+        """Test poll preserves legacy string-encoded source types semantically."""
+        sources = [["https://drive.example.com/doc", "Drive Doc", "Description", "drive"]]
+        task_info = [None, ["drive query", 1], 1, [sources, "Drive summary"], 2]
+        response_body = build_rpc_response(RPCMethod.POLL_RESEARCH, [[["task_123", task_info]]])
+        httpx_mock.add_response(content=response_body.encode(), method="POST")
+
+        async with NotebookLMClient(auth_tokens) as client:
+            result = await client.research.poll("nb_123")
+
+        assert result["status"] == "completed"
+        assert result["sources"][0]["url"] == "https://drive.example.com/doc"
+        assert result["sources"][0]["title"] == "Drive Doc"
+        assert result["sources"][0]["result_type"] == 2
+
+    @pytest.mark.asyncio
     async def test_poll_status_code_6_completed(self, auth_tokens, httpx_mock, build_rpc_response):
         """Test that status code 6 (deep research) is treated as completed."""
         task_info = [None, ["query", 1], 1, [[], ""], 6]

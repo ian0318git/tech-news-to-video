@@ -518,6 +518,9 @@ _RESULT_TYPE_LABELS = {
     1: "Web",
     2: "Drive",
     5: "Report",
+    "web": "Web",
+    "drive": "Drive",
+    "report": "Report",
 }
 
 
@@ -570,7 +573,8 @@ def display_report(report: str, max_chars: int = 1000, json_hint: bool = True) -
     """
     if not report:
         return
-    console.print(f"\n[bold]Report:[/bold]\n{report[:max_chars]}")
+    console.print("\n[bold]Report:[/bold]")
+    console.print(report[:max_chars], markup=False)
     if len(report) > max_chars:
         hint = " use --json for full report" if json_hint else ""
         console.print(
