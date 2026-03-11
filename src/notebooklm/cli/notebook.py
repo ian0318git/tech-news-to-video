@@ -239,8 +239,8 @@ def register_notebook_commands(cli):
                 # Resolve partial ID
                 resolved_id = await resolve_notebook_id(client, notebook_id)
 
-                # Get metadata (use client method, not notebooks.get_metadata)
-                metadata = await client.get_notebook_metadata(resolved_id)
+                # Get metadata (use notebooks.get_metadata)
+                metadata = await client.notebooks.get_metadata(resolved_id)
 
                 if json_output:
                     # JSON output
