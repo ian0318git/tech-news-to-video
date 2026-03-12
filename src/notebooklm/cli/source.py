@@ -73,7 +73,7 @@ def _build_id_ambiguity_error(source_id: str, matches) -> click.ClickException:
         lines.append(f"  {item.id[:12]}... {title}")
     if len(matches) > 5:
         lines.append(f"  ... and {len(matches) - 5} more")
-    lines.append("\nSpecify more characters to narrow down.")
+    lines.append("Specify more characters to narrow down.")
     return click.ClickException("\n".join(lines))
 
 
