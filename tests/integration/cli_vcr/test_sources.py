@@ -78,3 +78,23 @@ class TestSourceContentCommands:
         with notebooklm_vcr.use_cassette(cassette):
             result = runner.invoke(cli, ["source", command, "test_source_id"])
             assert_command_success(result)
+
+
+class TestSourceDeleteCommand:
+    """Test delete command paths that can reuse existing VCR coverage."""
+
+    @notebooklm_vcr.use_cassette("sources_delete.yaml")
+    def test_source_delete_full_uuid(self, runner, mock_auth_for_vcr, mock_context):
+        """Delete source by full UUID works with real client."""
+        result = runner.invoke(
+            cli,
+            [
+                "source",
+                "delete",
+                "ff503bfa-5e39-4281-a1d8-2a66c7b86724",
+                "-n",
+                "06f0c5bd-108f-4c8b-8911-34b2acc656de",
+                "-y",
+            ],
+        )
+        assert_command_success(result, allow_no_context=False)
