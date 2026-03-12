@@ -62,9 +62,10 @@ def assert_generation_started(result, artifact_type: str = "Artifact") -> None:
         pytest.skip("Rate limited by API")
 
     assert result.task_id, f"{artifact_type} generation failed: {result.error}"
-    assert result.status in ("pending", "in_progress"), (
-        f"Unexpected {artifact_type.lower()} status: {result.status}"
-    )
+    assert result.status in (
+        "pending",
+        "in_progress",
+    ), f"Unexpected {artifact_type.lower()} status: {result.status}"
 
 
 def has_auth() -> bool:
