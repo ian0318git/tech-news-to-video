@@ -136,6 +136,7 @@ Proceed with release preparation?
   ```bash
   uv run pre-commit run --all-files && uv run mypy src/notebooklm --ignore-missing-imports && uv run pytest
   ```
+- [ ] Ensure CI runs the same lint gate (`pre-commit run --all-files`) as local release prep
 - [ ] Fix any issues before proceeding
 
 ### Commit

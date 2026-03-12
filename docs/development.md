@@ -111,6 +111,8 @@ src/notebooklm/
    uv run pre-commit install
    ```
 
+   CI runs the same lint gate with `uv run pre-commit run --all-files`, so local hook results should match the `quality` job.
+
 2. **Authenticate:**
    ```bash
    notebooklm login
