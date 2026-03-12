@@ -87,8 +87,12 @@ def _looks_like_full_source_id(source_id: str) -> bool:
     )
 
 
-async def _resolve_source_for_delete(client, notebook_id: str, source_id: str):
-    """Resolve a source for delete, always validating against the live source list."""
+async def _resolve_source_for_delete(client, notebook_id: str, source_id: str) -> str:
+    """Resolve a source ID for delete, returning the full source ID string.
+
+    Canonical UUIDs take a fast path and skip the live source list lookup.
+    Partial IDs are resolved against the live list.
+    """
     source_id = validate_id(source_id, "source")
     if _looks_like_full_source_id(source_id):
         return source_id
@@ -100,7 +104,7 @@ async def _resolve_source_for_delete(client, notebook_id: str, source_id: str):
         if matches[0].id != source_id:
             title = matches[0].title or "(untitled)"
             console.print(f"[dim]Matched: {matches[0].id[:12]}... ({title})[/dim]")
-        return matches[0]
+        return matches[0].id
 
     if len(matches) > 1:
         raise _build_id_ambiguity_error(source_id, matches)
@@ -359,10 +363,7 @@ def source_delete(ctx, source_id, notebook_id, yes, client_auth):
     async def _run():
         async with NotebookLMClient(client_auth) as client:
             nb_id_resolved = await resolve_notebook_id(client, nb_id)
-            resolved_source = await _resolve_source_for_delete(client, nb_id_resolved, source_id)
-            resolved_id = (
-                resolved_source if isinstance(resolved_source, str) else resolved_source.id
-            )
+            resolved_id = await _resolve_source_for_delete(client, nb_id_resolved, source_id)
 
             if not yes and not click.confirm(f"Delete source {resolved_id}?"):
                 return
