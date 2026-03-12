@@ -1,7 +1,7 @@
 # Python API Reference
 
 **Status:** Active
-**Last Updated:** 2026-03-02
+**Last Updated:** 2026-03-12
 
 Complete reference for the `notebooklm` Python library.
 
@@ -31,8 +31,9 @@ async def main():
 
         # Generate a podcast
         status = await client.artifacts.generate_audio(nb.id)
-        final = await client.artifacts.wait_for_completion(nb.id, status.task_id)
-        print(f"Audio ready: {final.url}")
+        await client.artifacts.wait_for_completion(nb.id, status.task_id)
+        output_path = await client.artifacts.download_audio(nb.id, "podcast.mp3")
+        print(f"Audio saved to: {output_path}")
 
 asyncio.run(main())
 ```
@@ -157,10 +158,15 @@ class NotebookLMClient:
     chat: ChatAPI              # Conversations
     research: ResearchAPI      # Web/Drive research
     notes: NotesAPI            # User notes
+    settings: SettingsAPI      # User settings (language, etc.)
     sharing: SharingAPI        # Notebook sharing
+    auth: AuthTokens           # Current authentication tokens
+    is_connected: bool         # Connection state
 
     @classmethod
-    async def from_storage(cls, path: str = None) -> "NotebookLMClient"
+    async def from_storage(
+        cls, path: str | None = None, timeout: float = 30.0
+    ) -> "NotebookLMClient"
 
     async def refresh_auth(self) -> AuthTokens
 ```
@@ -177,8 +183,10 @@ class NotebookLMClient:
 | `delete(notebook_id)` | `notebook_id: str` | `bool` | Delete a notebook |
 | `rename(notebook_id, new_title)` | `notebook_id: str, new_title: str` | `Notebook` | Rename a notebook |
 | `get_description(notebook_id)` | `notebook_id: str` | `NotebookDescription` | Get AI summary and topics |
+| `get_metadata(notebook_id)` | `notebook_id: str` | `NotebookMetadata` | Get notebook metadata and sources |
 | `get_summary(notebook_id)` | `notebook_id: str` | `str` | Get raw summary text |
-| `share(notebook_id, settings=None)` | `notebook_id: str, settings: dict` | `Any` | Share notebook with settings |
+| `share(notebook_id, public=True, artifact_id=None)` | `notebook_id: str, bool, str \| None` | `dict` | Create or update a share link |
+| `get_share_url(notebook_id, artifact_id=None)` | `notebook_id: str, str \| None` | `str` | Get a share URL |
 | `remove_from_recent(notebook_id)` | `notebook_id: str` | `None` | Remove from recently viewed |
 | `get_raw(notebook_id)` | `notebook_id: str` | `Any` | Get raw API response data |
 
@@ -203,8 +211,14 @@ for topic in desc.suggested_topics:
 summary = await client.notebooks.get_summary(nb.id)
 print(summary)
 
-# Share a notebook
-await client.notebooks.share(nb.id, settings={"public": True})
+# Get metadata for automation or exports
+metadata = await client.notebooks.get_metadata(nb.id)
+print(metadata.title)
+
+# Enable public sharing and fetch the URL
+await client.notebooks.share(nb.id, public=True)
+url = await client.notebooks.get_share_url(nb.id)
+print(url)
 ```
 
 **get_summary vs get_description:**
@@ -440,11 +454,11 @@ status = await client.artifacts.generate_video(
 # Report
 status = await client.artifacts.generate_report(
     notebook_id,
+    report_format=ReportFormat.STUDY_GUIDE,  # BRIEFING_DOC, STUDY_GUIDE, BLOG_POST, CUSTOM
     source_ids=None,
-    title="...",
-    description="...",
-    format=ReportFormat.STUDY_GUIDE,  # BRIEFING_DOC, STUDY_GUIDE, BLOG_POST, CUSTOM
-    language="en"
+    language="en",
+    custom_prompt=None,          # Used with ReportFormat.CUSTOM
+    extra_instructions="..."     # Optional append for built-in formats
 )
 
 # Quiz
@@ -452,9 +466,8 @@ status = await client.artifacts.generate_quiz(
     notebook_id,
     source_ids=None,
     instructions="...",
-    quantity=QuizQuantity.STANDARD,    # FEWER, STANDARD
+    quantity=QuizQuantity.MORE,        # FEWER, STANDARD, MORE (MORE aliases STANDARD)
     difficulty=QuizDifficulty.MEDIUM,  # EASY, MEDIUM, HARD
-    language="en"
 )
 ```
 
@@ -473,7 +486,8 @@ final = await client.artifacts.wait_for_completion(
 )
 
 if final.is_complete:
-    print(f"Download URL: {final.url}")
+    path = await client.artifacts.download_audio(nb_id, "podcast.mp3")
+    print(f"Saved to: {path}")
 else:
     print(f"Failed or timed out: {final.status}")
 ```
@@ -966,6 +980,7 @@ class VideoStyle(Enum):
 class QuizQuantity(Enum):
     FEWER = 1
     STANDARD = 2
+    MORE = 2  # Alias of STANDARD used by the CLI/web UI
 
 class QuizDifficulty(Enum):
     EASY = 1
@@ -1050,6 +1065,8 @@ class SourceType(str, Enum):
     PDF = "pdf"
     PASTED_TEXT = "pasted_text"
     WEB_PAGE = "web_page"
+    GOOGLE_DRIVE_AUDIO = "google_drive_audio"
+    GOOGLE_DRIVE_VIDEO = "google_drive_video"
     YOUTUBE = "youtube"
     MARKDOWN = "markdown"
     DOCX = "docx"

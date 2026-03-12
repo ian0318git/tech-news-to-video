@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-03-12
+
+### Added
+- **Notebook metadata export** - Added notebook metadata APIs and CLI export with a simplified sources list
+  - New `notebooklm metadata` command with human-readable and `--json` output
+  - New `NotebookMetadata` and `SourceSummary` public types
+  - New `client.notebooks.get_metadata()` helper
+- **Cinematic Video Overview support** - Added cinematic generation and download flows
+  - `notebooklm generate video --format cinematic`
+- **Infographic styles** - Added CLI support for selecting infographic visual styles
+- **`source delete-by-title`** - Added explicit exact-title deletion command for sources
+
+### Fixed
+- **Research imports on timeout** - CLI research imports now retry on timeout with backoff
+- **Metadata command behavior** - Aligned metadata output and implementation with current CLI patterns
+- **Regional login cookies** - Improved browser login handling for regional Google domains
+- **Notebook summary parsing** - Fixed notebook summary response parsing
+- **Source delete UX** - Improved source delete resolution, ambiguity handling, and title-vs-ID errors
+- **Empty downloads** - Raise an error instead of producing zero-byte files
+- **Module execution** - Added `python -m notebooklm` support
+
+### Changed
+- **Documentation refresh** - Updated release, development, CLI, README, and Python API docs for current commands, APIs, and `uv` workflows
+- **Public API surface** - Exported `NotebookMetadata`, `SourceSummary`, and `InfographicStyle`
+
 ## [0.3.3] - 2026-03-03
 
 ### Added
@@ -319,7 +344,8 @@ This is the initial public release of `notebooklm-py`. While core functionality 
 - **Authentication expiry**: CSRF tokens expire after some time. Re-run `notebooklm login` if you encounter auth errors.
 - **Large file uploads**: Files over 50MB may fail or timeout. Split large documents if needed.
 
-[Unreleased]: https://github.com/teng-lin/notebooklm-py/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/teng-lin/notebooklm-py/compare/v0.3.4...HEAD
+[0.3.4]: https://github.com/teng-lin/notebooklm-py/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/teng-lin/notebooklm-py/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/teng-lin/notebooklm-py/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/teng-lin/notebooklm-py/compare/v0.3.0...v0.3.1

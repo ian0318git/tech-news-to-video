@@ -29,7 +29,7 @@ class TestSourceListCommand:
         if json_flag and result.exit_code == 0:
             data = parse_json_output(result.output)
             assert data is not None, "Expected valid JSON output"
-            assert isinstance(data, (list, dict))
+            assert isinstance(data, list | dict)
 
 
 class TestSourceAddCommand:

@@ -60,7 +60,10 @@ def is_auth_error(error: Exception) -> bool:
 
     # Don't treat network/rate limit/server errors as auth errors
     # even if they're subclasses of RPCError
-    if isinstance(error, (NetworkError, RPCTimeoutError, RateLimitError, ServerError, ClientError)):
+    if isinstance(
+        error,
+        NetworkError | RPCTimeoutError | RateLimitError | ServerError | ClientError,
+    ):
         return False
 
     # HTTP 401/403 are auth errors

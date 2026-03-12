@@ -148,7 +148,7 @@ def extract_id_recursive(data: Any) -> str | None:
     """
     if data is None:
         return None
-    if isinstance(data, (str, int)):
+    if isinstance(data, str | int):
         return str(data)
     if isinstance(data, list) and len(data) > 0:
         return extract_id_recursive(data[0])

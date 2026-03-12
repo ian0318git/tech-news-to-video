@@ -1,7 +1,7 @@
 # Release Checklist
 
 **Status:** Active
-**Last Updated:** 2026-03-02
+**Last Updated:** 2026-03-12
 
 Checklist for releasing a new version of `notebooklm-py`.
 
@@ -22,7 +22,7 @@ Before starting, present this summary to the user:
 
 ```
 Release Plan for vX.Y.Z:
-1. Create release worktree (release/X.Y.Z branch)
+1. Create release worktree (`release/vX.Y.Z` branch)
 2. Update pyproject.toml and CHANGELOG.md
 3. Run pre-commit checks (ruff, mypy, pytest)
 4. Commit changes
@@ -48,15 +48,13 @@ Proceed with release preparation?
 
 - [ ] Create a dedicated worktree for the release:
   ```bash
-  git worktree add .worktrees/release-X.Y.Z -b release/X.Y.Z
-  cd .worktrees/release-X.Y.Z
+  git worktree add .worktrees/vX.Y.Z -b release/vX.Y.Z main
+  cd .worktrees/vX.Y.Z
   ```
 - [ ] Set up the development environment:
   ```bash
-  uv venv .venv
-  uv pip install -e ".[all]"
-  playwright install chromium
-  source .venv/bin/activate
+  uv sync --all-extras
+  uv run playwright install chromium
   ```
 
 ---
@@ -71,7 +69,7 @@ Proceed with release preparation?
 - [ ] Update `Last Updated` dates in modified docs
 - [ ] Verify example scripts have valid syntax:
   ```bash
-  python -m py_compile docs/examples/*.py
+  uv run python -m py_compile docs/examples/*.py
   ```
 
 **Related docs to check/update if relevant:**
@@ -136,8 +134,9 @@ Proceed with release preparation?
 
 - [ ] Run all checks before committing:
   ```bash
-  ruff format src/ tests/ && ruff check src/ tests/ && mypy src/notebooklm --ignore-missing-imports && pytest
+  uv run pre-commit run --all-files && uv run mypy src/notebooklm --ignore-missing-imports && uv run pytest
   ```
+- [ ] Ensure CI runs the same lint gate (`pre-commit run --all-files`) as local release prep
 - [ ] Fix any issues before proceeding
 
 ### Commit
@@ -165,7 +164,7 @@ Proceed with release preparation?
 - [ ] **⏸️ CONFIRM:** Ask user "Ready to create PR for release vX.Y.Z?"
 - [ ] Push branch and create PR:
   ```bash
-  git push -u origin release/X.Y.Z
+  git push -u origin release/vX.Y.Z
   gh pr create --title "chore: release vX.Y.Z" --body "Release vX.Y.Z
 
   See CHANGELOG.md for details."
@@ -178,7 +177,7 @@ Proceed with release preparation?
 ### E2E Tests on Release Branch
 
 - [ ] Go to **Actions** → **Nightly E2E**
-- [ ] Click **Run workflow**, select the `release/X.Y.Z` branch
+- [ ] Click **Run workflow**, select the `release/vX.Y.Z` branch
 - [ ] Wait for E2E tests to pass
 - [ ] If E2E tests fail:
   1. Fix issues in the release worktree
@@ -195,7 +194,7 @@ Proceed with release preparation?
 
 - [ ] **⏸️ CONFIRM:** Ask user "Ready to publish to TestPyPI?"
 - [ ] Go to **Actions** → **Publish to TestPyPI**
-- [ ] Click **Run workflow**, select the **release/X.Y.Z** branch
+- [ ] Click **Run workflow**, select the **release/vX.Y.Z** branch
 - [ ] Wait for upload to complete
 - [ ] Verify package appears: https://test.pypi.org/project/notebooklm-py/
 
@@ -276,11 +275,11 @@ Proceed with release preparation?
   ```
 - [ ] Remove the release worktree:
   ```bash
-  git worktree remove .worktrees/release-X.Y.Z
+  git worktree remove .worktrees/vX.Y.Z
   ```
 - [ ] Delete the local branch (if not already deleted by PR merge):
   ```bash
-  git branch -d release/X.Y.Z
+  git branch -d release/vX.Y.Z
   ```
 
 ---
@@ -304,13 +303,13 @@ git push
 gh pr close
 
 # Remove worktree
-git worktree remove .worktrees/release-X.Y.Z
+git worktree remove .worktrees/vX.Y.Z
 
 # Delete local branch
-git branch -D release/X.Y.Z
+git branch -D release/vX.Y.Z
 
 # Delete remote branch (if pushed)
-git push origin --delete release/X.Y.Z
+git push origin --delete release/vX.Y.Z
 ```
 
 ### Tag already exists
