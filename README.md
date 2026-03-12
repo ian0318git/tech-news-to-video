@@ -60,7 +60,7 @@
 | Type | Options | Download Format |
 |------|---------|-----------------|
 | **Audio Overview** | 4 formats (deep-dive, brief, critique, debate), 3 lengths, 50+ languages | MP3/MP4 |
-| **Video Overview** | 2 formats, 9 visual styles (classic, whiteboard, kawaii, anime, etc.) | MP4 |
+| **Video Overview** | 3 formats (explainer, brief, cinematic), 9 visual styles, plus a dedicated `cinematic-video` CLI alias | MP4 |
 | **Slide Deck** | Detailed or presenter format, adjustable length; individual slide revision | PDF, PPTX |
 | **Infographic** | 3 orientations, 3 detail levels | PNG |
 | **Quiz** | Configurable quantity and difficulty | JSON, Markdown, HTML |
@@ -131,6 +131,7 @@ notebooklm ask "What are the key themes?"
 # 4. Generate content
 notebooklm generate audio "make it engaging" --wait
 notebooklm generate video --style whiteboard --wait
+notebooklm generate cinematic-video "documentary-style summary" --wait
 notebooklm generate quiz --difficulty hard
 notebooklm generate flashcards --quantity more
 notebooklm generate slide-deck
@@ -141,12 +142,24 @@ notebooklm generate data-table "compare key concepts"
 # 5. Download artifacts
 notebooklm download audio ./podcast.mp3
 notebooklm download video ./overview.mp4
+notebooklm download cinematic-video ./documentary.mp4
 notebooklm download quiz --format markdown ./quiz.md
 notebooklm download flashcards --format json ./cards.json
 notebooklm download slide-deck ./slides.pdf
 notebooklm download infographic ./infographic.png
 notebooklm download mind-map ./mindmap.json
 notebooklm download data-table ./data.csv
+```
+
+Other useful CLI commands:
+
+```bash
+notebooklm auth check --test         # Diagnose auth/cookie issues
+notebooklm language list             # List supported output languages
+notebooklm metadata --json           # Export notebook metadata and sources
+notebooklm share status              # Inspect sharing state
+notebooklm source add-research "AI"  # Start web research and import sources
+notebooklm skill status              # Check Claude Code skill installation
 ```
 
 ### Python API
@@ -199,6 +212,7 @@ notebooklm skill install
 - **[CLI Reference](docs/cli-reference.md)** - Complete command documentation
 - **[Python API](docs/python-api.md)** - Full API reference
 - **[Configuration](docs/configuration.md)** - Storage and settings
+- **[Release Guide](docs/releasing.md)** - Release checklist and packaging verification
 - **[Troubleshooting](docs/troubleshooting.md)** - Common issues and solutions
 - **[API Stability](docs/stability.md)** - Versioning policy and stability guarantees
 

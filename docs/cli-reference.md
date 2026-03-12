@@ -1,7 +1,7 @@
 # CLI Reference
 
 **Status:** Active
-**Last Updated:** 2026-03-02
+**Last Updated:** 2026-03-12
 
 Complete command reference for the `notebooklm` CLI—providing full programmatic access to all NotebookLM features, including capabilities not exposed in the web UI.
 
@@ -27,7 +27,8 @@ See [Configuration](configuration.md) for details on environment variables and C
 - **Session commands** - Authentication and context management
 - **Notebook commands** - CRUD operations on notebooks
 - **Chat commands** - Querying and conversation management
-- **Grouped commands** - `source`, `artifact`, `generate`, `download`, `note`
+- **Grouped commands** - `source`, `artifact`, `generate`, `download`, `note`, `share`, `research`, `language`, `skill`, `auth`
+- **Utility commands** - `metadata`
 
 ---
 
@@ -67,7 +68,6 @@ See [Configuration](configuration.md) for details on environment variables and C
 | `create <title>` | Create notebook | `notebooklm create "Research"` |
 | `delete <id>` | Delete notebook | `notebooklm delete abc123` |
 | `rename <title>` | Rename current notebook | `notebooklm rename "New Title"` |
-| `share` | Toggle notebook sharing | `notebooklm share` or `notebooklm share --revoke` |
 | `summary` | Get AI summary | `notebooklm summary` |
 
 ### Chat Commands
@@ -125,7 +125,8 @@ All generate commands support:
 | Command | Options | Example |
 |---------|---------|---------|
 | `audio [description]` | `--format [deep-dive\|brief\|critique\|debate]`, `--length [short\|default\|long]`, `--wait` | `generate audio "Focus on history"` |
-| `video [description]` | `--format [explainer\|brief]`, `--style [auto\|classic\|whiteboard\|kawaii\|anime\|watercolor\|retro-print\|heritage\|paper-craft]`, `--wait` | `generate video "Explainer for kids"` |
+| `video [description]` | `--format [explainer\|brief\|cinematic]`, `--style [auto\|classic\|whiteboard\|kawaii\|anime\|watercolor\|retro-print\|heritage\|paper-craft]`, `--wait` | `generate video "Explainer for kids"` |
+| `cinematic-video [description]` | Alias for `video --format cinematic`; supports the same options | `generate cinematic-video "Documentary about quantum physics"` |
 | `slide-deck [description]` | `--format [detailed\|presenter]`, `--length [default\|short]`, `--wait` | `generate slide-deck` |
 | `revise-slide <description>` | `-a/--artifact <id>` (required), `--slide N` (required), `--wait` | `generate revise-slide "Move title up" --artifact <id> --slide 0` |
 | `quiz [description]` | `--difficulty [easy\|medium\|hard]`, `--quantity [fewer\|standard\|more]`, `--wait` | `generate quiz --difficulty hard` |
@@ -154,6 +155,7 @@ All generate commands support:
 |---------|-----------|---------|---------|
 | `audio [path]` | Output path | `-a/--artifact`, `--all`, `--latest`, `--name`, `--force`, `--dry-run` | `download audio --all` |
 | `video [path]` | Output path | `-a/--artifact`, `--all`, `--latest`, `--name`, `--force`, `--dry-run` | `download video --latest` |
+| `cinematic-video [path]` | Output path | Alias for `download video`; same options as `video` | `download cinematic-video ./documentary.mp4` |
 | `slide-deck [path]` | Output path      | `-a/--artifact`, `--all`, `--latest`, `--name`, `--force`, `--dry-run`, `--format [pdf\|pptx]` | `download slide-deck ./slides.pdf` |
 | `infographic [path]` | Output path | `-a/--artifact`, `--all`, `--latest`, `--name`, `--force`, `--dry-run` | `download infographic ./info.png` |
 | `report [path]` | Output path | `-a/--artifact`, `--all`, `--latest`, `--name`, `--force`, `--dry-run` | `download report ./report.md` |
@@ -169,9 +171,27 @@ All generate commands support:
 | `list` | - | - | `note list` |
 | `create <content>` | Note content | - | `note create "My notes..."` |
 | `get <id>` | Note ID | - | `note get note123` |
-| `save <id>` | Note ID | - | `note save note123` |
+| `save <id>` | Note ID | `--title`, `--content` | `note save note123 --title "Updated title"` |
 | `rename <id> <title>` | Note ID, title | - | `note rename note123 "Title"` |
 | `delete <id>` | Note ID | - | `note delete note123` |
+
+### Metadata Command
+
+Export notebook metadata and a simplified source list.
+
+```bash
+notebooklm metadata [OPTIONS]
+```
+
+**Options:**
+- `-n, --notebook ID` - Specify notebook (uses current if not set)
+- `--json` - Output as JSON for scripts
+
+**Examples:**
+```bash
+notebooklm metadata
+notebooklm metadata -n abc123 --json
+```
 
 ### Skill Commands (`notebooklm skill <cmd>`)
 
@@ -781,7 +801,7 @@ notebooklm summary
 # 4. Generate study materials
 notebooklm generate quiz --difficulty hard --wait
 notebooklm generate flashcards --wait
-notebooklm generate report --type study-guide --wait
+notebooklm generate report --format study-guide --wait
 
 # 5. Ask specific questions
 notebooklm ask "Explain the key concepts in chapter 3"
@@ -806,7 +826,7 @@ notebooklm ask "What are the main points?"
 notebooklm ask "Create bullet point notes"
 
 # 4. Generate a quick briefing doc
-notebooklm generate report --type briefing-doc --wait
+notebooklm generate report --format briefing-doc --wait
 ```
 
 ### Bulk Import
