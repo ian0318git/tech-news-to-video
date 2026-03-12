@@ -210,6 +210,8 @@ If the title contains error-related text, remove the source and use the pre-fetc
 ```bash
 # Remove incorrectly parsed source
 notebooklm source delete <source_id>
+# Or, if you only have the exact title:
+notebooklm source delete-by-title "Exact Source Title"
 
 # Then re-add using the bird CLI method above
 ```

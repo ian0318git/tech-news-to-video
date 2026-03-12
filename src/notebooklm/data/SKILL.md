@@ -129,6 +129,8 @@ Before starting workflows, verify the CLI is ready:
 | Add file | `notebooklm source add ./file.pdf` |
 | Add YouTube | `notebooklm source add "https://youtube.com/..."` |
 | List sources | `notebooklm source list` |
+| Delete source by ID | `notebooklm source delete <source_id>` |
+| Delete source by exact title | `notebooklm source delete-by-title "Exact Title"` |
 | Wait for source processing | `notebooklm source wait <source_id>` |
 | Web research (fast) | `notebooklm source add-research "query"` |
 | Web research (deep) | `notebooklm source add-research "query" --mode deep --no-wait` |
@@ -173,7 +175,7 @@ Before starting workflows, verify the CLI is ready:
 
 **Parallel safety:** Use explicit notebook IDs in parallel workflows. Commands supporting `-n` shorthand: `artifact wait`, `source wait`, `research wait/status`, `download *`. Download commands also support `-a/--artifact`. Other commands use `--notebook`. For chat, use `-c <conversation_id>` to target a specific conversation.
 
-**Partial IDs:** Use first 6+ characters of UUIDs. Must be unique prefix (fails if ambiguous). Works for: `use`, `delete`, `wait` commands. For automation, prefer full UUIDs to avoid ambiguity.
+**Partial IDs:** Use first 6+ characters of UUIDs. Must be unique prefix (fails if ambiguous). Works for ID-based commands such as `use`, `source delete`, and `wait`. For exact source-title deletion, use `source delete-by-title "Title"`. For automation, prefer full UUIDs to avoid ambiguity.
 
 ## Command Output Formats
 

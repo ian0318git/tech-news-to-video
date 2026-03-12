@@ -8,6 +8,7 @@ Commands:
     guide        Get AI-generated source summary and keywords
     stale        Check if a URL/Drive source needs refresh
     delete       Delete a source
+    delete-by-title Delete a source by exact title
     rename       Rename a source
     refresh      Refresh a URL/Drive source
     add-drive    Add a Google Drive document
@@ -15,6 +16,7 @@ Commands:
 """
 
 import asyncio
+import re
 from pathlib import Path
 
 import click
@@ -33,6 +35,7 @@ from .helpers import (
     require_notebook,
     resolve_notebook_id,
     resolve_source_id,
+    validate_id,
     with_client,
 )
 
@@ -50,6 +53,7 @@ def source():
       guide        Get AI-generated source summary and keywords
       stale        Check if source needs refresh
       delete       Delete a source
+      delete-by-title Delete a source by exact title
       rename       Rename a source
       refresh      Refresh a URL/Drive source
 
@@ -59,6 +63,87 @@ def source():
       UUID, you can use a prefix (e.g., 'abc' matches 'abc123def456...').
     """
     pass
+
+
+def _build_id_ambiguity_error(source_id: str, matches) -> click.ClickException:
+    """Build a consistent ambiguity error for source ID prefix matches."""
+    lines = [f"Ambiguous ID '{source_id}' matches {len(matches)} sources:"]
+    for item in matches[:5]:
+        title = item.title or "(untitled)"
+        lines.append(f"  {item.id[:12]}... {title}")
+    if len(matches) > 5:
+        lines.append(f"  ... and {len(matches) - 5} more")
+    lines.append("\nSpecify more characters to narrow down.")
+    return click.ClickException("\n".join(lines))
+
+
+def _looks_like_full_source_id(source_id: str) -> bool:
+    """Return True for UUID-shaped source IDs that can skip list-based resolution."""
+    return bool(
+        re.fullmatch(
+            r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+            source_id,
+        )
+    )
+
+
+async def _resolve_source_for_delete(client, notebook_id: str, source_id: str):
+    """Resolve a source for delete, always validating against the live source list."""
+    source_id = validate_id(source_id, "source")
+    if _looks_like_full_source_id(source_id):
+        return source_id
+
+    sources = await client.sources.list(notebook_id)
+    matches = [item for item in sources if item.id.lower().startswith(source_id.lower())]
+
+    if len(matches) == 1:
+        if matches[0].id != source_id:
+            title = matches[0].title or "(untitled)"
+            console.print(f"[dim]Matched: {matches[0].id[:12]}... ({title})[/dim]")
+        return matches[0]
+
+    if len(matches) > 1:
+        raise _build_id_ambiguity_error(source_id, matches)
+
+    title_matches = [item for item in sources if item.title == source_id]
+    if title_matches:
+        lines = [
+            f"'{source_id}' matches {len(title_matches)} source title(s), not source IDs.",
+            f"Use 'notebooklm source delete-by-title \"{source_id}\"' or delete by ID:",
+        ]
+        for item in title_matches[:5]:
+            lines.append(f"  {item.id[:12]}... {item.title}")
+        if len(title_matches) > 5:
+            lines.append(f"  ... and {len(title_matches) - 5} more")
+        raise click.ClickException("\n".join(lines))
+
+    raise click.ClickException(
+        f"No source found starting with '{source_id}'. "
+        "Run 'notebooklm source list' to see available sources."
+    )
+
+
+async def _resolve_source_by_exact_title(client, notebook_id: str, title: str):
+    """Resolve a source by exact title for the explicit delete-by-title flow."""
+    title = validate_id(title, "source title")
+    sources = await client.sources.list(notebook_id)
+    matches = [item for item in sources if item.title == title]
+
+    if len(matches) == 1:
+        return matches[0]
+
+    if len(matches) > 1:
+        lines = [f"Title '{title}' matches {len(matches)} sources. Delete by ID instead:"]
+        for item in matches[:5]:
+            lines.append(f"  {item.id[:12]}... {item.title}")
+        if len(matches) > 5:
+            lines.append(f"  ... and {len(matches) - 5} more")
+        raise click.ClickException("\n".join(lines))
+
+    raise click.ClickException(
+        f"No source found with title '{title}'. "
+        "Run 'notebooklm source list' to see available sources."
+    )
 
 
 @source.command("list")
@@ -274,8 +359,10 @@ def source_delete(ctx, source_id, notebook_id, yes, client_auth):
     async def _run():
         async with NotebookLMClient(client_auth) as client:
             nb_id_resolved = await resolve_notebook_id(client, nb_id)
-            # Resolve partial ID to full ID
-            resolved_id = await resolve_source_id(client, nb_id_resolved, source_id)
+            resolved_source = await _resolve_source_for_delete(client, nb_id_resolved, source_id)
+            resolved_id = (
+                resolved_source if isinstance(resolved_source, str) else resolved_source.id
+            )
 
             if not yes and not click.confirm(f"Delete source {resolved_id}?"):
                 return
@@ -283,6 +370,38 @@ def source_delete(ctx, source_id, notebook_id, yes, client_auth):
             success = await client.sources.delete(nb_id_resolved, resolved_id)
             if success:
                 console.print(f"[green]Deleted source:[/green] {resolved_id}")
+            else:
+                console.print("[yellow]Delete may have failed[/yellow]")
+
+    return _run()
+
+
+@source.command("delete-by-title")
+@click.argument("title")
+@click.option(
+    "-n",
+    "--notebook",
+    "notebook_id",
+    default=None,
+    help="Notebook ID (uses current if not set)",
+)
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
+@with_client
+def source_delete_by_title(ctx, title, notebook_id, yes, client_auth):
+    """Delete a source by exact title."""
+    nb_id = require_notebook(notebook_id)
+
+    async def _run():
+        async with NotebookLMClient(client_auth) as client:
+            nb_id_resolved = await resolve_notebook_id(client, nb_id)
+            source = await _resolve_source_by_exact_title(client, nb_id_resolved, title)
+
+            if not yes and not click.confirm(f"Delete source '{source.title}' ({source.id})?"):
+                return
+
+            success = await client.sources.delete(nb_id_resolved, source.id)
+            if success:
+                console.print(f"[green]Deleted source:[/green] {source.id}")
             else:
                 console.print("[yellow]Delete may have failed[/yellow]")
 

@@ -102,7 +102,10 @@ Supported source types: URLs, YouTube videos, files (PDF, text, Markdown, Word, 
 | `rename <id> <title>` | Source ID, new title | - | `source rename src123 "New Name"` |
 | `refresh <id>` | Source ID | - | `source refresh src123` |
 | `delete <id>` | Source ID | - | `source delete src123` |
+| `delete-by-title <title>` | Exact source title | - | `source delete-by-title "My Source"` |
 | `wait <id>` | Source ID | `--timeout`, `--interval` | `source wait src123` |
+
+`source delete <id>` accepts only full source IDs or unique partial-ID prefixes. To delete by exact source title, use `source delete-by-title "<title>"`.
 
 ### Research Commands (`notebooklm research <cmd>`)
 
