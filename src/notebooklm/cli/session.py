@@ -160,11 +160,19 @@ def register_session_commands(cli):
         default=None,
         help="Where to save storage_state.json (default: $NOTEBOOKLM_HOME/storage_state.json)",
     )
-    def login(storage):
+    @click.option(
+        "--browser",
+        type=click.Choice(["chromium", "msedge"], case_sensitive=False),
+        default="chromium",
+        help="Browser to use for login (default: chromium). Use 'msedge' for Microsoft Edge.",
+    )
+    def login(storage, browser):
         """Log in to NotebookLM via browser.
 
         Opens a browser window for Google login. After logging in,
         press ENTER in the terminal to save authentication.
+
+        Use --browser msedge if your organization requires Microsoft Edge for SSO.
 
         Note: Cannot be used when NOTEBOOKLM_AUTH_JSON is set (use file-based
         auth or unset the env var first).
@@ -184,36 +192,56 @@ def register_session_commands(cli):
         try:
             from playwright.sync_api import sync_playwright
         except ImportError:
-            console.print(
-                "[red]Playwright not installed. Run:[/red]\n"
-                "  pip install notebooklm[browser]\n"
-                "  playwright install chromium"
-            )
+            if browser == "msedge":
+                install_hint = "  pip install notebooklm[browser]"
+            else:
+                install_hint = "  pip install notebooklm[browser]\n  playwright install chromium"
+            console.print(f"[red]Playwright not installed. Run:[/red]\n{install_hint}")
             raise SystemExit(1) from None
 
-        # Pre-flight check: verify Chromium browser is installed
-        _ensure_chromium_installed()
+        # Pre-flight check: verify Chromium browser is installed (skip for Edge)
+        if browser == "chromium":
+            _ensure_chromium_installed()
 
         storage_path = Path(storage) if storage else get_storage_path()
         browser_profile = get_browser_profile_dir()
         storage_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         browser_profile.mkdir(parents=True, exist_ok=True, mode=0o700)
 
-        console.print("[yellow]Opening browser for Google login...[/yellow]")
+        browser_label = "Microsoft Edge" if browser == "msedge" else "Chromium"
+        console.print(f"[yellow]Opening {browser_label} for Google login...[/yellow]")
         console.print(f"[dim]Using persistent profile: {browser_profile}[/dim]")
 
         # Use context manager to restore ProactorEventLoop for Playwright on Windows
         # (fixes #89: NotImplementedError on Windows Python 3.12)
         with _windows_playwright_event_loop(), sync_playwright() as p:
-            context = p.chromium.launch_persistent_context(
-                user_data_dir=str(browser_profile),
-                headless=False,
-                args=[
+            launch_kwargs: dict[str, Any] = {
+                "user_data_dir": str(browser_profile),
+                "headless": False,
+                "args": [
                     "--disable-blink-features=AutomationControlled",
                     "--password-store=basic",  # Avoid macOS keychain encryption for headless compatibility
                 ],
-                ignore_default_args=["--enable-automation"],
-            )
+                "ignore_default_args": ["--enable-automation"],
+            }
+            if browser == "msedge":
+                launch_kwargs["channel"] = "msedge"
+
+            try:
+                context = p.chromium.launch_persistent_context(**launch_kwargs)
+            except Exception as e:
+                if browser == "msedge" and (
+                    "executable doesn't exist" in str(e).lower()
+                    or "no such file" in str(e).lower()
+                    or "failed to launch" in str(e).lower()
+                ):
+                    console.print(
+                        "[red]Microsoft Edge not found.[/red]\n"
+                        "Install from: https://www.microsoft.com/edge\n"
+                        "Or use the default Chromium browser: notebooklm login"
+                    )
+                    raise SystemExit(1) from None
+                raise
 
             page = context.pages[0] if context.pages else context.new_page()
             page.goto(NOTEBOOKLM_URL)

@@ -38,7 +38,7 @@ See [Configuration](configuration.md) for details on environment variables and C
 
 | Command | Description | Example |
 |---------|-------------|---------|
-| `login` | Authenticate via browser | `notebooklm login` |
+| `login` | Authenticate via browser | `notebooklm login` / `notebooklm login --browser msedge` |
 | `use <id>` | Set active notebook | `notebooklm use abc123` |
 | `status` | Show current context | `notebooklm status` |
 | `status --paths` | Show configuration paths | `notebooklm status --paths` |
@@ -232,10 +232,23 @@ These CLI capabilities are not available in NotebookLM's web interface:
 Authenticate with Google NotebookLM via browser.
 
 ```bash
-notebooklm login
+notebooklm login [OPTIONS]
 ```
 
 Opens a Chromium browser with a persistent profile. Log in to your Google account, then press Enter in the terminal to save the session.
+
+**Options:**
+- `--storage PATH` - Where to save storage_state.json (default: `$NOTEBOOKLM_HOME/storage_state.json`)
+- `--browser [chromium|msedge]` - Browser to use for login (default: `chromium`). Use `msedge` for Microsoft Edge.
+
+**Examples:**
+```bash
+# Default (Chromium)
+notebooklm login
+
+# Use Microsoft Edge (for orgs that require Edge for SSO)
+notebooklm login --browser msedge
+```
 
 ### Session: `use`
 
