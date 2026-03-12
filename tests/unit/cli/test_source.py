@@ -281,7 +281,7 @@ class TestSourceDelete:
     def test_source_delete(self, runner, mock_auth):
         with patch_client_for_module("source") as mock_client_cls:
             mock_client = create_mock_client()
-            # Mock sources.list for resolve_source_id
+            # Mock sources.list for source delete resolution
             mock_client.sources.list = AsyncMock(
                 return_value=[Source(id="src_123", title="Test Source")]
             )
@@ -299,7 +299,7 @@ class TestSourceDelete:
     def test_source_delete_failure(self, runner, mock_auth):
         with patch_client_for_module("source") as mock_client_cls:
             mock_client = create_mock_client()
-            # Mock sources.list for resolve_source_id
+            # Mock sources.list for source delete resolution
             mock_client.sources.list = AsyncMock(
                 return_value=[Source(id="src_123", title="Test Source")]
             )
@@ -312,6 +312,183 @@ class TestSourceDelete:
 
             assert result.exit_code == 0
             assert "Delete may have failed" in result.output
+
+    def test_source_delete_full_uuid_skips_source_list(self, runner, mock_auth):
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.sources.list = AsyncMock()
+            mock_client.sources.delete = AsyncMock(return_value=True)
+            mock_client_cls.return_value = mock_client
+
+            source_id = "03abe51c-d8df-43ba-ae2d-0efe02c71c4a"
+            with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["source", "delete", source_id, "-n", "nb_123", "-y"])
+
+            assert result.exit_code == 0
+            mock_client.sources.list.assert_not_called()
+            mock_client.sources.delete.assert_called_once_with("nb_123", source_id)
+
+    def test_source_delete_long_hex_string_does_not_skip_source_list(self, runner, mock_auth):
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.sources.list = AsyncMock(return_value=[])
+            mock_client.sources.delete = AsyncMock(return_value=True)
+            mock_client_cls.return_value = mock_client
+
+            source_id = "03abe51cd8df43baae2d0efe02c71c4a"
+            with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["source", "delete", source_id, "-n", "nb_123", "-y"])
+
+            assert result.exit_code == 1
+            mock_client.sources.list.assert_called_once_with("nb_123")
+            mock_client.sources.delete.assert_not_called()
+
+    def test_source_delete_title_suggests_delete_by_title(self, runner, mock_auth):
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.sources.list = AsyncMock(
+                return_value=[
+                    Source(
+                        id="03abe51c-d8df-43ba-ae2d-0efe02c71c4a",
+                        title="Emails_Verzonden_2026_02",
+                    )
+                ]
+            )
+            mock_client.sources.delete = AsyncMock(return_value=True)
+            mock_client_cls.return_value = mock_client
+
+            with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli, ["source", "delete", "Emails_Verzonden_2026_02", "-n", "nb_123", "-y"]
+                )
+
+            assert result.exit_code == 1
+            assert "delete-by-title" in result.output
+            mock_client.sources.delete.assert_not_called()
+
+    def test_source_delete_unknown_long_string_fails_locally(self, runner, mock_auth):
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.sources.list = AsyncMock(
+                return_value=[Source(id="src_123", title="Test Source")]
+            )
+            mock_client.sources.delete = AsyncMock(return_value=True)
+            mock_client_cls.return_value = mock_client
+
+            with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli,
+                    ["source", "delete", "Emails_Verzonden_2025-Q1.txt", "-n", "nb_123", "-y"],
+                )
+
+            assert result.exit_code == 1
+            assert "No source found starting with" in result.output
+            mock_client.sources.delete.assert_not_called()
+
+    def test_source_delete_ambiguous_partial_id(self, runner, mock_auth):
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.sources.list = AsyncMock(
+                return_value=[
+                    Source(id="src_123", title="First Source"),
+                    Source(id="src_456", title="Second Source"),
+                ]
+            )
+            mock_client.sources.delete = AsyncMock(return_value=True)
+            mock_client_cls.return_value = mock_client
+
+            with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["source", "delete", "src", "-n", "nb_123", "-y"])
+
+            assert result.exit_code == 1
+            assert "Ambiguous ID 'src' matches 2 sources" in result.output
+            mock_client.sources.delete.assert_not_called()
+
+
+class TestSourceDeleteByTitle:
+    def test_source_delete_by_title(self, runner, mock_auth):
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.sources.list = AsyncMock(
+                return_value=[Source(id="src_123", title="Test Source")]
+            )
+            mock_client.sources.delete = AsyncMock(return_value=True)
+            mock_client_cls.return_value = mock_client
+
+            with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli, ["source", "delete-by-title", "Test Source", "-n", "nb_123", "-y"]
+                )
+
+            assert result.exit_code == 0
+            assert "Deleted source" in result.output
+            mock_client.sources.delete.assert_called_once_with("nb_123", "src_123")
+
+    def test_source_delete_by_title_duplicate_titles(self, runner, mock_auth):
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.sources.list = AsyncMock(
+                return_value=[
+                    Source(id="src_123", title="Duplicate"),
+                    Source(id="src_456", title="Duplicate"),
+                ]
+            )
+            mock_client.sources.delete = AsyncMock(return_value=True)
+            mock_client_cls.return_value = mock_client
+
+            with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli, ["source", "delete-by-title", "Duplicate", "-n", "nb_123", "-y"]
+                )
+
+            assert result.exit_code == 1
+            assert "Delete by ID instead" in result.output
+            mock_client.sources.delete.assert_not_called()
+
+    def test_source_delete_by_title_not_found(self, runner, mock_auth):
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.sources.list = AsyncMock(return_value=[])
+            mock_client.sources.delete = AsyncMock(return_value=True)
+            mock_client_cls.return_value = mock_client
+
+            with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli, ["source", "delete-by-title", "Missing", "-n", "nb_123", "-y"]
+                )
+
+            assert result.exit_code == 1
+            assert "No source found with title" in result.output
+            mock_client.sources.delete.assert_not_called()
+
+    def test_source_delete_by_title_confirmation_shows_title_and_id(self, runner, mock_auth):
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.sources.list = AsyncMock(
+                return_value=[Source(id="src_123", title="Test Source")]
+            )
+            mock_client.sources.delete = AsyncMock(return_value=True)
+            mock_client_cls.return_value = mock_client
+
+            with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli,
+                    ["source", "delete-by-title", "Test Source", "-n", "nb_123"],
+                    input="y\n",
+                )
+
+            assert result.exit_code == 0
+            assert "Delete source 'Test Source' (src_123)?" in result.output
+            mock_client.sources.delete.assert_called_once_with("nb_123", "src_123")
 
 
 # =============================================================================
