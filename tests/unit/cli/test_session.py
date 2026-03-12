@@ -148,6 +148,32 @@ class TestLoginCommand:
         mock_ensure.assert_called_once()
         assert "channel" not in mock_launch.call_args[1]
 
+    def test_login_msedge_not_installed_shows_helpful_error(self, runner, tmp_path):
+        """Test --browser msedge shows helpful error when Edge is not installed."""
+        with (
+            patch("notebooklm.cli.session._ensure_chromium_installed"),
+            patch("playwright.sync_api.sync_playwright") as mock_pw,
+            patch(
+                "notebooklm.cli.session.get_storage_path", return_value=tmp_path / "storage.json"
+            ),
+            patch(
+                "notebooklm.cli.session.get_browser_profile_dir",
+                return_value=tmp_path / "profile",
+            ),
+        ):
+            mock_launch = (
+                mock_pw.return_value.__enter__.return_value.chromium.launch_persistent_context
+            )
+            mock_launch.side_effect = Exception(
+                "Executable doesn't exist at /ms-edge\nFailed to launch"
+            )
+
+            result = runner.invoke(cli, ["login", "--browser", "msedge"])
+
+        assert result.exit_code == 1
+        assert "Microsoft Edge not found" in result.output
+        assert "microsoft.com/edge" in result.output
+
 
 # =============================================================================
 # USE COMMAND TESTS

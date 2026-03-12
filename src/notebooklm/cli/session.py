@@ -227,7 +227,21 @@ def register_session_commands(cli):
             if browser == "msedge":
                 launch_kwargs["channel"] = "msedge"
 
-            context = p.chromium.launch_persistent_context(**launch_kwargs)
+            try:
+                context = p.chromium.launch_persistent_context(**launch_kwargs)
+            except Exception as e:
+                if browser == "msedge" and (
+                    "executable doesn't exist" in str(e).lower()
+                    or "no such file" in str(e).lower()
+                    or "failed to launch" in str(e).lower()
+                ):
+                    console.print(
+                        "[red]Microsoft Edge not found.[/red]\n"
+                        "Install from: https://www.microsoft.com/edge\n"
+                        "Or use the default Chromium browser: notebooklm login"
+                    )
+                    raise SystemExit(1) from None
+                raise
 
             page = context.pages[0] if context.pages else context.new_page()
             page.goto(NOTEBOOKLM_URL)
