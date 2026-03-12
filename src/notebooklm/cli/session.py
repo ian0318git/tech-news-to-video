@@ -192,11 +192,10 @@ def register_session_commands(cli):
         try:
             from playwright.sync_api import sync_playwright
         except ImportError:
-            install_hint = (
-                "  pip install notebooklm[browser]"
-                if browser == "msedge"
-                else "  pip install notebooklm[browser]\n  playwright install chromium"
-            )
+            if browser == "msedge":
+                install_hint = "  pip install notebooklm[browser]"
+            else:
+                install_hint = "  pip install notebooklm[browser]\n  playwright install chromium"
             console.print(f"[red]Playwright not installed. Run:[/red]\n{install_hint}")
             raise SystemExit(1) from None
 
