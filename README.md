@@ -118,6 +118,8 @@ pip install git+https://github.com/teng-lin/notebooklm-py@main
 ```bash
 # 1. Authenticate (opens browser)
 notebooklm login
+# Or use Microsoft Edge (for orgs that require Edge for SSO)
+# notebooklm login --browser msedge
 
 # 2. Create a notebook and add sources
 notebooklm create "My Research"

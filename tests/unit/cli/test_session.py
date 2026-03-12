@@ -83,6 +83,105 @@ class TestLoginCommand:
         assert result.exit_code == 1
         assert "Cannot run 'login' when NOTEBOOKLM_AUTH_JSON is set" in result.output
 
+    def test_login_help_shows_browser_option(self, runner):
+        """Test login --help shows --browser option with chromium/msedge choices."""
+        result = runner.invoke(cli, ["login", "--help"])
+
+        assert result.exit_code == 0
+        assert "--browser" in result.output
+        assert "chromium" in result.output
+        assert "msedge" in result.output
+
+    def test_login_rejects_invalid_browser(self, runner):
+        """Test login rejects invalid --browser values."""
+        result = runner.invoke(cli, ["login", "--browser", "firefox"])
+
+        assert result.exit_code != 0
+
+    def test_login_msedge_skips_chromium_install(self, runner, tmp_path):
+        """Test --browser msedge skips _ensure_chromium_installed."""
+        with (
+            patch("notebooklm.cli.session._ensure_chromium_installed") as mock_ensure,
+            patch("playwright.sync_api.sync_playwright") as mock_pw,
+            patch(
+                "notebooklm.cli.session.get_storage_path", return_value=tmp_path / "storage.json"
+            ),
+            patch(
+                "notebooklm.cli.session.get_browser_profile_dir",
+                return_value=tmp_path / "profile",
+            ),
+            patch("notebooklm.cli.session._sync_server_language_to_config"),
+            patch("builtins.input", return_value=""),
+        ):
+            mock_context = MagicMock()
+            mock_page = MagicMock()
+            mock_page.url = "https://notebooklm.google.com/"
+            mock_context.pages = [mock_page]
+            mock_pw.return_value.__enter__.return_value.chromium.launch_persistent_context.return_value = mock_context
+
+            runner.invoke(cli, ["login", "--browser", "msedge"])
+
+        mock_ensure.assert_not_called()
+
+    def test_login_msedge_passes_channel_param(self, runner, tmp_path):
+        """Test --browser msedge passes channel='msedge' to launch_persistent_context."""
+        with (
+            patch("notebooklm.cli.session._ensure_chromium_installed"),
+            patch("playwright.sync_api.sync_playwright") as mock_pw,
+            patch(
+                "notebooklm.cli.session.get_storage_path", return_value=tmp_path / "storage.json"
+            ),
+            patch(
+                "notebooklm.cli.session.get_browser_profile_dir",
+                return_value=tmp_path / "profile",
+            ),
+            patch("notebooklm.cli.session._sync_server_language_to_config"),
+            patch("builtins.input", return_value=""),
+        ):
+            mock_context = MagicMock()
+            mock_page = MagicMock()
+            mock_page.url = "https://notebooklm.google.com/"
+            mock_context.pages = [mock_page]
+            mock_launch = (
+                mock_pw.return_value.__enter__.return_value.chromium.launch_persistent_context
+            )
+            mock_launch.return_value = mock_context
+
+            runner.invoke(cli, ["login", "--browser", "msedge"])
+
+        call_kwargs = mock_launch.call_args[1]
+        assert call_kwargs.get("channel") == "msedge"
+
+    def test_login_chromium_default_no_channel(self, runner, tmp_path):
+        """Test default chromium does not pass channel and calls _ensure_chromium_installed."""
+        with (
+            patch("notebooklm.cli.session._ensure_chromium_installed") as mock_ensure,
+            patch("playwright.sync_api.sync_playwright") as mock_pw,
+            patch(
+                "notebooklm.cli.session.get_storage_path", return_value=tmp_path / "storage.json"
+            ),
+            patch(
+                "notebooklm.cli.session.get_browser_profile_dir",
+                return_value=tmp_path / "profile",
+            ),
+            patch("notebooklm.cli.session._sync_server_language_to_config"),
+            patch("builtins.input", return_value=""),
+        ):
+            mock_context = MagicMock()
+            mock_page = MagicMock()
+            mock_page.url = "https://notebooklm.google.com/"
+            mock_context.pages = [mock_page]
+            mock_launch = (
+                mock_pw.return_value.__enter__.return_value.chromium.launch_persistent_context
+            )
+            mock_launch.return_value = mock_context
+
+            runner.invoke(cli, ["login", "--browser", "chromium"])
+
+        mock_ensure.assert_called_once()
+        call_kwargs = mock_launch.call_args[1]
+        assert "channel" not in call_kwargs
+
 
 # =============================================================================
 # USE COMMAND TESTS
