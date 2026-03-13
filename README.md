@@ -95,6 +95,8 @@ pip install "notebooklm-py[browser]"
 playwright install chromium
 ```
 
+If `playwright install chromium` fails with `TypeError: onExit is not a function`, see the Linux workaround in [Troubleshooting](docs/troubleshooting.md#linux).
+
 ### Development Installation
 
 For contributors or testing unreleased features:
