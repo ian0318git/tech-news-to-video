@@ -1,7 +1,7 @@
 # CLI Reference
 
 **Status:** Active
-**Last Updated:** 2026-03-12
+**Last Updated:** 2026-03-13
 
 Complete command reference for the `notebooklm` CLI—providing full programmatic access to all NotebookLM features, including capabilities not exposed in the web UI.
 
@@ -205,6 +205,8 @@ Manage Claude Code skill integration.
 | `show` | Display skill content | `skill show` |
 
 After installation, Claude Code recognizes NotebookLM commands via `/notebooklm` or natural language like "create a podcast about X".
+
+Codex does not use the `skill` subcommand. In this repository it reads the root [`AGENTS.md`](../AGENTS.md) file and invokes the `notebooklm` CLI or Python API directly.
 
 ### Features Beyond the Web UI
 
