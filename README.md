@@ -159,6 +159,8 @@ Other useful CLI commands:
 
 ```bash
 notebooklm auth check --test         # Diagnose auth/cookie issues
+notebooklm agent show codex          # Print bundled Codex instructions
+notebooklm agent show claude         # Print bundled Claude Code skill template
 notebooklm language list             # List supported output languages
 notebooklm metadata --json           # Export notebook metadata and sources
 notebooklm share status              # Inspect sharing state
@@ -206,6 +208,7 @@ asyncio.run(main())
 ```bash
 # Install via CLI or ask Claude Code to do it
 notebooklm skill install
+notebooklm agent show claude
 
 # Then use natural language:
 # "Create a podcast about quantum computing"
@@ -219,6 +222,7 @@ Codex reads repo-level instructions from [`AGENTS.md`](AGENTS.md), so there is n
 
 ```bash
 uv sync --extra dev --extra browser
+notebooklm agent show codex
 notebooklm login
 notebooklm list --json
 ```

@@ -5,11 +5,11 @@ Commands for managing the Claude Code skill integration.
 
 import contextlib
 import re
-from importlib import resources
 from pathlib import Path
 
 import click
 
+from .agent_templates import get_agent_source_content
 from .helpers import console
 
 # Skill paths
@@ -19,11 +19,7 @@ SKILL_DEST = SKILL_DEST_DIR / "SKILL.md"
 
 def get_skill_source_content() -> str | None:
     """Read the skill source file from package data."""
-    try:
-        # Python 3.9+ way to read package data (use / operator for path traversal)
-        return (resources.files("notebooklm") / "data" / "SKILL.md").read_text(encoding="utf-8")
-    except (FileNotFoundError, TypeError):
-        return None
+    return get_agent_source_content("claude")
 
 
 def get_package_version() -> str:
