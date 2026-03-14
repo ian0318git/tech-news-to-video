@@ -203,9 +203,7 @@ asyncio.run(main())
 
 ### Agent Setup
 
-#### Claude Code
-
-**Option 1 — CLI install** (requires `notebooklm-py` installed):
+**Option 1 — CLI install**:
 
 ```bash
 notebooklm skill install
