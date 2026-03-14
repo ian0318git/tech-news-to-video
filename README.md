@@ -27,7 +27,7 @@
 
 ## What You Can Build
 
-🤖 **AI Agent Tools** - Integrate NotebookLM into Claude Code or other LLM agents. Ships with [Claude Code skills](#agent-skills-claude-code) for natural language automation (`notebooklm skill install`), or build your own integrations with the async Python API.
+🤖 **AI Agent Tools** - Integrate NotebookLM into Claude Code, Codex, and other LLM agents. Ships with a [Claude Code skill](#agent-setup) (`notebooklm skill install`) and repo-level Codex instructions in [`AGENTS.md`](AGENTS.md), or build your own integrations with the async Python API.
 
 📚 **Research Automation** - Bulk-import sources (URLs, PDFs, YouTube, Google Drive), run web/Drive research queries with auto-import, and extract insights programmatically. Build repeatable research pipelines.
 
@@ -41,7 +41,7 @@
 |--------|----------|
 | **Python API** | Application integration, async workflows, custom pipelines |
 | **CLI** | Shell scripts, quick tasks, CI/CD automation |
-| **Agent Skills** | Claude Code, LLM agents, natural language automation |
+| **Agent Integration** | Claude Code, Codex, LLM agents, natural language automation |
 
 ## Features
 
@@ -94,6 +94,8 @@ pip install notebooklm-py
 pip install "notebooklm-py[browser]"
 playwright install chromium
 ```
+
+If `playwright install chromium` fails with `TypeError: onExit is not a function`, see the Linux workaround in [Troubleshooting](docs/troubleshooting.md#linux).
 
 ### Development Installation
 
@@ -157,6 +159,8 @@ Other useful CLI commands:
 
 ```bash
 notebooklm auth check --test         # Diagnose auth/cookie issues
+notebooklm agent show codex          # Print bundled Codex instructions
+notebooklm agent show claude         # Print bundled Claude Code skill template
 notebooklm language list             # List supported output languages
 notebooklm metadata --json           # Export notebook metadata and sources
 notebooklm share status              # Inspect sharing state
@@ -197,17 +201,33 @@ async def main():
 asyncio.run(main())
 ```
 
-### Agent Skills (Claude Code)
+### Agent Setup
+
+#### Claude Code
 
 ```bash
 # Install via CLI or ask Claude Code to do it
 notebooklm skill install
+notebooklm agent show claude
 
 # Then use natural language:
 # "Create a podcast about quantum computing"
 # "Download the quiz as markdown"
 # "/notebooklm generate video"
 ```
+
+#### Codex
+
+Codex reads repo-level instructions from [`AGENTS.md`](AGENTS.md), so there is no separate install command. After installing dependencies and authenticating, ask Codex to use the `notebooklm` CLI or Python API directly.
+
+```bash
+uv sync --extra dev --extra browser
+notebooklm agent show codex
+notebooklm login
+notebooklm list --json
+```
+
+For automation, prefer `--json`, pass explicit notebook IDs instead of relying on `notebooklm use`, and set `NOTEBOOKLM_HOME=/tmp/codex-$RUN_ID` when multiple agents may run in parallel.
 
 ## Documentation
 

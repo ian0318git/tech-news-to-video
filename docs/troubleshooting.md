@@ -1,7 +1,7 @@
 # Troubleshooting
 
 **Status:** Active
-**Last Updated:** 2026-01-20
+**Last Updated:** 2026-03-13
 
 Common issues, known limitations, and workarounds for `notebooklm-py`.
 
@@ -305,6 +305,30 @@ audio = next(a for a in artifacts if a.kind == "audio")
 **Playwright missing dependencies:**
 ```bash
 playwright install-deps chromium
+```
+
+**`playwright install chromium` fails with `TypeError: onExit is not a function`:**
+
+This is an environment-specific Playwright install failure that has been observed with some newer Playwright builds on Linux. `notebooklm-py` only needs a working browser install for `notebooklm login`; the workaround is to install a known-good Playwright version in a clean virtual environment.
+
+**Workaround:**
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -U pip
+pip install "playwright==1.57.0"
+python -m playwright install chromium
+pip install -e ".[all]"
+```
+
+**Why this order matters:**
+- `python -m playwright ...` ensures you use the Playwright module from the active virtual environment
+- installing the browser before `pip install -e ".[all]"` avoids picking up an older broken global `playwright` executable
+- if you already have another `playwright` on your system, verify with `which playwright` after activation
+
+If you need a non-editable install from Git instead of a local checkout, replace the last step with:
+```bash
+pip install "git+https://github.com/<your-user>/notebooklm-py@<branch>"
 ```
 
 **No display available (headless server):**
