@@ -17,6 +17,7 @@ class SkillTarget:
     label: str
     relative_path: Path
 
+
 TARGETS = {
     "claude": SkillTarget("Claude Code", Path(".claude") / "skills" / "notebooklm" / "SKILL.md"),
     "agents": SkillTarget("Agent Skills", Path(".agents") / "skills" / "notebooklm" / "SKILL.md"),
