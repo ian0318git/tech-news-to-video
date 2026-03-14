@@ -1,7 +1,7 @@
 # CLI Reference
 
 **Status:** Active
-**Last Updated:** 2026-03-12
+**Last Updated:** 2026-03-13
 
 Complete command reference for the `notebooklm` CLI—providing full programmatic access to all NotebookLM features, including capabilities not exposed in the web UI.
 
@@ -27,7 +27,7 @@ See [Configuration](configuration.md) for details on environment variables and C
 - **Session commands** - Authentication and context management
 - **Notebook commands** - CRUD operations on notebooks
 - **Chat commands** - Querying and conversation management
-- **Grouped commands** - `source`, `artifact`, `generate`, `download`, `note`, `share`, `research`, `language`, `skill`, `auth`
+- **Grouped commands** - `source`, `artifact`, `agent`, `generate`, `download`, `note`, `share`, `research`, `language`, `skill`, `auth`
 - **Utility commands** - `metadata`
 
 ---
@@ -38,7 +38,7 @@ See [Configuration](configuration.md) for details on environment variables and C
 
 | Command | Description | Example |
 |---------|-------------|---------|
-| `login` | Authenticate via browser | `notebooklm login` |
+| `login` | Authenticate via browser | `notebooklm login` / `notebooklm login --browser msedge` |
 | `use <id>` | Set active notebook | `notebooklm use abc123` |
 | `status` | Show current context | `notebooklm status` |
 | `status --paths` | Show configuration paths | `notebooklm status --paths` |
@@ -213,6 +213,19 @@ Defaults:
 
 The packaged wheel includes the repo-root `SKILL.md`, so the same skill content powers `notebooklm skill install`, GitHub discovery, and `npx skills add teng-lin/notebooklm-py`.
 
+Codex does not use the `skill` subcommand. In this repository it reads the root [`AGENTS.md`](../AGENTS.md) file and invokes the `notebooklm` CLI or Python API directly.
+
+### Agent Commands (`notebooklm agent <cmd>`)
+
+Show bundled instructions for supported agent environments.
+
+| Command | Description | Example |
+|---------|-------------|---------|
+| `show codex` | Print the Codex repository guidance | `agent show codex` |
+| `show claude` | Print the bundled Claude Code skill template | `agent show claude` |
+
+`agent show codex` prefers the root [`AGENTS.md`](../AGENTS.md) file when running from a source checkout, so the CLI mirrors the same instructions Codex sees in the repository.
+
 ### Features Beyond the Web UI
 
 These CLI capabilities are not available in NotebookLM's web interface:
@@ -239,10 +252,23 @@ These CLI capabilities are not available in NotebookLM's web interface:
 Authenticate with Google NotebookLM via browser.
 
 ```bash
-notebooklm login
+notebooklm login [OPTIONS]
 ```
 
 Opens a Chromium browser with a persistent profile. Log in to your Google account, then press Enter in the terminal to save the session.
+
+**Options:**
+- `--storage PATH` - Where to save storage_state.json (default: `$NOTEBOOKLM_HOME/storage_state.json`)
+- `--browser [chromium|msedge]` - Browser to use for login (default: `chromium`). Use `msedge` for Microsoft Edge.
+
+**Examples:**
+```bash
+# Default (Chromium)
+notebooklm login
+
+# Use Microsoft Edge (for orgs that require Edge for SSO)
+notebooklm login --browser msedge
+```
 
 ### Session: `use`
 

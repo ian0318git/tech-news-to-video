@@ -83,6 +83,97 @@ class TestLoginCommand:
         assert result.exit_code == 1
         assert "Cannot run 'login' when NOTEBOOKLM_AUTH_JSON is set" in result.output
 
+    def test_login_help_shows_browser_option(self, runner):
+        """Test login --help shows --browser option with chromium/msedge choices."""
+        result = runner.invoke(cli, ["login", "--help"])
+
+        assert result.exit_code == 0
+        assert "--browser" in result.output
+        assert "chromium" in result.output
+        assert "msedge" in result.output
+
+    def test_login_rejects_invalid_browser(self, runner):
+        """Test login rejects invalid --browser values."""
+        result = runner.invoke(cli, ["login", "--browser", "firefox"])
+
+        assert result.exit_code != 0
+
+    @pytest.fixture
+    def mock_login_browser(self, tmp_path):
+        """Mock Playwright browser launch for login --browser tests.
+
+        Yields (mock_ensure, mock_launch) for assertions on chromium install
+        check and launch_persistent_context kwargs.
+        """
+        with (
+            patch("notebooklm.cli.session._ensure_chromium_installed") as mock_ensure,
+            patch("playwright.sync_api.sync_playwright") as mock_pw,
+            patch(
+                "notebooklm.cli.session.get_storage_path", return_value=tmp_path / "storage.json"
+            ),
+            patch(
+                "notebooklm.cli.session.get_browser_profile_dir",
+                return_value=tmp_path / "profile",
+            ),
+            patch("notebooklm.cli.session._sync_server_language_to_config"),
+            patch("builtins.input", return_value=""),
+        ):
+            mock_context = MagicMock()
+            mock_page = MagicMock()
+            mock_page.url = "https://notebooklm.google.com/"
+            mock_context.pages = [mock_page]
+            mock_launch = (
+                mock_pw.return_value.__enter__.return_value.chromium.launch_persistent_context
+            )
+            mock_launch.return_value = mock_context
+
+            yield mock_ensure, mock_launch
+
+    def test_login_msedge_skips_chromium_install(self, runner, mock_login_browser):
+        """Test --browser msedge skips _ensure_chromium_installed."""
+        mock_ensure, _ = mock_login_browser
+        runner.invoke(cli, ["login", "--browser", "msedge"])
+        mock_ensure.assert_not_called()
+
+    def test_login_msedge_passes_channel_param(self, runner, mock_login_browser):
+        """Test --browser msedge passes channel='msedge' to launch_persistent_context."""
+        _, mock_launch = mock_login_browser
+        runner.invoke(cli, ["login", "--browser", "msedge"])
+        assert mock_launch.call_args[1].get("channel") == "msedge"
+
+    def test_login_chromium_default_no_channel(self, runner, mock_login_browser):
+        """Test default chromium calls _ensure_chromium_installed and has no channel."""
+        mock_ensure, mock_launch = mock_login_browser
+        runner.invoke(cli, ["login", "--browser", "chromium"])
+        mock_ensure.assert_called_once()
+        assert "channel" not in mock_launch.call_args[1]
+
+    def test_login_msedge_not_installed_shows_helpful_error(self, runner, tmp_path):
+        """Test --browser msedge shows helpful error when Edge is not installed."""
+        with (
+            patch("notebooklm.cli.session._ensure_chromium_installed"),
+            patch("playwright.sync_api.sync_playwright") as mock_pw,
+            patch(
+                "notebooklm.cli.session.get_storage_path", return_value=tmp_path / "storage.json"
+            ),
+            patch(
+                "notebooklm.cli.session.get_browser_profile_dir",
+                return_value=tmp_path / "profile",
+            ),
+        ):
+            mock_launch = (
+                mock_pw.return_value.__enter__.return_value.chromium.launch_persistent_context
+            )
+            mock_launch.side_effect = Exception(
+                "Executable doesn't exist at /ms-edge\nFailed to launch"
+            )
+
+            result = runner.invoke(cli, ["login", "--browser", "msedge"])
+
+        assert result.exit_code == 1
+        assert "Microsoft Edge not found" in result.output
+        assert "microsoft.com/edge" in result.output
+
 
 # =============================================================================
 # USE COMMAND TESTS

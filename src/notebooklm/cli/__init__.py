@@ -5,6 +5,7 @@ This package provides the command-line interface for NotebookLM automation.
 Command groups are organized into separate modules:
 - source.py: Source management commands (includes add-research)
 - artifact.py: Artifact management commands
+- agent.py: Agent integration helpers
 - generate.py: Content generation commands
 - download.py: Download commands
 - note.py: Note management commands
@@ -16,6 +17,7 @@ Re-exports from helpers for backward compatibility with tests.
 """
 
 # Command groups (subcommand style)
+from .agent import agent
 from .artifact import artifact
 from .chat import register_chat_commands
 from .download import download
@@ -80,6 +82,7 @@ __all__ = [
     # Command groups (subcommand style)
     "source",
     "artifact",
+    "agent",
     "generate",
     "download",
     "note",

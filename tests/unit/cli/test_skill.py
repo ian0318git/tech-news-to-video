@@ -292,25 +292,16 @@ class TestSkillVersionExtraction:
 class TestSkillSourceFallback:
     """Tests for resolving the canonical repository skill."""
 
-    def test_get_skill_source_content_falls_back_to_repo_root(self, tmp_path):
-        """Test reading the repo root SKILL.md when package data is unavailable."""
-        repo_skill = tmp_path / "SKILL.md"
-        repo_skill.write_text("# Canonical Skill", encoding="utf-8")
-
-        with (
-            patch.object(skill_module, "_DEV_SKILL_FALLBACK", repo_skill),
-            patch.object(skill_module.resources, "files", side_effect=FileNotFoundError),
+    def test_get_skill_source_content_reads_claude_agent_template(self):
+        """Test that skill content is sourced through the shared agent template loader."""
+        with patch.object(
+            skill_module, "get_agent_source_content", return_value="# Canonical Skill"
         ):
             assert skill_module.get_skill_source_content() == "# Canonical Skill"
 
-    def test_get_skill_source_content_returns_none_when_both_missing(self, tmp_path):
-        """Test that None is returned when both package data and dev fallback are missing."""
-        missing = tmp_path / "nonexistent.md"
-
-        with (
-            patch.object(skill_module, "_DEV_SKILL_FALLBACK", missing),
-            patch.object(skill_module.resources, "files", side_effect=FileNotFoundError),
-        ):
+    def test_get_skill_source_content_returns_none_when_template_missing(self):
+        """Test that None is returned when bundled claude instructions are missing."""
+        with patch.object(skill_module, "get_agent_source_content", return_value=None):
             assert skill_module.get_skill_source_content() is None
 
 
@@ -323,8 +314,7 @@ class TestAddVersionComment:
 
         content = "---\nname: notebooklm\n---\n# Body"
         result = add_version_comment(content, "1.2.3")
-        # parts[2] starts with '\n', so the version comment lands between '---\n' and '\n# Body'
-        assert result == "---\nname: notebooklm\n---\n<!-- notebooklm-py v1.2.3 -->\n\n# Body"
+        assert result == "---\nname: notebooklm\n---\n<!-- notebooklm-py v1.2.3 -->\n# Body"
 
     def test_prepends_when_no_frontmatter(self):
         """Version comment is prepended when no frontmatter delimiters exist."""

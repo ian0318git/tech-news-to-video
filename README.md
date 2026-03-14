@@ -27,7 +27,7 @@
 
 ## What You Can Build
 
-🤖 **AI Agent Tools** - Integrate NotebookLM into Claude Code, Codex, and other compatible agent-skill runtimes. Ships with a root [NotebookLM skill](SKILL.md) for GitHub and `npx skills add` discovery, plus `notebooklm skill install` for local agent directories.
+🤖 **AI Agent Tools** - Integrate NotebookLM into Claude Code, Codex, and other LLM agents. Ships with a root [NotebookLM skill](SKILL.md) for GitHub and `npx skills add` discovery, local `notebooklm skill install` support for Claude Code and `.agents` skill directories, and repo-level Codex guidance in [`AGENTS.md`](AGENTS.md).
 
 📚 **Research Automation** - Bulk-import sources (URLs, PDFs, YouTube, Google Drive), run web/Drive research queries with auto-import, and extract insights programmatically. Build repeatable research pipelines.
 
@@ -41,7 +41,7 @@
 |--------|----------|
 | **Python API** | Application integration, async workflows, custom pipelines |
 | **CLI** | Shell scripts, quick tasks, CI/CD automation |
-| **Agent Skills** | Claude Code, LLM agents, natural language automation |
+| **Agent Integration** | Claude Code, Codex, LLM agents, natural language automation |
 
 ## Features
 
@@ -95,6 +95,8 @@ pip install "notebooklm-py[browser]"
 playwright install chromium
 ```
 
+If `playwright install chromium` fails with `TypeError: onExit is not a function`, see the Linux workaround in [Troubleshooting](docs/troubleshooting.md#linux).
+
 ### Development Installation
 
 For contributors or testing unreleased features:
@@ -118,6 +120,8 @@ pip install git+https://github.com/teng-lin/notebooklm-py@main
 ```bash
 # 1. Authenticate (opens browser)
 notebooklm login
+# Or use Microsoft Edge (for orgs that require Edge for SSO)
+# notebooklm login --browser msedge
 
 # 2. Create a notebook and add sources
 notebooklm create "My Research"
@@ -155,6 +159,8 @@ Other useful CLI commands:
 
 ```bash
 notebooklm auth check --test         # Diagnose auth/cookie issues
+notebooklm agent show codex          # Print bundled Codex instructions
+notebooklm agent show claude         # Print bundled Claude Code skill template
 notebooklm language list             # List supported output languages
 notebooklm metadata --json           # Export notebook metadata and sources
 notebooklm share status              # Inspect sharing state
@@ -195,11 +201,14 @@ async def main():
 asyncio.run(main())
 ```
 
-### Agent Skills
+### Agent Setup
+
+#### Claude Code
 
 ```bash
 # Install into local user-level Claude + .agents skill directories
 notebooklm skill install
+notebooklm agent show claude
 
 # Install only the universal .agents/skills target in the current project
 notebooklm skill install --scope project --target agents
@@ -211,8 +220,21 @@ npx skills add teng-lin/notebooklm-py
 Supported paths:
 
 - `notebooklm skill install` manages local `~/.claude/skills/notebooklm` and `~/.agents/skills/notebooklm` by default.
-- GitHub / `npx skills add` discover the canonical root [SKILL.md](SKILL.md).
+- GitHub and `npx skills add teng-lin/notebooklm-py` discover the canonical root [SKILL.md](SKILL.md).
 - Agents that honor `.agents/skills` can consume the universal install path; Claude Code also supports `.claude/skills`.
+
+#### Codex
+
+Codex reads repo-level instructions from [`AGENTS.md`](AGENTS.md), so there is no separate install command. After installing dependencies and authenticating, ask Codex to use the `notebooklm` CLI or Python API directly.
+
+```bash
+uv sync --extra dev --extra browser
+notebooklm agent show codex
+notebooklm login
+notebooklm list --json
+```
+
+For automation, prefer `--json`, pass explicit notebook IDs instead of relying on `notebooklm use`, and set `NOTEBOOKLM_HOME=/tmp/codex-$RUN_ID` when multiple agents may run in parallel.
 
 ## Documentation
 

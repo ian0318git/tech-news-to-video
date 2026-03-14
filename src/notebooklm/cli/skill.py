@@ -2,11 +2,11 @@
 
 import re
 from dataclasses import dataclass
-from importlib import resources
 from pathlib import Path
 
 import click
 
+from .agent_templates import get_agent_source_content
 from .helpers import console
 
 
@@ -17,11 +17,6 @@ class SkillTarget:
     label: str
     relative_path: Path
 
-
-# Dev-only fallback: points to the repo root only when running from an editable install.
-# In a pip-installed wheel, parents[3] resolves to a site-packages ancestor, not the repo.
-# The primary importlib.resources path is always tried first.
-_DEV_SKILL_FALLBACK = Path(__file__).resolve().parents[3] / "SKILL.md"
 TARGETS = {
     "claude": SkillTarget("Claude Code", Path(".claude") / "skills" / "notebooklm" / "SKILL.md"),
     "agents": SkillTarget("Agent Skills", Path(".agents") / "skills" / "notebooklm" / "SKILL.md"),
@@ -31,17 +26,7 @@ SCOPES = ("user", "project")
 
 def get_skill_source_content() -> str | None:
     """Read the skill source file from package data."""
-    try:
-        # Python 3.9+ way to read package data (use / operator for path traversal).
-        # TypeError: raised by some importlib.resources implementations when the package
-        # is not properly installed (e.g. namespace packages, partial installs).
-        # ModuleNotFoundError: raised when the notebooklm.data sub-path doesn't exist.
-        return (resources.files("notebooklm") / "data" / "SKILL.md").read_text(encoding="utf-8")
-    except (FileNotFoundError, TypeError, ModuleNotFoundError):
-        try:
-            return _DEV_SKILL_FALLBACK.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            return None
+    return get_agent_source_content("claude")
 
 
 def get_package_version() -> str:
@@ -88,7 +73,7 @@ def add_version_comment(content: str, version: str) -> str:
     if "---" in content:
         parts = content.split("---", 2)
         if len(parts) >= 3:
-            return f"---{parts[1]}---\n{version_comment}{parts[2]}"
+            return f"---{parts[1]}---\n{version_comment}{parts[2].lstrip()}"
 
     return version_comment + content
 

@@ -61,6 +61,7 @@ from .auth import DEFAULT_STORAGE_PATH
 
 # Import command groups from cli package
 from .cli import (
+    agent,
     artifact,
     download,
     generate,
@@ -135,6 +136,7 @@ register_chat_commands(cli)
 # Register command groups (subcommand style)
 cli.add_command(source)
 cli.add_command(artifact)
+cli.add_command(agent)
 cli.add_command(generate)
 cli.add_command(download)
 cli.add_command(note)
