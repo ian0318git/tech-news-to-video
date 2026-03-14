@@ -60,6 +60,23 @@ class TestSkillInstall:
         assert (project / ".agents" / "skills" / "notebooklm" / "SKILL.md").exists()
         assert not (project / ".claude" / "skills" / "notebooklm" / "SKILL.md").exists()
 
+    def test_skill_install_project_scope_all_targets(self, runner, tmp_path):
+        """Test project-scope installs both targets under cwd when target=all."""
+        project = tmp_path / "project"
+        mock_source_content = "---\nname: notebooklm\n---\n# Test"
+
+        with (
+            patch.object(
+                skill_module, "get_skill_source_content", return_value=mock_source_content
+            ),
+            patch.object(skill_module.Path, "cwd", return_value=project),
+        ):
+            result = runner.invoke(cli, ["skill", "install", "--scope", "project"])
+
+        assert result.exit_code == 0
+        assert (project / ".claude" / "skills" / "notebooklm" / "SKILL.md").exists()
+        assert (project / ".agents" / "skills" / "notebooklm" / "SKILL.md").exists()
+
     def test_skill_install_source_not_found(self, runner, tmp_path):
         """Test error when source file doesn't exist."""
         with patch.object(skill_module, "get_skill_source_content", return_value=None):
@@ -67,6 +84,29 @@ class TestSkillInstall:
 
         assert result.exit_code == 1
         assert "not found" in result.output.lower()
+
+    def test_skill_install_partial_failure_reports_both(self, runner, tmp_path):
+        """Test that a per-target write failure is reported but other targets still install."""
+        home = tmp_path / "home"
+        mock_source_content = "---\nname: notebooklm\n---\n# Test"
+
+        # Make the claude target path a file so mkdir(parents=True) raises NotADirectoryError
+        claude_dir = home / ".claude" / "skills" / "notebooklm"
+        claude_dir.parent.mkdir(parents=True)
+        claude_dir.write_text("blocker")
+
+        with (
+            patch.object(
+                skill_module, "get_skill_source_content", return_value=mock_source_content
+            ),
+            patch.object(skill_module.Path, "home", return_value=home),
+        ):
+            result = runner.invoke(cli, ["skill", "install"])
+
+        assert result.exit_code == 1
+        assert "failed" in result.output.lower()
+        # agents target should still have succeeded
+        assert (home / ".agents" / "skills" / "notebooklm" / "SKILL.md").exists()
 
 
 class TestSkillStatus:
@@ -84,19 +124,41 @@ class TestSkillStatus:
         assert "claude code" in result.output.lower()
         assert "agent skills" in result.output.lower()
 
-    def test_skill_status_installed(self, runner, tmp_path):
-        """Test status when skill is installed."""
+    def test_skill_status_installed_version_mismatch(self, runner, tmp_path):
+        """Test status when skill is installed with a different version than the CLI."""
         home = tmp_path / "home"
         skill_dest = home / ".agents" / "skills" / "notebooklm" / "SKILL.md"
         skill_dest.parent.mkdir(parents=True)
         skill_dest.write_text("<!-- notebooklm-py v0.1.0 -->\n# Test")
 
-        with patch.object(skill_module.Path, "home", return_value=home):
+        with (
+            patch.object(skill_module.Path, "home", return_value=home),
+            patch.object(skill_module, "get_package_version", return_value="9.9.9"),
+        ):
             result = runner.invoke(cli, ["skill", "status"])
 
         assert result.exit_code == 0
         assert "installed" in result.output.lower()
         assert "version mismatch" in result.output.lower()
+
+    def test_skill_status_both_targets_same_version(self, runner, tmp_path):
+        """Test status when both targets are installed with the current version."""
+        home = tmp_path / "home"
+        version = "1.2.3"
+        for subdir in [".claude/skills/notebooklm", ".agents/skills/notebooklm"]:
+            dest = home / subdir / "SKILL.md"
+            dest.parent.mkdir(parents=True)
+            dest.write_text(f"<!-- notebooklm-py v{version} -->\n# Test")
+
+        with (
+            patch.object(skill_module.Path, "home", return_value=home),
+            patch.object(skill_module, "get_package_version", return_value=version),
+        ):
+            result = runner.invoke(cli, ["skill", "status"])
+
+        assert result.exit_code == 0
+        assert "version mismatch" not in result.output.lower()
+        assert result.output.count("Installed") >= 2
 
 
 class TestSkillUninstall:
@@ -119,6 +181,24 @@ class TestSkillUninstall:
         assert not skill_dest.exists()
         assert other_dest.exists()
 
+    def test_skill_uninstall_all_targets_removes_both(self, runner, tmp_path):
+        """Test that uninstall --target all removes both targets and cleans empty dirs."""
+        home = tmp_path / "home"
+        for subdir in [".claude/skills/notebooklm", ".agents/skills/notebooklm"]:
+            dest = home / subdir / "SKILL.md"
+            dest.parent.mkdir(parents=True)
+            dest.write_text("# Test")
+
+        with patch.object(skill_module.Path, "home", return_value=home):
+            result = runner.invoke(cli, ["skill", "uninstall"])
+
+        assert result.exit_code == 0
+        assert not (home / ".claude" / "skills" / "notebooklm" / "SKILL.md").exists()
+        assert not (home / ".agents" / "skills" / "notebooklm" / "SKILL.md").exists()
+        # Empty intermediate directories should be cleaned up
+        assert not (home / ".claude" / "skills" / "notebooklm").exists()
+        assert not (home / ".agents" / "skills" / "notebooklm").exists()
+
     def test_skill_uninstall_not_installed(self, runner, tmp_path):
         """Test uninstall when skill doesn't exist."""
         home = tmp_path / "home"
@@ -136,12 +216,22 @@ class TestSkillShow:
     def test_skill_show_displays_source_content(self, runner):
         """Test that show defaults to the packaged skill source."""
         with patch.object(
-            skill_module, "get_skill_source_content", return_value="# NotebookLM Skill\nTest content"
+            skill_module,
+            "get_skill_source_content",
+            return_value="# NotebookLM Skill\nTest content",
         ):
             result = runner.invoke(cli, ["skill", "show"])
 
         assert result.exit_code == 0
         assert "NotebookLM Skill" in result.output
+
+    def test_skill_show_source_not_found(self, runner):
+        """Test that show exits with code 1 when package data is missing."""
+        with patch.object(skill_module, "get_skill_source_content", return_value=None):
+            result = runner.invoke(cli, ["skill", "show"])
+
+        assert result.exit_code == 1
+        assert "not found" in result.output.lower()
 
     def test_skill_show_installed_target(self, runner, tmp_path):
         """Test that show can read an installed target."""
@@ -208,7 +298,99 @@ class TestSkillSourceFallback:
         repo_skill.write_text("# Canonical Skill", encoding="utf-8")
 
         with (
-            patch.object(skill_module, "REPO_SKILL_SOURCE", repo_skill),
+            patch.object(skill_module, "_DEV_SKILL_FALLBACK", repo_skill),
             patch.object(skill_module.resources, "files", side_effect=FileNotFoundError),
         ):
             assert skill_module.get_skill_source_content() == "# Canonical Skill"
+
+    def test_get_skill_source_content_returns_none_when_both_missing(self, tmp_path):
+        """Test that None is returned when both package data and dev fallback are missing."""
+        missing = tmp_path / "nonexistent.md"
+
+        with (
+            patch.object(skill_module, "_DEV_SKILL_FALLBACK", missing),
+            patch.object(skill_module.resources, "files", side_effect=FileNotFoundError),
+        ):
+            assert skill_module.get_skill_source_content() is None
+
+
+class TestAddVersionComment:
+    """Tests for add_version_comment."""
+
+    def test_inserts_after_frontmatter(self):
+        """Version comment is inserted after closing --- preserving surrounding whitespace."""
+        from notebooklm.cli.skill import add_version_comment
+
+        content = "---\nname: notebooklm\n---\n# Body"
+        result = add_version_comment(content, "1.2.3")
+        # parts[2] starts with '\n', so the version comment lands between '---\n' and '\n# Body'
+        assert result == "---\nname: notebooklm\n---\n<!-- notebooklm-py v1.2.3 -->\n\n# Body"
+
+    def test_prepends_when_no_frontmatter(self):
+        """Version comment is prepended when no frontmatter delimiters exist."""
+        from notebooklm.cli.skill import add_version_comment
+
+        content = "# No Frontmatter\nBody text"
+        result = add_version_comment(content, "2.0.0")
+        assert result == "<!-- notebooklm-py v2.0.0 -->\n# No Frontmatter\nBody text"
+
+    def test_prepends_with_incomplete_frontmatter(self):
+        """Version comment is prepended when only one --- delimiter exists."""
+        from notebooklm.cli.skill import add_version_comment
+
+        content = "---\nbroken frontmatter"
+        result = add_version_comment(content, "1.0.0")
+        assert result == "<!-- notebooklm-py v1.0.0 -->\n---\nbroken frontmatter"
+
+
+class TestRemoveEmptyParents:
+    """Tests for remove_empty_parents."""
+
+    def test_cleans_empty_intermediate_directories(self, tmp_path):
+        """Empty parent directories up to scope root are removed."""
+        from notebooklm.cli.skill import remove_empty_parents
+
+        home = tmp_path / "home"
+        skill_path = home / ".claude" / "skills" / "notebooklm" / "SKILL.md"
+        skill_path.parent.mkdir(parents=True)
+        skill_path.write_text("# Test")
+        skill_path.unlink()
+
+        with patch.object(skill_module.Path, "home", return_value=home):
+            remove_empty_parents(skill_path, "user")
+
+        assert not (home / ".claude" / "skills" / "notebooklm").exists()
+        assert not (home / ".claude" / "skills").exists()
+        assert home.exists()  # scope root must survive
+
+    def test_stops_at_non_empty_directory(self, tmp_path):
+        """Removal stops when a directory is non-empty."""
+        from notebooklm.cli.skill import remove_empty_parents
+
+        home = tmp_path / "home"
+        skill_path = home / ".agents" / "skills" / "notebooklm" / "SKILL.md"
+        skill_path.parent.mkdir(parents=True)
+        skill_path.write_text("# Test")
+        # Create a sibling file to make skills/ non-empty after notebooklm/ is gone
+        (home / ".agents" / "skills" / "other.md").write_text("keep me")
+        skill_path.unlink()
+        skill_path.parent.rmdir()  # notebooklm/ is empty, remove it manually
+
+        with patch.object(skill_module.Path, "home", return_value=home):
+            remove_empty_parents(skill_path.parent, "user")
+
+        assert (home / ".agents" / "skills").exists()  # non-empty, should not be removed
+
+    def test_scope_root_is_never_removed(self, tmp_path):
+        """The scope root directory itself is never deleted."""
+        from notebooklm.cli.skill import remove_empty_parents
+
+        home = tmp_path / "home"
+        home.mkdir()
+        # Simulate a skill directly one level inside home (no intermediates)
+        skill_path = home / "SKILL.md"
+
+        with patch.object(skill_module.Path, "home", return_value=home):
+            remove_empty_parents(skill_path, "user")
+
+        assert home.exists()

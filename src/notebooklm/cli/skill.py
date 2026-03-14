@@ -18,7 +18,10 @@ class SkillTarget:
     relative_path: Path
 
 
-REPO_SKILL_SOURCE = Path(__file__).resolve().parents[3] / "SKILL.md"
+# Dev-only fallback: points to the repo root only when running from an editable install.
+# In a pip-installed wheel, parents[3] resolves to a site-packages ancestor, not the repo.
+# The primary importlib.resources path is always tried first.
+_DEV_SKILL_FALLBACK = Path(__file__).resolve().parents[3] / "SKILL.md"
 TARGETS = {
     "claude": SkillTarget("Claude Code", Path(".claude") / "skills" / "notebooklm" / "SKILL.md"),
     "agents": SkillTarget("Agent Skills", Path(".agents") / "skills" / "notebooklm" / "SKILL.md"),
@@ -29,11 +32,14 @@ SCOPES = ("user", "project")
 def get_skill_source_content() -> str | None:
     """Read the skill source file from package data."""
     try:
-        # Python 3.9+ way to read package data (use / operator for path traversal)
+        # Python 3.9+ way to read package data (use / operator for path traversal).
+        # TypeError: raised by some importlib.resources implementations when the package
+        # is not properly installed (e.g. namespace packages, partial installs).
+        # ModuleNotFoundError: raised when the notebooklm.data sub-path doesn't exist.
         return (resources.files("notebooklm") / "data" / "SKILL.md").read_text(encoding="utf-8")
-    except (FileNotFoundError, TypeError):
+    except (FileNotFoundError, TypeError, ModuleNotFoundError):
         try:
-            return REPO_SKILL_SOURCE.read_text(encoding="utf-8")
+            return _DEV_SKILL_FALLBACK.read_text(encoding="utf-8")
         except FileNotFoundError:
             return None
 
@@ -91,7 +97,7 @@ def remove_empty_parents(skill_path: Path, scope: str) -> None:
     """Remove empty skill directories without touching the scope root."""
     stop_at = get_scope_root(scope)
     current = skill_path.parent
-    while current != stop_at and current != stop_at.parent:
+    while current != stop_at:
         try:
             current.rmdir()
         except OSError:
@@ -142,20 +148,31 @@ def install(scope: str, target_name: str):
     version = get_package_version()
     stamped_content = add_version_comment(content, version)
     installed_paths = []
+    failed_targets = []
 
     for target in iter_targets(target_name):
         skill_path = get_skill_path(target, scope)
-        skill_path.parent.mkdir(parents=True, exist_ok=True)
-        skill_path.write_text(stamped_content, encoding="utf-8")
-        installed_paths.append((target, skill_path))
+        try:
+            skill_path.parent.mkdir(parents=True, exist_ok=True)
+            skill_path.write_text(stamped_content, encoding="utf-8")
+            installed_paths.append((target, skill_path))
+        except OSError as e:
+            failed_targets.append((target, e))
 
-    console.print("[green]Installed[/green] NotebookLM skill")
-    console.print(f"  Version: {version}")
-    console.print(f"  Scope:   {scope}")
-    for target, skill_path in installed_paths:
-        console.print(f"  {TARGETS[target].label}: {skill_path}")
-    console.print("")
-    console.print("NotebookLM commands are now available in the selected skill directories.")
+    if installed_paths:
+        console.print("[green]Installed[/green] NotebookLM skill")
+        console.print(f"  Version: {version}")
+        console.print(f"  Scope:   {scope}")
+        for target, skill_path in installed_paths:
+            console.print(f"  {TARGETS[target].label}: {skill_path}")
+        console.print("")
+        console.print("NotebookLM commands are now available in the selected skill directories.")
+
+    for target, err in failed_targets:
+        console.print(f"[red]Failed[/red] to install {TARGETS[target].label}: {err}")
+
+    if failed_targets:
+        raise SystemExit(1)
 
 
 @skill.command()
@@ -186,14 +203,18 @@ def status(scope: str, target_name: str):
     for target in selected_targets:
         skill_path = get_skill_path(target, scope)
         skill_version = get_skill_version(skill_path)
-        status_label = "[green]Installed[/green]" if skill_path.exists() else "[yellow]Not installed[/yellow]"
+        status_label = (
+            "[green]Installed[/green]" if skill_path.exists() else "[yellow]Not installed[/yellow]"
+        )
         console.print(f"  {TARGETS[target].label}: {status_label}")
         console.print(f"    Path: {skill_path}")
         if skill_path.exists():
             any_installed = True
             console.print(f"    Skill version: {skill_version or 'unknown'}")
             if skill_version and skill_version != cli_version:
-                console.print("    [yellow]Version mismatch[/yellow] - run [cyan]notebooklm skill install[/cyan]")
+                console.print(
+                    "    [yellow]Version mismatch[/yellow] - run [cyan]notebooklm skill install[/cyan]"
+                )
 
     if not any_installed:
         console.print("")
