@@ -53,7 +53,14 @@ class TestAgentTemplates:
 
     def test_codex_template_falls_back_to_package_data(self, tmp_path):
         """Test that codex content falls back to packaged data outside repo root."""
-        with patch.object(agent_templates_module, "REPO_ROOT_AGENTS", tmp_path / "AGENTS.md"):
+        with (
+            patch.object(agent_templates_module, "REPO_ROOT_AGENTS", tmp_path / "AGENTS.md"),
+            patch.object(
+                agent_templates_module,
+                "_read_package_data",
+                return_value="# Repository Guidelines",
+            ),
+        ):
             content = agent_templates_module.get_agent_source_content("codex")
 
         assert content is not None

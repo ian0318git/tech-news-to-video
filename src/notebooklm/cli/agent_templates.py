@@ -9,13 +9,14 @@ AGENT_TEMPLATE_FILES = {
 }
 
 REPO_ROOT_AGENTS = Path(__file__).resolve().parents[3] / "AGENTS.md"
+REPO_ROOT_CLAUDE_SKILL = Path(__file__).resolve().parents[3] / "SKILL.md"
 
 
 def _read_package_data(filename: str) -> str | None:
     """Read a packaged agent template file."""
     try:
         return (resources.files("notebooklm") / "data" / filename).read_text(encoding="utf-8")
-    except (FileNotFoundError, TypeError):
+    except (FileNotFoundError, TypeError, ModuleNotFoundError):
         return None
 
 
@@ -27,6 +28,11 @@ def get_agent_source_content(target: str) -> str | None:
     # the CLI mirrors the instructions Codex actually sees in this repository.
     if normalized == "codex" and REPO_ROOT_AGENTS.exists():
         return REPO_ROOT_AGENTS.read_text(encoding="utf-8")
+
+    # Prefer the repo-root skill when running from a source checkout so both
+    # GitHub discovery and local CLI installs use the same source of truth.
+    if normalized == "claude" and REPO_ROOT_CLAUDE_SKILL.exists():
+        return REPO_ROOT_CLAUDE_SKILL.read_text(encoding="utf-8")
 
     filename = AGENT_TEMPLATE_FILES.get(normalized)
     if filename is None:
