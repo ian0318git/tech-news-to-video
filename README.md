@@ -205,36 +205,22 @@ asyncio.run(main())
 
 #### Claude Code
 
+**Option 1 — CLI install** (requires `notebooklm-py` installed):
+
 ```bash
-# Install into local user-level Claude + .agents skill directories
 notebooklm skill install
-notebooklm agent show claude
+```
 
-# Install only the universal .agents/skills target in the current project
-notebooklm skill install --scope project --target agents
+Installs the skill into `~/.claude/skills/notebooklm` and `~/.agents/skills/notebooklm`.
 
-# Install from GitHub via the open skills ecosystem
+**Option 2 — `npx` install** (via the open skills ecosystem):
+
+```bash
 npx skills add teng-lin/notebooklm-py
 ```
 
-Supported paths:
+Fetches the canonical [SKILL.md](SKILL.md) directly from GitHub.
 
-- `notebooklm skill install` manages local `~/.claude/skills/notebooklm` and `~/.agents/skills/notebooklm` by default.
-- GitHub and `npx skills add teng-lin/notebooklm-py` discover the canonical root [SKILL.md](SKILL.md).
-- Agents that honor `.agents/skills` can consume the universal install path; Claude Code also supports `.claude/skills`.
-
-#### Codex
-
-Codex reads repo-level instructions from [`AGENTS.md`](AGENTS.md), so there is no separate install command. After installing dependencies and authenticating, ask Codex to use the `notebooklm` CLI or Python API directly.
-
-```bash
-uv sync --extra dev --extra browser
-notebooklm agent show codex
-notebooklm login
-notebooklm list --json
-```
-
-For automation, prefer `--json`, pass explicit notebook IDs instead of relying on `notebooklm use`, and set `NOTEBOOKLM_HOME=/tmp/codex-$RUN_ID` when multiple agents may run in parallel.
 
 ## Documentation
 
