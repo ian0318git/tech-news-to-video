@@ -23,7 +23,13 @@ pip install "git+https://github.com/teng-lin/notebooklm-py@${LATEST_TAG}"
 
 ⚠️ **DO NOT install from main branch** (`pip install git+https://github.com/teng-lin/notebooklm-py`). The main branch may contain unreleased/unstable changes. Always use PyPI or a specific release tag, unless you are testing unreleased features.
 
-After installation, install the Claude Code skill:
+**Skill install methods:**
+
+- `notebooklm skill install` installs this skill into the supported local agent directories managed by the CLI.
+- `npx skills add teng-lin/notebooklm-py` installs this skill from the GitHub repository into compatible agent skill directories.
+- If you are already reading this file inside an agent skill directory, the skill is already installed. You only need the Python package and authentication below.
+
+**CLI-managed install:**
 ```bash
 notebooklm skill install
 ```
@@ -560,4 +566,4 @@ notebooklm language --help     # Language settings
 **Diagnose auth:** `notebooklm auth check` - shows cookie domains, storage path, validation status
 **Re-authenticate:** `notebooklm login`
 **Check version:** `notebooklm --version`
-**Update skill:** `notebooklm skill install`
+**Refresh a CLI-managed install:** `notebooklm skill install`

@@ -1,0 +1,28 @@
+"""Packaging smoke tests for skill assets."""
+
+import shutil
+import subprocess
+import zipfile
+from pathlib import Path
+
+def test_wheel_includes_root_skill_content(tmp_path):
+    """The built wheel should carry the canonical repo SKILL.md into package data."""
+    if shutil.which("uv") is None:
+        pytest.skip("uv is required for build smoke tests")
+
+    repo_root = Path(__file__).resolve().parents[2]
+    build_dir = tmp_path / "dist"
+    result = subprocess.run(
+        ["uv", "build", "--wheel", "--out-dir", str(build_dir)],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+    wheel_path = next(build_dir.glob("*.whl"))
+    with zipfile.ZipFile(wheel_path) as wheel:
+        packaged_skill = wheel.read("notebooklm/data/SKILL.md").decode("utf-8")
+
+    assert packaged_skill == (repo_root / "SKILL.md").read_text(encoding="utf-8")

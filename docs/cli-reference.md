@@ -195,16 +195,23 @@ notebooklm metadata -n abc123 --json
 
 ### Skill Commands (`notebooklm skill <cmd>`)
 
-Manage Claude Code skill integration.
+Manage NotebookLM agent skill integration.
 
 | Command | Description | Example |
 |---------|-------------|---------|
-| `install` | Install/update skill to ~/.claude/skills/ | `skill install` |
-| `status` | Check installation and version | `skill status` |
-| `uninstall` | Remove skill | `skill uninstall` |
-| `show` | Display skill content | `skill show` |
+| `install` | Install/update the skill for `claude`, `.agents`, or both | `skill install --target all` |
+| `status` | Check installed targets and version info | `skill status --scope project` |
+| `uninstall` | Remove one or more installed targets | `skill uninstall --target agents` |
+| `show` | Display the packaged skill or an installed target | `skill show --target source` |
 
-After installation, Claude Code recognizes NotebookLM commands via `/notebooklm` or natural language like "create a podcast about X".
+Defaults:
+
+- `skill install` uses `--scope user --target all`
+- `claude` maps to `.claude/skills/notebooklm/SKILL.md`
+- `agents` maps to `.agents/skills/notebooklm/SKILL.md`
+- `show --target source` prints the canonical packaged skill file
+
+The packaged wheel includes the repo-root `SKILL.md`, so the same skill content powers `notebooklm skill install`, GitHub discovery, and `npx skills add teng-lin/notebooklm-py`.
 
 ### Features Beyond the Web UI
 

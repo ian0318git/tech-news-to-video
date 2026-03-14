@@ -27,7 +27,7 @@
 
 ## What You Can Build
 
-🤖 **AI Agent Tools** - Integrate NotebookLM into Claude Code or other LLM agents. Ships with [Claude Code skills](#agent-skills-claude-code) for natural language automation (`notebooklm skill install`), or build your own integrations with the async Python API.
+🤖 **AI Agent Tools** - Integrate NotebookLM into Claude Code, Codex, and other compatible agent-skill runtimes. Ships with a root [NotebookLM skill](SKILL.md) for GitHub and `npx skills add` discovery, plus `notebooklm skill install` for local agent directories.
 
 📚 **Research Automation** - Bulk-import sources (URLs, PDFs, YouTube, Google Drive), run web/Drive research queries with auto-import, and extract insights programmatically. Build repeatable research pipelines.
 
@@ -159,7 +159,7 @@ notebooklm language list             # List supported output languages
 notebooklm metadata --json           # Export notebook metadata and sources
 notebooklm share status              # Inspect sharing state
 notebooklm source add-research "AI"  # Start web research and import sources
-notebooklm skill status              # Check Claude Code skill installation
+notebooklm skill status              # Check local agent skill installation
 ```
 
 ### Python API
@@ -195,17 +195,24 @@ async def main():
 asyncio.run(main())
 ```
 
-### Agent Skills (Claude Code)
+### Agent Skills
 
 ```bash
-# Install via CLI or ask Claude Code to do it
+# Install into local user-level Claude + .agents skill directories
 notebooklm skill install
 
-# Then use natural language:
-# "Create a podcast about quantum computing"
-# "Download the quiz as markdown"
-# "/notebooklm generate video"
+# Install only the universal .agents/skills target in the current project
+notebooklm skill install --scope project --target agents
+
+# Install from GitHub via the open skills ecosystem
+npx skills add teng-lin/notebooklm-py
 ```
+
+Supported paths:
+
+- `notebooklm skill install` manages local `~/.claude/skills/notebooklm` and `~/.agents/skills/notebooklm` by default.
+- GitHub / `npx skills add` discover the canonical root [SKILL.md](SKILL.md).
+- Agents that honor `.agents/skills` can consume the universal install path; Claude Code also supports `.claude/skills`.
 
 ## Documentation
 
