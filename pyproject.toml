@@ -86,7 +86,7 @@ replacement = '](https://github.com/teng-lin/notebooklm-py/blob/v$HFPR_VERSION/S
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/notebooklm"]
-force-include = {"SKILL.md" = "notebooklm/data/SKILL.md"}
+force-include = {"SKILL.md" = "notebooklm/data/SKILL.md", "AGENTS.md" = "notebooklm/data/CODEX.md"}
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

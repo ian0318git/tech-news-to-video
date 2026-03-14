@@ -9,7 +9,7 @@ import pytest
 
 
 def test_wheel_includes_root_skill_content(tmp_path):
-    """The built wheel should carry the canonical repo SKILL.md into package data."""
+    """The built wheel should carry the canonical repo agent docs into package data."""
     if shutil.which("uv") is None:
         pytest.skip("uv is required for build smoke tests")
 
@@ -27,5 +27,7 @@ def test_wheel_includes_root_skill_content(tmp_path):
     wheel_path = next(build_dir.glob("*.whl"))
     with zipfile.ZipFile(wheel_path) as wheel:
         packaged_skill = wheel.read("notebooklm/data/SKILL.md").decode("utf-8")
+        packaged_codex = wheel.read("notebooklm/data/CODEX.md").decode("utf-8")
 
     assert packaged_skill == (repo_root / "SKILL.md").read_text(encoding="utf-8")
+    assert packaged_codex == (repo_root / "AGENTS.md").read_text(encoding="utf-8")
