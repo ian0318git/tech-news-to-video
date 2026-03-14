@@ -5,6 +5,9 @@ import subprocess
 import zipfile
 from pathlib import Path
 
+import pytest
+
+
 def test_wheel_includes_root_skill_content(tmp_path):
     """The built wheel should carry the canonical repo SKILL.md into package data."""
     if shutil.which("uv") is None:
