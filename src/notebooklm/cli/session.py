@@ -212,7 +212,9 @@ def register_session_commands(cli):
             browser_profile.mkdir(parents=True, exist_ok=True)
         else:
             storage_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            storage_path.parent.chmod(0o700)
             browser_profile.mkdir(parents=True, exist_ok=True, mode=0o700)
+            browser_profile.chmod(0o700)
 
         browser_label = "Microsoft Edge" if browser == "msedge" else "Chromium"
         console.print(f"[yellow]Opening {browser_label} for Google login...[/yellow]")
