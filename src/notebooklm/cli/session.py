@@ -205,8 +205,15 @@ def register_session_commands(cli):
 
         storage_path = Path(storage) if storage else get_storage_path()
         browser_profile = get_browser_profile_dir()
-        storage_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        browser_profile.mkdir(parents=True, exist_ok=True, mode=0o700)
+        import sys as _sys
+        if _sys.platform == "win32":
+            # On Windows, mode= is ignored by mkdir() but sets restrictive ACLs
+            # that block other processes (even same user) from reading files.
+            storage_path.parent.mkdir(parents=True, exist_ok=True)
+            browser_profile.mkdir(parents=True, exist_ok=True)
+        else:
+            storage_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            browser_profile.mkdir(parents=True, exist_ok=True, mode=0o700)
 
         browser_label = "Microsoft Edge" if browser == "msedge" else "Chromium"
         console.print(f"[yellow]Opening {browser_label} for Google login...[/yellow]")
@@ -267,7 +274,10 @@ def register_session_commands(cli):
 
             context.storage_state(path=str(storage_path))
             # Restrict permissions to owner only (contains sensitive cookies)
-            storage_path.chmod(0o600)
+            import sys as _sys2
+            if _sys2.platform != "win32":
+                # chmod is a no-op on Windows (and can confuse ACLs)
+                storage_path.chmod(0o600)
             context.close()
 
         console.print(f"\n[green]Authentication saved to:[/green] {storage_path}")

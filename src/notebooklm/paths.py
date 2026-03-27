@@ -47,10 +47,17 @@ def get_home_dir(create: bool = False) -> Path:
         path = Path.home() / ".notebooklm"
 
     if create:
-        path.mkdir(parents=True, exist_ok=True, mode=0o700)
-        # Ensure correct permissions even if directory already existed
-        # (protects against TOCTOU race where attacker creates dir with wrong perms)
-        path.chmod(0o700)
+        import sys
+        if sys.platform == "win32":
+            # On Windows, mode is ignored by mkdir() and the ACL set by 0o700
+            # blocks other processes (even same user) from reading the file.
+            # Skip mode entirely; Windows inherits permissive ACLs from the parent.
+            path.mkdir(parents=True, exist_ok=True)
+        else:
+            path.mkdir(parents=True, exist_ok=True, mode=0o700)
+            # Ensure correct permissions even if directory already existed
+            # (protects against TOCTOU race where attacker creates dir with wrong perms)
+            path.chmod(0o700)
 
     return path
 
