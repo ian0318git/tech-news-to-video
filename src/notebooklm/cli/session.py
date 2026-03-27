@@ -205,9 +205,7 @@ def register_session_commands(cli):
 
         storage_path = Path(storage) if storage else get_storage_path()
         browser_profile = get_browser_profile_dir()
-        import sys as _sys
-
-        if _sys.platform == "win32":
+        if sys.platform == "win32":
             # On Windows, mode= is ignored by mkdir() but sets restrictive ACLs
             # that block other processes (even same user) from reading files.
             storage_path.parent.mkdir(parents=True, exist_ok=True)
@@ -275,9 +273,7 @@ def register_session_commands(cli):
 
             context.storage_state(path=str(storage_path))
             # Restrict permissions to owner only (contains sensitive cookies)
-            import sys as _sys2
-
-            if _sys2.platform != "win32":
+            if sys.platform != "win32":
                 # chmod is a no-op on Windows (and can confuse ACLs)
                 storage_path.chmod(0o600)
             context.close()
