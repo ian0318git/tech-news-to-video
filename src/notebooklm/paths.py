@@ -21,6 +21,7 @@ Usage:
 """
 
 import os
+import sys
 from pathlib import Path
 
 
@@ -30,7 +31,8 @@ def get_home_dir(create: bool = False) -> Path:
     Precedence: NOTEBOOKLM_HOME env var > ~/.notebooklm
 
     Args:
-        create: If True, create directory with 0o700 permissions if it doesn't exist.
+        create: If True, create directory. On Unix, sets 0o700 permissions; on Windows,
+            skips permission enforcement (chmod is a no-op and ACLs are inherited).
 
     Returns:
         Path to the NotebookLM home directory.
@@ -47,8 +49,6 @@ def get_home_dir(create: bool = False) -> Path:
         path = Path.home() / ".notebooklm"
 
     if create:
-        import sys
-
         if sys.platform == "win32":
             # On Windows, mode is ignored by mkdir() and the ACL set by 0o700
             # blocks other processes (even same user) from reading the file.
