@@ -48,6 +48,7 @@ def get_home_dir(create: bool = False) -> Path:
 
     if create:
         import sys
+
         if sys.platform == "win32":
             # On Windows, mode is ignored by mkdir() and the ACL set by 0o700
             # blocks other processes (even same user) from reading the file.
