@@ -31,8 +31,13 @@ def get_home_dir(create: bool = False) -> Path:
     Precedence: NOTEBOOKLM_HOME env var > ~/.notebooklm
 
     Args:
-        create: If True, create directory. On Unix, sets 0o700 permissions; on Windows,
-            skips permission enforcement (chmod is a no-op and ACLs are inherited).
+        create: If True, create directory. On Unix, sets 0o700 permissions via
+            mkdir + chmod. On Windows, skips mode= and chmod entirely because:
+            - Python < 3.13: mode= is silently ignored by mkdir().
+            - Python >= 3.13: mode= applies Windows ACLs that can be overly
+              restrictive, blocking other processes (even the same user) from
+              reading the directory.
+            In both cases, Windows inherits ACLs from the parent directory.
 
     Returns:
         Path to the NotebookLM home directory.
@@ -50,9 +55,10 @@ def get_home_dir(create: bool = False) -> Path:
 
     if create:
         if sys.platform == "win32":
-            # On Windows, mode is ignored by mkdir() and the ACL set by 0o700
-            # blocks other processes (even same user) from reading the file.
-            # Skip mode entirely; Windows inherits permissive ACLs from the parent.
+            # On Windows < Python 3.13, mode= is ignored by mkdir(). On
+            # Python 3.13+, mode= applies Windows ACLs that can be overly
+            # restrictive (0o700 blocks other same-user processes). Skip mode
+            # entirely and let Windows inherit ACLs from the parent directory.
             path.mkdir(parents=True, exist_ok=True)
         else:
             path.mkdir(parents=True, exist_ok=True, mode=0o700)

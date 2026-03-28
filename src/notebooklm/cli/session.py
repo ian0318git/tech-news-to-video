@@ -206,8 +206,10 @@ def register_session_commands(cli):
         storage_path = Path(storage) if storage else get_storage_path()
         browser_profile = get_browser_profile_dir()
         if sys.platform == "win32":
-            # On Windows, mode= is ignored by mkdir() but sets restrictive ACLs
-            # that block other processes (even same user) from reading files.
+            # On Windows < Python 3.13, mode= is ignored by mkdir(). On
+            # Python 3.13+, mode= applies Windows ACLs that can be overly
+            # restrictive (0o700 blocks other same-user processes). Skip mode
+            # and chmod entirely; Windows inherits ACLs from the parent.
             storage_path.parent.mkdir(parents=True, exist_ok=True)
             browser_profile.mkdir(parents=True, exist_ok=True)
         else:
