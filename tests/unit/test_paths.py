@@ -68,7 +68,6 @@ class TestGetHomeDir:
             mode = custom_path.stat().st_mode & 0o777
             assert mode == 0o700
 
-
     def test_windows_create_skips_mode_and_chmod(self, tmp_path, monkeypatch):
         """On Windows, create=True calls mkdir without mode= and skips chmod."""
         import notebooklm.paths as paths_mod
