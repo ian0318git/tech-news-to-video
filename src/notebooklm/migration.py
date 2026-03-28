@@ -126,6 +126,7 @@ def _set_default_profile_in_config() -> None:
             json.dumps(data, indent=2, ensure_ascii=False) + "\n",
             encoding="utf-8",
         )
+        config_path.chmod(0o600)
 
 
 def ensure_profiles_dir() -> None:

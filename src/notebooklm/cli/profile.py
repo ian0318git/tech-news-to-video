@@ -153,6 +153,7 @@ def switch_cmd(name):
         json.dumps(data, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
+    config_path.chmod(0o600)
 
     console.print(f"[green]Switched default profile: {old_profile} → {name}[/green]")
 
@@ -233,6 +234,7 @@ def rename_cmd(old_name, new_name):
                     json.dumps(data, indent=2, ensure_ascii=False) + "\n",
                     encoding="utf-8",
                 )
+                config_path.chmod(0o600)
                 console.print(
                     f"[dim]Updated default profile in config: {old_name} → {new_name}[/dim]"
                 )
