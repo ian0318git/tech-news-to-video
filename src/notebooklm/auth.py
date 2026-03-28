@@ -140,10 +140,6 @@ GOOGLE_REGIONAL_CCTLDS = frozenset(
     }
 )
 
-# Default path for Playwright storage state
-# Note: Use get_storage_path() for dynamic resolution with NOTEBOOKLM_HOME support
-DEFAULT_STORAGE_PATH = get_storage_path()
-
 
 @dataclass
 class AuthTokens:
@@ -169,15 +165,18 @@ class AuthTokens:
         return "; ".join(f"{k}={v}" for k, v in self.cookies.items())
 
     @classmethod
-    async def from_storage(cls, path: Path | None = None) -> "AuthTokens":
+    async def from_storage(
+        cls, path: Path | None = None, profile: str | None = None
+    ) -> "AuthTokens":
         """Create AuthTokens from Playwright storage state file.
 
         This is the recommended way to create AuthTokens for programmatic use.
         It loads cookies from storage and fetches CSRF/session tokens automatically.
 
         Args:
-            path: Path to storage_state.json. If None, uses default location
-                  (~/.notebooklm/storage_state.json).
+            path: Path to storage_state.json. If provided, takes precedence over profile.
+            profile: Profile name to load auth from (e.g., "work", "personal").
+                If None, uses the active profile (from CLI flag, env var, or config).
 
         Returns:
             Fully initialized AuthTokens ready for API calls.
@@ -191,7 +190,14 @@ class AuthTokens:
             auth = await AuthTokens.from_storage()
             async with NotebookLMClient(auth) as client:
                 notebooks = await client.list_notebooks()
+
+            # Load from a specific profile
+            auth = await AuthTokens.from_storage(profile="work")
         """
+        if path is None and profile is not None:
+            from .paths import get_storage_path
+
+            path = get_storage_path(profile=profile)
         cookies = load_auth_from_storage(path)
         csrf_token, session_id = await fetch_tokens(cookies)
         return cls(cookies=cookies, csrf_token=csrf_token, session_id=session_id)

@@ -158,7 +158,7 @@ def register_session_commands(cli):
         "--storage",
         type=click.Path(),
         default=None,
-        help="Where to save storage_state.json (default: $NOTEBOOKLM_HOME/storage_state.json)",
+        help="Where to save storage_state.json (default: profile-specific location)",
     )
     @click.option(
         "--browser",
@@ -203,12 +203,16 @@ def register_session_commands(cli):
         if browser == "chromium":
             _ensure_chromium_installed()
 
+        from ..paths import resolve_profile
+
         storage_path = Path(storage) if storage else get_storage_path()
         browser_profile = get_browser_profile_dir()
         storage_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         browser_profile.mkdir(parents=True, exist_ok=True, mode=0o700)
 
+        profile_name = resolve_profile()
         browser_label = "Microsoft Edge" if browser == "msedge" else "Chromium"
+        console.print(f"[dim]Profile: {profile_name}[/dim]")
         console.print(f"[yellow]Opening {browser_label} for Google login...[/yellow]")
         console.print(f"[dim]Using persistent profile: {browser_profile}[/dim]")
 
@@ -367,7 +371,13 @@ def register_session_commands(cli):
             table.add_column("Path", style="cyan")
             table.add_column("Source", style="green")
 
+            table.add_row(
+                "Profile",
+                path_info.get("profile", "default"),
+                path_info.get("profile_source", ""),
+            )
             table.add_row("Home Directory", path_info["home_dir"], path_info["home_source"])
+            table.add_row("Profile Directory", path_info.get("profile_dir", ""), "")
             table.add_row("Storage State", path_info["storage_path"], "")
             table.add_row("Context", path_info["context_path"], "")
             table.add_row("Browser Profile", path_info["browser_profile_dir"], "")

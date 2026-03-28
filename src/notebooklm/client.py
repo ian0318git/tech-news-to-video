@@ -118,7 +118,10 @@ class NotebookLMClient:
 
     @classmethod
     async def from_storage(
-        cls, path: str | None = None, timeout: float = DEFAULT_TIMEOUT
+        cls,
+        path: str | None = None,
+        timeout: float = DEFAULT_TIMEOUT,
+        profile: str | None = None,
     ) -> "NotebookLMClient":
         """Create a client from Playwright storage state file.
 
@@ -126,9 +129,10 @@ class NotebookLMClient:
         Handles all authentication setup automatically.
 
         Args:
-            path: Path to storage_state.json. If None, uses default location
-                  (~/.notebooklm/storage_state.json).
+            path: Path to storage_state.json. If provided, takes precedence over profile.
             timeout: HTTP request timeout in seconds. Defaults to 30 seconds.
+            profile: Profile name to load auth from (e.g., "work", "personal").
+                If None, uses the active profile (from CLI flag, env var, or config).
 
         Returns:
             NotebookLMClient instance (not yet connected).
@@ -136,9 +140,13 @@ class NotebookLMClient:
         Example:
             async with await NotebookLMClient.from_storage() as client:
                 notebooks = await client.notebooks.list()
+
+            # Use a specific profile
+            async with await NotebookLMClient.from_storage(profile="work") as client:
+                notebooks = await client.notebooks.list()
         """
         storage_path = Path(path) if path else None
-        auth = await AuthTokens.from_storage(storage_path)
+        auth = await AuthTokens.from_storage(storage_path, profile=profile)
         return cls(auth, timeout=timeout)
 
     async def refresh_auth(self) -> AuthTokens:

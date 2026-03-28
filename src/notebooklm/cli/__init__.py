@@ -12,21 +12,18 @@ Command groups are organized into separate modules:
 - session.py: Session and context commands (login, use, status, clear)
 - notebook.py: Notebook management commands (list, create, delete, rename, share, summary)
 - chat.py: Chat commands (ask, configure, history)
-
-Re-exports from helpers for backward compatibility with tests.
+- doctor.py: Diagnostic and migration commands
+- profile.py: Profile management commands
 """
 
 # Command groups (subcommand style)
 from .agent import agent
 from .artifact import artifact
 from .chat import register_chat_commands
+from .doctor import register_doctor_command
 from .download import download
 from .generate import generate
 from .helpers import (
-    # Display
-    BROWSER_PROFILE_DIR,
-    # Context
-    CONTEXT_FILE,
     clear_context,
     cli_name_to_artifact_type,
     # Console
@@ -70,6 +67,7 @@ from .options import (
     standard_options,
     wait_option,
 )
+from .profile import profile
 from .research import research
 
 # Register functions (top-level command style)
@@ -90,12 +88,14 @@ __all__ = [
     "skill",
     "research",
     "language",
+    "profile",
     # Language config
     "get_language",
     # Register functions (top-level command style)
     "register_session_commands",
     "register_notebook_commands",
     "register_chat_commands",
+    "register_doctor_command",
     # Console
     "console",
     # Async
@@ -104,8 +104,6 @@ __all__ = [
     "get_client",
     "get_auth_tokens",
     # Context
-    "CONTEXT_FILE",
-    "BROWSER_PROFILE_DIR",
     "get_current_notebook",
     "set_current_notebook",
     "clear_context",

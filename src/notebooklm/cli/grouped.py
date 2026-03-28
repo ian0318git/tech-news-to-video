@@ -22,7 +22,7 @@ class SectionedGroup(click.Group):
     # Regular commands - show help text
     command_sections = OrderedDict(
         [
-            ("Session", ["login", "use", "status", "clear"]),
+            ("Session", ["login", "use", "status", "clear", "doctor"]),
             ("Notebooks", ["list", "create", "delete", "rename", "summary"]),
             ("Chat", ["ask", "configure", "history"]),
         ]
@@ -33,7 +33,7 @@ class SectionedGroup(click.Group):
         [
             (
                 "Command Groups (use: notebooklm <group> <command>)",
-                ["source", "artifact", "note", "share", "research"],
+                ["source", "artifact", "note", "share", "research", "profile"],
             ),
             ("Artifact Actions (use: notebooklm <action> <type>)", ["generate", "download"]),
         ]

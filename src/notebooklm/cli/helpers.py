@@ -27,7 +27,7 @@ from ..auth import (
     load_auth_from_storage,
 )
 from ..exceptions import RPCTimeoutError
-from ..paths import get_browser_profile_dir, get_context_path
+from ..paths import get_context_path
 from ..types import ArtifactType
 
 if TYPE_CHECKING:
@@ -35,12 +35,6 @@ if TYPE_CHECKING:
 
 console = Console()
 logger = logging.getLogger(__name__)
-
-# Backward-compatible module-level constants (for tests that patch these)
-# Note: Prefer using get_context_path() and get_browser_profile_dir() for dynamic resolution
-# These are evaluated once at import time, so NOTEBOOKLM_HOME changes after import won't affect them
-CONTEXT_FILE = get_context_path()
-BROWSER_PROFILE_DIR = get_browser_profile_dir()
 
 # CLI artifact type name aliases
 _CLI_ARTIFACT_ALIASES = {
