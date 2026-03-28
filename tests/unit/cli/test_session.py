@@ -2,6 +2,7 @@
 
 import json
 from datetime import datetime
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import click
@@ -173,6 +174,98 @@ class TestLoginCommand:
         assert result.exit_code == 1
         assert "Microsoft Edge not found" in result.output
         assert "microsoft.com/edge" in result.output
+
+    @pytest.fixture
+    def mock_login_browser_with_storage(self, tmp_path):
+        """Mock Playwright browser for login tests that assert exit_code == 0.
+
+        Like mock_login_browser but also makes storage_state() create the file
+        so that storage_path.chmod() succeeds.
+        """
+        storage_file = tmp_path / "storage.json"
+        with (
+            patch("notebooklm.cli.session._ensure_chromium_installed"),
+            patch("playwright.sync_api.sync_playwright") as mock_pw,
+            patch("notebooklm.cli.session.get_storage_path", return_value=storage_file),
+            patch(
+                "notebooklm.cli.session.get_browser_profile_dir",
+                return_value=tmp_path / "profile",
+            ),
+            patch("notebooklm.cli.session._sync_server_language_to_config"),
+            patch("builtins.input", return_value=""),
+        ):
+            mock_context = MagicMock()
+            mock_page = MagicMock()
+            mock_page.url = "https://notebooklm.google.com/"
+            mock_context.pages = [mock_page]
+            # Make storage_state create the file so chmod succeeds
+            mock_context.storage_state.side_effect = lambda path: Path(path).write_text("{}")
+            mock_launch = (
+                mock_pw.return_value.__enter__.return_value.chromium.launch_persistent_context
+            )
+            mock_launch.return_value = mock_context
+
+            yield mock_page
+
+    def test_login_handles_navigation_interrupted_error(
+        self, runner, mock_login_browser_with_storage
+    ):
+        """Test login succeeds when page.goto raises 'Navigation interrupted' (#214)."""
+        mock_page = mock_login_browser_with_storage
+        from playwright.sync_api import Error as PlaywrightError
+
+        call_count = 0
+        original_url = mock_page.url
+
+        def goto_side_effect(url, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            # First goto (NOTEBOOKLM_URL before login) succeeds
+            # Second and third (cookie-forcing) raise navigation interrupted
+            if call_count >= 2:
+                raise PlaywrightError("Page.goto: Navigation interrupted by another one")
+
+        mock_page.goto.side_effect = goto_side_effect
+        mock_page.url = original_url
+
+        result = runner.invoke(cli, ["login"])
+
+        assert result.exit_code == 0
+        assert "Authentication saved" in result.output
+
+    def test_login_reraises_non_navigation_playwright_errors(
+        self, runner, mock_login_browser_with_storage
+    ):
+        """Test login re-raises PlaywrightError that isn't 'Navigation interrupted'."""
+        mock_page = mock_login_browser_with_storage
+        from playwright.sync_api import Error as PlaywrightError
+
+        call_count = 0
+
+        def goto_side_effect(url, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count >= 2:
+                raise PlaywrightError("Page.goto: net::ERR_CONNECTION_REFUSED")
+
+        mock_page.goto.side_effect = goto_side_effect
+
+        result = runner.invoke(cli, ["login"])
+
+        assert result.exit_code != 0
+
+    def test_login_uses_commit_wait_strategy(self, runner, mock_login_browser_with_storage):
+        """Test login uses wait_until='commit' for cookie-forcing navigation."""
+        mock_page = mock_login_browser_with_storage
+
+        result = runner.invoke(cli, ["login"])
+
+        assert result.exit_code == 0
+        goto_calls = mock_page.goto.call_args_list
+        # 3 calls: initial NOTEBOOKLM_URL, then accounts.google.com, then NOTEBOOKLM_URL
+        assert len(goto_calls) == 3
+        assert goto_calls[1].kwargs.get("wait_until") == "commit"
+        assert goto_calls[2].kwargs.get("wait_until") == "commit"
 
 
 # =============================================================================
