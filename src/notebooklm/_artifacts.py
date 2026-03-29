@@ -1250,10 +1250,12 @@ class ArtifactsAPI:
         if not info_art:
             raise ArtifactNotReadyError("infographic")
 
-        # Extract URL from metadata
+        # Extract URL from metadata.
+        # Iterate forward (low→high index) so we match the original content
+        # URL field rather than any later URL-containing fields Google may add.
         try:
             metadata = None
-            for item in reversed(info_art):
+            for item in info_art:
                 if isinstance(item, list) and len(item) > 0 and isinstance(item[0], list):
                     if len(item) > 2 and isinstance(item[2], list) and len(item[2]) > 0:
                         content_list = item[2]
