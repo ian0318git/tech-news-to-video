@@ -190,6 +190,7 @@ def register_session_commands(cli):
             raise SystemExit(1)
 
         try:
+            from playwright.sync_api import Error as PlaywrightError
             from playwright.sync_api import sync_playwright
         except ImportError:
             if browser == "msedge":
@@ -254,9 +255,15 @@ def register_session_commands(cli):
             input("[Press ENTER when logged in] ")
 
             # Force .google.com cookies for regional users (e.g. UK lands on
-            # .google.co.uk). Use "load" not "networkidle" to avoid analytics hangs.
-            page.goto(GOOGLE_ACCOUNTS_URL, wait_until="load")
-            page.goto(NOTEBOOKLM_URL, wait_until="load")
+            # .google.co.uk). Use "commit" to resolve once response headers
+            # (including Set-Cookie) are processed, before any client-side
+            # JS redirect can interrupt. See #214.
+            for url in [GOOGLE_ACCOUNTS_URL, NOTEBOOKLM_URL]:
+                try:
+                    page.goto(url, wait_until="commit")
+                except PlaywrightError as exc:
+                    if "Navigation interrupted" not in str(exc):
+                        raise
 
             current_url = page.url
             if NOTEBOOKLM_HOST not in current_url:
