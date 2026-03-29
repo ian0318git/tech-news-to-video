@@ -149,7 +149,7 @@ def _read_default_profile() -> str | None:
         # Guard against non-string values (e.g., {"default_profile": 123})
         _cached_default_profile = value if isinstance(value, str) else None
         _config_mtime = mtime
-        return _cached_default_profile  # type: ignore[return-value]
+        return _cached_default_profile
     except (json.JSONDecodeError, OSError):
         _cached_default_profile = _UNSET
         _config_mtime = 0.0
@@ -209,8 +209,11 @@ def get_profile_dir(profile: str | None = None, create: bool = False) -> Path:
         raise ValueError(f"Invalid profile name: {resolved!r}")
 
     if create:
-        path.mkdir(parents=True, exist_ok=True, mode=0o700)
-        path.chmod(0o700)
+        if sys.platform == "win32":
+            path.mkdir(parents=True, exist_ok=True)
+        else:
+            path.mkdir(parents=True, exist_ok=True, mode=0o700)
+            path.chmod(0o700)
 
     return path
 

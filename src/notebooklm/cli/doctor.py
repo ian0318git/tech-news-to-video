@@ -88,7 +88,10 @@ def register_doctor_command(cli):
         if storage_path.exists():
             try:
                 data = json.loads(storage_path.read_text(encoding="utf-8"))
-                cookie_names = {c.get("name") for c in data.get("cookies", [])}
+                cookies = data.get("cookies", [])
+                if not isinstance(cookies, list):
+                    raise ValueError("cookies is not a list")
+                cookie_names = {c.get("name") for c in cookies if isinstance(c, dict)}
                 if "SID" in cookie_names:
                     checks["auth"] = {
                         "status": "pass",
@@ -110,8 +113,11 @@ def register_doctor_command(cli):
             try:
                 config_data = json.loads(config_path.read_text(encoding="utf-8"))
                 default_profile = config_data.get("default_profile")
-                if default_profile:
-                    profile_exists = (home / "profiles" / default_profile).exists()
+                if default_profile and isinstance(default_profile, str):
+                    try:
+                        profile_exists = get_profile_dir(default_profile).exists()
+                    except ValueError:
+                        profile_exists = False
                     if profile_exists:
                         checks["config"] = {
                             "status": "pass",

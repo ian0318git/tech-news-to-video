@@ -13,6 +13,7 @@ The migration is:
 import json
 import logging
 import shutil
+import sys
 
 from .paths import get_config_path, get_home_dir
 
@@ -60,7 +61,10 @@ def migrate_to_profiles() -> bool:
     if not legacy_files and not legacy_dirs:
         # Fresh install — ensure home dir has correct permissions first
         get_home_dir(create=True)
-        profiles_dir.mkdir(exist_ok=True, mode=0o700)
+        if sys.platform == "win32":
+            profiles_dir.mkdir(exist_ok=True)
+        else:
+            profiles_dir.mkdir(exist_ok=True, mode=0o700)
         logger.debug("Created profiles directory (fresh install)")
         return True
 
@@ -68,25 +72,33 @@ def migrate_to_profiles() -> bool:
     # Ensure home dir has correct 0o700 permissions (may already exist from legacy)
     get_home_dir(create=True)
     default_dir = profiles_dir / "default"
-    default_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if sys.platform == "win32":
+        default_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        default_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
 
     logger.info("Migrating legacy layout to profiles/default/")
 
-    # Copy files
+    # Copy files (skip if destination already exists and is newer — avoids
+    # overwriting profile data that was updated after a partial migration)
     for src in legacy_files:
         dst = default_dir / src.name
-        shutil.copy2(src, dst)
-        # Preserve restrictive permissions
-        dst.chmod(src.stat().st_mode)
-        logger.debug("Copied %s → %s", src.name, dst)
+        if dst.exists():
+            logger.debug("Skipping %s (already exists in profile)", src.name)
+        else:
+            shutil.copy2(src, dst)
+            if sys.platform != "win32":
+                dst.chmod(src.stat().st_mode)
+            logger.debug("Copied %s → %s", src.name, dst)
 
-    # Copy directories
+    # Copy directories (skip if destination already exists)
     for src in legacy_dirs:
         dst = default_dir / src.name
         if dst.exists():
-            shutil.rmtree(dst)
-        shutil.copytree(src, dst)
-        logger.debug("Copied %s/ → %s/", src.name, dst)
+            logger.debug("Skipping %s/ (already exists in profile)", src.name)
+        else:
+            shutil.copytree(src, dst)
+            logger.debug("Copied %s/ → %s/", src.name, dst)
 
     # Remove originals (copies already in place as fallback)
     for src in legacy_files:

@@ -137,9 +137,15 @@ def cli(ctx, storage, profile, verbose):
     # --storage and NOTEBOOKLM_AUTH_JSON bypass the profile system entirely
     # and must not require a writable NOTEBOOKLM_HOME.
     if not storage and not os.environ.get("NOTEBOOKLM_AUTH_JSON"):
-        from .migration import ensure_profiles_dir
+        try:
+            from .migration import ensure_profiles_dir
 
-        ensure_profiles_dir()
+            ensure_profiles_dir()
+        except ValueError as e:
+            # Invalid profile name (e.g., path traversal in env var or config)
+            import click as _click
+
+            raise _click.ClickException(str(e)) from None
 
     ctx.ensure_object(dict)
     ctx.obj["storage_path"] = Path(storage) if storage else None
