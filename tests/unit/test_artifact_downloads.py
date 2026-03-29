@@ -222,7 +222,7 @@ class TestDownloadInfographic:
     @pytest.mark.asyncio
     async def test_download_infographic_prefers_first_matching_url(self, mock_artifacts_api):
         """When multiple URL fields exist, the first (lowest-index) one is used."""
-        api, mock_core = mock_artifacts_api
+        api, _mock_core = mock_artifacts_api
         canonical_url = "https://example.com/canonical.png"
         later_url = "https://example.com/later.png"
 
