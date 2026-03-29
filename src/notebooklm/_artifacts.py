@@ -1250,28 +1250,13 @@ class ArtifactsAPI:
         if not info_art:
             raise ArtifactNotReadyError("infographic")
 
-        # Extract URL from metadata
+        # Reuse the shared helper so readiness checks and downloads agree on
+        # which URL to select (both now iterate forward, preferring the
+        # canonical content URL at a lower index).
         try:
-            metadata = None
-            for item in reversed(info_art):
-                if isinstance(item, list) and len(item) > 0 and isinstance(item[0], list):
-                    if len(item) > 2 and isinstance(item[2], list) and len(item[2]) > 0:
-                        content_list = item[2]
-                        if isinstance(content_list[0], list) and len(content_list[0]) > 1:
-                            img_data = content_list[0][1]
-                            if (
-                                isinstance(img_data, list)
-                                and len(img_data) > 0
-                                and isinstance(img_data[0], str)
-                                and img_data[0].startswith("http")
-                            ):
-                                metadata = item
-                                break
-
-            if not metadata:
+            url = self._find_infographic_url(info_art)
+            if not url:
                 raise ArtifactParseError("infographic", details="Could not find metadata")
-
-            url = metadata[2][0][1][0]
             return await self._download_url(url, output_path)
 
         except (IndexError, TypeError) as e:
@@ -2226,7 +2211,8 @@ class ArtifactsAPI:
         """Extract infographic image URL from artifact data.
 
         Infographic URLs are deeply nested in the artifact structure.
-        This method searches backwards through the artifact to find the URL.
+        This method searches forward through the artifact to prefer the
+        canonical content URL over any later URL-containing fields.
 
         Args:
             art: Raw artifact data from _list_raw().
@@ -2234,7 +2220,7 @@ class ArtifactsAPI:
         Returns:
             The image URL if found, None otherwise.
         """
-        for item in reversed(art):
+        for item in art:
             if not isinstance(item, list) or len(item) <= 2:
                 continue
             content = item[2]

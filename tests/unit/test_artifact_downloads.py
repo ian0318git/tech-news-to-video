@@ -219,6 +219,42 @@ class TestDownloadInfographic:
             with pytest.raises(ArtifactNotReadyError):
                 await api.download_infographic("nb_123", "/tmp/info.png")
 
+    @pytest.mark.asyncio
+    async def test_download_infographic_prefers_first_matching_url(self, mock_artifacts_api):
+        """When multiple URL fields exist, the first (lowest-index) one is used."""
+        api, _mock_core = mock_artifacts_api
+        canonical_url = "https://example.com/canonical.png"
+        later_url = "https://example.com/later.png"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = os.path.join(tmpdir, "infographic.png")
+
+            with patch.object(api, "_list_raw", new_callable=AsyncMock) as mock_list:
+                # Artifact with two URL-bearing metadata entries at different indices
+                mock_list.return_value = [
+                    [
+                        "infographic_001",
+                        "Infographic Title",
+                        7,
+                        None,
+                        3,
+                        None,
+                        None,
+                        None,
+                        None,
+                        [[], [], [[None, [canonical_url]]]],
+                        [[], [], [[None, [later_url]]]],
+                    ]
+                ]
+
+                with patch.object(
+                    api, "_download_url", new_callable=AsyncMock, return_value=output_path
+                ) as mock_dl:
+                    result = await api.download_infographic("nb_123", output_path)
+
+            assert result == output_path
+            mock_dl.assert_awaited_once_with(canonical_url, output_path)
+
 
 class TestDownloadSlideDeck:
     """Test download_slide_deck method."""
