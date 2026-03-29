@@ -125,17 +125,19 @@ class TestFromStorage:
     @pytest.mark.asyncio
     async def test_from_storage_with_default_path(self, httpx_mock: HTTPXMock):
         """Test from_storage uses default path when none specified."""
-        from notebooklm.auth import DEFAULT_STORAGE_PATH
+        from notebooklm.paths import get_storage_path
+
+        default_storage_path = get_storage_path()
 
         # Create storage file at default location
-        if not DEFAULT_STORAGE_PATH.parent.exists():
-            DEFAULT_STORAGE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        if not default_storage_path.parent.exists():
+            default_storage_path.parent.mkdir(parents=True, exist_ok=True)
 
         # IMPORTANT: Back up existing auth file if it exists
-        backup_path = DEFAULT_STORAGE_PATH.with_suffix(".json.bak")
-        had_existing_file = DEFAULT_STORAGE_PATH.exists()
+        backup_path = default_storage_path.with_suffix(".json.bak")
+        had_existing_file = default_storage_path.exists()
         if had_existing_file:
-            backup_path.write_text(DEFAULT_STORAGE_PATH.read_text())
+            backup_path.write_text(default_storage_path.read_text())
 
         storage_state = {
             "cookies": [
@@ -145,7 +147,7 @@ class TestFromStorage:
 
         # Only run if we can write to default location
         try:
-            DEFAULT_STORAGE_PATH.write_text(json.dumps(storage_state))
+            default_storage_path.write_text(json.dumps(storage_state))
 
             html = '"SNlM0e":"csrf" "FdrFJe":"sess"'
             httpx_mock.add_response(content=html.encode())
@@ -157,10 +159,10 @@ class TestFromStorage:
         finally:
             # Restore original file or clean up test file
             if had_existing_file:
-                DEFAULT_STORAGE_PATH.write_text(backup_path.read_text())
+                default_storage_path.write_text(backup_path.read_text())
                 backup_path.unlink()
-            elif DEFAULT_STORAGE_PATH.exists():
-                DEFAULT_STORAGE_PATH.unlink()
+            elif default_storage_path.exists():
+                default_storage_path.unlink()
 
 
 # =============================================================================

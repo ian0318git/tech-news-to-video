@@ -7,20 +7,31 @@ This guide covers storage locations, environment settings, and configuration opt
 
 ## File Locations
 
-All data is stored under `~/.notebooklm/` by default:
+All data is stored under `~/.notebooklm/` by default, organized by profile:
 
 ```
 ~/.notebooklm/
-├── storage_state.json    # Authentication cookies and session
-├── context.json          # CLI context (active notebook, conversation)
-└── browser_profile/      # Persistent Chromium profile
+├── active_profile        # Tracks the current profile name
+├── profiles/
+│   ├── default/          # Default profile (auto-created)
+│   │   ├── storage_state.json    # Authentication cookies and session
+│   │   ├── context.json          # CLI context (active notebook, conversation)
+│   │   └── browser_profile/      # Persistent Chromium profile
+│   ├── work/             # Named profile example
+│   │   ├── storage_state.json
+│   │   ├── context.json
+│   │   └── browser_profile/
+│   └── personal/
+│       └── ...
 ```
+
+**Legacy layout:** If upgrading from a pre-profile version, the first run auto-migrates flat files into `profiles/default/`. The legacy flat layout continues to work as a fallback.
 
 You can relocate all files by setting `NOTEBOOKLM_HOME`:
 
 ```bash
 export NOTEBOOKLM_HOME=/custom/path
-# All files now go to /custom/path/
+# All files now go to /custom/path/profiles/<profile>/
 ```
 
 ### Storage State (`storage_state.json`)
@@ -79,6 +90,7 @@ A persistent Chromium user data directory used during `notebooklm login`.
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `NOTEBOOKLM_HOME` | Base directory for all files | `~/.notebooklm` |
+| `NOTEBOOKLM_PROFILE` | Active profile name | `default` |
 | `NOTEBOOKLM_AUTH_JSON` | Inline authentication JSON (for CI/CD) | - |
 | `NOTEBOOKLM_LOG_LEVEL` | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR` | `WARNING` |
 | `NOTEBOOKLM_DEBUG_RPC` | Legacy: Enable RPC debug logging (use `LOG_LEVEL=DEBUG` instead) | `false` |
@@ -91,15 +103,25 @@ Relocates all configuration files to a custom directory:
 export NOTEBOOKLM_HOME=/custom/path
 
 # All files now go here:
-# /custom/path/storage_state.json
-# /custom/path/context.json
-# /custom/path/browser_profile/
+# /custom/path/profiles/<profile>/storage_state.json
+# /custom/path/profiles/<profile>/context.json
+# /custom/path/profiles/<profile>/browser_profile/
 ```
 
 **Use cases:**
-- Multiple Google accounts (separate home directories)
 - Per-project isolation
 - Custom storage locations
+
+### NOTEBOOKLM_PROFILE
+
+Selects the active profile without changing the persisted default:
+
+```bash
+export NOTEBOOKLM_PROFILE=work
+notebooklm list   # Uses ~/.notebooklm/profiles/work/
+```
+
+Equivalent to passing `-p work` on every command. The CLI flag takes precedence over the env var.
 
 ### NOTEBOOKLM_AUTH_JSON
 
@@ -113,8 +135,9 @@ notebooklm list  # Works without any file on disk
 **Precedence:**
 1. `--storage` CLI flag (highest)
 2. `NOTEBOOKLM_AUTH_JSON` environment variable
-3. `$NOTEBOOKLM_HOME/storage_state.json` file
-4. `~/.notebooklm/storage_state.json` file (default)
+3. Profile-aware path: `$NOTEBOOKLM_HOME/profiles/<profile>/storage_state.json`
+4. `~/.notebooklm/profiles/default/storage_state.json` (default)
+5. `~/.notebooklm/storage_state.json` (legacy fallback)
 
 **Note:** Cannot run `notebooklm login` when `NOTEBOOKLM_AUTH_JSON` is set.
 
@@ -124,7 +147,9 @@ notebooklm list  # Works without any file on disk
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--storage PATH` | Path to storage_state.json | `$NOTEBOOKLM_HOME/storage_state.json` |
+| `--storage PATH` | Path to storage_state.json | `$NOTEBOOKLM_HOME/profiles/<profile>/storage_state.json` |
+| `-p, --profile NAME` | Use a named profile | Active profile or `default` |
+| `-v, --verbose` | Enable verbose output | - |
 | `--version` | Show version | - |
 | `--help` | Show help | - |
 
@@ -139,14 +164,15 @@ notebooklm status --paths
 Output:
 ```
                 Configuration Paths
-┏━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━┓
-┃ File            ┃ Path                         ┃ Source    ┃
-┡━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━┩
-│ Home Directory  │ /home/user/.notebooklm      │ default   │
-│ Storage State   │ .../storage_state.json      │           │
-│ Context         │ .../context.json            │           │
-│ Browser Profile │ .../browser_profile         │           │
-└─────────────────┴──────────────────────────────┴───────────┘
+┏━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━┓
+┃ File            ┃ Path                                     ┃ Source    ┃
+┡━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━┩
+│ Profile         │ default                                  │ active    │
+│ Home Directory  │ /home/user/.notebooklm                   │ default   │
+│ Storage State   │ .../profiles/default/storage_state.json  │           │
+│ Context         │ .../profiles/default/context.json        │           │
+│ Browser Profile │ .../profiles/default/browser_profile     │           │
+└─────────────────┴──────────────────────────────────────────┴───────────┘
 ```
 
 ## Session Management
@@ -170,25 +196,43 @@ notebooklm login
 
 ### Multiple Accounts
 
-Use `NOTEBOOKLM_HOME` to maintain separate configurations:
+**Profiles (recommended):** Use named profiles to manage multiple Google accounts under a single home directory:
 
 ```bash
-# Work account
-export NOTEBOOKLM_HOME=~/.notebooklm-work
-notebooklm login
-notebooklm list
+# Create and authenticate profiles
+notebooklm profile create work
+notebooklm -p work login
+notebooklm -p work list
 
-# Personal account
-export NOTEBOOKLM_HOME=~/.notebooklm-personal
-notebooklm login
-notebooklm list
+notebooklm profile create personal
+notebooklm -p personal login
+notebooklm -p personal list
+
+# Switch the active profile
+notebooklm profile switch work
+notebooklm list   # Uses work profile
+
+# List all profiles
+notebooklm profile list
+
+# Use env var for session-wide override
+export NOTEBOOKLM_PROFILE=personal
+notebooklm list   # Uses personal profile
 ```
 
-Or use `--storage` for one-off overrides:
+Each profile stores its own `storage_state.json`, `context.json`, and `browser_profile/` under `~/.notebooklm/profiles/<name>/`.
+
+**Alternative: `NOTEBOOKLM_HOME`** still works for full directory-level isolation:
 
 ```bash
-notebooklm --storage ~/.notebooklm/account1.json login
-notebooklm --storage ~/.notebooklm/account1.json list
+export NOTEBOOKLM_HOME=~/.notebooklm-work
+notebooklm login
+```
+
+**One-off override with `--storage`:**
+
+```bash
+notebooklm --storage /path/to/account.json list
 ```
 
 ## CI/CD Configuration
@@ -236,12 +280,25 @@ If you prefer file-based authentication:
 ```yaml
 - name: Setup NotebookLM auth
   run: |
-    mkdir -p ~/.notebooklm
-    echo "${{ secrets.NOTEBOOKLM_AUTH_JSON }}" > ~/.notebooklm/storage_state.json
-    chmod 600 ~/.notebooklm/storage_state.json
+    mkdir -p ~/.notebooklm/profiles/default
+    echo "${{ secrets.NOTEBOOKLM_AUTH_JSON }}" > ~/.notebooklm/profiles/default/storage_state.json
+    chmod 600 ~/.notebooklm/profiles/default/storage_state.json
 
 - name: List notebooks
   run: notebooklm list
+```
+
+For profile-specific CI auth:
+
+```yaml
+- name: Setup work profile auth
+  run: |
+    mkdir -p ~/.notebooklm/profiles/work
+    echo "${{ secrets.WORK_AUTH_JSON }}" > ~/.notebooklm/profiles/work/storage_state.json
+    chmod 600 ~/.notebooklm/profiles/work/storage_state.json
+
+- name: List notebooks (work)
+  run: notebooklm -p work list
 ```
 
 ### Session Expiration
