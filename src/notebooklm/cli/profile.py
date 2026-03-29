@@ -176,13 +176,14 @@ def delete_cmd(name, confirm):
     except ValueError as e:
         raise click.ClickException(str(e)) from None
 
-    # Block deletion of the configured default profile (not just the active resolved one)
+    # Block deletion of active or configured default profile
     from ..paths import _read_default_profile
 
     configured_default = _read_default_profile() or "default"
-    if name == configured_default:
+    effective_active = resolve_profile()
+    if name in (configured_default, effective_active):
         raise click.ClickException(
-            f"Cannot delete the default profile '{name}'. "
+            f"Cannot delete active/default profile '{name}'. "
             f"Switch to another profile first with 'notebooklm profile switch <name>'."
         )
 
