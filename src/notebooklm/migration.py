@@ -40,10 +40,8 @@ def migrate_to_profiles() -> bool:
 
     Uses copy-then-delete with a marker file for crash safety:
     1. Copy all files/dirs to profiles/default/
-    2. Write .migration_complete marker
-    3. Delete originals
-
-    If interrupted before the marker, next run retries from intact originals.
+    2. Delete originals
+    3. Write .migration_complete marker (last — incomplete runs retry)
 
     Returns:
         True if migration was performed, False if already migrated or no-op.
@@ -60,12 +58,15 @@ def migrate_to_profiles() -> bool:
     legacy_dirs = [home / name for name in _LEGACY_DIRS if (home / name).is_dir()]
 
     if not legacy_files and not legacy_dirs:
-        # Fresh install — just create profiles directory
-        profiles_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        # Fresh install — ensure home dir has correct permissions first
+        get_home_dir(create=True)
+        profiles_dir.mkdir(exist_ok=True, mode=0o700)
         logger.debug("Created profiles directory (fresh install)")
         return True
 
     # Migrate legacy files into profiles/default/
+    # Ensure home dir has correct 0o700 permissions (may already exist from legacy)
+    get_home_dir(create=True)
     default_dir = profiles_dir / "default"
     default_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
 

@@ -219,6 +219,14 @@ class TestGetProfileDir:
             assert result.exists()
             assert result.is_dir()
 
+    def test_rejects_dot_profile(self, tmp_path):
+        """Profile name '.' resolves to profiles root — must be rejected."""
+        with (
+            patch.dict(os.environ, {"NOTEBOOKLM_HOME": str(tmp_path)}, clear=True),
+            pytest.raises(ValueError, match="Invalid profile name"),
+        ):
+            get_profile_dir(".")
+
     def test_rejects_path_traversal(self, tmp_path):
         """Profile names with path traversal are rejected."""
         with (

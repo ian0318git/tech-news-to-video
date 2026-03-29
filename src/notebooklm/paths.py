@@ -199,8 +199,11 @@ def get_profile_dir(profile: str | None = None, create: bool = False) -> Path:
     profiles_root = get_home_dir() / "profiles"
     path = (profiles_root / resolved).resolve()
 
-    # Guard against path traversal (e.g., profile="../../etc")
-    if not path.is_relative_to(profiles_root.resolve()):
+    # Guard against path traversal (e.g., profile="../../etc") and names that
+    # resolve to the profiles root itself (e.g., profile=".") which would let
+    # delete/rename operate on the entire profiles directory.
+    resolved_root = profiles_root.resolve()
+    if not path.is_relative_to(resolved_root) or path == resolved_root:
         raise ValueError(f"Invalid profile name: {resolved!r}")
 
     if create:
