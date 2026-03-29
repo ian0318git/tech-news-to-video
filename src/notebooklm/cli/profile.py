@@ -224,25 +224,28 @@ def rename_cmd(old_name, new_name):
 
     os.rename(old_dir, new_dir)
 
-    # Update config if renamed profile was the default
+    # Update config if renamed profile was the effective default.
+    # This handles both: config.json exists with default_profile=old_name,
+    # AND config.json doesn't exist (implicit "default" fallback).
     config_path = get_config_path()
-    if config_path.exists():
-        try:
+    try:
+        data: dict = {}
+        if config_path.exists():
             data = json.loads(config_path.read_text(encoding="utf-8"))
-            if data.get("default_profile") == old_name:
-                data["default_profile"] = new_name
-                config_path.write_text(
-                    json.dumps(data, indent=2, ensure_ascii=False) + "\n",
-                    encoding="utf-8",
-                )
-                config_path.chmod(0o600)
-                console.print(
-                    f"[dim]Updated default profile in config: {old_name} → {new_name}[/dim]"
-                )
-        except (json.JSONDecodeError, OSError) as e:
-            console.print(
-                f"[yellow]Warning: profile renamed but config.json update failed: {e}[/yellow]\n"
-                f"[yellow]Run 'notebooklm profile switch {new_name}' to fix.[/yellow]"
+        configured_default = data.get("default_profile") or "default"
+        if configured_default == old_name:
+            data["default_profile"] = new_name
+            config_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            config_path.write_text(
+                json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
             )
+            config_path.chmod(0o600)
+            console.print(f"[dim]Updated default profile in config: {old_name} → {new_name}[/dim]")
+    except (json.JSONDecodeError, OSError) as e:
+        console.print(
+            f"[yellow]Warning: profile renamed but config.json update failed: {e}[/yellow]\n"
+            f"[yellow]Run 'notebooklm profile switch {new_name}' to fix.[/yellow]"
+        )
 
     console.print(f"[green]Profile renamed: {old_name} → {new_name}[/green]")
