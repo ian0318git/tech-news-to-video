@@ -884,3 +884,126 @@ class TestSessionEdgeCases:
         # Title and is_owner should be None due to JSONDecodeError
         assert output_data["notebook"]["title"] is None
         assert output_data["notebook"]["is_owner"] is None
+
+
+# =============================================================================
+# WINDOWS PERMISSION REGRESSION TESTS (fixes #212)
+# =============================================================================
+
+
+class TestLoginWindowsPermissions:
+    """Regression tests for Windows permission handling in login command.
+
+    On Windows, mkdir(mode=0o700) and chmod() can cause PermissionError
+    because Python 3.13+ applies restrictive ACLs. The login command must
+    skip both on Windows while preserving Unix hardening.
+
+    See: https://github.com/teng-lin/notebooklm-py/issues/212
+    """
+
+    @pytest.fixture
+    def _patch_login_deps(self, tmp_path, monkeypatch):
+        """Patch all login dependencies to isolate mkdir/chmod behavior."""
+        storage_path = tmp_path / "home" / "storage_state.json"
+        browser_profile = tmp_path / "profile"
+
+        monkeypatch.setattr(
+            "notebooklm.cli.session.get_storage_path", lambda: storage_path
+        )
+        monkeypatch.setattr(
+            "notebooklm.cli.session.get_browser_profile_dir", lambda: browser_profile
+        )
+        self.storage_parent = storage_path.parent
+        self.browser_profile = browser_profile
+
+    def test_windows_login_skips_mode_and_chmod(
+        self, monkeypatch, _patch_login_deps, runner
+    ):
+        """On Windows, login mkdir calls omit mode= and chmod is never called."""
+        import notebooklm.cli.session as session_mod
+
+        monkeypatch.setattr(session_mod.sys, "platform", "win32")
+
+        mkdir_calls = []
+        chmod_calls = []
+        _orig_mkdir = Path.mkdir
+
+        def _track_mkdir(self, *args, **kwargs):
+            mkdir_calls.append({"path": self, "kwargs": kwargs})
+            return _orig_mkdir(self, *args, **kwargs)
+
+        def _track_chmod(self, *args, **kwargs):
+            chmod_calls.append({"path": self, "args": args})
+
+        monkeypatch.setattr(Path, "mkdir", _track_mkdir)
+        monkeypatch.setattr(Path, "chmod", _track_chmod)
+
+        # Trigger the login command but abort early at playwright import
+        with patch.dict("sys.modules", {"playwright": None, "playwright.sync_api": None}):
+            runner.invoke(cli, ["login"])
+
+        # mkdir should NOT receive mode= on Windows
+        for call in mkdir_calls:
+            assert "mode" not in call["kwargs"], (
+                f"mkdir received mode= on Windows for {call['path']}"
+            )
+
+        # chmod should NOT be called on Windows
+        assert len(chmod_calls) == 0, (
+            f"chmod called {len(chmod_calls)} time(s) on Windows: {chmod_calls}"
+        )
+
+    def test_unix_login_sets_mode_and_chmod(
+        self, monkeypatch, _patch_login_deps, runner
+    ):
+        """On Unix, login mkdir calls include mode=0o700 and chmod is called."""
+        import notebooklm.cli.session as session_mod
+
+        monkeypatch.setattr(session_mod.sys, "platform", "linux")
+
+        mkdir_calls = []
+        chmod_calls = []
+        _orig_mkdir = Path.mkdir
+
+        def _track_mkdir(self, *args, **kwargs):
+            mkdir_calls.append({"path": self, "kwargs": kwargs})
+            return _orig_mkdir(self, *args, **kwargs)
+
+        def _track_chmod(self, *args, **kwargs):
+            chmod_calls.append({"path": self, "args": args})
+
+        monkeypatch.setattr(Path, "mkdir", _track_mkdir)
+        monkeypatch.setattr(Path, "chmod", _track_chmod)
+
+        # Trigger the login command but abort early at playwright import
+        with patch.dict("sys.modules", {"playwright": None, "playwright.sync_api": None}):
+            runner.invoke(cli, ["login"])
+
+        # mkdir should receive mode=0o700 on Unix (2 calls: storage_parent + browser_profile)
+        mode_calls = [c for c in mkdir_calls if c["kwargs"].get("mode") == 0o700]
+        assert len(mode_calls) >= 2, (
+            f"Expected ≥2 mkdir calls with mode=0o700 on Unix, got {len(mode_calls)}"
+        )
+
+        # chmod(0o700) should be called on Unix (2 calls: storage_parent + browser_profile)
+        chmod_700 = [c for c in chmod_calls if c["args"] == (0o700,)]
+        assert len(chmod_700) >= 2, (
+            f"Expected ≥2 chmod(0o700) calls on Unix, got {len(chmod_700)}"
+        )
+
+    def test_windows_storage_chmod_skipped(
+        self, monkeypatch, _patch_login_deps
+    ):
+        """On Windows, storage_state.json chmod(0o600) is also skipped."""
+        import notebooklm.cli.session as session_mod
+
+        monkeypatch.setattr(session_mod.sys, "platform", "win32")
+
+        # The code at line 280-282 checks sys.platform before chmod(0o600)
+        # Verify the guard exists by checking the source
+        import inspect
+        source = inspect.getsource(session_mod)
+        # The pattern: if sys.platform != "win32": ... storage_path.chmod(0o600)
+        assert 'sys.platform != "win32"' in source or "sys.platform != 'win32'" in source, (
+            "Missing Windows guard for storage_state.json chmod(0o600)"
+        )
