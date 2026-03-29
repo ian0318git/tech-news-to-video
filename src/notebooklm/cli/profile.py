@@ -238,7 +238,10 @@ def rename_cmd(old_name, new_name):
                 console.print(
                     f"[dim]Updated default profile in config: {old_name} → {new_name}[/dim]"
                 )
-        except (json.JSONDecodeError, OSError):
-            pass
+        except (json.JSONDecodeError, OSError) as e:
+            console.print(
+                f"[yellow]Warning: profile renamed but config.json update failed: {e}[/yellow]\n"
+                f"[yellow]Run 'notebooklm profile switch {new_name}' to fix.[/yellow]"
+            )
 
     console.print(f"[green]Profile renamed: {old_name} → {new_name}[/green]")
