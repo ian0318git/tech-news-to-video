@@ -2,6 +2,7 @@
 
 import json
 from datetime import datetime
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import click
@@ -907,18 +908,14 @@ class TestLoginWindowsPermissions:
         storage_path = tmp_path / "home" / "storage_state.json"
         browser_profile = tmp_path / "profile"
 
-        monkeypatch.setattr(
-            "notebooklm.cli.session.get_storage_path", lambda: storage_path
-        )
+        monkeypatch.setattr("notebooklm.cli.session.get_storage_path", lambda: storage_path)
         monkeypatch.setattr(
             "notebooklm.cli.session.get_browser_profile_dir", lambda: browser_profile
         )
         self.storage_parent = storage_path.parent
         self.browser_profile = browser_profile
 
-    def test_windows_login_skips_mode_and_chmod(
-        self, monkeypatch, _patch_login_deps, runner
-    ):
+    def test_windows_login_skips_mode_and_chmod(self, monkeypatch, _patch_login_deps, runner):
         """On Windows, login mkdir calls omit mode= and chmod is never called."""
         import notebooklm.cli.session as session_mod
 
@@ -953,9 +950,7 @@ class TestLoginWindowsPermissions:
             f"chmod called {len(chmod_calls)} time(s) on Windows: {chmod_calls}"
         )
 
-    def test_unix_login_sets_mode_and_chmod(
-        self, monkeypatch, _patch_login_deps, runner
-    ):
+    def test_unix_login_sets_mode_and_chmod(self, monkeypatch, _patch_login_deps, runner):
         """On Unix, login mkdir calls include mode=0o700 and chmod is called."""
         import notebooklm.cli.session as session_mod
 
@@ -987,13 +982,9 @@ class TestLoginWindowsPermissions:
 
         # chmod(0o700) should be called on Unix (2 calls: storage_parent + browser_profile)
         chmod_700 = [c for c in chmod_calls if c["args"] == (0o700,)]
-        assert len(chmod_700) >= 2, (
-            f"Expected ≥2 chmod(0o700) calls on Unix, got {len(chmod_700)}"
-        )
+        assert len(chmod_700) >= 2, f"Expected ≥2 chmod(0o700) calls on Unix, got {len(chmod_700)}"
 
-    def test_windows_storage_chmod_skipped(
-        self, monkeypatch, _patch_login_deps
-    ):
+    def test_windows_storage_chmod_skipped(self, monkeypatch, _patch_login_deps):
         """On Windows, storage_state.json chmod(0o600) is also skipped."""
         import notebooklm.cli.session as session_mod
 
@@ -1002,6 +993,7 @@ class TestLoginWindowsPermissions:
         # The code at line 280-282 checks sys.platform before chmod(0o600)
         # Verify the guard exists by checking the source
         import inspect
+
         source = inspect.getsource(session_mod)
         # The pattern: if sys.platform != "win32": ... storage_path.chmod(0o600)
         assert 'sys.platform != "win32"' in source or "sys.platform != 'win32'" in source, (
