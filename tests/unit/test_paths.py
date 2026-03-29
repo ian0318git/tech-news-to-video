@@ -83,6 +83,69 @@ class TestGetHomeDir:
             mode = custom_path.stat().st_mode & 0o777
             assert mode == 0o700
 
+    def test_windows_create_skips_mode_and_chmod(self, tmp_path, monkeypatch):
+        """On Windows, create=True calls mkdir without mode= and skips chmod."""
+        import notebooklm.paths as paths_mod
+
+        custom_path = tmp_path / "win_home"
+        monkeypatch.setenv("NOTEBOOKLM_HOME", str(custom_path))
+        monkeypatch.setattr(paths_mod.sys, "platform", "win32")
+
+        mkdir_calls = []
+        chmod_calls = []
+        _orig_mkdir = Path.mkdir
+
+        def _track_mkdir(self, *args, **kwargs):
+            mkdir_calls.append({"args": args, "kwargs": kwargs})
+            return _orig_mkdir(self, *args, **kwargs)
+
+        def _track_chmod(self, *args, **kwargs):
+            chmod_calls.append({"args": args, "kwargs": kwargs})
+
+        monkeypatch.setattr(Path, "mkdir", _track_mkdir)
+        monkeypatch.setattr(Path, "chmod", _track_chmod)
+
+        get_home_dir(create=True)
+
+        assert custom_path.exists()
+        # mkdir should NOT receive mode= kwarg on Windows
+        assert len(mkdir_calls) == 1
+        assert "mode" not in mkdir_calls[0]["kwargs"]
+        # chmod should NOT be called on Windows
+        assert len(chmod_calls) == 0
+
+    def test_unix_create_sets_mode_and_chmod(self, tmp_path, monkeypatch):
+        """On Unix, create=True passes mode=0o700 to mkdir and calls chmod(0o700)."""
+        import notebooklm.paths as paths_mod
+
+        custom_path = tmp_path / "unix_home"
+        monkeypatch.setenv("NOTEBOOKLM_HOME", str(custom_path))
+        monkeypatch.setattr(paths_mod.sys, "platform", "linux")
+
+        mkdir_calls = []
+        chmod_calls = []
+        _orig_mkdir = Path.mkdir
+
+        def _track_mkdir(self, *args, **kwargs):
+            mkdir_calls.append({"args": args, "kwargs": kwargs})
+            return _orig_mkdir(self, *args, **kwargs)
+
+        def _track_chmod(self, *args, **kwargs):
+            chmod_calls.append({"args": args, "kwargs": kwargs})
+
+        monkeypatch.setattr(Path, "mkdir", _track_mkdir)
+        monkeypatch.setattr(Path, "chmod", _track_chmod)
+
+        get_home_dir(create=True)
+
+        assert custom_path.exists()
+        # mkdir should receive mode=0o700 on Unix
+        assert len(mkdir_calls) == 1
+        assert mkdir_calls[0]["kwargs"].get("mode") == 0o700
+        # chmod should be called with 0o700 on Unix
+        assert len(chmod_calls) == 1
+        assert chmod_calls[0]["args"] == (0o700,)
+
 
 class TestResolveProfile:
     def test_explicit_argument(self):

@@ -189,7 +189,23 @@ def register_session_commands(cli):
             )
             raise SystemExit(1)
 
+        storage_path = Path(storage) if storage else get_storage_path()
+        browser_profile = get_browser_profile_dir()
+        if sys.platform == "win32":
+            # On Windows < Python 3.13, mode= is ignored by mkdir(). On
+            # Python 3.13+, mode= applies Windows ACLs that can be overly
+            # restrictive (0o700 blocks other same-user processes). Skip mode
+            # and chmod entirely; Windows inherits ACLs from the parent.
+            storage_path.parent.mkdir(parents=True, exist_ok=True)
+            browser_profile.mkdir(parents=True, exist_ok=True)
+        else:
+            storage_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            storage_path.parent.chmod(0o700)
+            browser_profile.mkdir(parents=True, exist_ok=True, mode=0o700)
+            browser_profile.chmod(0o700)
+
         try:
+            from playwright.sync_api import Error as PlaywrightError
             from playwright.sync_api import sync_playwright
         except ImportError:
             if browser == "msedge":
@@ -204,11 +220,6 @@ def register_session_commands(cli):
             _ensure_chromium_installed()
 
         from ..paths import resolve_profile
-
-        storage_path = Path(storage) if storage else get_storage_path()
-        browser_profile = get_browser_profile_dir()
-        storage_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        browser_profile.mkdir(parents=True, exist_ok=True, mode=0o700)
 
         profile_name = resolve_profile()
         browser_label = "Microsoft Edge" if browser == "msedge" else "Chromium"
@@ -258,9 +269,15 @@ def register_session_commands(cli):
             input("[Press ENTER when logged in] ")
 
             # Force .google.com cookies for regional users (e.g. UK lands on
-            # .google.co.uk). Use "load" not "networkidle" to avoid analytics hangs.
-            page.goto(GOOGLE_ACCOUNTS_URL, wait_until="load")
-            page.goto(NOTEBOOKLM_URL, wait_until="load")
+            # .google.co.uk). Use "commit" to resolve once response headers
+            # (including Set-Cookie) are processed, before any client-side
+            # JS redirect can interrupt. See #214.
+            for url in [GOOGLE_ACCOUNTS_URL, NOTEBOOKLM_URL]:
+                try:
+                    page.goto(url, wait_until="commit")
+                except PlaywrightError as exc:
+                    if "Navigation interrupted" not in str(exc):
+                        raise
 
             current_url = page.url
             if NOTEBOOKLM_HOST not in current_url:
@@ -271,7 +288,9 @@ def register_session_commands(cli):
 
             context.storage_state(path=str(storage_path))
             # Restrict permissions to owner only (contains sensitive cookies)
-            storage_path.chmod(0o600)
+            if sys.platform != "win32":
+                # chmod is a no-op on Windows (and can confuse ACLs)
+                storage_path.chmod(0o600)
             context.close()
 
         console.print(f"\n[green]Authentication saved to:[/green] {storage_path}")
