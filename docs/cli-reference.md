@@ -8,16 +8,19 @@ Complete command reference for the `notebooklm` CLI—providing full programmati
 ## Command Structure
 
 ```
-notebooklm [--storage PATH] [--version] <command> [OPTIONS] [ARGS]
+notebooklm [-p PROFILE] [--storage PATH] [--version] [-v] <command> [OPTIONS] [ARGS]
 ```
 
 **Global Options:**
-- `--storage PATH` - Override the default storage location (`~/.notebooklm/storage_state.json`)
+- `-p, --profile NAME` - Use a named profile (overrides `NOTEBOOKLM_PROFILE` env var)
+- `--storage PATH` - Override the default storage location
+- `-v, --verbose` - Enable verbose output
 - `--version` - Show version and exit
 - `--help` - Show help message
 
 **Environment Variables:**
 - `NOTEBOOKLM_HOME` - Base directory for all config files (default: `~/.notebooklm`)
+- `NOTEBOOKLM_PROFILE` - Active profile name (default: `default`)
 - `NOTEBOOKLM_AUTH_JSON` - Inline authentication JSON (for CI/CD, no file writes needed)
 - `NOTEBOOKLM_DEBUG_RPC` - Enable RPC debug logging (`1` to enable)
 
@@ -27,8 +30,8 @@ See [Configuration](configuration.md) for details on environment variables and C
 - **Session commands** - Authentication and context management
 - **Notebook commands** - CRUD operations on notebooks
 - **Chat commands** - Querying and conversation management
-- **Grouped commands** - `source`, `artifact`, `agent`, `generate`, `download`, `note`, `share`, `research`, `language`, `skill`, `auth`
-- **Utility commands** - `metadata`
+- **Grouped commands** - `source`, `artifact`, `agent`, `generate`, `download`, `note`, `share`, `research`, `language`, `skill`, `auth`, `profile`
+- **Utility commands** - `metadata`, `doctor`
 
 ---
 
@@ -47,6 +50,19 @@ See [Configuration](configuration.md) for details on environment variables and C
 | `auth check` | Diagnose authentication issues | `notebooklm auth check` |
 | `auth check --test` | Validate with network test | `notebooklm auth check --test` |
 | `auth check --json` | Output as JSON | `notebooklm auth check --json` |
+| `doctor` | Check environment health | `notebooklm doctor` |
+| `doctor --fix` | Auto-fix detected issues | `notebooklm doctor --fix` |
+| `doctor --json` | Output diagnostics as JSON | `notebooklm doctor --json` |
+
+### Profile Commands (`notebooklm profile <cmd>`)
+
+| Command | Description | Example |
+|---------|-------------|---------|
+| `list` | List all profiles | `notebooklm profile list` |
+| `create <name>` | Create a new profile | `notebooklm profile create work` |
+| `switch <name>` | Set the active profile | `notebooklm profile switch work` |
+| `delete <name>` | Delete a profile | `notebooklm profile delete old` |
+| `rename <old> <new>` | Rename a profile | `notebooklm profile rename old new` |
 
 ### Language Commands (`notebooklm language <cmd>`)
 
