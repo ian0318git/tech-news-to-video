@@ -189,20 +189,6 @@ def register_session_commands(cli):
             )
             raise SystemExit(1)
 
-        try:
-            from playwright.sync_api import sync_playwright
-        except ImportError:
-            if browser == "msedge":
-                install_hint = "  pip install notebooklm[browser]"
-            else:
-                install_hint = "  pip install notebooklm[browser]\n  playwright install chromium"
-            console.print(f"[red]Playwright not installed. Run:[/red]\n{install_hint}")
-            raise SystemExit(1) from None
-
-        # Pre-flight check: verify Chromium browser is installed (skip for Edge)
-        if browser == "chromium":
-            _ensure_chromium_installed()
-
         storage_path = Path(storage) if storage else get_storage_path()
         browser_profile = get_browser_profile_dir()
         if sys.platform == "win32":
@@ -217,6 +203,20 @@ def register_session_commands(cli):
             storage_path.parent.chmod(0o700)
             browser_profile.mkdir(parents=True, exist_ok=True, mode=0o700)
             browser_profile.chmod(0o700)
+
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            if browser == "msedge":
+                install_hint = "  pip install notebooklm[browser]"
+            else:
+                install_hint = "  pip install notebooklm[browser]\n  playwright install chromium"
+            console.print(f"[red]Playwright not installed. Run:[/red]\n{install_hint}")
+            raise SystemExit(1) from None
+
+        # Pre-flight check: verify Chromium browser is installed (skip for Edge)
+        if browser == "chromium":
+            _ensure_chromium_installed()
 
         browser_label = "Microsoft Edge" if browser == "msedge" else "Chromium"
         console.print(f"[yellow]Opening {browser_label} for Google login...[/yellow]")
