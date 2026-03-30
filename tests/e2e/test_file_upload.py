@@ -1,5 +1,7 @@
 import os
 import tempfile
+import zipfile
+from io import BytesIO
 from pathlib import Path
 
 import pytest
@@ -441,6 +443,65 @@ def create_minimal_jpg(path: Path) -> None:
     path.write_bytes(jpg_content)
 
 
+def create_minimal_epub(path: Path) -> None:
+    """Create a minimal valid EPUB 3 file for testing."""
+    mimetype = b"application/epub+zip"
+
+    container_xml = b"""<?xml version="1.0" encoding="UTF-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>"""
+
+    content_opf = b"""<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="uid">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>Test EPUB</dc:title>
+    <dc:language>en</dc:language>
+    <meta property="dcterms:modified">2024-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="chapter1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+  </manifest>
+  <spine>
+    <itemref idref="chapter1"/>
+  </spine>
+</package>"""
+
+    chapter1_xhtml = b"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Chapter 1</title></head>
+<body>
+<h1>Chapter 1</h1>
+<p>Test EPUB content for NotebookLM upload testing.</p>
+</body>
+</html>"""
+
+    nav_xhtml = b"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head><title>Navigation</title></head>
+<body>
+<nav epub:type="toc"><ol><li><a href="chapter1.xhtml">Chapter 1</a></li></ol></nav>
+</body>
+</html>"""
+
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        # mimetype must be first entry and stored uncompressed per EPUB spec
+        zf.writestr("mimetype", mimetype, compress_type=zipfile.ZIP_STORED)
+        zf.writestr("META-INF/container.xml", container_xml)
+        zf.writestr("OEBPS/content.opf", content_opf)
+        zf.writestr("OEBPS/chapter1.xhtml", chapter1_xhtml)
+        zf.writestr("OEBPS/nav.xhtml", nav_xhtml)
+
+    path.write_bytes(buffer.getvalue())
+
+
 @requires_auth
 class TestFileUpload:
     """File upload tests.
@@ -609,3 +670,22 @@ class TestFileUpload:
         assert source.id is not None
         assert source.title == "test_image.jpg"
         assert source.kind == SourceType.IMAGE
+
+    @pytest.mark.asyncio
+    async def test_add_epub_file(self, client, temp_notebook, tmp_path):
+        """Test uploading an EPUB file."""
+        test_epub = tmp_path / "test_book.epub"
+        create_minimal_epub(test_epub)
+
+        # wait=True ensures we get the processed source type
+        source = await client.sources.add_file(
+            temp_notebook.id,
+            test_epub,
+            mime_type="application/epub+zip",
+            wait=True,
+            wait_timeout=120,
+        )
+        assert source is not None
+        assert source.id is not None
+        assert source.title == "test_book.epub"
+        assert source.kind == SourceType.EPUB

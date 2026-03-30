@@ -159,6 +159,9 @@ class TestGetSourceTypeDisplay:
     def test_pasted_text(self):
         assert get_source_type_display("pasted_text") == "📝 Pasted Text"
 
+    def test_epub(self):
+        assert get_source_type_display("epub") == "📕 EPUB"
+
     def test_unknown_type(self):
         assert get_source_type_display("unknown") == "❓ Unknown"
 

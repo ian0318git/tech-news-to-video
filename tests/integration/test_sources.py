@@ -2,6 +2,8 @@
 
 import re
 import urllib.parse
+import zipfile
+from io import BytesIO
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -649,6 +651,72 @@ class TestAddFileSource:
         # Verify the actual content was sent
         assert upload_request.content == binary_content
         assert upload_request.headers["x-goog-upload-offset"] == "0"
+
+
+class TestAddEpubFileSource:
+    """Integration tests for EPUB file upload."""
+
+    @pytest.mark.asyncio
+    async def test_add_epub_file_upload(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+        build_rpc_response,
+        tmp_path,
+    ):
+        """Test EPUB file upload through the 3-step protocol."""
+        # Minimal EPUB ZIP — only needs valid ZIP structure since the server
+        # is mocked and never processes the content.
+        test_epub = tmp_path / "test_book.epub"
+        buffer = BytesIO()
+        with zipfile.ZipFile(buffer, "w") as zf:
+            zf.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+            zf.writestr("OEBPS/chapter1.xhtml", "<html><body><p>Test</p></body></html>")
+        test_epub.write_bytes(buffer.getvalue())
+
+        # Step 1: Mock RPC registration
+        rpc_response = build_rpc_response(
+            RPCMethod.ADD_SOURCE_FILE,
+            [[[["epub_source_123"], "test_book.epub", [None, None, None, None, 0]]]],
+        )
+        httpx_mock.add_response(
+            url=re.compile(r".*batchexecute.*"),
+            content=rpc_response.encode(),
+        )
+
+        # Step 2: Mock upload session start
+        httpx_mock.add_response(
+            url=re.compile(r".*upload/_/\?authuser=0$"),
+            headers={
+                "x-goog-upload-url": "https://notebooklm.google.com/upload/_/?authuser=0&upload_id=epub_upload",
+                "x-goog-upload-status": "active",
+            },
+            content=b"",
+        )
+
+        # Step 3: Mock upload finalize
+        httpx_mock.add_response(
+            url=re.compile(r".*upload/_/\?authuser=0&upload_id=.*"),
+            content=b"OK: Enqueued blob bytes to spanner queue for processing.",
+        )
+
+        async with NotebookLMClient(auth_tokens) as client:
+            source = await client.sources.add_file(
+                "nb_123",
+                test_epub,
+                mime_type="application/epub+zip",
+            )
+
+        assert source.id == "epub_source_123"
+        assert source.title == "test_book.epub"
+
+        # Verify all 3 requests were made
+        requests = httpx_mock.get_requests()
+        assert len(requests) == 3
+
+        # Verify uploaded content is the EPUB ZIP bytes
+        upload_request = requests[2]
+        assert upload_request.content == test_epub.read_bytes()
 
 
 class TestGetFulltext:

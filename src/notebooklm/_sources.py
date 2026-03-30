@@ -417,6 +417,7 @@ class SourcesAPI:
             - PDF: application/pdf
             - Text: text/plain
             - Markdown: text/markdown
+            - EPUB: application/epub+zip
             - Word: application/vnd.openxmlformats-officedocument.wordprocessingml.document
         """
         logger.debug("Adding file source to notebook %s: %s", notebook_id, file_path)

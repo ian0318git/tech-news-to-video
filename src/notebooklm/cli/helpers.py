@@ -695,6 +695,7 @@ def get_source_type_display(source_type: str) -> str:
         "google_drive_video": "🎬 Drive Video",
         "image": "🖼️ Image",
         "csv": "📊 CSV",
+        "epub": "📕 EPUB",
         "unknown": "❓ Unknown",
     }
     return type_map.get(type_str, f"❓ {type_str}")
