@@ -91,6 +91,7 @@ class SourceType(str, Enum):
     MARKDOWN = "markdown"
     DOCX = "docx"
     CSV = "csv"
+    EPUB = "epub"
     IMAGE = "image"
     MEDIA = "media"
     UNKNOWN = "unknown"
@@ -138,6 +139,7 @@ _SOURCE_TYPE_CODE_MAP: dict[int, SourceType] = {
     13: SourceType.IMAGE,
     14: SourceType.GOOGLE_SPREADSHEET,
     16: SourceType.CSV,
+    17: SourceType.EPUB,
 }
 
 # Mapping from internal int codes to ArtifactType enum
@@ -166,6 +168,7 @@ _SOURCE_TYPE_COMPAT_MAP: dict[SourceType, str] = {
     SourceType.MARKDOWN: "text_file",
     SourceType.DOCX: "text_file",
     SourceType.CSV: "text",
+    SourceType.EPUB: "text_file",
     SourceType.IMAGE: "text",
     SourceType.MEDIA: "text",
     SourceType.UNKNOWN: "text",

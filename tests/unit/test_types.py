@@ -192,6 +192,7 @@ class TestSource:
             (13, SourceType.IMAGE),
             (14, SourceType.GOOGLE_SPREADSHEET),
             (16, SourceType.CSV),
+            (17, SourceType.EPUB),
         ],
     )
     def test_from_api_response_source_type_codes(self, type_code, expected_kind):
@@ -219,6 +220,17 @@ class TestSource:
         """Test that None raises ValueError."""
         with pytest.raises(ValueError, match="Invalid source data"):
             Source.from_api_response(None)
+
+
+class TestSourceTypeCompatMapping:
+    """Tests for the _SOURCE_TYPE_COMPAT_MAP backward-compatible mapping."""
+
+    def test_epub_maps_to_text_file(self):
+        """Test that EPUB maps to 'text_file' in the compat mapping."""
+        from notebooklm.types import _SOURCE_TYPE_COMPAT_MAP
+
+        assert SourceType.EPUB in _SOURCE_TYPE_COMPAT_MAP
+        assert _SOURCE_TYPE_COMPAT_MAP[SourceType.EPUB] == "text_file"
 
 
 class TestSourceKindProperty:
