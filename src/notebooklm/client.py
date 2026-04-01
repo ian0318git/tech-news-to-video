@@ -77,28 +77,25 @@ class NotebookLMClient:
         self,
         auth: AuthTokens,
         timeout: float = DEFAULT_TIMEOUT,
-        storage_path: "Path | None" = None,
+        storage_path: Path | None = None,
     ):
         """Initialize the NotebookLM client.
 
         Args:
             auth: Authentication tokens from browser login.
             timeout: HTTP request timeout in seconds. Defaults to 30 seconds.
-            storage_path: Path to the storage state file used for authentication.
-                If provided, this path is used for loading cookies during downloads.
+            storage_path: Path to the storage state file for loading download cookies.
         """
         # Pass refresh_auth as callback for automatic retry on auth failures
         # Note: refresh_auth calls update_auth_headers internally
-        self._core = ClientCore(
-            auth, timeout=timeout, refresh_callback=self.refresh_auth, storage_path=storage_path
-        )
+        self._core = ClientCore(auth, timeout=timeout, refresh_callback=self.refresh_auth)
 
         # Initialize sub-client APIs
         # Note: notes must be initialized before artifacts (artifacts uses notes API)
         self.notebooks = NotebooksAPI(self._core)
         self.sources = SourcesAPI(self._core)
         self.notes = NotesAPI(self._core)
-        self.artifacts = ArtifactsAPI(self._core, notes_api=self.notes)
+        self.artifacts = ArtifactsAPI(self._core, notes_api=self.notes, storage_path=storage_path)
         self.chat = ChatAPI(self._core)
         self.research = ResearchAPI(self._core)
         self.settings = SettingsAPI(self._core)
