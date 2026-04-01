@@ -153,6 +153,13 @@ class NotebookLMClient:
         """
         storage_path = Path(path) if path else None
         auth = await AuthTokens.from_storage(storage_path, profile=profile)
+        # When no explicit path given but a profile is specified, resolve it
+        # so that downstream cookie loading (e.g. artifact downloads) uses
+        # the correct storage file instead of falling back to the default.
+        if storage_path is None and profile is not None:
+            from .paths import get_storage_path
+
+            storage_path = get_storage_path(profile)
         return cls(auth, timeout=timeout, storage_path=storage_path)
 
     async def refresh_auth(self) -> AuthTokens:

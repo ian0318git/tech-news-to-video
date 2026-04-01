@@ -2055,6 +2055,20 @@ class ArtifactsAPI:
         ) as client:
             for url, output_path in urls_and_paths:
                 try:
+                    # Validate URL scheme and domain before sending auth cookies
+                    parsed = urlparse(url)
+                    if parsed.scheme != "https":
+                        raise ArtifactDownloadError(
+                            "media", details=f"Download URL must use HTTPS: {url[:80]}"
+                        )
+                    trusted = (".google.com", ".googleusercontent.com", ".googleapis.com")
+                    if not any(
+                        parsed.netloc == d.lstrip(".") or parsed.netloc.endswith(d) for d in trusted
+                    ):
+                        raise ArtifactDownloadError(
+                            "media", details=f"Untrusted download domain: {parsed.netloc}"
+                        )
+
                     response = await client.get(url)
                     response.raise_for_status()
 
