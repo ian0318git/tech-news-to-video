@@ -2039,7 +2039,7 @@ class ArtifactsAPI:
         downloaded: list[str] = []
 
         # Load cookies with domain info for cross-domain redirect handling
-        cookies = load_httpx_cookies()
+        cookies = load_httpx_cookies(path=self._core.storage_path)
 
         async with httpx.AsyncClient(
             cookies=cookies,
@@ -2104,7 +2104,7 @@ class ArtifactsAPI:
         temp_file = output_file.with_suffix(output_file.suffix + ".tmp")
 
         # Load cookies with domain info for cross-domain redirect handling
-        cookies = load_httpx_cookies()
+        cookies = load_httpx_cookies(path=self._core.storage_path)
 
         # Use granular timeouts: 10s to connect, 30s per chunk read/write
         # This allows large files to download without timeout while still

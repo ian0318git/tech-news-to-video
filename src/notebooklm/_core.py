@@ -5,6 +5,7 @@ import logging
 import time
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Coroutine
+from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlencode
 
@@ -98,6 +99,7 @@ class ClientCore:
         connect_timeout: float = DEFAULT_CONNECT_TIMEOUT,
         refresh_callback: Callable[[], Awaitable[AuthTokens]] | None = None,
         refresh_retry_delay: float = 0.2,
+        storage_path: Path | None = None,
     ):
         """Initialize the core client.
 
@@ -110,8 +112,11 @@ class ClientCore:
             refresh_callback: Optional async callback to refresh auth tokens on failure.
                 If provided, rpc_call will automatically retry once after refreshing.
             refresh_retry_delay: Delay in seconds before retrying after refresh.
+            storage_path: Path to the storage state file used for authentication.
+                If provided, this path is used for loading cookies during downloads.
         """
         self.auth = auth
+        self.storage_path = storage_path
         self._timeout = timeout
         self._connect_timeout = connect_timeout
         self._refresh_callback = refresh_callback
