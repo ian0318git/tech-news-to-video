@@ -1854,8 +1854,7 @@ class ArtifactsAPI:
             elapsed = asyncio.get_running_loop().time() - start_time
             if elapsed > timeout:
                 raise TimeoutError(
-                    f"Task {task_id} timed out after {timeout}s "
-                    f"(last status: {last_status})"
+                    f"Task {task_id} timed out after {timeout}s (last status: {last_status})"
                 )
 
             # Clamp sleep duration to respect timeout

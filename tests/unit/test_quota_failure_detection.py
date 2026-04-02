@@ -12,15 +12,13 @@ Root causes:
 3. Failed artifacts had no error message surfaced to the caller.
 """
 
-import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from notebooklm._artifacts import ArtifactsAPI
 from notebooklm.rpc.types import ArtifactStatus
 from notebooklm.types import GenerationStatus
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -91,7 +89,9 @@ class TestPollStatusNotFound:
         """Completed non-media artifact (report) returns 'completed'."""
         api = _make_api()
         # Type 2 = REPORT (non-media, no URL check required)
-        api._list_raw = AsyncMock(return_value=[_art("task_abc", ArtifactStatus.COMPLETED, artifact_type=2)])
+        api._list_raw = AsyncMock(
+            return_value=[_art("task_abc", ArtifactStatus.COMPLETED, artifact_type=2)]
+        )
 
         result = await api.poll_status("nb1", "task_abc")
 
