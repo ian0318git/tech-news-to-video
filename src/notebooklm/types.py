@@ -953,7 +953,7 @@ class GenerationStatus:
     """
 
     task_id: str  # Same as artifact_id - used for polling and becomes Artifact.id
-    status: str  # "pending", "in_progress", "completed", "failed"
+    status: str  # "pending", "in_progress", "completed", "failed", "not_found"
     url: str | None = None
     error: str | None = None
     error_code: str | None = None  # e.g., "USER_DISPLAYABLE_ERROR" for rate limits
@@ -1012,7 +1012,11 @@ class GenerationStatus:
         # Fall back to string matching for backwards compatibility
         if self.error is not None:
             error_lower = self.error.lower()
-            return "rate limit" in error_lower or "quota" in error_lower or "limit exceeded" in error_lower
+            return (
+                "rate limit" in error_lower
+                or "quota" in error_lower
+                or "limit exceeded" in error_lower
+            )
 
         return False
 
