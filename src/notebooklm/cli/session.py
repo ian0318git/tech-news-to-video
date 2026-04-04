@@ -281,6 +281,9 @@ def register_session_commands(cli):
                         if is_retryable and attempt < LOGIN_MAX_RETRIES:
                             # Retryable error with attempts remaining: retry
                             backoff_seconds = attempt  # Linear backoff: 1s, 2s
+                            logger.debug(
+                                f"Retryable connection error on attempt {attempt}/{LOGIN_MAX_RETRIES}: {error_str}"
+                            )
                             console.print(
                                 f"[yellow]Connection interrupted "
                                 f"(attempt {attempt}/{LOGIN_MAX_RETRIES}). "
@@ -289,10 +292,15 @@ def register_session_commands(cli):
                             time.sleep(backoff_seconds)
                         elif is_retryable:
                             # Exhausted retries on a retryable error
+                            logger.error(
+                                f"Failed to connect to NotebookLM after {LOGIN_MAX_RETRIES} attempts. "
+                                f"Last error: {error_str}"
+                            )
                             console.print(CONNECTION_ERROR_HELP)
-                            raise SystemExit(1) from None
+                            raise SystemExit(1) from exc
                         else:
                             # Non-retryable error - re-raise immediately
+                            logger.debug(f"Non-retryable error: {error_str}")
                             raise
 
                 console.print("\n[bold green]Instructions:[/bold green]")
@@ -333,12 +341,14 @@ def register_session_commands(cli):
                         or "no such file" in str(e).lower()
                         or "failed to launch" in str(e).lower()
                     ):
+                        logger.error(f"Microsoft Edge not found: {e}")
                         console.print(
                             "[red]Microsoft Edge not found.[/red]\n"
                             "Install from: https://www.microsoft.com/edge\n"
                             "Or use the default Chromium browser: notebooklm login"
                         )
-                        raise SystemExit(1) from None
+                        raise SystemExit(1) from e
+                logger.error(f"Login failed: {e}", exc_info=True)
                 raise
             finally:
                 # Always close the browser context to prevent resource leaks
