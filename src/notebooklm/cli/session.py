@@ -315,7 +315,9 @@ def register_session_commands(cli):
 
                 current_url = page.url
                 if NOTEBOOKLM_HOST not in current_url:
-                    console.print(f"[yellow]Warning: Current URL is {current_url}[/yellow]")
+                    console.print(
+                        f"[yellow]Warning: Current URL is {current_url}[/yellow]"
+                    )
                     if not click.confirm("Save authentication anyway?"):
                         raise SystemExit(1)
 
