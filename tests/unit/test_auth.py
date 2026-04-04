@@ -8,6 +8,7 @@ from pytest_httpx import HTTPXMock
 
 from notebooklm.auth import (
     AuthTokens,
+    convert_rookiepy_cookies_to_storage_state,
     extract_cookies_from_storage,
     extract_csrf_from_html,
     extract_session_id_from_html,
@@ -1129,8 +1130,6 @@ class TestConvertRookiepyCookies:
 
     def test_converts_basic_cookie(self):
         """Single cookie is converted to storage_state format."""
-        from notebooklm.auth import convert_rookiepy_cookies_to_storage_state
-
         raw = [
             {
                 "domain": ".google.com",
@@ -1157,8 +1156,6 @@ class TestConvertRookiepyCookies:
 
     def test_none_expires_becomes_minus_one(self):
         """rookiepy uses None for session cookies; storage_state uses -1."""
-        from notebooklm.auth import convert_rookiepy_cookies_to_storage_state
-
         raw = [
             {
                 "domain": ".google.com",
@@ -1175,8 +1172,6 @@ class TestConvertRookiepyCookies:
 
     def test_filters_non_google_domains(self):
         """Non-Google domains are dropped."""
-        from notebooklm.auth import convert_rookiepy_cookies_to_storage_state
-
         raw = [
             {
                 "domain": ".google.com",
@@ -1203,8 +1198,6 @@ class TestConvertRookiepyCookies:
 
     def test_snake_to_camel_case(self):
         """http_only (rookiepy) → httpOnly (storage_state)."""
-        from notebooklm.auth import convert_rookiepy_cookies_to_storage_state
-
         raw = [
             {
                 "domain": ".google.com",
@@ -1222,8 +1215,6 @@ class TestConvertRookiepyCookies:
 
     def test_empty_list(self):
         """Empty cookie list returns empty structure."""
-        from notebooklm.auth import convert_rookiepy_cookies_to_storage_state
-
         assert convert_rookiepy_cookies_to_storage_state([]) == {
             "cookies": [],
             "origins": [],
@@ -1231,8 +1222,6 @@ class TestConvertRookiepyCookies:
 
     def test_regional_google_domain_included(self):
         """Regional domains like .google.co.uk are kept."""
-        from notebooklm.auth import convert_rookiepy_cookies_to_storage_state
-
         raw = [
             {
                 "domain": ".google.co.uk",

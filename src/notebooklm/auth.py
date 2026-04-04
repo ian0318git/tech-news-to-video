@@ -270,9 +270,7 @@ def convert_rookiepy_cookies_to_storage_state(
 
     Returns:
         Dict matching storage_state.json schema: ``{"cookies": [...], "origins": []}``.
-
-    Raises:
-        ValueError: If a cookie is missing required fields (name, value, domain).
+        Cookies missing required fields or from non-Google domains are silently skipped.
     """
     converted = []
     for cookie in rookiepy_cookies:
@@ -287,7 +285,6 @@ def convert_rookiepy_cookies_to_storage_state(
         if not _is_allowed_auth_domain(domain):
             continue
 
-        # Cache dict lookups to reduce hash table operations
         path = cookie.get("path", "/")
         http_only = cookie.get("http_only", False)
         secure = cookie.get("secure", False)
