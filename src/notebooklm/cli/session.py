@@ -326,8 +326,8 @@ def register_session_commands(cli):
                     storage_path.chmod(0o600)
 
             except Exception as e:
-                # Handle browser launch errors specially
-                if "context" not in locals():
+                # Handle browser launch errors specially (context will be None if launch failed)
+                if context is None:
                     if browser == "msedge" and (
                         "executable doesn't exist" in str(e).lower()
                         or "no such file" in str(e).lower()
