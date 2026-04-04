@@ -273,14 +273,17 @@ def register_session_commands(cli):
                         break
                     except PlaywrightError as exc:
                         error_str = str(exc)
-                        is_retryable = any(code in error_str for code in RETRYABLE_CONNECTION_ERRORS)
+                        is_retryable = any(
+                            code in error_str for code in RETRYABLE_CONNECTION_ERRORS
+                        )
 
                         # Check if we should retry
                         if is_retryable and attempt < max_retries:
-                            # Retryable error with attempts remaining: wait and retry
+                            # Retryable error with attempts remaining: retry
                             backoff_seconds = attempt  # Linear backoff: 1s, 2s
                             console.print(
-                                f"[yellow]Connection interrupted (attempt {attempt}/{max_retries}). "
+                                f"[yellow]Connection interrupted "
+                                f"(attempt {attempt}/{max_retries}). "
                                 f"Retrying in {backoff_seconds}s...[/yellow]"
                             )
                             time.sleep(backoff_seconds)
