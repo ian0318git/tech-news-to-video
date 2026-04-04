@@ -4,7 +4,7 @@
 
 ### 1. **Missing Backoff Between Retries (CRITICAL)** ✅
 **Issue**: Retries happened immediately, hammering rate-limited endpoints
-**Fix**: Added exponential backoff (1s, 2s) between retry attempts using `time.sleep()`
+**Fix**: Added linear backoff (1s, 2s) between retry attempts using `time.sleep()`
 **Impact**: Prevents making rate limiting worse when Google is rejecting connections
 
 ### 2. **Magic String Constants (HIGH)** ✅
@@ -89,11 +89,12 @@ time.sleep(backoff_seconds)
 
 ## Test Coverage
 
-All 4 new tests now properly mock `time.sleep()`:
+All 5 new tests now properly mock `time.sleep()`:
 1. ✅ `test_login_retries_on_connection_closed_error` - Verifies retry succeeds
 2. ✅ `test_login_retries_on_connection_reset_error` - Verifies both error types work
 3. ✅ `test_login_exits_after_max_retries` - Verifies helpful error message after exhaustion
 4. ✅ `test_login_fails_fast_on_non_retryable_errors` - Verifies no retry on other errors
+5. ✅ `test_login_displays_help_text_after_exhausting_retries` - Verifies CONNECTION_ERROR_HELP displays
 
 ## Feedback Address
 

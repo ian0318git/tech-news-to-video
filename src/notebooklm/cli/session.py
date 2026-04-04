@@ -50,6 +50,7 @@ NOTEBOOKLM_HOST = "notebooklm.google.com"
 
 # Retryable Playwright connection errors
 RETRYABLE_CONNECTION_ERRORS = ("ERR_CONNECTION_CLOSED", "ERR_CONNECTION_RESET")
+LOGIN_MAX_RETRIES = 3
 CONNECTION_ERROR_HELP = (
     "[red]Failed to connect to NotebookLM after multiple retries.[/red]\n"
     "This may be caused by:\n"
@@ -266,8 +267,7 @@ def register_session_commands(cli):
                 page = context.pages[0] if context.pages else context.new_page()
 
                 # Retry navigation on transient connection errors with backoff
-                max_retries = 3
-                for attempt in range(1, max_retries + 1):
+                for attempt in range(1, LOGIN_MAX_RETRIES + 1):
                     try:
                         page.goto(NOTEBOOKLM_URL, timeout=30000)
                         break
@@ -278,12 +278,12 @@ def register_session_commands(cli):
                         )
 
                         # Check if we should retry
-                        if is_retryable and attempt < max_retries:
+                        if is_retryable and attempt < LOGIN_MAX_RETRIES:
                             # Retryable error with attempts remaining: retry
                             backoff_seconds = attempt  # Linear backoff: 1s, 2s
                             console.print(
                                 f"[yellow]Connection interrupted "
-                                f"(attempt {attempt}/{max_retries}). "
+                                f"(attempt {attempt}/{LOGIN_MAX_RETRIES}). "
                                 f"Retrying in {backoff_seconds}s...[/yellow]"
                             )
                             time.sleep(backoff_seconds)
