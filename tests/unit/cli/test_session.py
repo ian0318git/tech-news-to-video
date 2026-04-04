@@ -1229,7 +1229,7 @@ class TestLoginBrowserCookies:
     def test_rookiepy_not_installed_shows_error(self, runner):
         """Shows helpful error when rookiepy is not installed."""
         with patch.dict(sys.modules, {"rookiepy": None}):
-            result = runner.invoke(cli, ["login", "--browser-cookies"])
+            result = runner.invoke(cli, ["login", "--browser-cookies", "auto"])
         assert result.exit_code != 0
         assert "rookiepy" in result.output
         assert "pip install" in result.output
@@ -1261,7 +1261,7 @@ class TestLoginBrowserCookies:
                 return_value=("csrf", "sess"),
             ),
         ):
-            result = runner.invoke(cli, ["login", "--browser-cookies"])
+            result = runner.invoke(cli, ["login", "--browser-cookies", "auto"])
         assert result.exit_code == 0, result.output
         mock_rookiepy.load.assert_called_once()
 
@@ -1308,7 +1308,7 @@ class TestLoginBrowserCookies:
                 return_value=tmp_path / "storage.json",
             ),
         ):
-            result = runner.invoke(cli, ["login", "--browser-cookies"])
+            result = runner.invoke(cli, ["login", "--browser-cookies", "auto"])
         assert result.exit_code != 0
         assert "SID" in result.output or "Google" in result.output
 
@@ -1324,7 +1324,7 @@ class TestLoginBrowserCookies:
                 return_value=tmp_path / "storage.json",
             ),
         ):
-            result = runner.invoke(cli, ["login", "--browser-cookies"])
+            result = runner.invoke(cli, ["login", "--browser-cookies", "auto"])
         assert result.exit_code != 0
         output_lower = result.output.lower()
         assert "close" in output_lower or "browser" in output_lower
@@ -1356,7 +1356,7 @@ class TestLoginBrowserCookies:
                 return_value=("csrf", "sess"),
             ),
         ):
-            runner.invoke(cli, ["login", "--browser-cookies"])
+            runner.invoke(cli, ["login", "--browser-cookies", "auto"])
         data = json.loads(storage_file.read_text())
         assert any(c["name"] == "SID" and c["value"] == "mysid" for c in data["cookies"])
 
