@@ -13,6 +13,7 @@ import logging
 import os
 import subprocess
 import sys
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -46,6 +47,22 @@ logger = logging.getLogger(__name__)
 GOOGLE_ACCOUNTS_URL = "https://accounts.google.com/"
 NOTEBOOKLM_URL = "https://notebooklm.google.com/"
 NOTEBOOKLM_HOST = "notebooklm.google.com"
+
+# Retryable Playwright connection errors
+RETRYABLE_CONNECTION_ERRORS = ("ERR_CONNECTION_CLOSED", "ERR_CONNECTION_RESET")
+CONNECTION_ERROR_HELP = (
+    "[red]Failed to connect to NotebookLM after multiple retries.[/red]\n"
+    "This may be caused by:\n"
+    "  • Network connectivity issues\n"
+    "  • Firewall or VPN blocking notebooklm.google.com\n"
+    "  • Corporate proxy interfering with the connection\n"
+    "  • Google rate limiting (too many login attempts)\n\n"
+    "Try:\n"
+    "  1. Check your internet connection\n"
+    "  2. Disable VPN/proxy temporarily\n"
+    "  3. Wait a few minutes before retrying\n"
+    "  4. Check if notebooklm.google.com is accessible in your browser"
+)
 
 
 def _sync_server_language_to_config() -> None:
@@ -242,56 +259,88 @@ def register_session_commands(cli):
             if browser == "msedge":
                 launch_kwargs["channel"] = "msedge"
 
+            context = None
             try:
                 context = p.chromium.launch_persistent_context(**launch_kwargs)
+
+                page = context.pages[0] if context.pages else context.new_page()
+
+                # Retry navigation on transient connection errors with backoff
+                max_retries = 3
+                for attempt in range(1, max_retries + 1):
+                    try:
+                        page.goto(NOTEBOOKLM_URL, timeout=30000)
+                        break
+                    except PlaywrightError as exc:
+                        error_str = str(exc)
+                        is_retryable = any(code in error_str for code in RETRYABLE_CONNECTION_ERRORS)
+
+                        # Check if we should retry
+                        if is_retryable and attempt < max_retries:
+                            # Retryable error with attempts remaining: wait and retry
+                            backoff_seconds = attempt  # Linear backoff: 1s, 2s
+                            console.print(
+                                f"[yellow]Connection interrupted (attempt {attempt}/{max_retries}). "
+                                f"Retrying in {backoff_seconds}s...[/yellow]"
+                            )
+                            time.sleep(backoff_seconds)
+                        elif is_retryable:
+                            # Exhausted retries on a retryable error
+                            console.print(CONNECTION_ERROR_HELP)
+                            raise SystemExit(1) from None
+                        else:
+                            # Non-retryable error - re-raise immediately
+                            raise
+
+                console.print("\n[bold green]Instructions:[/bold green]")
+                console.print("1. Complete the Google login in the browser window")
+                console.print("2. Wait until you see the NotebookLM homepage")
+                console.print("3. Press [bold]ENTER[/bold] here to save and close\n")
+
+                input("[Press ENTER when logged in] ")
+
+                # Force .google.com cookies for regional users (e.g. UK lands on
+                # .google.co.uk). Use "commit" to resolve once response headers
+                # (including Set-Cookie) are processed, before any client-side
+                # JS redirect can interrupt. See #214.
+                for url in [GOOGLE_ACCOUNTS_URL, NOTEBOOKLM_URL]:
+                    try:
+                        page.goto(url, wait_until="commit")
+                    except PlaywrightError as exc:
+                        if "Navigation interrupted" not in str(exc):
+                            raise
+
+                current_url = page.url
+                if NOTEBOOKLM_HOST not in current_url:
+                    console.print(f"[yellow]Warning: Current URL is {current_url}[/yellow]")
+                    if not click.confirm("Save authentication anyway?"):
+                        raise SystemExit(1)
+
+                context.storage_state(path=str(storage_path))
+                # Restrict permissions to owner only (contains sensitive cookies)
+                if sys.platform != "win32":
+                    # chmod is a no-op on Windows (and can confuse ACLs)
+                    storage_path.chmod(0o600)
+
             except Exception as e:
-                if browser == "msedge" and (
-                    "executable doesn't exist" in str(e).lower()
-                    or "no such file" in str(e).lower()
-                    or "failed to launch" in str(e).lower()
-                ):
-                    console.print(
-                        "[red]Microsoft Edge not found.[/red]\n"
-                        "Install from: https://www.microsoft.com/edge\n"
-                        "Or use the default Chromium browser: notebooklm login"
-                    )
-                    raise SystemExit(1) from None
+                # Handle browser launch errors specially
+                if "context" not in locals():
+                    if browser == "msedge" and (
+                        "executable doesn't exist" in str(e).lower()
+                        or "no such file" in str(e).lower()
+                        or "failed to launch" in str(e).lower()
+                    ):
+                        console.print(
+                            "[red]Microsoft Edge not found.[/red]\n"
+                            "Install from: https://www.microsoft.com/edge\n"
+                            "Or use the default Chromium browser: notebooklm login"
+                        )
+                        raise SystemExit(1) from None
                 raise
-
-            page = context.pages[0] if context.pages else context.new_page()
-            page.goto(NOTEBOOKLM_URL)
-
-            console.print("\n[bold green]Instructions:[/bold green]")
-            console.print("1. Complete the Google login in the browser window")
-            console.print("2. Wait until you see the NotebookLM homepage")
-            console.print("3. Press [bold]ENTER[/bold] here to save and close\n")
-
-            input("[Press ENTER when logged in] ")
-
-            # Force .google.com cookies for regional users (e.g. UK lands on
-            # .google.co.uk). Use "commit" to resolve once response headers
-            # (including Set-Cookie) are processed, before any client-side
-            # JS redirect can interrupt. See #214.
-            for url in [GOOGLE_ACCOUNTS_URL, NOTEBOOKLM_URL]:
-                try:
-                    page.goto(url, wait_until="commit")
-                except PlaywrightError as exc:
-                    if "Navigation interrupted" not in str(exc):
-                        raise
-
-            current_url = page.url
-            if NOTEBOOKLM_HOST not in current_url:
-                console.print(f"[yellow]Warning: Current URL is {current_url}[/yellow]")
-                if not click.confirm("Save authentication anyway?"):
+            finally:
+                # Always close the browser context to prevent resource leaks
+                if context:
                     context.close()
-                    raise SystemExit(1)
-
-            context.storage_state(path=str(storage_path))
-            # Restrict permissions to owner only (contains sensitive cookies)
-            if sys.platform != "win32":
-                # chmod is a no-op on Windows (and can confuse ACLs)
-                storage_path.chmod(0o600)
-            context.close()
 
         console.print(f"\n[green]Authentication saved to:[/green] {storage_path}")
 
