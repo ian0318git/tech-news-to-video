@@ -188,8 +188,12 @@ class TestWaitForCompletionQuotaDetection:
         )
 
         result = await api.wait_for_completion(
-            "nb1", "task_abc", initial_interval=0.01, max_interval=0.01,
-            max_not_found=3, min_not_found_window=0.0,
+            "nb1",
+            "task_abc",
+            initial_interval=0.01,
+            max_interval=0.01,
+            max_not_found=3,
+            min_not_found_window=0.0,
         )
 
         assert result.is_failed is True
@@ -211,8 +215,12 @@ class TestWaitForCompletionQuotaDetection:
         api.poll_status = AsyncMock(side_effect=responses)
 
         result = await api.wait_for_completion(
-            "nb1", "task_abc", initial_interval=0.01, max_interval=0.01,
-            max_not_found=2, min_not_found_window=0.0,
+            "nb1",
+            "task_abc",
+            initial_interval=0.01,
+            max_interval=0.01,
+            max_not_found=2,
+            min_not_found_window=0.0,
         )
 
         assert result.is_complete is True
@@ -297,7 +305,10 @@ class TestWaitForCompletionQuotaDetection:
         api.poll_status = AsyncMock(side_effect=side_effect)
 
         result = await api.wait_for_completion(
-            "nb1", "task_abc", initial_interval=0.01, max_interval=0.01,
+            "nb1",
+            "task_abc",
+            initial_interval=0.01,
+            max_interval=0.01,
             min_not_found_window=0.0,
         )
 
@@ -328,15 +339,17 @@ class TestWaitForCompletionQuotaDetection:
                     GenerationStatus(task_id="task_abc", status="not_found")
                 )
             else:
-                responses_flickering.append(
-                    GenerationStatus(task_id="task_abc", status="pending")
-                )
+                responses_flickering.append(GenerationStatus(task_id="task_abc", status="pending"))
 
         api.poll_status = AsyncMock(side_effect=responses_flickering)
 
         result = await api.wait_for_completion(
-            "nb1", "task_abc", initial_interval=0.01, max_interval=0.01,
-            max_not_found=3, min_not_found_window=0.0,
+            "nb1",
+            "task_abc",
+            initial_interval=0.01,
+            max_interval=0.01,
+            max_not_found=3,
+            min_not_found_window=0.0,
         )
 
         assert result.is_failed is True
@@ -385,8 +398,12 @@ class TestWaitForCompletionQuotaDetection:
         # Use max_not_found=5, min_not_found_window=9999 so consecutive
         # trigger is blocked, but total triggers at 10.
         result = await api.wait_for_completion(
-            "nb1", "task_abc", initial_interval=0.01, max_interval=0.01,
-            max_not_found=5, min_not_found_window=9999.0,
+            "nb1",
+            "task_abc",
+            initial_interval=0.01,
+            max_interval=0.01,
+            max_not_found=5,
+            min_not_found_window=9999.0,
         )
 
         # Should complete since we return completed at poll 6
