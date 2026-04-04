@@ -30,7 +30,6 @@ from ..auth import (
     convert_rookiepy_cookies_to_storage_state,
     extract_cookies_from_storage,
     fetch_tokens,
-    load_auth_from_storage,
 )
 from ..client import NotebookLMClient
 from ..paths import (
@@ -178,7 +177,7 @@ def _login_with_browser_cookies(storage_path: Path, browser_name: str) -> None:
 
     storage_state = convert_rookiepy_cookies_to_storage_state(raw_cookies)
     try:
-        extract_cookies_from_storage(storage_state)  # validates SID is present
+        cookies = extract_cookies_from_storage(storage_state)  # validates SID is present
     except ValueError as e:
         console.print(
             "[red]No valid Google authentication cookies found.[/red]\n"
@@ -189,7 +188,9 @@ def _login_with_browser_cookies(storage_path: Path, browser_name: str) -> None:
 
     # Create parent directory (avoid mode= on Windows to prevent ACL issues)
     storage_path.parent.mkdir(parents=True, exist_ok=True)
-    storage_path.write_text(json.dumps(storage_state, indent=2), encoding="utf-8")
+    storage_path.write_text(
+        json.dumps(storage_state, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
     if sys.platform != "win32":
         # On Unix: ensure both directory and file have restrictive permissions
         storage_path.parent.chmod(0o700)
@@ -197,20 +198,14 @@ def _login_with_browser_cookies(storage_path: Path, browser_name: str) -> None:
 
     console.print(f"\n[green]Authentication saved to:[/green] {storage_path}")
 
-    # Verify that cookies work before completing login
+    # Verify that cookies work — reuse cookies extracted above (no redundant disk read)
     try:
-        cookies = load_auth_from_storage(storage_path)
         run_async(fetch_tokens(cookies))
         logger.info("Cookies verified successfully")
         console.print("[green]Cookies verified successfully.[/green]")
-    except FileNotFoundError as e:
-        # Storage file write succeeded but we can't read it back (unlikely but possible)
-        logger.error(f"Failed to read saved storage file: {e}")
-        console.print(f"[red]Critical error: Saved storage file is unreadable.[/red]\nDetails: {e}")
-        raise SystemExit(1) from e
     except ValueError as e:
         # Cookie validation failed - the extracted cookies are invalid
-        logger.error(f"Extracted cookies are invalid: {e}")
+        logger.error("Extracted cookies are invalid: %s", e)
         console.print(
             "[red]Warning: Extracted cookies failed validation.[/red]\n"
             "The cookies may be expired or malformed.\n"
@@ -219,7 +214,7 @@ def _login_with_browser_cookies(storage_path: Path, browser_name: str) -> None:
         )
     except httpx.RequestError as e:
         # Network error - can't verify but cookies might be OK
-        logger.warning(f"Could not verify cookies due to network error: {e}")
+        logger.warning("Could not verify cookies due to network error: %s", e)
         console.print(
             "[yellow]Warning: Could not verify cookies (network issue).[/yellow]\n"
             "Cookies saved but may not be working.\n"
@@ -227,7 +222,7 @@ def _login_with_browser_cookies(storage_path: Path, browser_name: str) -> None:
         )
     except Exception as e:
         # Unexpected error - log it fully
-        logger.warning(f"Unexpected error verifying cookies: {type(e).__name__}: {e}")
+        logger.warning("Unexpected error verifying cookies: %s: %s", type(e).__name__, e)
         console.print(
             f"[yellow]Warning: Unexpected error during verification: {e}[/yellow]\n"
             "Cookies saved but please verify with 'notebooklm auth check --test'"
