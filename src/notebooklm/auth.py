@@ -254,6 +254,42 @@ def _is_allowed_auth_domain(domain: str) -> bool:
     return domain in ALLOWED_COOKIE_DOMAINS or _is_google_domain(domain)
 
 
+def convert_rookiepy_cookies_to_storage_state(
+    rookiepy_cookies: list[dict],
+) -> dict[str, Any]:
+    """Convert rookiepy cookie dicts to Playwright storage_state.json format.
+
+    Key mappings:
+    - ``http_only`` → ``httpOnly`` (snake_case to camelCase)
+    - ``expires=None`` → ``expires=-1`` (Playwright convention for session cookies)
+    - ``sameSite`` is absent in rookiepy; defaults to ``"None"``
+
+    Args:
+        rookiepy_cookies: List of cookie dicts from any ``rookiepy.*()`` call.
+
+    Returns:
+        Dict matching storage_state.json schema: ``{"cookies": [...], "origins": []}``.
+    """
+    converted = []
+    for cookie in rookiepy_cookies:
+        domain = cookie.get("domain", "")
+        if not _is_allowed_auth_domain(domain):
+            continue
+        converted.append(
+            {
+                "name": cookie.get("name", ""),
+                "value": cookie.get("value", ""),
+                "domain": domain,
+                "path": cookie.get("path", "/"),
+                "expires": cookie["expires"] if cookie.get("expires") is not None else -1,
+                "httpOnly": bool(cookie.get("http_only", False)),
+                "secure": bool(cookie.get("secure", False)),
+                "sameSite": "None",
+            }
+        )
+    return {"cookies": converted, "origins": []}
+
+
 def extract_cookies_from_storage(storage_state: dict[str, Any]) -> dict[str, str]:
     """Extract Google cookies from Playwright storage state for NotebookLM auth.
 
