@@ -187,14 +187,21 @@ def _login_with_browser_cookies(storage_path: Path, browser_name: str) -> None:
         raise SystemExit(1) from None
 
     # Create parent directory (avoid mode= on Windows to prevent ACL issues)
-    storage_path.parent.mkdir(parents=True, exist_ok=True)
-    storage_path.write_text(
-        json.dumps(storage_state, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
-    if sys.platform != "win32":
-        # On Unix: ensure both directory and file have restrictive permissions
-        storage_path.parent.chmod(0o700)
-        storage_path.chmod(0o600)
+    try:
+        storage_path.parent.mkdir(parents=True, exist_ok=True)
+        storage_path.write_text(
+            json.dumps(storage_state, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        if sys.platform != "win32":
+            # On Unix: ensure both directory and file have restrictive permissions
+            storage_path.parent.chmod(0o700)
+            storage_path.chmod(0o600)
+    except OSError as e:
+        logger.error("Failed to save authentication to %s: %s", storage_path, e)
+        console.print(
+            f"[red]Failed to save authentication to {storage_path}.[/red]\n" f"Details: {e}"
+        )
+        raise SystemExit(1) from None
 
     console.print(f"\n[green]Authentication saved to:[/green] {storage_path}")
 
