@@ -143,6 +143,19 @@ class TestPollStatusErrorExtraction:
         assert result.error is None
 
     @pytest.mark.asyncio
+    async def test_art5_fallback_end_to_end(self):
+        """Error in art[5] is surfaced through poll_status (end-to-end, not just helper)."""
+        api = _make_api()
+        # art[3] is None, error is in art[5] nested list
+        art = ["task_abc", "Title", 1, None, ArtifactStatus.FAILED, ["Veo daily limit hit"]]
+        api._list_raw = AsyncMock(return_value=[art])
+
+        result = await api.poll_status("nb1", "task_abc")
+
+        assert result.status == "failed"
+        assert result.error == "Veo daily limit hit"
+
+    @pytest.mark.asyncio
     async def test_error_extraction_only_for_failed_status(self):
         """Error extraction is skipped for non-failed statuses."""
         api = _make_api()
@@ -175,7 +188,8 @@ class TestWaitForCompletionQuotaDetection:
         )
 
         result = await api.wait_for_completion(
-            "nb1", "task_abc", initial_interval=0.01, max_interval=0.01, max_not_found=3
+            "nb1", "task_abc", initial_interval=0.01, max_interval=0.01,
+            max_not_found=3, min_not_found_window=0.0,
         )
 
         assert result.is_failed is True
@@ -184,21 +198,26 @@ class TestWaitForCompletionQuotaDetection:
 
     @pytest.mark.asyncio
     async def test_not_found_then_found_resets_counter(self):
-        """A single not-found followed by pending resets the counter (artifact lag)."""
+        """Prove consecutive counter resets: with max_not_found=2, a
+        [not_found, pending, not_found, completed] sequence should succeed
+        because the pending response resets the consecutive counter."""
         api = _make_api()
         responses = [
             GenerationStatus(task_id="task_abc", status="not_found"),
             GenerationStatus(task_id="task_abc", status="pending"),
-            GenerationStatus(task_id="task_abc", status="in_progress"),
+            GenerationStatus(task_id="task_abc", status="not_found"),
             GenerationStatus(task_id="task_abc", status="completed"),
         ]
         api.poll_status = AsyncMock(side_effect=responses)
 
         result = await api.wait_for_completion(
-            "nb1", "task_abc", initial_interval=0.01, max_interval=0.01, max_not_found=3
+            "nb1", "task_abc", initial_interval=0.01, max_interval=0.01,
+            max_not_found=2, min_not_found_window=0.0,
         )
 
         assert result.is_complete is True
+        # All 4 calls were made (counter was reset after the pending)
+        assert api.poll_status.call_count == 4
 
     @pytest.mark.asyncio
     async def test_sustained_not_found_fails_before_timeout(self):
@@ -218,6 +237,7 @@ class TestWaitForCompletionQuotaDetection:
             max_interval=0.01,
             timeout=60.0,  # Long timeout — should NOT reach it
             max_not_found=3,
+            min_not_found_window=0.0,
         )
         elapsed = time.monotonic() - start
 
@@ -264,8 +284,8 @@ class TestWaitForCompletionQuotaDetection:
         assert "in_progress" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_max_not_found_default_is_3(self):
-        """Default max_not_found is 3 consecutive polls."""
+    async def test_max_not_found_default_is_5(self):
+        """Default max_not_found is 5 consecutive polls."""
         api = _make_api()
         call_count = 0
 
@@ -277,12 +297,101 @@ class TestWaitForCompletionQuotaDetection:
         api.poll_status = AsyncMock(side_effect=side_effect)
 
         result = await api.wait_for_completion(
-            "nb1", "task_abc", initial_interval=0.01, max_interval=0.01
+            "nb1", "task_abc", initial_interval=0.01, max_interval=0.01,
+            min_not_found_window=0.0,
         )
 
-        # Should have polled exactly 3 times (default max_not_found=3)
-        assert call_count == 3
+        # Should have polled exactly 5 times (default max_not_found=5)
+        assert call_count == 5
         assert result.is_failed is True
+
+    @pytest.mark.asyncio
+    async def test_flickering_artifact_triggers_total_failure(self):
+        """Oscillating found/not-found (flickering) triggers failure via
+        total_not_found even though consecutive never reaches max_not_found."""
+        api = _make_api()
+        # With max_not_found=3, total threshold is 6.  Alternate to keep
+        # consecutive at most 1, but accumulate 6 total not-founds.
+        responses = []
+        for _ in range(6):
+            responses.append(GenerationStatus(task_id="task_abc", status="not_found"))
+            responses.append(GenerationStatus(task_id="task_abc", status="pending"))
+        # The 6th not_found should trigger total_not_found >= 3*2 = 6
+        # Actually it fires at the not_found before the pending resets consecutive,
+        # so let's just add enough not_founds interleaved.
+        # Sequence: nf, pending, nf, pending, nf, pending, nf, pending, nf, pending, nf
+        # total_not_found hits 6 at the 6th nf (index 10)
+        responses_flickering = []
+        for i in range(12):
+            if i % 2 == 0:
+                responses_flickering.append(
+                    GenerationStatus(task_id="task_abc", status="not_found")
+                )
+            else:
+                responses_flickering.append(
+                    GenerationStatus(task_id="task_abc", status="pending")
+                )
+
+        api.poll_status = AsyncMock(side_effect=responses_flickering)
+
+        result = await api.wait_for_completion(
+            "nb1", "task_abc", initial_interval=0.01, max_interval=0.01,
+            max_not_found=3, min_not_found_window=0.0,
+        )
+
+        assert result.is_failed is True
+        assert result.error is not None
+        assert "removed by the server" in result.error
+
+    @pytest.mark.asyncio
+    async def test_last_status_set_before_timeout(self):
+        """Timeout message includes actual status even on immediate timeout."""
+        api = _make_api()
+        api.poll_status = AsyncMock(
+            return_value=GenerationStatus(task_id="task_abc", status="in_progress")
+        )
+
+        with pytest.raises(TimeoutError) as exc_info:
+            await api.wait_for_completion(
+                "nb1",
+                "task_abc",
+                initial_interval=0.01,
+                max_interval=0.01,
+                timeout=0.0,  # Immediate timeout after first poll
+            )
+
+        # last_status should be set even though we timed out on first iteration
+        assert "in_progress" in str(exc_info.value)
+        assert "None" not in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_min_not_found_window_prevents_false_positive(self):
+        """Not-found failure is deferred until min_not_found_window elapses."""
+        api = _make_api()
+        call_count = 0
+
+        async def side_effect(notebook_id, task_id):
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 5:
+                return GenerationStatus(task_id=task_id, status="not_found")
+            return GenerationStatus(task_id=task_id, status="completed")
+
+        api.poll_status = AsyncMock(side_effect=side_effect)
+
+        # With a large window, consecutive threshold alone won't trigger
+        # because the window hasn't elapsed.  But after enough polls,
+        # the total count (5*2=10) would trigger on the total path.
+        # Use max_not_found=5, min_not_found_window=9999 so consecutive
+        # trigger is blocked, but total triggers at 10.
+        result = await api.wait_for_completion(
+            "nb1", "task_abc", initial_interval=0.01, max_interval=0.01,
+            max_not_found=5, min_not_found_window=9999.0,
+        )
+
+        # Should complete since we return completed at poll 6
+        assert result.is_complete is True
+        assert call_count == 6
 
 
 # ---------------------------------------------------------------------------

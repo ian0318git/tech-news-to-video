@@ -1728,6 +1728,12 @@ class ArtifactsAPI:
             found in the list, ``status`` is set to ``"not_found"`` so that
             callers can distinguish "genuinely pending" from "removed by the
             server" (e.g. after a quota rejection).
+
+        .. versionchanged:: 0.4.0
+            **Breaking change:** Previously returned ``status="pending"``
+            when an artifact was absent from the list.  Now returns
+            ``status="not_found"`` to allow callers to distinguish a
+            genuinely pending artifact from one that was removed.
         """
         # List all artifacts and find by ID (no poll-by-ID RPC exists)
         artifacts_data = await self._list_raw(notebook_id)
@@ -1777,7 +1783,8 @@ class ArtifactsAPI:
         max_interval: float = 10.0,
         timeout: float = 300.0,
         poll_interval: float | None = None,  # Deprecated, use initial_interval
-        max_not_found: int = 3,
+        max_not_found: int = 5,
+        min_not_found_window: float = 10.0,
     ) -> GenerationStatus:
         """Wait for a generation task to complete.
 
@@ -1794,7 +1801,11 @@ class ArtifactsAPI:
                 the task as failed.  When the API removes an artifact
                 from the list (e.g. after a daily-quota rejection), the
                 poller would otherwise spin until *timeout*.  Defaults
-                to 3 to tolerate brief replication lag.
+                to 5 to tolerate brief replication lag and slow networks.
+            min_not_found_window: Minimum seconds that must have elapsed
+                since the *first* not-found response before a consecutive
+                run triggers failure.  This avoids false positives on
+                slow or unreliable networks.  Defaults to 10.0.
 
         Returns:
             Final GenerationStatus.
@@ -1816,40 +1827,66 @@ class ArtifactsAPI:
         start_time = asyncio.get_running_loop().time()
         current_interval = initial_interval
         consecutive_not_found = 0
+        total_not_found = 0
+        first_not_found_time: float | None = None
         last_status: str | None = None
 
         while True:
             status = await self.poll_status(notebook_id, task_id)
+            last_status = status.status
 
             if status.is_complete or status.is_failed:
                 return status
 
-            # Track consecutive "not found" responses.  The API may
-            # remove quota-rejected artifacts from the list entirely
-            # instead of setting them to FAILED.  After several
-            # consecutive not-found responses we treat this as failure.
+            # Track consecutive and total "not found" responses.  The API
+            # may remove quota-rejected artifacts from the list entirely
+            # instead of setting them to FAILED.  We track both a
+            # consecutive run *and* a total count to handle "flickering"
+            # artifacts that alternate between found/not-found due to API
+            # replication lag.
             if status.status == "not_found":
                 consecutive_not_found += 1
-                if consecutive_not_found >= max_not_found:
+                total_not_found += 1
+                now = asyncio.get_running_loop().time()
+                if first_not_found_time is None:
+                    first_not_found_time = now
+                not_found_elapsed = now - first_not_found_time
+
+                # Trigger failure when consecutive threshold is met AND
+                # enough wall-clock time has passed (avoids false positives
+                # on fast networks), OR when total not-found count is high
+                # enough to indicate flickering artifacts.
+                consecutive_trigger = (
+                    consecutive_not_found >= max_not_found
+                    and not_found_elapsed >= min_not_found_window
+                )
+                total_trigger = total_not_found >= max_not_found * 2
+
+                if consecutive_trigger or total_trigger:
+                    trigger = (
+                        f"consecutive={consecutive_not_found}"
+                        if consecutive_trigger
+                        else f"total={total_not_found}"
+                    )
                     logger.warning(
-                        "Artifact %s disappeared from list after %d consecutive "
-                        "polls — treating as failed (likely quota/limit exceeded)",
+                        "Artifact %s disappeared from list (%s not-found polls, "
+                        "%s) — treating as failed",
                         task_id,
-                        consecutive_not_found,
+                        trigger,
+                        f"elapsed={not_found_elapsed:.1f}s",
                     )
                     return GenerationStatus(
                         task_id=task_id,
                         status="failed",
                         error=(
                             "Generation failed: artifact was removed by the server. "
-                            "This usually means a daily quota or rate limit was exceeded. "
+                            "This may indicate a daily quota/rate limit was exceeded, "
+                            "an invalid notebook ID, or a transient API issue. "
                             "Try again later."
                         ),
                     )
             else:
                 consecutive_not_found = 0
-
-            last_status = status.status
 
             elapsed = asyncio.get_running_loop().time() - start_time
             if elapsed > timeout:
@@ -2277,22 +2314,36 @@ class ArtifactsAPI:
             A human-readable error string, or ``None`` if no error detail
             could be extracted.
         """
-        # art[3] — simple string error reason
-        if len(art) > 3 and isinstance(art[3], str) and art[3].strip():
-            return art[3].strip()
+        try:
+            # art[3] — simple string error reason
+            if len(art) > 3 and isinstance(art[3], str) and art[3].strip():
+                return art[3].strip()
 
-        # art[5] — nested structure that may contain error text
-        if len(art) > 5 and isinstance(art[5], list):
-            # Walk the list looking for the first non-empty string
-            for item in art[5]:
-                if isinstance(item, str) and item.strip():
-                    return item.strip()
-                if isinstance(item, list):
-                    for sub in item:
-                        if isinstance(sub, str) and sub.strip():
-                            return sub.strip()
+            # art[5] — nested structure that may contain error text.
+            # NOTE: This position is protocol-dependent and was
+            # reverse-engineered; it may change without notice.
+            if len(art) > 5 and isinstance(art[5], list):
+                logger.debug(
+                    "Falling back to art[5] for error extraction (art[3]=%r)",
+                    art[3] if len(art) > 3 else "<missing>",
+                )
+                # Walk the list looking for the first non-empty string
+                for item in art[5]:
+                    if isinstance(item, str) and item.strip():
+                        return item.strip()
+                    if isinstance(item, list):
+                        for sub in item:
+                            if isinstance(sub, str) and sub.strip():
+                                return sub.strip()
 
-        return None
+            return None
+        except Exception:
+            logger.warning(
+                "Failed to extract error from artifact data: %r",
+                art[:6] if len(art) > 6 else art,
+                exc_info=True,
+            )
+            return None
 
     def _get_artifact_type_name(self, artifact_type: int) -> str:
         """Get human-readable name for an artifact type.
