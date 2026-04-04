@@ -254,6 +254,57 @@ def _is_allowed_auth_domain(domain: str) -> bool:
     return domain in ALLOWED_COOKIE_DOMAINS or _is_google_domain(domain)
 
 
+def convert_rookiepy_cookies_to_storage_state(
+    rookiepy_cookies: list[dict],
+) -> dict[str, Any]:
+    """Convert rookiepy cookie dicts to Playwright storage_state.json format.
+
+    Key mappings:
+    - ``http_only`` → ``httpOnly`` (snake_case to camelCase)
+    - ``expires=None`` → ``expires=-1`` (Playwright convention for session cookies)
+    - ``sameSite`` always ``"None"`` for cross-site Google cookies
+
+    Args:
+        rookiepy_cookies: List of cookie dicts from any ``rookiepy.*()`` call.
+            Required keys: ``domain``, ``name``, ``value``.
+
+    Returns:
+        Dict matching storage_state.json schema: ``{"cookies": [...], "origins": []}``.
+        Cookies missing required fields or from non-Google domains are silently skipped.
+    """
+    converted = []
+    for cookie in rookiepy_cookies:
+        domain = cookie.get("domain", "")
+        name = cookie.get("name", "")
+        value = cookie.get("value", "")
+
+        # Validate required fields
+        if not name or not value or not domain:
+            continue
+
+        if not _is_allowed_auth_domain(domain):
+            continue
+
+        path = cookie.get("path", "/")
+        http_only = cookie.get("http_only", False)
+        secure = cookie.get("secure", False)
+        expires = cookie.get("expires")
+
+        converted.append(
+            {
+                "name": name,
+                "value": value,
+                "domain": domain,
+                "path": path,
+                "expires": expires if expires is not None else -1,
+                "httpOnly": http_only,
+                "secure": secure,
+                "sameSite": "None",
+            }
+        )
+    return {"cookies": converted, "origins": []}
+
+
 def extract_cookies_from_storage(storage_state: dict[str, Any]) -> dict[str, str]:
     """Extract Google cookies from Playwright storage state for NotebookLM auth.
 

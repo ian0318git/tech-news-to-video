@@ -1,6 +1,7 @@
 """Tests for session CLI commands (login, use, status, clear)."""
 
 import json
+import sys
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1215,3 +1216,163 @@ class TestLoginWindowsPermissions:
         assert (
             'sys.platform != "win32"' in source or "sys.platform != 'win32'" in source
         ), "Missing Windows guard for storage_state.json chmod(0o600)"
+
+
+class TestLoginBrowserCookies:
+    """Tests for notebooklm login --browser-cookies."""
+
+    def test_browser_cookies_in_help(self, runner):
+        """--browser-cookies appears in login --help."""
+        result = runner.invoke(cli, ["login", "--help"])
+        assert "--browser-cookies" in result.output
+
+    def test_rookiepy_not_installed_shows_error(self, runner):
+        """Shows helpful error when rookiepy is not installed."""
+        with patch.dict(sys.modules, {"rookiepy": None}):
+            result = runner.invoke(cli, ["login", "--browser-cookies", "auto"])
+        assert result.exit_code != 0
+        assert "rookiepy" in result.output
+        assert "pip install" in result.output
+
+    def test_auto_detect_calls_rookiepy_load(self, runner, tmp_path):
+        """Auto-detect calls rookiepy.load()."""
+        storage_file = tmp_path / "storage.json"
+        mock_cookies = [
+            {
+                "domain": ".google.com",
+                "name": "SID",
+                "value": "abc",
+                "path": "/",
+                "secure": True,
+                "expires": 1234567890,
+                "http_only": False,
+            },
+        ]
+        mock_rookiepy = MagicMock()
+        mock_rookiepy.load = MagicMock(return_value=mock_cookies)
+
+        with (
+            patch.dict("sys.modules", {"rookiepy": mock_rookiepy}),
+            patch("notebooklm.cli.session.get_storage_path", return_value=storage_file),
+            patch("notebooklm.cli.session._sync_server_language_to_config"),
+            patch(
+                "notebooklm.cli.session.fetch_tokens",
+                new_callable=AsyncMock,
+                return_value=("csrf", "sess"),
+            ),
+        ):
+            result = runner.invoke(cli, ["login", "--browser-cookies", "auto"])
+        assert result.exit_code == 0, result.output
+        mock_rookiepy.load.assert_called_once()
+
+    def test_named_browser_calls_rookiepy_function(self, runner, tmp_path):
+        """Named browser calls the matching rookiepy function."""
+        storage_file = tmp_path / "storage.json"
+        mock_cookies = [
+            {
+                "domain": ".google.com",
+                "name": "SID",
+                "value": "abc",
+                "path": "/",
+                "secure": True,
+                "expires": None,
+                "http_only": False,
+            },
+        ]
+        mock_rookiepy = MagicMock()
+        mock_rookiepy.chrome = MagicMock(return_value=mock_cookies)
+
+        with (
+            patch.dict("sys.modules", {"rookiepy": mock_rookiepy}),
+            patch("notebooklm.cli.session.get_storage_path", return_value=storage_file),
+            patch("notebooklm.cli.session._sync_server_language_to_config"),
+            patch(
+                "notebooklm.cli.session.fetch_tokens",
+                new_callable=AsyncMock,
+                return_value=("csrf", "sess"),
+            ),
+        ):
+            result = runner.invoke(cli, ["login", "--browser-cookies", "chrome"])
+        assert result.exit_code == 0, result.output
+        mock_rookiepy.chrome.assert_called_once()
+
+    def test_no_google_cookies_shows_error(self, runner, tmp_path):
+        """Shows error when no Google cookies found."""
+        mock_rookiepy = MagicMock()
+        mock_rookiepy.load = MagicMock(return_value=[])
+
+        with (
+            patch.dict("sys.modules", {"rookiepy": mock_rookiepy}),
+            patch(
+                "notebooklm.cli.session.get_storage_path",
+                return_value=tmp_path / "storage.json",
+            ),
+        ):
+            result = runner.invoke(cli, ["login", "--browser-cookies", "auto"])
+        assert result.exit_code != 0
+        assert "SID" in result.output or "Google" in result.output
+
+    def test_locked_db_shows_close_browser_hint(self, runner, tmp_path):
+        """Shows close-browser hint when DB is locked."""
+        mock_rookiepy = MagicMock()
+        mock_rookiepy.load = MagicMock(side_effect=OSError("database is locked"))
+
+        with (
+            patch.dict("sys.modules", {"rookiepy": mock_rookiepy}),
+            patch(
+                "notebooklm.cli.session.get_storage_path",
+                return_value=tmp_path / "storage.json",
+            ),
+        ):
+            result = runner.invoke(cli, ["login", "--browser-cookies", "auto"])
+        assert result.exit_code != 0
+        output_lower = result.output.lower()
+        assert "close" in output_lower or "browser" in output_lower
+
+    def test_cookies_saved_to_storage_file(self, runner, tmp_path):
+        """Cookies are written to storage_state.json."""
+        storage_file = tmp_path / "storage.json"
+        mock_cookies = [
+            {
+                "domain": ".google.com",
+                "name": "SID",
+                "value": "mysid",
+                "path": "/",
+                "secure": True,
+                "expires": 9999,
+                "http_only": False,
+            },
+        ]
+        mock_rookiepy = MagicMock()
+        mock_rookiepy.load = MagicMock(return_value=mock_cookies)
+
+        with (
+            patch.dict("sys.modules", {"rookiepy": mock_rookiepy}),
+            patch("notebooklm.cli.session.get_storage_path", return_value=storage_file),
+            patch("notebooklm.cli.session._sync_server_language_to_config"),
+            patch(
+                "notebooklm.cli.session.fetch_tokens",
+                new_callable=AsyncMock,
+                return_value=("csrf", "sess"),
+            ),
+        ):
+            runner.invoke(cli, ["login", "--browser-cookies", "auto"])
+        data = json.loads(storage_file.read_text())
+        assert any(c["name"] == "SID" and c["value"] == "mysid" for c in data["cookies"])
+
+    def test_unknown_browser_shows_error(self, runner, tmp_path):
+        """Unknown browser name shows a clear error."""
+        mock_rookiepy = MagicMock()
+        mock_rookiepy.load = MagicMock(
+            side_effect=AttributeError("module has no attribute 'netscape'")
+        )
+
+        with (
+            patch.dict("sys.modules", {"rookiepy": mock_rookiepy}),
+            patch(
+                "notebooklm.cli.session.get_storage_path",
+                return_value=tmp_path / "storage.json",
+            ),
+        ):
+            result = runner.invoke(cli, ["login", "--browser-cookies", "netscape"])
+        assert result.exit_code != 0

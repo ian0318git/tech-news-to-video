@@ -8,6 +8,7 @@ from pytest_httpx import HTTPXMock
 
 from notebooklm.auth import (
     AuthTokens,
+    convert_rookiepy_cookies_to_storage_state,
     extract_cookies_from_storage,
     extract_csrf_from_html,
     extract_session_id_from_html,
@@ -1122,3 +1123,115 @@ class TestLoadHttpxCookiesRegional:
 
         cookies = load_httpx_cookies(path=storage_file)
         assert cookies.get("SID", domain=".google.de") == "sid_de"
+
+
+class TestConvertRookiepyCookies:
+    """Test conversion from rookiepy cookie dicts to storage_state.json format."""
+
+    def test_converts_basic_cookie(self):
+        """Single cookie is converted to storage_state format."""
+        raw = [
+            {
+                "domain": ".google.com",
+                "name": "SID",
+                "value": "abc",
+                "path": "/",
+                "secure": True,
+                "expires": 1234567890,
+                "http_only": False,
+            }
+        ]
+        result = convert_rookiepy_cookies_to_storage_state(raw)
+        assert result["cookies"][0] == {
+            "name": "SID",
+            "value": "abc",
+            "domain": ".google.com",
+            "path": "/",
+            "expires": 1234567890,
+            "httpOnly": False,
+            "secure": True,
+            "sameSite": "None",
+        }
+        assert result["origins"] == []
+
+    def test_none_expires_becomes_minus_one(self):
+        """rookiepy uses None for session cookies; storage_state uses -1."""
+        raw = [
+            {
+                "domain": ".google.com",
+                "name": "SID",
+                "value": "x",
+                "path": "/",
+                "secure": True,
+                "expires": None,
+                "http_only": False,
+            }
+        ]
+        result = convert_rookiepy_cookies_to_storage_state(raw)
+        assert result["cookies"][0]["expires"] == -1
+
+    def test_filters_non_google_domains(self):
+        """Non-Google domains are dropped."""
+        raw = [
+            {
+                "domain": ".google.com",
+                "name": "SID",
+                "value": "x",
+                "path": "/",
+                "secure": True,
+                "expires": None,
+                "http_only": False,
+            },
+            {
+                "domain": "evil.com",
+                "name": "TRACK",
+                "value": "y",
+                "path": "/",
+                "secure": False,
+                "expires": None,
+                "http_only": False,
+            },
+        ]
+        result = convert_rookiepy_cookies_to_storage_state(raw)
+        assert len(result["cookies"]) == 1
+        assert result["cookies"][0]["name"] == "SID"
+
+    def test_snake_to_camel_case(self):
+        """http_only (rookiepy) → httpOnly (storage_state)."""
+        raw = [
+            {
+                "domain": ".google.com",
+                "name": "X",
+                "value": "y",
+                "path": "/",
+                "secure": False,
+                "expires": None,
+                "http_only": True,
+            }
+        ]
+        result = convert_rookiepy_cookies_to_storage_state(raw)
+        assert "http_only" not in result["cookies"][0]
+        assert result["cookies"][0]["httpOnly"] is True
+
+    def test_empty_list(self):
+        """Empty cookie list returns empty structure."""
+        assert convert_rookiepy_cookies_to_storage_state([]) == {
+            "cookies": [],
+            "origins": [],
+        }
+
+    def test_regional_google_domain_included(self):
+        """Regional domains like .google.co.uk are kept."""
+        raw = [
+            {
+                "domain": ".google.co.uk",
+                "name": "SID",
+                "value": "x",
+                "path": "/",
+                "secure": True,
+                "expires": None,
+                "http_only": False,
+            }
+        ]
+        result = convert_rookiepy_cookies_to_storage_state(raw)
+        assert len(result["cookies"]) == 1

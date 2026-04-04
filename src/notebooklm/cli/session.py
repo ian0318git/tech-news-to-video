@@ -20,9 +20,17 @@ from pathlib import Path
 from typing import Any
 
 import click
+import httpx
 from rich.table import Table
 
-from ..auth import AuthTokens
+from ..auth import (
+    ALLOWED_COOKIE_DOMAINS,
+    GOOGLE_REGIONAL_CCTLDS,
+    AuthTokens,
+    convert_rookiepy_cookies_to_storage_state,
+    extract_cookies_from_storage,
+    fetch_tokens,
+)
 from ..client import NotebookLMClient
 from ..paths import (
     get_browser_profile_dir,
@@ -64,6 +72,170 @@ CONNECTION_ERROR_HELP = (
     "  3. Wait a few minutes before retrying\n"
     "  4. Check if notebooklm.google.com is accessible in your browser"
 )
+
+# Maps user-facing browser names to rookiepy function names.
+_ROOKIEPY_BROWSER_ALIASES: dict[str, str] = {
+    "arc": "arc",
+    "brave": "brave",
+    "chrome": "chrome",
+    "chromium": "chromium",
+    "edge": "edge",
+    "firefox": "firefox",
+    "ie": "ie",
+    "librewolf": "librewolf",
+    "octo": "octo",
+    "opera": "opera",
+    "opera-gx": "opera_gx",
+    "opera_gx": "opera_gx",
+    "safari": "safari",
+    "vivaldi": "vivaldi",
+    "zen": "zen",
+}
+
+
+def _handle_rookiepy_error(e: Exception, browser_name: str) -> None:
+    """Print a user-friendly error for rookiepy exceptions."""
+    msg = str(e).lower()
+    if "lock" in msg or "database" in msg:
+        console.print(
+            f"[red]Could not read {browser_name} cookies: browser database is locked.[/red]\n"
+            "Close your browser and try again."
+        )
+    elif "permission" in msg or "access" in msg:
+        console.print(
+            f"[red]Permission denied reading {browser_name} cookies.[/red]\n"
+            "You may need to grant Terminal/Python access to your browser profile directory."
+        )
+    elif "keychain" in msg or "decrypt" in msg:
+        console.print(
+            f"[red]Could not decrypt {browser_name} cookies.[/red]\n"
+            "On macOS, allow Keychain access when prompted, or try a different browser."
+        )
+    else:
+        console.print(f"[red]Failed to read cookies from {browser_name}:[/red] {e}")
+
+
+def _login_with_browser_cookies(storage_path: Path, browser_name: str) -> None:
+    """Extract Google cookies from an installed browser via rookiepy.
+
+    Args:
+        storage_path: Where to write storage_state.json.
+        browser_name: "auto" to use rookiepy.load(), or a specific browser name.
+    """
+    try:
+        import rookiepy
+    except ImportError:
+        console.print(
+            "[red]rookiepy is not installed.[/red]\n"
+            "Install it with:\n"
+            "  pip install 'notebooklm-py[cookies]'\n"
+            "or directly:\n"
+            "  pip install rookiepy"
+        )
+        raise SystemExit(1) from None
+
+    # Build domains list including base and regional Google domains for rookiepy
+    domains = list(ALLOWED_COOKIE_DOMAINS)
+    # Add regional Google auth domains (e.g., .google.co.uk, .google.com.sg)
+    for cctld in GOOGLE_REGIONAL_CCTLDS:
+        domain = f".google.{cctld}"
+        if domain not in domains:
+            domains.append(domain)
+
+    if browser_name == "auto":
+        console.print("[yellow]Reading cookies from installed browser (auto-detect)...[/yellow]")
+        try:
+            raw_cookies = rookiepy.load(domains=domains)
+        except (OSError, RuntimeError) as e:
+            # OSError: file access issues (locked DB, permission denied)
+            # RuntimeError: decryption/keychain errors
+            _handle_rookiepy_error(e, "auto-detect")
+            raise SystemExit(1) from None
+    else:
+        canonical = _ROOKIEPY_BROWSER_ALIASES.get(browser_name.lower())
+        if canonical is None:
+            console.print(
+                f"[red]Unknown browser: '{browser_name}'[/red]\n"
+                f"Supported: {', '.join(sorted(_ROOKIEPY_BROWSER_ALIASES))}"
+            )
+            raise SystemExit(1)
+        console.print(f"[yellow]Reading cookies from {browser_name}...[/yellow]")
+        browser_fn = getattr(rookiepy, canonical, None)
+        if browser_fn is None or not callable(browser_fn):
+            console.print(
+                f"[red]rookiepy does not support '{canonical}' on this platform.[/red]\n"
+                "Check that rookiepy is properly installed: pip install rookiepy"
+            )
+            raise SystemExit(1)
+        try:
+            raw_cookies = browser_fn(domains=domains)
+        except (OSError, RuntimeError) as e:
+            # OSError: file access issues (locked DB, permission denied)
+            # RuntimeError: decryption/keychain errors
+            _handle_rookiepy_error(e, browser_name)
+            raise SystemExit(1) from None
+
+    storage_state = convert_rookiepy_cookies_to_storage_state(raw_cookies)
+    try:
+        cookies = extract_cookies_from_storage(storage_state)  # validates SID is present
+    except ValueError as e:
+        console.print(
+            "[red]No valid Google authentication cookies found.[/red]\n"
+            f"{e}\n\n"
+            "Make sure you are logged into Google in your browser."
+        )
+        raise SystemExit(1) from None
+
+    # Create parent directory (avoid mode= on Windows to prevent ACL issues)
+    try:
+        storage_path.parent.mkdir(parents=True, exist_ok=True)
+        storage_path.write_text(
+            json.dumps(storage_state, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        if sys.platform != "win32":
+            # On Unix: ensure both directory and file have restrictive permissions
+            storage_path.parent.chmod(0o700)
+            storage_path.chmod(0o600)
+    except OSError as e:
+        logger.error("Failed to save authentication to %s: %s", storage_path, e)
+        console.print(
+            f"[red]Failed to save authentication to {storage_path}.[/red]\n" f"Details: {e}"
+        )
+        raise SystemExit(1) from None
+
+    console.print(f"\n[green]Authentication saved to:[/green] {storage_path}")
+
+    # Verify that cookies work — reuse cookies extracted above (no redundant disk read)
+    try:
+        run_async(fetch_tokens(cookies))
+        logger.info("Cookies verified successfully")
+        console.print("[green]Cookies verified successfully.[/green]")
+    except ValueError as e:
+        # Cookie validation failed - the extracted cookies are invalid
+        logger.error("Extracted cookies are invalid: %s", e)
+        console.print(
+            "[red]Warning: Extracted cookies failed validation.[/red]\n"
+            "The cookies may be expired or malformed.\n"
+            f"Error: {e}\n\n"
+            "Saved anyway, but you may need to re-run login if these are invalid."
+        )
+    except httpx.RequestError as e:
+        # Network error - can't verify but cookies might be OK
+        logger.warning("Could not verify cookies due to network error: %s", e)
+        console.print(
+            "[yellow]Warning: Could not verify cookies (network issue).[/yellow]\n"
+            "Cookies saved but may not be working.\n"
+            "Try running 'notebooklm ask' to test authentication."
+        )
+    except Exception as e:
+        # Unexpected error - log it fully
+        logger.warning("Unexpected error verifying cookies: %s: %s", type(e).__name__, e)
+        console.print(
+            f"[yellow]Warning: Unexpected error during verification: {e}[/yellow]\n"
+            "Cookies saved but please verify with 'notebooklm auth check --test'"
+        )
+
+    _sync_server_language_to_config()
 
 
 def _sync_server_language_to_config() -> None:
@@ -184,7 +356,19 @@ def register_session_commands(cli):
         default="chromium",
         help="Browser to use for login (default: chromium). Use 'msedge' for Microsoft Edge.",
     )
-    def login(storage, browser):
+    @click.option(
+        "--browser-cookies",
+        "browser_cookies",
+        default=None,
+        is_flag=False,
+        flag_value="auto",
+        help=(
+            "Read cookies from an installed browser instead of launching Playwright. "
+            "Optionally specify browser: chrome, firefox, brave, edge, safari, arc, ... "
+            "Requires: pip install 'notebooklm[cookies]'"
+        ),
+    )
+    def login(storage, browser, browser_cookies):
         """Log in to NotebookLM via browser.
 
         Opens a browser window for Google login. After logging in,
@@ -206,6 +390,12 @@ def register_session_commands(cli):
                 "  2. Continue using NOTEBOOKLM_AUTH_JSON for authentication"
             )
             raise SystemExit(1)
+
+        # rookiepy fast-path: skip Playwright entirely
+        if browser_cookies is not None:
+            resolved_storage = Path(storage) if storage else get_storage_path()
+            _login_with_browser_cookies(resolved_storage, browser_cookies)
+            return
 
         storage_path = Path(storage) if storage else get_storage_path()
         browser_profile = get_browser_profile_dir()
