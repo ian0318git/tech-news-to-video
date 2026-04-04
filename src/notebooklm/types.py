@@ -953,7 +953,7 @@ class GenerationStatus:
     """
 
     task_id: str  # Same as artifact_id - used for polling and becomes Artifact.id
-    status: str  # "pending", "in_progress", "completed", "failed"
+    status: str  # "pending", "in_progress", "completed", "failed", "not_found"
     url: str | None = None
     error: str | None = None
     error_code: str | None = None  # e.g., "USER_DISPLAYABLE_ERROR" for rate limits
@@ -980,6 +980,22 @@ class GenerationStatus:
         return self.status == "in_progress"
 
     @property
+    def is_not_found(self) -> bool:
+        """Check if the artifact was not found in the poll response.
+
+        This status is set by ``poll_status()`` when the artifact ID is
+        absent from the artifact list.  It differs from ``is_pending``:
+        a ``pending`` artifact exists in the list and is queued, while a
+        ``not_found`` artifact has either not yet appeared (brief lag after
+        creation) or was silently removed by the server (e.g. after a
+        daily-quota rejection).
+
+        ``wait_for_completion`` treats a sustained run of ``not_found``
+        responses as a failure — see its ``max_not_found`` parameter.
+        """
+        return self.status == "not_found"
+
+    @property
     def is_rate_limited(self) -> bool:
         """Check if generation failed due to rate limiting or quota exceeded.
 
@@ -996,7 +1012,11 @@ class GenerationStatus:
         # Fall back to string matching for backwards compatibility
         if self.error is not None:
             error_lower = self.error.lower()
-            return "rate limit" in error_lower or "quota" in error_lower
+            return (
+                "rate limit" in error_lower
+                or "quota" in error_lower
+                or "limit exceeded" in error_lower
+            )
 
         return False
 
