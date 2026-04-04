@@ -1323,7 +1323,7 @@ class TestLoginBrowserCookies:
     def test_locked_db_shows_close_browser_hint(self, runner, tmp_path):
         """Shows close-browser hint when DB is locked."""
         mock_rookiepy = MagicMock()
-        mock_rookiepy.load = MagicMock(side_effect=Exception("database is locked"))
+        mock_rookiepy.load = MagicMock(side_effect=OSError("database is locked"))
 
         with (
             patch.dict("sys.modules", {"rookiepy": mock_rookiepy}),

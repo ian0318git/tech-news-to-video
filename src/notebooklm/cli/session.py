@@ -20,10 +20,12 @@ from pathlib import Path
 from typing import Any
 
 import click
+import httpx
 from rich.table import Table
 
 from ..auth import (
     ALLOWED_COOKIE_DOMAINS,
+    GOOGLE_REGIONAL_CCTLDS,
     AuthTokens,
     convert_rookiepy_cookies_to_storage_state,
     extract_cookies_from_storage,
