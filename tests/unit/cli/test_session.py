@@ -267,6 +267,130 @@ class TestLoginCommand:
         assert goto_calls[1].kwargs.get("wait_until") == "commit"
         assert goto_calls[2].kwargs.get("wait_until") == "commit"
 
+    def test_login_retries_on_connection_closed_error(
+        self, runner, mock_login_browser_with_storage
+    ):
+        """Test login retries when initial navigation fails with ERR_CONNECTION_CLOSED (#243)."""
+        mock_page = mock_login_browser_with_storage
+        from playwright.sync_api import Error as PlaywrightError
+
+        call_count = 0
+
+        def goto_side_effect(url, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            # First call fails with connection closed, second succeeds
+            if call_count == 1:
+                raise PlaywrightError(
+                    "Page.goto: net::ERR_CONNECTION_CLOSED at https://notebooklm.google.com/"
+                )
+            # All other calls succeed
+
+        mock_page.goto.side_effect = goto_side_effect
+
+        with patch("notebooklm.cli.session.time.sleep"):
+            result = runner.invoke(cli, ["login"])
+
+        assert result.exit_code == 0
+        assert "Authentication saved" in result.output
+        # Verify that goto was called more than once (retried)
+        assert mock_page.goto.call_count >= 2
+
+    def test_login_retries_on_connection_reset_error(self, runner, mock_login_browser_with_storage):
+        """Test login retries when initial navigation fails with ERR_CONNECTION_RESET (#243)."""
+        mock_page = mock_login_browser_with_storage
+        from playwright.sync_api import Error as PlaywrightError
+
+        call_count = 0
+
+        def goto_side_effect(url, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            # First call fails with connection reset, second succeeds
+            if call_count == 1:
+                raise PlaywrightError(
+                    "Page.goto: net::ERR_CONNECTION_RESET at https://notebooklm.google.com/"
+                )
+            # All other calls succeed
+
+        mock_page.goto.side_effect = goto_side_effect
+
+        with patch("notebooklm.cli.session.time.sleep"):
+            result = runner.invoke(cli, ["login"])
+
+        assert result.exit_code == 0
+        assert "Authentication saved" in result.output
+
+    def test_login_exits_after_max_retries(self, runner, mock_login_browser_with_storage):
+        """Test login exits with error message after 3 failed connection attempts (#243)."""
+        mock_page = mock_login_browser_with_storage
+        from playwright.sync_api import Error as PlaywrightError
+
+        def goto_side_effect(url, **kwargs):
+            raise PlaywrightError(
+                "Page.goto: net::ERR_CONNECTION_CLOSED at https://notebooklm.google.com/"
+            )
+
+        mock_page.goto.side_effect = goto_side_effect
+
+        with patch("notebooklm.cli.session.time.sleep"):
+            result = runner.invoke(cli, ["login"])
+
+        assert result.exit_code == 1
+        assert "Failed to connect to NotebookLM" in result.output
+        assert "Network connectivity" in result.output or "Firewall" in result.output
+        # Verify retry attempts were made
+        assert mock_page.goto.call_count == 3
+
+    def test_login_fails_fast_on_non_retryable_errors(
+        self, runner, mock_login_browser_with_storage
+    ):
+        """Test login fails immediately on non-connection errors during initial navigation."""
+        mock_page = mock_login_browser_with_storage
+        from playwright.sync_api import Error as PlaywrightError
+
+        def goto_side_effect(url, **kwargs):
+            # Fail on first call with a non-retryable error
+            raise PlaywrightError(
+                "Page.goto: net::ERR_INVALID_URL at https://notebooklm.google.com/"
+            )
+
+        mock_page.goto.side_effect = goto_side_effect
+
+        with patch("notebooklm.cli.session.time.sleep"):
+            result = runner.invoke(cli, ["login"])
+
+        assert result.exit_code != 0
+        # Should fail immediately without retrying (only 1 call)
+        assert mock_page.goto.call_count == 1
+
+    def test_login_displays_help_text_after_exhausting_retries(
+        self, runner, mock_login_browser_with_storage
+    ):
+        """Test login displays CONNECTION_ERROR_HELP after exhausting retries (#243)."""
+        mock_page = mock_login_browser_with_storage
+        from playwright.sync_api import Error as PlaywrightError
+
+        def goto_side_effect(url, **kwargs):
+            # Always fail with retryable error to exhaust retries
+            raise PlaywrightError(
+                "Page.goto: net::ERR_CONNECTION_CLOSED at https://notebooklm.google.com/"
+            )
+
+        mock_page.goto.side_effect = goto_side_effect
+
+        with patch("notebooklm.cli.session.time.sleep"):
+            result = runner.invoke(cli, ["login"])
+
+        assert result.exit_code == 1
+        # Verify that CONNECTION_ERROR_HELP is actually displayed
+        assert "Failed to connect to NotebookLM after multiple retries" in result.output
+        assert "Network connectivity issues" in result.output
+        assert "Firewall or VPN" in result.output
+        assert "Check your internet connection" in result.output
+        # Verify exactly 3 retry attempts
+        assert mock_page.goto.call_count == 3
+
 
 # =============================================================================
 # USE COMMAND TESTS
