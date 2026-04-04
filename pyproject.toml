@@ -35,6 +35,7 @@ Issues = "https://github.com/teng-lin/notebooklm-py/issues"
 
 [project.optional-dependencies]
 browser = ["playwright>=1.40.0"]
+cookies = ["rookiepy>=0.1.0"]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
@@ -48,7 +49,7 @@ dev = [
     "ruff==0.8.6",
     "vcrpy>=6.0.0",
 ]
-all = ["notebooklm-py[browser,dev]"]
+all = ["notebooklm-py[browser,cookies,dev]"]
 
 [project.scripts]
 notebooklm = "notebooklm.notebooklm_cli:main"
