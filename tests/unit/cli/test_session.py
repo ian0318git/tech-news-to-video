@@ -1228,8 +1228,6 @@ class TestLoginBrowserCookies:
 
     def test_rookiepy_not_installed_shows_error(self, runner):
         """Shows helpful error when rookiepy is not installed."""
-        import sys
-
         with patch.dict(sys.modules, {"rookiepy": None}):
             result = runner.invoke(cli, ["login", "--browser-cookies"])
         assert result.exit_code != 0
