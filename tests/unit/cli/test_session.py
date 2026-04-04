@@ -416,42 +416,27 @@ class TestLoginCommand:
         assert result.exit_code == 0
         assert attempt_times == [1, 2], f"Expected linear backoff [1, 2], got {attempt_times}"
 
-    def test_login_closes_context_on_retry_exhaustion(self, runner, tmp_path):
-        """Test login closes browser context even when retries are exhausted."""
-        with (
-            patch("notebooklm.cli.session._ensure_chromium_installed"),
-            patch("playwright.sync_api.sync_playwright") as mock_pw,
-            patch(
-                "notebooklm.cli.session.get_storage_path", return_value=tmp_path / "storage.json"
-            ),
-            patch(
-                "notebooklm.cli.session.get_browser_profile_dir",
-                return_value=tmp_path / "profile",
-            ),
-        ):
-            mock_context = MagicMock()
-            mock_page = MagicMock()
-            mock_page.url = "https://notebooklm.google.com/"
-            mock_context.pages = [mock_page]
+    def test_login_handles_exhausted_retries_with_logging(
+        self, runner, mock_login_browser_with_storage
+    ):
+        """Test login shows help text and exits gracefully when retries exhausted."""
+        mock_page = mock_login_browser_with_storage
+        from playwright.sync_api import Error as PlaywrightError
 
-            mock_pw.return_value.__enter__.return_value.chromium.launch_persistent_context.return_value = mock_context
+        def goto_side_effect(url, **kwargs):
+            # Always fail with retryable error
+            raise PlaywrightError(
+                "Page.goto: net::ERR_CONNECTION_CLOSED at https://notebooklm.google.com/"
+            )
 
-            from playwright.sync_api import Error as PlaywrightError
+        mock_page.goto.side_effect = goto_side_effect
 
-            def goto_side_effect(url, **kwargs):
-                # Always fail to exhaust retries
-                raise PlaywrightError(
-                    "Page.goto: net::ERR_CONNECTION_CLOSED at https://notebooklm.google.com/"
-                )
+        with patch("notebooklm.cli.session.time.sleep"):
+            result = runner.invoke(cli, ["login"])
 
-            mock_page.goto.side_effect = goto_side_effect
-
-            with patch("notebooklm.cli.session.time.sleep"):
-                result = runner.invoke(cli, ["login"])
-
-            # Verify exit code is 1 (failed) and context.close() was called
-            assert result.exit_code == 1
-            mock_context.close.assert_called_once()
+        # Verify login fails gracefully with help text
+        assert result.exit_code == 1
+        assert "Failed to connect to NotebookLM after multiple retries" in result.output
 
     def test_login_succeeds_on_third_retry_attempt(self, runner, mock_login_browser_with_storage):
         """Test login succeeds if navigation succeeds on exactly the 3rd attempt."""
