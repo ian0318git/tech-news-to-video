@@ -1262,9 +1262,7 @@ class TestLoginBrowserCookies:
                 new_callable=AsyncMock,
                 return_value=("csrf", "sess"),
             ),
-            patch(
-                "notebooklm.cli.session.load_auth_from_storage", return_value={}
-            ),
+            patch("notebooklm.cli.session.load_auth_from_storage", return_value={}),
         ):
             result = runner.invoke(cli, ["login", "--browser-cookies"])
         assert result.exit_code == 0, result.output
@@ -1296,9 +1294,7 @@ class TestLoginBrowserCookies:
                 new_callable=AsyncMock,
                 return_value=("csrf", "sess"),
             ),
-            patch(
-                "notebooklm.cli.session.load_auth_from_storage", return_value={}
-            ),
+            patch("notebooklm.cli.session.load_auth_from_storage", return_value={}),
         ):
             result = runner.invoke(cli, ["login", "--browser-cookies", "chrome"])
         assert result.exit_code == 0, result.output
@@ -1363,15 +1359,11 @@ class TestLoginBrowserCookies:
                 new_callable=AsyncMock,
                 return_value=("csrf", "sess"),
             ),
-            patch(
-                "notebooklm.cli.session.load_auth_from_storage", return_value={}
-            ),
+            patch("notebooklm.cli.session.load_auth_from_storage", return_value={}),
         ):
             runner.invoke(cli, ["login", "--browser-cookies"])
         data = json.loads(storage_file.read_text())
-        assert any(
-            c["name"] == "SID" and c["value"] == "mysid" for c in data["cookies"]
-        )
+        assert any(c["name"] == "SID" and c["value"] == "mysid" for c in data["cookies"])
 
     def test_unknown_browser_shows_error(self, runner, tmp_path):
         """Unknown browser name shows a clear error."""
