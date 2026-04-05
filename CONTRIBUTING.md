@@ -52,6 +52,14 @@ pre-commit install
 5. Ensure formatting: `ruff format --check src/ tests/`
 6. Submit a PR with a description of changes
 
+### Pull Request Quality Expectations
+
+- **Reference an issue**: PRs should link to an existing issue or clearly describe the problem being solved. If no issue exists, open one first for discussion.
+- **AI-assisted contributions**: Welcome, but the submitter must review, understand, and test the code before submitting. PRs that appear to be unreviewed AI output will be closed.
+- **No duplicates**: Check existing open PRs before submitting. Duplicate PRs for the same issue will be closed in favor of the first or best submission.
+- **Accurate severity**: Claims of "critical" bugs must include evidence (stack trace, reproduction steps, affected users). Routine edge cases are not critical.
+- **Tested locally**: All PRs must include evidence of local testing. The PR template includes a checklist for this.
+
 ---
 
 ## Documentation Rules for AI Agents
