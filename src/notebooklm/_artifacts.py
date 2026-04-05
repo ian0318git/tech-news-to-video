@@ -988,6 +988,8 @@ class ArtifactsAPI:
         self,
         notebook_id: str,
         source_ids: builtins.list[str] | None = None,
+        language: str = "en",
+        instructions: str | None = None,
     ) -> dict[str, Any]:
         """Generate an interactive mind map.
 
@@ -997,6 +999,8 @@ class ArtifactsAPI:
         Args:
             notebook_id: The notebook ID.
             source_ids: Source IDs to include. If None, uses all sources.
+            language: Language code (default: "en").
+            instructions: Custom instructions for the mind map.
 
         Returns:
             Dictionary with 'mind_map' (JSON data) and 'note_id'.
@@ -1014,7 +1018,7 @@ class ArtifactsAPI:
             None,
             None,
             None,
-            ["interactive_mindmap", [["[CONTEXT]", ""]], ""],
+            ["interactive_mindmap", [["[CONTEXT]", instructions or ""]], language],
             None,
             [2, None, [1]],
         ]
