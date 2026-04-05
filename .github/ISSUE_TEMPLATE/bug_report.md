@@ -35,6 +35,14 @@ Paste error output here
 - notebooklm-py version: (run `notebooklm --version`)
 - Install method: (pip, uv, pipx)
 
+## Debug Output
+
+If applicable, run the failing command with `-vv` for verbose logging and paste the relevant output:
+
+```
+notebooklm -vv <your-command-here>
+```
+
 ## Checklist
 
 - [ ] I verified this bug exists on the latest version of notebooklm-py
