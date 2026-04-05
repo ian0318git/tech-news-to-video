@@ -39,7 +39,7 @@ Paste error output here
 
 If applicable, run the failing command with `-vv` for verbose logging and paste the relevant output:
 
-```
+```bash
 notebooklm -vv <your-command-here>
 ```
 
