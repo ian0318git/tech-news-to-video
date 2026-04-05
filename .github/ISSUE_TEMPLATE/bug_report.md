@@ -24,7 +24,7 @@ What you expected to happen.
 
 What actually happened. Include the full error message or traceback if applicable.
 
-```
+```text
 Paste error output here
 ```
 
