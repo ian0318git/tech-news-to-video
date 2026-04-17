@@ -586,8 +586,10 @@ class Source:
                     # the full index map; YouTube URLs live at entry[2][5][0].
                     url = None
                     if len(entry) > 2 and isinstance(entry[2], list):
-                        if len(entry[2]) > 7 and isinstance(entry[2][7], list):
-                            url = entry[2][7][0] if entry[2][7] else None
+                        if len(entry[2]) > 7:
+                            url_list = entry[2][7]
+                            if isinstance(url_list, list) and len(url_list) > 0:
+                                url = url_list[0]
                         if not url and len(entry[2]) > 5:
                             yt_data = entry[2][5]
                             if (

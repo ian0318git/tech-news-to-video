@@ -126,7 +126,7 @@ class TestSource:
 
         assert source.id == "src_456"
         assert source.title == "Nested Source"
-        # URL extraction depends on nesting level - verify ID and title parsed correctly
+        assert source.url == "https://example.com"
 
     def test_from_api_response_deeply_nested(self):
         """Test parsing deeply nested format."""
