@@ -582,13 +582,33 @@ class Source:
                     source_id = entry[0][0] if isinstance(entry[0], list) else entry[0]
                     title = entry[1] if len(entry) > 1 else None
 
-                    # Try to extract URL if present
+                    # Try to extract URL if present. See _sources.py list() for
+                    # the full index map; YouTube URLs live at entry[2][5][0].
                     url = None
                     if len(entry) > 2 and isinstance(entry[2], list):
                         if len(entry[2]) > 7 and isinstance(entry[2][7], list):
                             url = entry[2][7][0] if entry[2][7] else None
+                        if not url and len(entry[2]) > 5:
+                            yt_data = entry[2][5]
+                            if (
+                                isinstance(yt_data, list)
+                                and len(yt_data) > 0
+                                and isinstance(yt_data[0], str)
+                            ):
+                                url = yt_data[0]
 
-                    return cls(id=str(source_id), title=title, url=url, _type_code=None)
+                    # Also parse the type code here so youtube sources are
+                    # identified correctly even in the medium-nested shape.
+                    type_code = None
+                    if (
+                        len(entry) > 2
+                        and isinstance(entry[2], list)
+                        and len(entry[2]) > 4
+                        and isinstance(entry[2][4], int)
+                    ):
+                        type_code = entry[2][4]
+
+                    return cls(id=str(source_id), title=title, url=url, _type_code=type_code)
 
                 # Deeply nested: continue with URL and type code extraction
                 url = None
