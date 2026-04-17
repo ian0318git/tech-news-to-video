@@ -217,6 +217,62 @@ class TestSourcesAPI:
         assert sources[2].kind == "youtube"
 
     @pytest.mark.asyncio
+    async def test_list_sources_youtube_url_at_index_5(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+        build_rpc_response,
+    ):
+        """Regression test for issue #265: YouTube URLs are stored at src[2][5][0].
+
+        The real NotebookLM API stores YouTube metadata at src[2][5] as
+        [url, video_id, channel_name], with src[2][7] = None. The list() method
+        must extract the URL from [5] when [7] is not populated.
+        """
+        response = build_rpc_response(
+            RPCMethod.GET_NOTEBOOK,
+            [
+                [
+                    "Test Notebook",
+                    [
+                        [
+                            ["src_yt"],
+                            "YouTube Video",
+                            [
+                                None,
+                                11,
+                                [1704240000, 0],
+                                None,
+                                9,  # YOUTUBE type code
+                                [
+                                    "https://www.youtube.com/watch?v=dcWU-qD8ISQ",
+                                    "dcWU-qD8ISQ",
+                                    "john newquist",
+                                ],
+                                None,
+                                None,  # [7] is None for YouTube sources
+                            ],
+                            [None, 2],
+                        ],
+                    ],
+                    "nb_123",
+                    "📘",
+                    None,
+                    [None, None, None, None, None, [1704067200, 0]],
+                ]
+            ],
+        )
+        httpx_mock.add_response(content=response.encode())
+
+        async with NotebookLMClient(auth_tokens) as client:
+            sources = await client.sources.list("nb_123")
+
+        assert len(sources) == 1
+        assert sources[0].id == "src_yt"
+        assert sources[0].kind == "youtube"
+        assert sources[0].url == "https://www.youtube.com/watch?v=dcWU-qD8ISQ"
+
+    @pytest.mark.asyncio
     async def test_list_sources_empty(
         self,
         auth_tokens,
