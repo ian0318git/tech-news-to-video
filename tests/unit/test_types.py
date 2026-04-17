@@ -126,7 +126,7 @@ class TestSource:
 
         assert source.id == "src_456"
         assert source.title == "Nested Source"
-        # URL extraction depends on nesting level - verify ID and title parsed correctly
+        assert source.url == "https://example.com"
 
     def test_from_api_response_deeply_nested(self):
         """Test parsing deeply nested format."""
@@ -160,6 +160,127 @@ class TestSource:
 
         assert source.kind == SourceType.YOUTUBE
         assert source.kind == "youtube"  # str enum comparison
+
+    def test_from_api_response_deeply_nested_youtube_url_at_index_5(self):
+        """Regression test for issue #265: deeply-nested YouTube payloads store
+        the URL at entry[2][5][0]; entry[2][7] is None. from_api_response must
+        read the URL from index 5 when index 7 is unpopulated.
+        """
+        data = [
+            [
+                [
+                    ["src_yt_deep"],
+                    "YouTube Video",
+                    [
+                        None,
+                        None,
+                        None,
+                        None,
+                        9,  # YOUTUBE type code
+                        [
+                            "https://www.youtube.com/watch?v=dcWU-qD8ISQ",
+                            "dcWU-qD8ISQ",
+                            "john newquist",
+                        ],
+                        None,
+                        None,  # [7] is None for YouTube sources
+                    ],
+                ]
+            ]
+        ]
+        source = Source.from_api_response(data)
+
+        assert source.id == "src_yt_deep"
+        assert source.kind == SourceType.YOUTUBE
+        assert source.url == "https://www.youtube.com/watch?v=dcWU-qD8ISQ"
+
+    def test_from_api_response_medium_nested_youtube_url_at_index_5(self):
+        """Regression test for issue #265: medium-nested YouTube payloads also
+        store the URL at entry[2][5][0] with entry[2][7] = None.
+        """
+        data = [
+            [
+                ["src_yt_mid"],
+                "YouTube Video",
+                [
+                    None,
+                    None,
+                    None,
+                    None,
+                    9,
+                    [
+                        "https://www.youtube.com/watch?v=dcWU-qD8ISQ",
+                        "dcWU-qD8ISQ",
+                        "john newquist",
+                    ],
+                    None,
+                    None,
+                ],
+            ]
+        ]
+        source = Source.from_api_response(data)
+
+        assert source.id == "src_yt_mid"
+        assert source.url == "https://www.youtube.com/watch?v=dcWU-qD8ISQ"
+        assert source.kind == SourceType.YOUTUBE
+
+    def test_from_api_response_index_5_empty_list_does_not_crash(self):
+        """entry[2][5] == [] must not produce a URL and must not raise."""
+        data = [
+            [
+                [
+                    ["src_empty5"],
+                    "Weird Source",
+                    [None, None, None, None, 9, [], None, None],
+                ]
+            ]
+        ]
+        source = Source.from_api_response(data)
+
+        assert source.id == "src_empty5"
+        assert source.url is None
+
+    def test_from_api_response_index_5_non_string_first_element(self):
+        """entry[2][5][0] that isn't a string must not be used as a URL."""
+        data = [
+            [
+                [
+                    ["src_non_str"],
+                    "Weird Source",
+                    [None, None, None, None, 9, [123, "xyz", "chan"], None, None],
+                ]
+            ]
+        ]
+        source = Source.from_api_response(data)
+
+        assert source.id == "src_non_str"
+        assert source.url is None
+
+    def test_from_api_response_index_7_still_wins_over_5(self):
+        """When both [7] and [5] are populated, [7] takes precedence (matches
+        list() behaviour in _sources.py).
+        """
+        data = [
+            [
+                [
+                    ["src_both"],
+                    "Hybrid Source",
+                    [
+                        None,
+                        None,
+                        None,
+                        None,
+                        5,
+                        ["https://shouldnt.win/5"],
+                        None,
+                        ["https://should.win/7"],
+                    ],
+                ]
+            ]
+        ]
+        source = Source.from_api_response(data)
+
+        assert source.url == "https://should.win/7"
 
     def test_from_api_response_web_page_source(self):
         """Test that web page sources are parsed with type code 5."""

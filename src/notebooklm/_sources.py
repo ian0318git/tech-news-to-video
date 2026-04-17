@@ -24,6 +24,7 @@ from .types import (
     SourceNotFoundError,
     SourceProcessingError,
     SourceTimeoutError,
+    _extract_source_url,
 )
 
 logger = logging.getLogger(__name__)
@@ -102,12 +103,9 @@ class SourcesAPI:
                 src_id = src[0][0] if isinstance(src[0], list) else src[0]
                 title = src[1] if len(src) > 1 else None
 
-                # Extract URL if present (at src[2][7])
-                url = None
-                if len(src) > 2 and isinstance(src[2], list) and len(src[2]) > 7:
-                    url_list = src[2][7]
-                    if isinstance(url_list, list) and len(url_list) > 0:
-                        url = url_list[0]
+                # Extract URL via the shared helper. See types._extract_source_url
+                # for the probe order ([7] > [5] > bare http at [0]).
+                url = _extract_source_url(src[2] if len(src) > 2 else None)
 
                 # Extract timestamp from src[2][2] - [seconds, nanoseconds]
                 created_at = None
