@@ -610,7 +610,9 @@ class Source:
 
                     return cls(id=str(source_id), title=title, url=url, _type_code=type_code)
 
-                # Deeply nested: continue with URL and type code extraction
+                # Deeply nested: continue with URL and type code extraction.
+                # See _sources.py list() for the full index map; YouTube URLs
+                # live at entry[2][5][0].
                 url = None
                 type_code = None
                 if len(entry) > 2 and isinstance(entry[2], list):
@@ -618,6 +620,14 @@ class Source:
                         url_list = entry[2][7]
                         if isinstance(url_list, list) and len(url_list) > 0:
                             url = url_list[0]
+                    if not url and len(entry[2]) > 5:
+                        yt_data = entry[2][5]
+                        if (
+                            isinstance(yt_data, list)
+                            and len(yt_data) > 0
+                            and isinstance(yt_data[0], str)
+                        ):
+                            url = yt_data[0]
                     if not url and len(entry[2]) > 0:
                         if isinstance(entry[2][0], str) and entry[2][0].startswith("http"):
                             url = entry[2][0]
