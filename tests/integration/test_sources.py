@@ -273,6 +273,51 @@ class TestSourcesAPI:
         assert sources[0].url == "https://www.youtube.com/watch?v=dcWU-qD8ISQ"
 
     @pytest.mark.asyncio
+    async def test_list_sources_index_7_wins_over_5(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+        build_rpc_response,
+    ):
+        """When both src[2][7] and src[2][5] are populated, [7] wins."""
+        response = build_rpc_response(
+            RPCMethod.GET_NOTEBOOK,
+            [
+                [
+                    "Test Notebook",
+                    [
+                        [
+                            ["src_both"],
+                            "Hybrid",
+                            [
+                                None,
+                                11,
+                                [1704240000, 0],
+                                None,
+                                5,
+                                ["https://shouldnt.win/5"],
+                                None,
+                                ["https://should.win/7"],
+                            ],
+                            [None, 2],
+                        ],
+                    ],
+                    "nb_123",
+                    "📘",
+                    None,
+                    [None, None, None, None, None, [1704067200, 0]],
+                ]
+            ],
+        )
+        httpx_mock.add_response(content=response.encode())
+
+        async with NotebookLMClient(auth_tokens) as client:
+            sources = await client.sources.list("nb_123")
+
+        assert len(sources) == 1
+        assert sources[0].url == "https://should.win/7"
+
+    @pytest.mark.asyncio
     async def test_list_sources_empty(
         self,
         auth_tokens,

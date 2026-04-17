@@ -222,6 +222,65 @@ class TestSource:
 
         assert source.id == "src_yt_mid"
         assert source.url == "https://www.youtube.com/watch?v=dcWU-qD8ISQ"
+        assert source.kind == SourceType.YOUTUBE
+
+    def test_from_api_response_index_5_empty_list_does_not_crash(self):
+        """entry[2][5] == [] must not produce a URL and must not raise."""
+        data = [
+            [
+                [
+                    ["src_empty5"],
+                    "Weird Source",
+                    [None, None, None, None, 9, [], None, None],
+                ]
+            ]
+        ]
+        source = Source.from_api_response(data)
+
+        assert source.id == "src_empty5"
+        assert source.url is None
+
+    def test_from_api_response_index_5_non_string_first_element(self):
+        """entry[2][5][0] that isn't a string must not be used as a URL."""
+        data = [
+            [
+                [
+                    ["src_non_str"],
+                    "Weird Source",
+                    [None, None, None, None, 9, [123, "xyz", "chan"], None, None],
+                ]
+            ]
+        ]
+        source = Source.from_api_response(data)
+
+        assert source.id == "src_non_str"
+        assert source.url is None
+
+    def test_from_api_response_index_7_still_wins_over_5(self):
+        """When both [7] and [5] are populated, [7] takes precedence (matches
+        list() behaviour in _sources.py).
+        """
+        data = [
+            [
+                [
+                    ["src_both"],
+                    "Hybrid Source",
+                    [
+                        None,
+                        None,
+                        None,
+                        None,
+                        5,
+                        ["https://shouldnt.win/5"],
+                        None,
+                        ["https://should.win/7"],
+                    ],
+                ]
+            ]
+        ]
+        source = Source.from_api_response(data)
+
+        assert source.url == "https://should.win/7"
 
     def test_from_api_response_web_page_source(self):
         """Test that web page sources are parsed with type code 5."""
