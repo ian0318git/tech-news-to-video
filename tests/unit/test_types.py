@@ -161,6 +161,68 @@ class TestSource:
         assert source.kind == SourceType.YOUTUBE
         assert source.kind == "youtube"  # str enum comparison
 
+    def test_from_api_response_deeply_nested_youtube_url_at_index_5(self):
+        """Regression test for issue #265: deeply-nested YouTube payloads store
+        the URL at entry[2][5][0]; entry[2][7] is None. from_api_response must
+        read the URL from index 5 when index 7 is unpopulated.
+        """
+        data = [
+            [
+                [
+                    ["src_yt_deep"],
+                    "YouTube Video",
+                    [
+                        None,
+                        None,
+                        None,
+                        None,
+                        9,  # YOUTUBE type code
+                        [
+                            "https://www.youtube.com/watch?v=dcWU-qD8ISQ",
+                            "dcWU-qD8ISQ",
+                            "john newquist",
+                        ],
+                        None,
+                        None,  # [7] is None for YouTube sources
+                    ],
+                ]
+            ]
+        ]
+        source = Source.from_api_response(data)
+
+        assert source.id == "src_yt_deep"
+        assert source.kind == SourceType.YOUTUBE
+        assert source.url == "https://www.youtube.com/watch?v=dcWU-qD8ISQ"
+
+    def test_from_api_response_medium_nested_youtube_url_at_index_5(self):
+        """Regression test for issue #265: medium-nested YouTube payloads also
+        store the URL at entry[2][5][0] with entry[2][7] = None.
+        """
+        data = [
+            [
+                ["src_yt_mid"],
+                "YouTube Video",
+                [
+                    None,
+                    None,
+                    None,
+                    None,
+                    9,
+                    [
+                        "https://www.youtube.com/watch?v=dcWU-qD8ISQ",
+                        "dcWU-qD8ISQ",
+                        "john newquist",
+                    ],
+                    None,
+                    None,
+                ],
+            ]
+        ]
+        source = Source.from_api_response(data)
+
+        assert source.id == "src_yt_mid"
+        assert source.url == "https://www.youtube.com/watch?v=dcWU-qD8ISQ"
+
     def test_from_api_response_web_page_source(self):
         """Test that web page sources are parsed with type code 5."""
         data = [
