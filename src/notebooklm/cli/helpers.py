@@ -237,11 +237,16 @@ def set_current_notebook(
     context_file.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-def clear_context():
-    """Clear the current context."""
+def clear_context() -> bool:
+    """Clear the current context.
+
+    Returns True if a context file was removed, False if none existed.
+    """
     context_file = get_context_path()
     if context_file.exists():
         context_file.unlink()
+        return True
+    return False
 
 
 def get_current_conversation() -> str | None:

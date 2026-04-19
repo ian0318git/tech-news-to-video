@@ -910,11 +910,18 @@ def register_session_commands(cli):
         # rpc/decoder.py), leaving context.json behind would cause the next
         # `ask` / `use` to target the old account's notebook and surface
         # misleading not-found / permission errors.
-        context_file = get_context_path()
-        context_existed = context_file.exists()
-        clear_context()
-        if context_existed:
-            removed_any = True
+        try:
+            if clear_context():
+                removed_any = True
+        except OSError as exc:
+            context_file = get_context_path()
+            logger.error("Failed to remove context file %s: %s", context_file, exc)
+            console.print(
+                f"[red]Cannot remove context file: {exc}[/red]\n"
+                "Close any running notebooklm commands and try again.\n"
+                f"If the problem persists, manually delete: {context_file}"
+            )
+            raise SystemExit(1) from exc
 
         if removed_any:
             console.print("[green]Logged out.[/green] Run 'notebooklm login' to sign in again.")

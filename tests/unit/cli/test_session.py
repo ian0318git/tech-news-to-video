@@ -1859,3 +1859,34 @@ class TestAuthLogoutCommand:
 
         assert result.exit_code == 0
         assert "Logged out" in result.output
+
+    def test_auth_logout_handles_os_error_on_context_unlink(
+        self, runner, tmp_path, mock_context_file
+    ):
+        """Logout must surface an OSError on context.json removal as SystemExit(1).
+
+        Parity with the existing handlers for storage_state.json and the browser
+        profile: a locked/unwritable context file should produce a clean
+        diagnostic message, not an unhandled traceback.
+        """
+        storage_file = tmp_path / "storage.json"
+        storage_file.write_text('{"cookies": []}')
+        browser_dir = tmp_path / "browser_profile"
+        # No browser dir — nothing to remove in that step.
+        mock_context_file.write_text('{"notebook_id": "stale"}')
+
+        with (
+            patch("notebooklm.cli.session.get_storage_path", return_value=storage_file),
+            patch(
+                "notebooklm.cli.session.get_browser_profile_dir",
+                return_value=browser_dir,
+            ),
+            patch(
+                "notebooklm.cli.session.clear_context",
+                side_effect=OSError("file in use"),
+            ),
+        ):
+            result = runner.invoke(cli, ["auth", "logout"])
+
+        assert result.exit_code == 1
+        assert "context file" in result.output.lower()
