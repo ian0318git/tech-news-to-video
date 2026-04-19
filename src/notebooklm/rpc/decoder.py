@@ -310,9 +310,12 @@ def _extract_status_code(error_info: Any) -> tuple[int, str] | None:
     if not isinstance(error_info, list) or len(error_info) != 1:
         return None
     code = error_info[0]
-    if not isinstance(code, int) or code < 0 or code > 16:
+    # type(code) is int (not isinstance) — bool is a subclass of int, so
+    # isinstance(True, int) is True and would accept [true] as code 1.
+    # Gate on _GRPC_STATUS_MESSAGES membership so this auto-tracks the table.
+    if type(code) is not int or code not in _GRPC_STATUS_MESSAGES:
         return None
-    return code, _GRPC_STATUS_MESSAGES.get(code, f"Error {code}")
+    return code, _GRPC_STATUS_MESSAGES[code]
 
 
 def _find_wrb_status(chunks: list[Any], rpc_id: str) -> tuple[int, str] | None:
@@ -476,16 +479,15 @@ def decode_response(raw_response: str, rpc_id: str, allow_null: bool = False) ->
             status = _find_wrb_status(chunks, rpc_id)
             if status is not None:
                 code, label = status
-                message = (
-                    f"RPC {rpc_id} returned null result with status code {code} "
-                    f"({label}).{_ACCOUNT_MISMATCH_HINT}"
-                )
-                # Route NOT_FOUND / PERMISSION_DENIED through ClientError so the
-                # _core.is_auth_error check does not misclassify them as auth
-                # failures and trigger a spurious token-refresh retry.
+                message = f"RPC {rpc_id} returned null result with status code {code} ({label})."
+                # Route NOT_FOUND (5) / PERMISSION_DENIED (7) through ClientError
+                # so _core.is_auth_error does not misclassify them as auth
+                # failures and trigger a spurious token-refresh retry. The
+                # account-routing hint is only relevant for these two codes —
+                # other codes (e.g. INTERNAL 13) get a plain message.
                 if code in (5, 7):
                     raise ClientError(
-                        message,
+                        message + _ACCOUNT_MISMATCH_HINT,
                         method_id=rpc_id,
                         rpc_code=code,
                         found_ids=found_ids,

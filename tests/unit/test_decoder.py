@@ -555,7 +555,12 @@ class TestNullResultStatusCodeEnrichment:
         self._assert_no_auth_patterns(message)
 
     def test_internal_code_raises_plain_rpc_error(self):
-        """[13] with allow_null=False → RPCError (not ClientError) with rpc_code=13."""
+        """[13] with allow_null=False → RPCError (not ClientError) with rpc_code=13.
+
+        The account-routing hint (mentioning authuser / issues #114, #294) is
+        only meaningful for NOT_FOUND / PERMISSION_DENIED. Other codes like
+        INTERNAL must not carry it — it would mislead users about the cause.
+        """
         with pytest.raises(RPCError) as exc_info:
             decode_response(self._build_raw([13]), self.RPC_ID)
 
@@ -564,6 +569,8 @@ class TestNullResultStatusCodeEnrichment:
         message = str(exc_info.value)
         assert "status code 13" in message
         assert "Internal" in message
+        assert "authuser" not in message.lower()
+        assert "#114" not in message and "#294" not in message
         self._assert_no_auth_patterns(message)
 
     def test_unauthenticated_code_does_not_become_auth_error(self):
@@ -613,6 +620,22 @@ class TestNullResultStatusCodeEnrichment:
         for code in (5, 7, 13, 16, 99):
             result = decode_response(self._build_raw([code]), self.RPC_ID, allow_null=True)
             assert result is None, f"allow_null=True leaked for code {code}"
+
+    def test_boolean_error_info_is_not_treated_as_status_code(self):
+        """[true] must not be accepted as code 1 — bool is a subclass of int.
+
+        ``json.loads('[true]')`` yields ``[True]`` and ``isinstance(True, int)``
+        is ``True`` in Python, so a lax type check would misread a boolean as
+        status code 1 (CANCELLED). Guard with ``type(...) is int``.
+        """
+        with pytest.raises(RPCError) as exc_info:
+            decode_response(self._build_raw([True]), self.RPC_ID)
+
+        assert not isinstance(exc_info.value, ClientError)
+        assert exc_info.value.rpc_code is None
+        message = str(exc_info.value)
+        assert "returned null result data" in message
+        assert "status code" not in message
 
 
 class TestAuthError:
