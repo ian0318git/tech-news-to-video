@@ -1689,7 +1689,9 @@ class TestLoginBrowserCookies:
 
 
 class TestAuthLogoutCommand:
-    def test_auth_logout_deletes_storage_and_browser_profile(self, runner, tmp_path):
+    def test_auth_logout_deletes_storage_and_browser_profile(
+        self, runner, tmp_path, mock_context_file
+    ):
         """Test auth logout deletes both storage_state.json and browser_profile/."""
         storage_file = tmp_path / "storage.json"
         storage_file.write_text('{"cookies": []}')
@@ -1712,7 +1714,7 @@ class TestAuthLogoutCommand:
         assert not storage_file.exists()
         assert not browser_dir.exists()
 
-    def test_auth_logout_when_already_logged_out(self, runner, tmp_path):
+    def test_auth_logout_when_already_logged_out(self, runner, tmp_path, mock_context_file):
         """Test auth logout is a no-op with friendly message when not logged in."""
         storage_file = tmp_path / "storage.json"
         browser_dir = tmp_path / "browser_profile"
@@ -1730,7 +1732,7 @@ class TestAuthLogoutCommand:
         assert result.exit_code == 0
         assert "already" in result.output.lower() or "No active session" in result.output
 
-    def test_auth_logout_partial_state_only_storage(self, runner, tmp_path):
+    def test_auth_logout_partial_state_only_storage(self, runner, tmp_path, mock_context_file):
         """Test auth logout handles case where only storage_state.json exists."""
         storage_file = tmp_path / "storage.json"
         storage_file.write_text('{"cookies": []}')
@@ -1750,7 +1752,9 @@ class TestAuthLogoutCommand:
         assert "Logged out" in result.output
         assert not storage_file.exists()
 
-    def test_auth_logout_handles_permission_error_on_rmtree(self, runner, tmp_path):
+    def test_auth_logout_handles_permission_error_on_rmtree(
+        self, runner, tmp_path, mock_context_file
+    ):
         """Test auth logout handles locked browser profile gracefully."""
         storage_file = tmp_path / "storage.json"
         storage_file.write_text('{"cookies": []}')
@@ -1773,7 +1777,9 @@ class TestAuthLogoutCommand:
         assert result.exit_code == 1
         assert "in use" in result.output.lower() or "Cannot" in result.output
 
-    def test_auth_logout_handles_permission_error_on_unlink(self, runner, tmp_path):
+    def test_auth_logout_handles_permission_error_on_unlink(
+        self, runner, tmp_path, mock_context_file
+    ):
         """Test auth logout handles locked storage_state.json gracefully on Windows."""
         storage_file = tmp_path / "storage.json"
         storage_file.write_text('{"cookies": []}')
