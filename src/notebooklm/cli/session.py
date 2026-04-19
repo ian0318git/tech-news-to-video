@@ -904,6 +904,25 @@ def register_session_commands(cli):
                 )
                 raise SystemExit(1) from exc
 
+        # Clear cached notebook / conversation context so post-logout commands
+        # don't silently reuse IDs from the previous account. When logout is
+        # part of the account-switch flow (see _ACCOUNT_MISMATCH_HINT in
+        # rpc/decoder.py), leaving context.json behind would cause the next
+        # `ask` / `use` to target the old account's notebook and surface
+        # misleading not-found / permission errors.
+        try:
+            if clear_context():
+                removed_any = True
+        except OSError as exc:
+            context_file = get_context_path()
+            logger.error("Failed to remove context file %s: %s", context_file, exc)
+            console.print(
+                f"[red]Cannot remove context file: {exc}[/red]\n"
+                "Close any running notebooklm commands and try again.\n"
+                f"If the problem persists, manually delete: {context_file}"
+            )
+            raise SystemExit(1) from exc
+
         if removed_any:
             console.print("[green]Logged out.[/green] Run 'notebooklm login' to sign in again.")
         else:

@@ -1689,7 +1689,9 @@ class TestLoginBrowserCookies:
 
 
 class TestAuthLogoutCommand:
-    def test_auth_logout_deletes_storage_and_browser_profile(self, runner, tmp_path):
+    def test_auth_logout_deletes_storage_and_browser_profile(
+        self, runner, tmp_path, mock_context_file
+    ):
         """Test auth logout deletes both storage_state.json and browser_profile/."""
         storage_file = tmp_path / "storage.json"
         storage_file.write_text('{"cookies": []}')
@@ -1712,7 +1714,7 @@ class TestAuthLogoutCommand:
         assert not storage_file.exists()
         assert not browser_dir.exists()
 
-    def test_auth_logout_when_already_logged_out(self, runner, tmp_path):
+    def test_auth_logout_when_already_logged_out(self, runner, tmp_path, mock_context_file):
         """Test auth logout is a no-op with friendly message when not logged in."""
         storage_file = tmp_path / "storage.json"
         browser_dir = tmp_path / "browser_profile"
@@ -1730,7 +1732,7 @@ class TestAuthLogoutCommand:
         assert result.exit_code == 0
         assert "already" in result.output.lower() or "No active session" in result.output
 
-    def test_auth_logout_partial_state_only_storage(self, runner, tmp_path):
+    def test_auth_logout_partial_state_only_storage(self, runner, tmp_path, mock_context_file):
         """Test auth logout handles case where only storage_state.json exists."""
         storage_file = tmp_path / "storage.json"
         storage_file.write_text('{"cookies": []}')
@@ -1750,7 +1752,9 @@ class TestAuthLogoutCommand:
         assert "Logged out" in result.output
         assert not storage_file.exists()
 
-    def test_auth_logout_handles_permission_error_on_rmtree(self, runner, tmp_path):
+    def test_auth_logout_handles_permission_error_on_rmtree(
+        self, runner, tmp_path, mock_context_file
+    ):
         """Test auth logout handles locked browser profile gracefully."""
         storage_file = tmp_path / "storage.json"
         storage_file.write_text('{"cookies": []}')
@@ -1773,7 +1777,9 @@ class TestAuthLogoutCommand:
         assert result.exit_code == 1
         assert "in use" in result.output.lower() or "Cannot" in result.output
 
-    def test_auth_logout_handles_permission_error_on_unlink(self, runner, tmp_path):
+    def test_auth_logout_handles_permission_error_on_unlink(
+        self, runner, tmp_path, mock_context_file
+    ):
         """Test auth logout handles locked storage_state.json gracefully on Windows."""
         storage_file = tmp_path / "storage.json"
         storage_file.write_text('{"cookies": []}')
@@ -1796,3 +1802,97 @@ class TestAuthLogoutCommand:
 
         assert result.exit_code == 1
         assert "Cannot" in result.output or "in use" in result.output.lower()
+
+    def test_auth_logout_clears_cached_notebook_context(self, runner, tmp_path, mock_context_file):
+        """Logout must remove context.json so the next command does not reuse
+        notebook_id / conversation_id from the previous account.
+
+        Issues #114 / #294 surfaced as "not found" / permission errors after an
+        account switch. The PR's account-mismatch hint steers users to
+        logout→login as the fix; the flow only works if context is actually
+        cleared on logout.
+        """
+        storage_file = tmp_path / "storage.json"
+        storage_file.write_text('{"cookies": []}')
+        browser_dir = tmp_path / "browser_profile"
+        browser_dir.mkdir()
+
+        # Simulate cached notebook / conversation from a previous session.
+        mock_context_file.write_text(
+            json.dumps(
+                {
+                    "notebook_id": "old-account-notebook",
+                    "conversation_id": "old-account-conversation",
+                }
+            )
+        )
+        assert mock_context_file.exists()
+
+        with (
+            patch("notebooklm.cli.session.get_storage_path", return_value=storage_file),
+            patch(
+                "notebooklm.cli.session.get_browser_profile_dir",
+                return_value=browser_dir,
+            ),
+        ):
+            result = runner.invoke(cli, ["auth", "logout"])
+
+        assert result.exit_code == 0
+        assert "Logged out" in result.output
+        assert not mock_context_file.exists()
+
+    def test_auth_logout_no_context_file_does_not_error(self, runner, tmp_path, mock_context_file):
+        """Logout must tolerate a missing context.json without erroring.
+
+        clear_context() is a no-op when the file does not exist; assert that
+        the main logout path still succeeds.
+        """
+        storage_file = tmp_path / "storage.json"
+        storage_file.write_text('{"cookies": []}')
+        browser_dir = tmp_path / "browser_profile"
+        # No context file, no browser dir.
+
+        assert not mock_context_file.exists()
+
+        with (
+            patch("notebooklm.cli.session.get_storage_path", return_value=storage_file),
+            patch(
+                "notebooklm.cli.session.get_browser_profile_dir",
+                return_value=browser_dir,
+            ),
+        ):
+            result = runner.invoke(cli, ["auth", "logout"])
+
+        assert result.exit_code == 0
+        assert "Logged out" in result.output
+
+    def test_auth_logout_handles_os_error_on_context_unlink(
+        self, runner, tmp_path, mock_context_file
+    ):
+        """Logout must surface an OSError on context.json removal as SystemExit(1).
+
+        Parity with the existing handlers for storage_state.json and the browser
+        profile: a locked/unwritable context file should produce a clean
+        diagnostic message, not an unhandled traceback.
+        """
+        storage_file = tmp_path / "storage.json"
+        storage_file.write_text('{"cookies": []}')
+        browser_dir = tmp_path / "browser_profile"
+        # No browser dir — nothing to remove in that step.
+        mock_context_file.write_text('{"notebook_id": "stale"}')
+
+        with (
+            patch("notebooklm.cli.session.get_storage_path", return_value=storage_file),
+            patch(
+                "notebooklm.cli.session.get_browser_profile_dir",
+                return_value=browser_dir,
+            ),
+            patch(
+                "notebooklm.cli.session.clear_context",
+                side_effect=OSError("file in use"),
+            ),
+        ):
+            result = runner.invoke(cli, ["auth", "logout"])
+
+        assert result.exit_code == 1
+        assert "context file" in result.output.lower()
