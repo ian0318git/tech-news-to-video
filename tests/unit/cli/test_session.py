@@ -1796,3 +1796,66 @@ class TestAuthLogoutCommand:
 
         assert result.exit_code == 1
         assert "Cannot" in result.output or "in use" in result.output.lower()
+
+    def test_auth_logout_clears_cached_notebook_context(self, runner, tmp_path, mock_context_file):
+        """Logout must remove context.json so the next command does not reuse
+        notebook_id / conversation_id from the previous account.
+
+        Issues #114 / #294 surfaced as "not found" / permission errors after an
+        account switch. The PR's account-mismatch hint steers users to
+        logout→login as the fix; the flow only works if context is actually
+        cleared on logout.
+        """
+        storage_file = tmp_path / "storage.json"
+        storage_file.write_text('{"cookies": []}')
+        browser_dir = tmp_path / "browser_profile"
+        browser_dir.mkdir()
+
+        # Simulate cached notebook / conversation from a previous session.
+        mock_context_file.write_text(
+            json.dumps(
+                {
+                    "notebook_id": "old-account-notebook",
+                    "conversation_id": "old-account-conversation",
+                }
+            )
+        )
+        assert mock_context_file.exists()
+
+        with (
+            patch("notebooklm.cli.session.get_storage_path", return_value=storage_file),
+            patch(
+                "notebooklm.cli.session.get_browser_profile_dir",
+                return_value=browser_dir,
+            ),
+        ):
+            result = runner.invoke(cli, ["auth", "logout"])
+
+        assert result.exit_code == 0
+        assert "Logged out" in result.output
+        assert not mock_context_file.exists()
+
+    def test_auth_logout_no_context_file_does_not_error(self, runner, tmp_path, mock_context_file):
+        """Logout must tolerate a missing context.json without erroring.
+
+        clear_context() is a no-op when the file does not exist; assert that
+        the main logout path still succeeds.
+        """
+        storage_file = tmp_path / "storage.json"
+        storage_file.write_text('{"cookies": []}')
+        browser_dir = tmp_path / "browser_profile"
+        # No context file, no browser dir.
+
+        assert not mock_context_file.exists()
+
+        with (
+            patch("notebooklm.cli.session.get_storage_path", return_value=storage_file),
+            patch(
+                "notebooklm.cli.session.get_browser_profile_dir",
+                return_value=browser_dir,
+            ),
+        ):
+            result = runner.invoke(cli, ["auth", "logout"])
+
+        assert result.exit_code == 0
+        assert "Logged out" in result.output
