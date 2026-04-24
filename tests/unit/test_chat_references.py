@@ -693,7 +693,7 @@ class TestMultiChunkReferenceInflation:
         """References must not multiply when the API streams repeated chunks.
 
         Issue #300: each streaming chunk repeated the full reference list, so
-        N chunks × M refs = N*M entries instead of M. The fix tracks refs
+        N chunks x M refs = N*M entries instead of M. The fix tracks refs
         alongside the best answer instead of accumulating across all chunks.
         """
         source_id = "aaaabbbb-cccc-dddd-eeee-ffffffffffff"
@@ -711,7 +711,7 @@ class TestMultiChunkReferenceInflation:
         assert refs[0].source_id == source_id
 
     def test_many_chunks_still_single_ref_set(self, chat_api):
-        """Simulate 6 progressive streaming chunks (as in the bug report: 6×~67 = 402 sources)."""
+        """Simulate 6 progressive streaming chunks (as in the bug report: 6x~67 = 402 sources)."""
         source_id = "12345678-1234-1234-1234-123456789012"
         chunks = [
             self._make_answer_chunk(
@@ -726,7 +726,7 @@ class TestMultiChunkReferenceInflation:
         _, refs, _ = chat_api._parse_ask_response_with_references(response)
 
         # Should have exactly 1 reference from the longest (last) chunk, not 6
-        assert len(refs) == 1, f"Expected 1 reference, got {len(refs)} (references inflated across chunks)"
+        assert len(refs) == 1, f"Expected 1 reference, got {len(refs)}"
 
     def test_refs_from_longest_winning_chunk(self, chat_api):
         """Refs must come from the chunk that produced the longest answer."""

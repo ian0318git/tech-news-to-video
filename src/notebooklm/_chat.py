@@ -455,7 +455,9 @@ class ChatAPI:
 
         def process_chunk(json_str: str) -> None:
             """Process a JSON chunk, updating best answer candidates and their refs."""
-            nonlocal best_marked_answer, best_marked_refs, best_unmarked_answer, best_unmarked_refs, server_conv_id
+            nonlocal best_marked_answer, best_marked_refs
+            nonlocal best_unmarked_answer, best_unmarked_refs
+            nonlocal server_conv_id
             text, is_answer, refs, conv_id = self._extract_answer_and_refs_from_chunk(json_str)
             if text:
                 if is_answer and len(text) > len(best_marked_answer):
