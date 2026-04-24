@@ -448,20 +448,22 @@ class ChatAPI:
 
         lines = response_text.strip().split("\n")
         best_marked_answer = ""
+        best_marked_refs: list[ChatReference] = []
         best_unmarked_answer = ""
-        all_references: list[ChatReference] = []
+        best_unmarked_refs: list[ChatReference] = []
         server_conv_id: str | None = None
 
         def process_chunk(json_str: str) -> None:
-            """Process a JSON chunk, updating best answers and all_references."""
-            nonlocal best_marked_answer, best_unmarked_answer, server_conv_id
+            """Process a JSON chunk, updating best answer candidates and their refs."""
+            nonlocal best_marked_answer, best_marked_refs, best_unmarked_answer, best_unmarked_refs, server_conv_id
             text, is_answer, refs, conv_id = self._extract_answer_and_refs_from_chunk(json_str)
             if text:
                 if is_answer and len(text) > len(best_marked_answer):
                     best_marked_answer = text
+                    best_marked_refs = refs
                 elif not is_answer and len(text) > len(best_unmarked_answer):
                     best_unmarked_answer = text
-            all_references.extend(refs)
+                    best_unmarked_refs = refs
             if conv_id:
                 server_conv_id = conv_id
 
@@ -485,6 +487,7 @@ class ChatAPI:
         # Prefer marked answers; fall back to longest unmarked text
         if best_marked_answer:
             longest_answer = best_marked_answer
+            final_refs = best_marked_refs
         elif best_unmarked_answer:
             logger.warning(
                 "No marked answer found; falling back to longest unmarked "
@@ -492,8 +495,10 @@ class ChatAPI:
                 len(best_unmarked_answer),
             )
             longest_answer = best_unmarked_answer
+            final_refs = best_unmarked_refs
         else:
             longest_answer = ""
+            final_refs = []
 
         if not longest_answer:
             logger.warning(
@@ -502,11 +507,11 @@ class ChatAPI:
             )
 
         # Assign citation numbers based on order of appearance
-        for idx, ref in enumerate(all_references, start=1):
+        for idx, ref in enumerate(final_refs, start=1):
             if ref.citation_number is None:
                 ref.citation_number = idx
 
-        return longest_answer, all_references, server_conv_id
+        return longest_answer, final_refs, server_conv_id
 
     def _extract_answer_and_refs_from_chunk(
         self, json_str: str
