@@ -20,6 +20,7 @@ from ..exceptions import (
     RPCError,
     ValidationError,
 )
+from ._encoding import safe_echo
 
 
 def _output_error(
@@ -44,11 +45,11 @@ def _output_error(
         response: dict = {"error": True, "code": code, "message": message}
         if extra:
             response.update(extra)
-        click.echo(json.dumps(response, indent=2))
+        click.echo(json.dumps(response, indent=2))  # json.dumps defaults to ASCII-safe output.
     else:
-        click.echo(message, err=True)
+        safe_echo(message, err=True)
         if hint:
-            click.echo(hint, err=True)
+            safe_echo(hint, err=True)
     raise SystemExit(exit_code)
 
 
@@ -80,7 +81,7 @@ def handle_errors(verbose: bool = False, json_output: bool = False) -> Generator
         if json_output:
             _output_error("Cancelled by user", "CANCELLED", True, 130)
         else:
-            click.echo("\nCancelled.", err=True)
+            safe_echo("\nCancelled.", err=True)
             raise SystemExit(130) from None
     except RateLimitError as e:
         retry_msg = f" Retry after {e.retry_after}s." if e.retry_after else ""

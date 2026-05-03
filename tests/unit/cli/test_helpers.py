@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import notebooklm.cli._encoding as encoding_module
 from notebooklm import Artifact
 from notebooklm.cli.helpers import (
     clear_context,
@@ -373,6 +374,44 @@ class TestHandleError:
             mock_console.print.assert_called_once()
             call_args = mock_console.print.call_args[0][0]
             assert "Test error" in call_args
+
+    def test_falls_back_when_console_cannot_encode_error(self):
+        class DummyStderr:
+            encoding = "cp950"
+
+        calls = []
+
+        def flaky_echo(message=None, **kwargs):
+            err = kwargs.get("err", False)
+            if not calls:
+                calls.append((message, err))
+                raise UnicodeEncodeError(
+                    "cp950",
+                    str(message),
+                    0,
+                    1,
+                    "illegal multibyte sequence",
+                )
+            calls.append((message, err))
+
+        with (
+            patch("notebooklm.cli.helpers.console") as mock_console,
+            patch("notebooklm.cli._encoding.click.echo", side_effect=flaky_echo),
+            patch.object(encoding_module.sys, "stderr", DummyStderr()),
+        ):
+            mock_console.print.side_effect = UnicodeEncodeError(
+                "cp950",
+                "Error: broken 🌐",
+                14,
+                15,
+                "illegal multibyte sequence",
+            )
+
+            with pytest.raises(SystemExit) as exc_info:
+                handle_error(ValueError("broken 🌐"))
+
+        assert exc_info.value.code == 1
+        assert calls == [("Error: broken 🌐", True), ("Error: broken ?", True)]
 
 
 class TestHandleAuthError:

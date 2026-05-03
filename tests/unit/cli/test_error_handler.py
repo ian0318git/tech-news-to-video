@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+import notebooklm.cli._encoding as encoding_module
 from notebooklm.cli.error_handler import handle_errors
 from notebooklm.exceptions import (
     AuthError,
@@ -165,6 +166,36 @@ class TestHandleErrorsTextOutput:
         data = json.loads(output)
         # Hint text should not be in the JSON structure
         assert "login" not in json.dumps(data).lower()
+
+    def test_text_output_falls_back_when_stream_cannot_encode(self, monkeypatch):
+        """Error reporting should not mask the original error with UnicodeEncodeError."""
+
+        class DummyStderr:
+            encoding = "cp950"
+
+        calls = []
+
+        def flaky_echo(message=None, **kwargs):
+            err = kwargs.get("err", False)
+            if not calls:
+                calls.append((message, err))
+                raise UnicodeEncodeError(
+                    "cp950",
+                    str(message),
+                    0,
+                    1,
+                    "illegal multibyte sequence",
+                )
+            calls.append((message, err))
+
+        monkeypatch.setattr(encoding_module.click, "echo", flaky_echo)
+        monkeypatch.setattr(encoding_module.sys, "stderr", DummyStderr())
+
+        with pytest.raises(SystemExit), handle_errors(json_output=False):
+            raise RuntimeError("bad 🌐")
+
+        assert calls[0] == ("Unexpected error: bad 🌐", True)
+        assert calls[1] == ("Unexpected error: bad ?", True)
 
 
 class TestHandleErrorsKeyboardInterrupt:

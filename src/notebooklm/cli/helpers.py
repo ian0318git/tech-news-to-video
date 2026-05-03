@@ -30,6 +30,7 @@ from ..auth import (
 from ..exceptions import NetworkError, RPCError, RPCTimeoutError
 from ..paths import get_context_path
 from ..types import ArtifactType
+from ._encoding import safe_echo
 
 if TYPE_CHECKING:
     from ..types import Artifact
@@ -536,7 +537,11 @@ async def resolve_source_ids(
 
 def handle_error(e: Exception):
     """Handle and display errors consistently."""
-    console.print(f"[red]Error: {e}[/red]")
+    message = f"Error: {e}"
+    try:
+        console.print(f"[red]{message}[/red]")
+    except UnicodeEncodeError:
+        safe_echo(message, err=True)
     raise SystemExit(1)
 
 
