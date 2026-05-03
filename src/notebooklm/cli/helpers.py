@@ -16,6 +16,7 @@ import os
 import time
 from functools import wraps
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit, urlunsplit
 
 import click
 from rich.console import Console
@@ -26,7 +27,7 @@ from ..auth import (
     fetch_tokens,
     load_auth_from_storage,
 )
-from ..exceptions import RPCTimeoutError
+from ..exceptions import NetworkError, RPCError, RPCTimeoutError
 from ..paths import get_context_path
 from ..types import ArtifactType
 
@@ -76,6 +77,25 @@ def run_async(coro):
     return asyncio.run(coro)
 
 
+def _normalize_url(url: str) -> str:
+    """Lowercase scheme + host and strip a trailing slash for comparison.
+
+    Server-side URL storage normalizes case and trailing slashes; client-side
+    requests may not. Compare via this helper to avoid false-negative misses
+    when verifying that a requested URL appears post-import.
+    """
+    parsed = urlsplit(url)
+    return urlunsplit(
+        (
+            parsed.scheme.lower(),
+            parsed.netloc.lower(),
+            parsed.path.rstrip("/"),
+            parsed.query,
+            parsed.fragment,
+        )
+    )
+
+
 async def import_with_retry(
     client,
     notebook_id: str,
@@ -103,27 +123,32 @@ async def import_with_retry(
     delay = initial_delay
     attempt = 1
 
-    requested_urls = {url for s in sources if isinstance((url := s.get("url")), str) and url}
+    requested_urls_norm = {
+        _normalize_url(url) for s in sources if isinstance((url := s.get("url")), str) and url
+    }
+    # Track whether the request itself includes any non-URL entries (research
+    # reports, pasted text). If it doesn't, we must NOT include concurrent
+    # no-URL additions in the synthesized return — those would be unrelated
+    # sources reported as "imported" by this call.
+    requested_has_no_url_entry = any(
+        not (isinstance(s.get("url"), str) and s.get("url")) for s in sources
+    )
 
-    # Snapshot baseline source URLs AND IDs so we can detect server-side success
-    # on timeout by computing the delta after each failed import RPC. URLs drive
-    # the detection condition (was the import seen on the server?); IDs filter
-    # the return value to only the truly new sources, which avoids reporting
-    # pre-existing rows as "imported" and also captures non-URL sources such as
-    # research-report entries.
-    baseline_urls: set[str] | None
+    # Snapshot baseline source IDs so the post-timeout probe can identify
+    # truly-new sources. We anchor the verified-success condition on URLs of
+    # *new* sources — not on a baseline→current URL delta — so concurrent
+    # additions from another session and pre-existing URLs cannot satisfy it.
     baseline_ids: set[str] | None
     try:
         baseline = await client.sources.list(notebook_id)
-        baseline_urls = {src.url for src in baseline if src.url}
         baseline_ids = {src.id for src in baseline}
-    except Exception as snapshot_exc:  # noqa: BLE001 - probe is best-effort; any failure falls back to legacy retry
-        logger.debug(
-            "Pre-import sources.list snapshot failed for %s: %s",
+    except (NetworkError, RPCError) as snapshot_exc:
+        logger.warning(
+            "Pre-import sources.list snapshot failed for %s: %s; "
+            "verified-success path disabled for this call",
             notebook_id,
             snapshot_exc,
         )
-        baseline_urls = None
         baseline_ids = None
 
     while True:
@@ -136,47 +161,62 @@ async def import_with_retry(
             # Verify server-side state before retrying. The IMPORT_RESEARCH RPC
             # frequently times out at the client (30s) after a successful
             # server-side write; retrying then duplicates every source.
-            if baseline_urls is not None and baseline_ids is not None and requested_urls:
+            if baseline_ids is not None and requested_urls_norm:
                 try:
                     current = await client.sources.list(notebook_id)
-                    current_urls = {src.url for src in current if src.url}
-                    delta_urls = current_urls - baseline_urls
-                    new_ids = {src.id for src in current} - baseline_ids
-                    # Either all requested URLs are now visible, or the delta
-                    # size matches what we tried to import. The latter is
-                    # robust to server-side URL normalization.
-                    if requested_urls.issubset(current_urls) or len(delta_urls) >= len(
-                        requested_urls
-                    ):
+                    new_sources = [src for src in current if src.id not in baseline_ids]
+                    new_urls_norm = {_normalize_url(src.url) for src in new_sources if src.url}
+                    # Success requires every requested URL to appear among the
+                    # *new* sources. Trivial-true cases (pre-existing URLs) and
+                    # concurrent unrelated additions both fail this check.
+                    if requested_urls_norm.issubset(new_urls_norm):
                         logger.warning(
                             "IMPORT_RESEARCH timed out for notebook %s but "
-                            "sources.list shows %d new sources; treating as "
-                            "success and skipping retry to avoid duplicate inflation",
+                            "sources.list shows all %d requested URLs among "
+                            "new sources; treating as success and skipping "
+                            "retry to avoid duplicate inflation",
                             notebook_id,
-                            len(new_ids),
+                            len(requested_urls_norm),
                         )
                         if not json_output:
                             console.print(
                                 f"[yellow]Import RPC timed out, but server-side "
-                                f"verified {len(new_ids)} new sources — "
-                                f"skipping retry.[/yellow]"
+                                f"verified {len(requested_urls_norm)} requested "
+                                f"sources — skipping retry.[/yellow]"
                             )
-                        # Return only sources whose IDs appeared after the
-                        # baseline probe. This avoids surfacing pre-existing
-                        # rows that happen to share a requested URL, and it
-                        # captures non-URL imports (e.g. research reports).
+                        # Return only new sources that match a requested URL.
+                        # No-URL new sources (research reports, pasted text)
+                        # are included only if the request itself had no-URL
+                        # entries — otherwise they're concurrent unrelated
+                        # additions and don't belong in the return.
                         return [
                             {"id": src.id, "title": src.title or src.url or ""}
-                            for src in current
-                            if src.id in new_ids
+                            for src in new_sources
+                            if (src.url and _normalize_url(src.url) in requested_urls_norm)
+                            or (not src.url and requested_has_no_url_entry)
                         ]
-                except Exception as probe_exc:  # noqa: BLE001 - probe is best-effort
+                except (NetworkError, RPCError) as probe_exc:
+                    # CancelledError is a BaseException, not Exception, and is
+                    # not in this tuple — it propagates naturally for callers
+                    # that need to cancel the operation cleanly.
                     logger.warning(
                         "Failed to probe server state after timeout: %s; falling back to retry",
                         probe_exc,
                     )
 
             if remaining <= 0:
+                raise
+
+            # Report-only imports (no URLs to verify) can't use the success
+            # check above. Cap retries at one to bound worst-case duplicate
+            # inflation for report entries when timeouts persist.
+            if not requested_urls_norm and attempt >= 2:
+                logger.warning(
+                    "IMPORT_RESEARCH timed out for notebook %s with no URLs to "
+                    "verify; giving up after %d attempts to bound duplicate inflation",
+                    notebook_id,
+                    attempt,
+                )
                 raise
 
             sleep_for = min(delay, max_delay, remaining)
