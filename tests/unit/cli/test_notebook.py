@@ -8,7 +8,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from click.testing import CliRunner
 
+from notebooklm.exceptions import NotebookLimitError, RPCError
 from notebooklm.notebooklm_cli import cli
+from notebooklm.rpc import RPCMethod
 from notebooklm.types import AskResult, Notebook
 
 from .conftest import create_mock_client, patch_client_for_module, patch_main_cli_client
@@ -146,6 +148,48 @@ class TestNotebookCreate:
             assert result.exit_code == 0
             data = json.loads(result.output)
             assert data["notebook"]["id"] == "new_nb_id"
+
+    def test_notebook_create_json_quota_error(self, runner, mock_auth):
+        """Create emits structured JSON when notebook quota is detected."""
+        with patch_main_cli_client() as mock_client_cls:
+            mock_client = create_mock_client()
+            original = RPCError(
+                "RPC CCqFvf returned null result with status code 3 (Invalid argument).",
+                method_id=RPCMethod.CREATE_NOTEBOOK.value,
+                rpc_code=3,
+            )
+            mock_client.notebooks.create = AsyncMock(
+                side_effect=NotebookLimitError(499, limit=500, original_error=original)
+            )
+            mock_client_cls.return_value = mock_client
+
+            with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["create", "Test Notebook", "--json"])
+
+            assert result.exit_code == 1
+            data = json.loads(result.output)
+            assert data["code"] == "NOTEBOOK_LIMIT"
+            assert data["current_count"] == 499
+            assert data["limit"] == 500
+            assert "known_limits" not in data
+            assert data["method_id"] == RPCMethod.CREATE_NOTEBOOK.value
+            assert data["rpc_code"] == 3
+
+    def test_notebook_create_text_quota_error(self, runner, mock_auth):
+        """Create emits an actionable text error when notebook quota is detected."""
+        with patch_main_cli_client() as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.notebooks.create = AsyncMock(side_effect=NotebookLimitError(499, limit=500))
+            mock_client_cls.return_value = mock_client
+
+            with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["create", "Test Notebook"])
+
+            assert result.exit_code == 1
+            assert "notebook limit" in result.output.lower()
+            assert "499/500" in result.output
 
 
 # =============================================================================

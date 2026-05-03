@@ -71,6 +71,23 @@ class UnknownTypeWarning(UserWarning):
     pass
 
 
+@dataclass(frozen=True)
+class AccountLimits:
+    """Account-level limits returned by NotebookLM user settings."""
+
+    notebook_limit: int | None = None
+    source_limit: int | None = None
+    raw_limits: tuple[Any, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class AccountTier:
+    """Raw NotebookLM tier metadata returned by the homepage tier RPC."""
+
+    tier: str | None = None
+    plan_name: str | None = None
+
+
 class SourceType(str, Enum):
     """User-facing source types.
 

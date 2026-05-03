@@ -66,6 +66,7 @@ from .exceptions import (
     NetworkError,
     # Domain: Notebooks
     NotebookError,
+    NotebookLimitError,
     # Base
     NotebookLMError,
     NotebookNotFoundError,
@@ -85,6 +86,8 @@ from .exceptions import (
 
 # Public API: Types and dataclasses
 from .types import (
+    AccountLimits,
+    AccountTier,
     Artifact,
     ArtifactType,
     AskResult,
@@ -136,6 +139,8 @@ __all__ = [
     # Auth
     "AuthTokens",
     # Types
+    "AccountLimits",
+    "AccountTier",
     "Notebook",
     "NotebookDescription",
     "NotebookMetadata",
@@ -170,6 +175,7 @@ __all__ = [
     # Domain Exceptions: Notebooks
     "NotebookError",
     "NotebookNotFoundError",
+    "NotebookLimitError",
     # Domain Exceptions: Chat
     "ChatError",
     # Domain Exceptions: Sources

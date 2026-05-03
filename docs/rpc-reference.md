@@ -53,6 +53,7 @@
 | `fejl7e` | REMOVE_RECENTLY_VIEWED | Remove notebook from recent list | `_notebooks.py` |
 | `ZwVcOc` | GET_USER_SETTINGS | Get user settings including output language | `_settings.py` |
 | `hT54vc` | SET_USER_SETTINGS | Set user settings (e.g., output language) | `_settings.py` |
+| `ozz5Z` | GET_USER_TIER | Get current NotebookLM subscription tier | `_settings.py` |
 
 ### Content Type Codes (ArtifactTypeCode)
 
@@ -1348,6 +1349,41 @@ await rpc_call(
 
 Global user settings that affect all notebooks in an account.
 
+### RPC: GET_USER_TIER (ozz5Z)
+
+**Source:** `_settings.py::get_account_tier()`
+
+Get the current NotebookLM subscription tier from the homepage context.
+
+```python
+params = [
+    [
+        [
+            [
+                [None, "1", 627],
+                [None, None, None, None, None, None, None, None, None, [None, None, 2]],
+                1,
+            ]
+        ]
+    ]
+]
+
+await rpc_call(
+    RPCMethod.GET_USER_TIER,
+    params,
+    source_path="/",
+)
+
+# Response includes a string like:
+# "NOTEBOOKLM_TIER_STANDARD"
+# "NOTEBOOKLM_TIER_PRO"
+# "NOTEBOOKLM_TIER_PRO_CONSUMER_USER"
+# "NOTEBOOKLM_TIER_PRO_DASHER_END_USER"
+#
+# Treat this as internal account metadata. Use GET_USER_SETTINGS limits for
+# notebook/source quota decisions.
+```
+
 ### RPC: GET_USER_SETTINGS (ZwVcOc)
 
 **Source:** `_settings.py::get_output_language()`
@@ -1377,6 +1413,8 @@ await rpc_call(
 # ]]
 #
 # Language code at: result[0][2][4][0]
+# Notebook limit at: result[0][1][1]
+# Source limit at: result[0][1][2]
 ```
 
 ### RPC: SET_USER_SETTINGS (hT54vc)

@@ -15,6 +15,7 @@ from ..exceptions import (
     AuthError,
     ConfigurationError,
     NetworkError,
+    NotebookLimitError,
     NotebookLMError,
     RateLimitError,
     RPCError,
@@ -116,6 +117,14 @@ def handle_errors(verbose: bool = False, json_output: bool = False) -> Generator
             json_output,
             1,
             hint="Check your internet connection and try again.",
+        )
+    except NotebookLimitError as e:
+        _output_error(
+            str(e),
+            "NOTEBOOK_LIMIT",
+            json_output,
+            1,
+            extra=e.to_error_response_extra(),
         )
     except NotebookLMError as e:
         extra_info: dict[str, Any] | None = None

@@ -10,6 +10,7 @@ from notebooklm.exceptions import (
     AuthError,
     ConfigurationError,
     NetworkError,
+    NotebookLimitError,
     RateLimitError,
     RPCError,
     ValidationError,
@@ -114,6 +115,21 @@ class TestHandleErrorsJsonOutput:
         assert data["error"] is True
         assert "method_id" not in data
 
+    def test_notebook_limit_error_json_includes_quota_context(self, capsys):
+        """NotebookLimitError should produce a specific JSON error code."""
+        with pytest.raises(SystemExit), handle_errors(json_output=True):
+            raise NotebookLimitError(499, limit=500)
+
+        output = capsys.readouterr().out
+        data = json.loads(output)
+        assert data["error"] is True
+        assert data["code"] == "NOTEBOOK_LIMIT"
+        assert data["current_count"] == 499
+        assert data["limit"] == 500
+        assert "known_limits" not in data
+        assert "method_id" not in data
+        assert "rpc_code" not in data
+
     def test_unexpected_error_json_format(self, capsys):
         """Unexpected errors should produce UNEXPECTED_ERROR code."""
         with pytest.raises(SystemExit), handle_errors(json_output=True):
@@ -146,6 +162,15 @@ class TestHandleErrorsTextOutput:
         output = capsys.readouterr().err
         assert "Network error" in output
         assert "internet connection" in output
+
+    def test_notebook_limit_error_text_includes_quota_context(self, capsys):
+        """NotebookLimitError should show notebook count in text mode."""
+        with pytest.raises(SystemExit), handle_errors(json_output=False):
+            raise NotebookLimitError(499, limit=500)
+
+        output = capsys.readouterr().err
+        assert "notebook limit" in output.lower()
+        assert "499/500" in output
 
     def test_unexpected_error_shows_bug_report_hint(self, capsys):
         """Unexpected errors should show bug report hint."""

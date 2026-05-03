@@ -78,6 +78,7 @@ class RPCMethod(str, Enum):
     # User settings
     GET_USER_SETTINGS = "ZwVcOc"  # Get user settings including output language
     SET_USER_SETTINGS = "hT54vc"  # Set user settings (e.g., output language)
+    GET_USER_TIER = "ozz5Z"  # Get NotebookLM subscription tier from homepage context
 
 
 class ArtifactTypeCode(int, Enum):

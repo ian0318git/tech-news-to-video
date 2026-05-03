@@ -27,7 +27,7 @@ from ..auth import (
     fetch_tokens,
     load_auth_from_storage,
 )
-from ..exceptions import NetworkError, RPCError, RPCTimeoutError
+from ..exceptions import NetworkError, NotebookLimitError, RPCError, RPCTimeoutError
 from ..paths import get_context_path
 from ..types import ArtifactType
 from ._encoding import safe_echo
@@ -730,6 +730,13 @@ def with_client(f):
         except Exception as e:
             log_result("failed", str(e))
             if json_output:
+                if isinstance(e, NotebookLimitError):
+                    json_error_response(
+                        "NOTEBOOK_LIMIT",
+                        str(e),
+                        extra=e.to_error_response_extra(),
+                    )
+                    return
                 json_error_response("ERROR", str(e))
             else:
                 handle_error(e)
