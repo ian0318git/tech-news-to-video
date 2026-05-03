@@ -897,6 +897,192 @@ class TestImportWithRetry:
         mock_sleep.assert_awaited_once_with(5)
 
     @pytest.mark.asyncio
+    async def test_partial_timeout_retries_only_missing_urls(self):
+        """If a timed-out import partially committed URLs, the retry payload
+        must drop already-visible URLs to avoid duplicating them.
+        """
+        imported_src = MagicMock(id="src_1", title="Source 1", url="https://one.example.com")
+        sources = [
+            {"url": "https://one.example.com", "title": "Source 1"},
+            {"url": "https://two.example.com", "title": "Source 2"},
+            {"url": "https://three.example.com", "title": "Source 3"},
+        ]
+        client = MagicMock()
+        client.sources.list = AsyncMock(
+            side_effect=[
+                [],  # baseline
+                [imported_src],  # post-timeout probe — 1 of 3 is visible
+            ]
+        )
+        client.research.import_sources = AsyncMock(
+            side_effect=[
+                RPCTimeoutError("Timed out", timeout_seconds=30.0),
+                [{"id": "src_2", "title": "Source 2"}, {"id": "src_3", "title": "Source 3"}],
+            ]
+        )
+
+        with (
+            patch("notebooklm.cli.helpers.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+            patch("notebooklm.cli.helpers.console"),
+        ):
+            imported = await import_with_retry(
+                client,
+                "nb_123",
+                "task_123",
+                sources,
+                initial_delay=5,
+            )
+
+        assert imported == [
+            {"id": "src_1", "title": "Source 1"},
+            {"id": "src_2", "title": "Source 2"},
+            {"id": "src_3", "title": "Source 3"},
+        ]
+        assert client.research.import_sources.await_count == 2
+        first_call_sources = client.research.import_sources.await_args_list[0].args[2]
+        retry_call_sources = client.research.import_sources.await_args_list[1].args[2]
+        assert first_call_sources == sources
+        assert retry_call_sources == [
+            {"url": "https://two.example.com", "title": "Source 2"},
+            {"url": "https://three.example.com", "title": "Source 3"},
+        ]
+        mock_sleep.assert_awaited_once_with(5)
+
+    @pytest.mark.asyncio
+    async def test_partial_timeout_preserves_report_entries_for_retry(self):
+        """Filtering URL entries that are already visible must leave no-URL
+        report entries in the retry payload.
+        """
+        imported_src = MagicMock(id="src_1", title="Source 1", url="https://one.example.com")
+        report_entry = {
+            "title": "Research Report",
+            "report_markdown": "# Findings\n...",
+            "result_type": 5,
+        }
+        sources = [
+            {"url": "https://one.example.com", "title": "Source 1"},
+            {"url": "https://two.example.com", "title": "Source 2"},
+            report_entry,
+        ]
+        client = MagicMock()
+        client.sources.list = AsyncMock(
+            side_effect=[
+                [],  # baseline
+                [imported_src],  # post-timeout probe — URL 1 is visible
+            ]
+        )
+        client.research.import_sources = AsyncMock(
+            side_effect=[
+                RPCTimeoutError("Timed out", timeout_seconds=30.0),
+                [{"id": "src_2", "title": "Source 2"}, {"id": "src_report", "title": "Report"}],
+            ]
+        )
+
+        with (
+            patch("notebooklm.cli.helpers.asyncio.sleep", new_callable=AsyncMock),
+            patch("notebooklm.cli.helpers.console"),
+        ):
+            imported = await import_with_retry(
+                client,
+                "nb_123",
+                "task_123",
+                sources,
+                initial_delay=5,
+            )
+
+        assert imported == [
+            {"id": "src_1", "title": "Source 1"},
+            {"id": "src_2", "title": "Source 2"},
+            {"id": "src_report", "title": "Report"},
+        ]
+        retry_call_sources = client.research.import_sources.await_args_list[1].args[2]
+        assert retry_call_sources == [
+            {"url": "https://two.example.com", "title": "Source 2"},
+            report_entry,
+        ]
+
+    @pytest.mark.asyncio
+    async def test_partial_timeout_merges_prior_verified_sources_on_later_verified_success(self):
+        """When multiple timeouts happen, later verified-success returns must
+        include sources verified during earlier partial probes.
+        """
+        source_1 = MagicMock(id="src_1", title="Source 1", url="https://one.example.com")
+        source_2 = MagicMock(id="src_2", title="Source 2", url="https://two.example.com")
+        sources = [
+            {"url": "https://one.example.com", "title": "Source 1"},
+            {"url": "https://two.example.com", "title": "Source 2"},
+        ]
+        client = MagicMock()
+        client.sources.list = AsyncMock(
+            side_effect=[
+                [],  # baseline
+                [source_1],  # first timeout — only URL 1 is visible, so retry URL 2
+                [source_1, source_2],  # second timeout — URL 2 is now visible
+            ]
+        )
+        client.research.import_sources = AsyncMock(
+            side_effect=[
+                RPCTimeoutError("Timed out", timeout_seconds=30.0),
+                RPCTimeoutError("Timed out", timeout_seconds=30.0),
+            ]
+        )
+
+        with (
+            patch("notebooklm.cli.helpers.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+            patch("notebooklm.cli.helpers.console"),
+        ):
+            imported = await import_with_retry(
+                client,
+                "nb_123",
+                "task_123",
+                sources,
+                initial_delay=5,
+            )
+
+        assert imported == [
+            {"id": "src_1", "title": "Source 1"},
+            {"id": "src_2", "title": "Source 2"},
+        ]
+        assert client.research.import_sources.await_count == 2
+        retry_call_sources = client.research.import_sources.await_args_list[1].args[2]
+        assert retry_call_sources == [{"url": "https://two.example.com", "title": "Source 2"}]
+        mock_sleep.assert_awaited_once_with(5)
+
+    @pytest.mark.asyncio
+    async def test_partial_timeout_skips_retry_when_filter_removes_all_sources(self):
+        """If every requested URL is already visible after the timeout, there
+        is nothing left to retry.
+        """
+        existing_src = MagicMock(id="src_existing", title="Old", url="https://example.com")
+        client = MagicMock()
+        client.sources.list = AsyncMock(
+            side_effect=[
+                [existing_src],  # baseline already has the URL
+                [existing_src],  # post-timeout probe still shows it
+            ]
+        )
+        client.research.import_sources = AsyncMock(
+            side_effect=RPCTimeoutError("Timed out", timeout_seconds=30.0)
+        )
+
+        with (
+            patch("notebooklm.cli.helpers.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+            patch("notebooklm.cli.helpers.console") as mock_console,
+        ):
+            imported = await import_with_retry(
+                client,
+                "nb_123",
+                "task_123",
+                [{"url": "https://example.com", "title": "Old (request)"}],
+                initial_delay=5,
+            )
+
+        assert imported == []
+        assert client.research.import_sources.await_count == 1
+        mock_sleep.assert_not_awaited()
+        assert mock_console.print.call_count == 1
+
+    @pytest.mark.asyncio
     async def test_retries_when_pre_existing_url_meets_concurrent_unrelated_addition(
         self,
     ):
@@ -904,7 +1090,8 @@ class TestImportWithRetry:
         before the import, AND a concurrent session added an unrelated source
         during the timeout window. The verified-success branch must NOT fire
         — neither the pre-existing URL nor the unrelated addition is proof
-        our import wrote anything. The legacy retry path must run.
+        our import wrote anything. The retry payload filter should still avoid
+        re-adding the requested URL because it is already present.
         """
         existing_src = MagicMock(id="src_existing", title="Old", url="https://example.com")
         unrelated_src = MagicMock(
@@ -940,11 +1127,9 @@ class TestImportWithRetry:
                 initial_delay=5,
             )
 
-        # Must retry — neither the pre-existing match nor the unrelated new
-        # source proves the requested URL was actually written by this call.
-        assert client.research.import_sources.await_count == 2
-        mock_sleep.assert_awaited_once_with(5)
-        assert imported == [{"id": "src_existing", "title": "Old"}]
+        assert imported == []
+        assert client.research.import_sources.await_count == 1
+        mock_sleep.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_returned_list_includes_non_url_sources_like_research_reports(self):
@@ -1086,8 +1271,8 @@ class TestImportWithRetry:
         """If the requested URL was already in the notebook before the import
         and the post-timeout snapshot shows no truly-new source matching it,
         verification must NOT fire — even though `requested_urls.issubset(
-        current_urls)` is trivially true. Otherwise a failed re-import of an
-        existing URL silently reports success.
+        current_urls)` is trivially true. The retry filter then drops the
+        already-present URL instead of re-adding a duplicate.
         """
         existing_src = MagicMock(id="src_existing", title="Old", url="https://example.com")
         client = MagicMock()
@@ -1117,10 +1302,9 @@ class TestImportWithRetry:
                 initial_delay=5,
             )
 
-        # Must retry — the URL being pre-existing isn't proof our import wrote.
-        assert client.research.import_sources.await_count == 2
-        mock_sleep.assert_awaited_once_with(5)
-        assert imported == [{"id": "src_existing", "title": "Old"}]
+        assert client.research.import_sources.await_count == 1
+        mock_sleep.assert_not_awaited()
+        assert imported == []
 
     @pytest.mark.asyncio
     async def test_report_only_import_bounded_retries_on_persistent_timeout(self):

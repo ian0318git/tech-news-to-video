@@ -33,7 +33,7 @@ from ..types import ArtifactType
 from ._encoding import safe_echo
 
 if TYPE_CHECKING:
-    from ..types import Artifact
+    from ..types import Artifact, Source
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -97,6 +97,38 @@ def _normalize_url(url: str) -> str:
     )
 
 
+def _source_url_norm(source: dict) -> str | None:
+    url = source.get("url")
+    if not isinstance(url, str) or not url:
+        return None
+    return _normalize_url(url)
+
+
+def _requested_urls_norm(sources: list[dict]) -> set[str]:
+    return {url for source in sources if (url := _source_url_norm(source))}
+
+
+def _has_no_url_entry(sources: list[dict]) -> bool:
+    return any(_source_url_norm(source) is None for source in sources)
+
+
+def _imported_source_entry(source: "Source") -> dict[str, str]:
+    return {"id": source.id, "title": source.title or source.url or ""}
+
+
+def _merge_imported_sources(
+    imported: list[dict[str, str]],
+    verified_imported: list[dict[str, str]],
+    verified_imported_ids: set[str],
+) -> list[dict[str, str]]:
+    if not verified_imported:
+        return imported
+    return [
+        *verified_imported,
+        *(entry for entry in imported if entry.get("id") not in verified_imported_ids),
+    ]
+
+
 async def import_with_retry(
     client,
     notebook_id: str,
@@ -123,17 +155,15 @@ async def import_with_retry(
     started_at = time.monotonic()
     delay = initial_delay
     attempt = 1
+    verified_imported: list[dict[str, str]] = []
+    verified_imported_ids: set[str] = set()
 
-    requested_urls_norm = {
-        _normalize_url(url) for s in sources if isinstance((url := s.get("url")), str) and url
-    }
+    requested_urls_norm = _requested_urls_norm(sources)
     # Track whether the request itself includes any non-URL entries (research
     # reports, pasted text). If it doesn't, we must NOT include concurrent
     # no-URL additions in the synthesized return — those would be unrelated
     # sources reported as "imported" by this call.
-    requested_has_no_url_entry = any(
-        not (isinstance(s.get("url"), str) and s.get("url")) for s in sources
-    )
+    requested_has_no_url_entry = _has_no_url_entry(sources)
 
     # Snapshot baseline source IDs so the post-timeout probe can identify
     # truly-new sources. We anchor the verified-success condition on URLs of
@@ -154,7 +184,8 @@ async def import_with_retry(
 
     while True:
         try:
-            return await client.research.import_sources(notebook_id, task_id, sources)
+            imported = await client.research.import_sources(notebook_id, task_id, sources)
+            return _merge_imported_sources(imported, verified_imported, verified_imported_ids)
         except RPCTimeoutError:
             elapsed = time.monotonic() - started_at
             remaining = max_elapsed - elapsed
@@ -167,6 +198,7 @@ async def import_with_retry(
                     current = await client.sources.list(notebook_id)
                     new_sources = [src for src in current if src.id not in baseline_ids]
                     new_urls_norm = {_normalize_url(src.url) for src in new_sources if src.url}
+                    current_urls_norm = {_normalize_url(src.url) for src in current if src.url}
                     # Success requires every requested URL to appear among the
                     # *new* sources. Trivial-true cases (pre-existing URLs) and
                     # concurrent unrelated additions both fail this check.
@@ -190,12 +222,62 @@ async def import_with_retry(
                         # are included only if the request itself had no-URL
                         # entries — otherwise they're concurrent unrelated
                         # additions and don't belong in the return.
-                        return [
-                            {"id": src.id, "title": src.title or src.url or ""}
+                        imported = [
+                            _imported_source_entry(src)
                             for src in new_sources
                             if (src.url and _normalize_url(src.url) in requested_urls_norm)
                             or (not src.url and requested_has_no_url_entry)
                         ]
+                        return _merge_imported_sources(
+                            imported, verified_imported, verified_imported_ids
+                        )
+                    source_norms = [(source, _source_url_norm(source)) for source in sources]
+                    removed_urls_norm = {
+                        url
+                        for _, url in source_norms
+                        if url is not None and url in current_urls_norm
+                    }
+                    filtered_sources = [
+                        source for source, url in source_norms if url not in current_urls_norm
+                    ]
+                    if len(filtered_sources) != len(sources):
+                        removed_count = len(sources) - len(filtered_sources)
+                        for src in new_sources:
+                            if (
+                                src.url
+                                and _normalize_url(src.url) in removed_urls_norm
+                                and src.id not in verified_imported_ids
+                            ):
+                                verified_imported.append(_imported_source_entry(src))
+                                verified_imported_ids.add(src.id)
+                        sources = filtered_sources
+                        requested_urls_norm = _requested_urls_norm(sources)
+                        requested_has_no_url_entry = _has_no_url_entry(sources)
+                        if not sources:
+                            logger.warning(
+                                "IMPORT_RESEARCH timed out for notebook %s but "
+                                "sources.list shows all requested URLs already "
+                                "present; treating as success and skipping retry "
+                                "to avoid duplicate inflation",
+                                notebook_id,
+                            )
+                            if not json_output:
+                                console.print(
+                                    "[yellow]Import RPC timed out, but all "
+                                    "requested sources are already present — "
+                                    "skipping retry.[/yellow]"
+                                )
+                            return _merge_imported_sources(
+                                [], verified_imported, verified_imported_ids
+                            )
+                        logger.warning(
+                            "IMPORT_RESEARCH timed out for notebook %s after "
+                            "%d requested source(s) were already present; retrying "
+                            "with %d remaining source(s)",
+                            notebook_id,
+                            removed_count,
+                            len(sources),
+                        )
                 except (NetworkError, RPCError) as probe_exc:
                     # CancelledError is a BaseException, not Exception, and is
                     # not in this tuple — it propagates naturally for callers
