@@ -208,10 +208,20 @@ class TestLoginCommand:
 
             yield mock_page
 
+    @pytest.mark.parametrize(
+        "error_message",
+        [
+            "Page.goto: Navigation interrupted by another one",
+            (
+                'Page.goto: Navigation to "https://accounts.google.com/" is interrupted by '
+                'another navigation to "https://notebooklm.google.com/"'
+            ),
+        ],
+    )
     def test_login_handles_navigation_interrupted_error(
-        self, runner, mock_login_browser_with_storage
+        self, runner, mock_login_browser_with_storage, error_message
     ):
-        """Test login succeeds when page.goto raises 'Navigation interrupted' (#214)."""
+        """Test login succeeds when page.goto raises navigation interruption errors."""
         mock_page = mock_login_browser_with_storage
         from playwright.sync_api import Error as PlaywrightError
 
@@ -224,7 +234,7 @@ class TestLoginCommand:
             # First goto (NOTEBOOKLM_URL before login) succeeds
             # Second and third (cookie-forcing) raise navigation interrupted
             if call_count >= 2:
-                raise PlaywrightError("Page.goto: Navigation interrupted by another one")
+                raise PlaywrightError(error_message)
 
         mock_page.goto.side_effect = goto_side_effect
         mock_page.url = original_url
@@ -237,7 +247,7 @@ class TestLoginCommand:
     def test_login_reraises_non_navigation_playwright_errors(
         self, runner, mock_login_browser_with_storage
     ):
-        """Test login re-raises PlaywrightError that isn't 'Navigation interrupted'."""
+        """Test login re-raises PlaywrightError that is not a navigation interruption."""
         mock_page = mock_login_browser_with_storage
         from playwright.sync_api import Error as PlaywrightError
 
@@ -598,6 +608,59 @@ class TestLoginCommand:
         assert result.exit_code == 0
         assert "Authentication saved" in result.output
         # Verify new_page was called to get a fresh page after the stale one died
+        mock_context.new_page.assert_called()
+
+    def test_login_ignores_navigation_interrupted_after_recovering_page(self, runner, tmp_path):
+        """Test recovered pages can also hit the Playwright navigation race (#317)."""
+        storage_file = tmp_path / "storage.json"
+        browser_dir = tmp_path / "profile"
+
+        with (
+            patch("notebooklm.cli.session._ensure_chromium_installed"),
+            patch("playwright.sync_api.sync_playwright") as mock_pw,
+            patch("notebooklm.cli.session.get_storage_path", return_value=storage_file),
+            patch(
+                "notebooklm.cli.session.get_browser_profile_dir",
+                return_value=browser_dir,
+            ),
+            patch("notebooklm.cli.session._sync_server_language_to_config"),
+            patch("builtins.input", return_value=""),
+        ):
+            from playwright.sync_api import Error as PlaywrightError
+
+            mock_context = MagicMock()
+            mock_page_stale = MagicMock()
+            mock_page_recovered = MagicMock()
+            mock_page_recovered.url = "https://notebooklm.google.com/"
+
+            goto_call_count = 0
+
+            def stale_goto_side_effect(url, **kwargs):
+                nonlocal goto_call_count
+                goto_call_count += 1
+                if goto_call_count == 1:
+                    return
+                raise PlaywrightError("Page.goto: Target page, context or browser has been closed")
+
+            mock_page_stale.goto.side_effect = stale_goto_side_effect
+            mock_page_stale.url = "https://notebooklm.google.com/"
+            mock_page_recovered.goto.side_effect = PlaywrightError(
+                'Page.goto: Navigation to "https://accounts.google.com/" is interrupted by '
+                'another navigation to "https://notebooklm.google.com/"'
+            )
+            mock_context.pages = [mock_page_stale]
+            mock_context.new_page.return_value = mock_page_recovered
+            mock_context.storage_state.side_effect = lambda path: Path(path).write_text("{}")
+
+            mock_launch = (
+                mock_pw.return_value.__enter__.return_value.chromium.launch_persistent_context
+            )
+            mock_launch.return_value = mock_context
+
+            result = runner.invoke(cli, ["login"])
+
+        assert result.exit_code == 0
+        assert "Authentication saved" in result.output
         mock_context.new_page.assert_called()
 
     def test_login_shows_browser_closed_message_after_exhausting_retries(self, runner, tmp_path):

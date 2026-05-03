@@ -68,6 +68,10 @@ LOGIN_MAX_RETRIES = 3
 # Playwright's TargetClosedError class (introduced in v1.41). If a future
 # version changes this message, the error will propagate unhandled (safe fallback).
 TARGET_CLOSED_ERROR = "Target page, context or browser has been closed"
+_NAVIGATION_INTERRUPTED_MARKERS = (
+    "navigation interrupted",
+    "interrupted by another navigation",
+)
 BROWSER_CLOSED_HELP = (
     "[red]The browser window was closed during login.[/red]\n"
     "This can happen when switching Google accounts in a persistent browser session.\n\n"
@@ -88,6 +92,13 @@ CONNECTION_ERROR_HELP = (
     "  3. Wait a few minutes before retrying\n"
     "  4. Check if notebooklm.google.com is accessible in your browser"
 )
+
+
+def _is_navigation_interrupted_error(error: str | Exception) -> bool:
+    """Return True for Playwright navigation races that are safe to ignore."""
+    error_str = str(error).lower()
+    return any(marker in error_str for marker in _NAVIGATION_INTERRUPTED_MARKERS)
+
 
 # Maps user-facing browser names to rookiepy function names.
 _ROOKIEPY_BROWSER_ALIASES: dict[str, str] = {
@@ -605,9 +616,9 @@ def register_session_commands(cli):
                                     # Recovered page also dead -- context/browser is gone
                                     console.print(BROWSER_CLOSED_HELP)
                                     raise SystemExit(1) from inner_exc
-                                elif "Navigation interrupted" not in str(inner_exc):
+                                elif not _is_navigation_interrupted_error(inner_exc):
                                     raise
-                        elif "Navigation interrupted" not in error_str:
+                        elif not _is_navigation_interrupted_error(error_str):
                             raise
 
                 current_url = page.url
