@@ -36,6 +36,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
@@ -1151,7 +1152,7 @@ async def _fetch_tokens_with_refresh(
 ) -> tuple[str, str, bool]:
     """Fetch tokens, optionally running NOTEBOOKLM_REFRESH_CMD on auth expiry."""
     try:
-        csrf, session_id = await _fetch_tokens_with_jar(cookie_jar)
+        csrf, session_id = await _fetch_tokens_with_jar(cookie_jar, storage_path)
         return csrf, session_id, False
     except ValueError as err:
         if not _should_try_refresh(err):
@@ -1172,7 +1173,7 @@ async def _fetch_tokens_with_refresh(
                     _REFRESH_GENERATIONS[refresh_key] = refresh_generation + 1
                 fresh_jar = build_httpx_cookies_from_storage(refresh_storage_path)
                 _replace_cookie_jar(cookie_jar, fresh_jar)
-            csrf, session_id = await _fetch_tokens_with_jar(cookie_jar)
+            csrf, session_id = await _fetch_tokens_with_jar(cookie_jar, refresh_storage_path)
             return csrf, session_id, True
         finally:
             _REFRESH_ATTEMPTED_CONTEXT.reset(refresh_token)
@@ -1203,55 +1204,128 @@ def _update_cookie_input(target: CookieInput, fresh: DomainCookieMap) -> None:
 # --- Keepalive poke ----------------------------------------------------------
 # Google's __Secure-1PSIDTS / __Secure-3PSIDTS cookies are the rotating freshness
 # partners of __Secure-1PSID / __Secure-3PSID. Their server-side validity window
-# is short (minutes-to-hours scale) and Google only emits a rotated value
-# (Set-Cookie) when the client touches the identity surface — typically
-# accounts.google.com/CheckCookie or ListAccounts. Pure RPC traffic against
+# is short (minutes-to-hours scale) and Google only emits a rotated value when
+# the client asks the identity surface to rotate. Pure RPC traffic against
 # notebooklm.google.com never triggers rotation, so a long-lived storage_state
 # silently stales out and every subsequent call fails with the
 # "Authentication expired or invalid" redirect (see issue #312).
 #
-# Hitting CheckCookie once per token-fetch elicits the rotation; the resulting
-# Set-Cookie lands in the live httpx jar, which #276 then persists on close.
-KEEPALIVE_POKE_URL = (
-    "https://accounts.google.com/CheckCookie?continue=https%3A%2F%2Fnotebooklm.google.com%2F"
-)
+# We POST to ``accounts.google.com/RotateCookies`` — the dedicated rotation
+# endpoint Chrome itself calls for legacy cookie rotation. Empirically validated
+# against both DBSC-bound (Playwright-minted) and unbound (Firefox-imported)
+# profiles in #345: a single POST returns 200 and sets fresh
+# ``__Secure-1PSIDTS`` / ``__Secure-3PSIDTS`` for either session type. The
+# response body declares the next-rotation interval (`["identity.hfcr",600]` —
+# 10 minutes), which sets the floor for how often this is worth firing.
+KEEPALIVE_ROTATE_URL = "https://accounts.google.com/RotateCookies"
+_KEEPALIVE_ROTATE_HEADERS = {
+    "Content-Type": "application/json",
+    "Origin": "https://accounts.google.com",
+}
+# Observed unbound RotateCookies request body — a placeholder pair Chrome sends
+# when there is no DBSC binding token to attest. Validated across Gemini-API and
+# the in-house experiments referenced in #345; kept in one place so it can be
+# changed if Google ever changes the contract.
+_KEEPALIVE_ROTATE_BODY = '[000,"-0000000000000000000"]'
 NOTEBOOKLM_DISABLE_KEEPALIVE_POKE_ENV = "NOTEBOOKLM_DISABLE_KEEPALIVE_POKE"
 _KEEPALIVE_POKE_TIMEOUT = 15.0
+# Skip the poke if storage_state.json was rewritten within this window — protects
+# accounts.google.com from rapid CLI loops (e.g. 10 sequential `notebooklm`
+# invocations) that would each fire their own rotation. Google's own declared
+# rotation cadence is 600 s, so 60 s is well under the useful interval.
+_KEEPALIVE_RATE_LIMIT_SECONDS = 60.0
+# Sub-second drift between ``time.time()`` and filesystem mtime can land a
+# freshly-written file fractionally in the future on some platforms (notably
+# Windows + older Python where the clock is coarser than NTFS mtime). Tolerate
+# that without re-opening the "future mtime wedges the guard" bug.
+_KEEPALIVE_PRECISION_TOLERANCE = 2.0
 
 
-async def _poke_session(client: httpx.AsyncClient) -> None:
-    """Best-effort GET to ``accounts.google.com/CheckCookie`` to elicit SIDTS rotation.
+def _is_recently_rotated(storage_path: Path | None) -> bool:
+    """Return True if ``storage_path`` was modified within the rate-limit window.
+
+    A meaningfully-future mtime (clock skew, NTP step, restored file, NFS drift)
+    is treated as **not recent**: we'd rather fire one extra rotation than wedge
+    the guard until wall time catches up. The lower bound is a small negative
+    tolerance to absorb sub-second drift between ``time.time()`` and filesystem
+    mtime resolution (notably Windows NTFS at lower clock granularity), which
+    can otherwise classify a freshly-written file as future-dated. A
+    missing/unreadable file falls through to the not-recent default.
+    """
+    if storage_path is None:
+        return False
+    try:
+        mtime = storage_path.stat().st_mtime
+    except OSError:
+        return False
+    age = time.time() - mtime
+    return -_KEEPALIVE_PRECISION_TOLERANCE <= age <= _KEEPALIVE_RATE_LIMIT_SECONDS
+
+
+async def _poke_session(client: httpx.AsyncClient, storage_path: Path | None = None) -> None:
+    """Best-effort POST to ``accounts.google.com/RotateCookies`` to rotate SIDTS.
 
     Failures are logged at DEBUG and swallowed: this is purely a freshness
     optimisation. The caller's request to notebooklm.google.com is the
     authoritative health check.
+
+    Args:
+        client: Live ``httpx.AsyncClient`` whose cookie jar should receive the
+            rotated ``Set-Cookie``.
+        storage_path: Optional path to the on-disk ``storage_state.json``. When
+            provided, the poke is skipped if the file was modified within the
+            last 60 s — guards accounts.google.com from rapid sequential
+            invocations.
 
     Set ``NOTEBOOKLM_DISABLE_KEEPALIVE_POKE=1`` to disable (e.g., environments
     that block ``accounts.google.com``).
     """
     if os.environ.get(NOTEBOOKLM_DISABLE_KEEPALIVE_POKE_ENV) == "1":
         return
+    if _is_recently_rotated(storage_path):
+        logger.debug(
+            "Keepalive RotateCookies skipped: %s rotated within %.0fs",
+            storage_path,
+            _KEEPALIVE_RATE_LIMIT_SECONDS,
+        )
+        return
     try:
-        await client.get(
-            KEEPALIVE_POKE_URL,
+        # ``follow_redirects=True`` is defensive: empirically RotateCookies
+        # answers 200 directly with the rotated Set-Cookie, but if Google ever
+        # routes a 30x through an identity hop we still pick up cookies from
+        # the terminal response.
+        response = await client.post(
+            KEEPALIVE_ROTATE_URL,
+            headers=_KEEPALIVE_ROTATE_HEADERS,
+            content=_KEEPALIVE_ROTATE_BODY,
             follow_redirects=True,
             timeout=_KEEPALIVE_POKE_TIMEOUT,
         )
+        # httpx does not auto-raise on 4xx/5xx; without this, a 429 or 5xx from
+        # Google would log nothing and the caller would proceed assuming the
+        # rotation happened.
+        response.raise_for_status()
     except httpx.HTTPError as exc:
-        logger.debug("Keepalive poke to accounts.google.com failed (non-fatal): %s", exc)
+        logger.debug("Keepalive RotateCookies POST failed (non-fatal): %s", exc)
 
 
-async def _fetch_tokens_with_jar(cookie_jar: httpx.Cookies) -> tuple[str, str]:
+async def _fetch_tokens_with_jar(
+    cookie_jar: httpx.Cookies, storage_path: Path | None = None
+) -> tuple[str, str]:
     """Internal: fetch CSRF and session tokens using a pre-built cookie jar.
 
     This is the single implementation for all token-fetch paths. All public
     functions (fetch_tokens, fetch_tokens_with_domains) delegate to this.
 
-    Before fetching tokens, makes a best-effort GET to accounts.google.com to
-    elicit __Secure-1PSIDTS rotation; see ``_poke_session``.
+    Before fetching tokens, makes a best-effort POST to accounts.google.com to
+    rotate __Secure-1PSIDTS; see ``_poke_session``. The poke may be skipped if
+    ``storage_path`` was modified within the rate-limit window — that path
+    relies on the existing on-disk cookies still being fresh.
 
     Args:
         cookie_jar: httpx.Cookies jar with auth cookies (domain-preserving or fallback).
+        storage_path: Optional storage_state.json path, forwarded to
+            ``_poke_session`` to gate the rotation poke.
 
     Returns:
         Tuple of (csrf_token, session_id)
@@ -1263,7 +1337,7 @@ async def _fetch_tokens_with_jar(cookie_jar: httpx.Cookies) -> tuple[str, str]:
     logger.debug("Fetching CSRF and session tokens from NotebookLM")
 
     async with httpx.AsyncClient(cookies=cookie_jar) as client:
-        await _poke_session(client)
+        await _poke_session(client, storage_path)
 
         response = await client.get(
             "https://notebooklm.google.com/",

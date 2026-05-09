@@ -11,7 +11,7 @@ from pytest_httpx import HTTPXMock
 from notebooklm.auth import AuthTokens
 from notebooklm.client import NotebookLMClient
 
-CHECKCOOKIE_RE = re.compile(r"^https://accounts\.google\.com/CheckCookie.*$")
+ROTATE_URL_RE = re.compile(r"^https://accounts\.google\.com/RotateCookies$")
 
 
 @pytest.fixture
@@ -60,9 +60,9 @@ class TestKeepaliveDisabledByDefault:
             # Give the loop a chance to run; nothing should happen
             await asyncio.sleep(0.1)
 
-        # No CheckCookie request should have been issued
+        # No RotateCookies request should have been issued
         for req in httpx_mock.get_requests():
-            assert "CheckCookie" not in str(req.url), f"Unexpected keepalive request: {req.url}"
+            assert "RotateCookies" not in str(req.url), f"Unexpected keepalive request: {req.url}"
 
 
 class TestKeepaliveLifecycle:
@@ -71,7 +71,7 @@ class TestKeepaliveLifecycle:
     async def test_spawns_task_on_enter_cancels_on_exit(self, mock_auth, httpx_mock: HTTPXMock):
         """Task is created on __aenter__ and cleanly cancelled on __aexit__."""
         httpx_mock.add_response(
-            url=CHECKCOOKIE_RE,
+            url=ROTATE_URL_RE,
             is_optional=True,
             is_reusable=True,
             status_code=204,
@@ -144,9 +144,9 @@ class TestKeepalivePokes:
     @pytest.mark.asyncio
     @pytest.mark.no_default_keepalive_mock
     async def test_pokes_at_interval(self, mock_auth, httpx_mock: HTTPXMock):
-        """At least two CheckCookie pokes fire within a short window."""
+        """At least two RotateCookies pokes fire within a short window."""
         httpx_mock.add_response(
-            url=CHECKCOOKIE_RE,
+            url=ROTATE_URL_RE,
             is_optional=True,
             is_reusable=True,
             status_code=204,
@@ -161,7 +161,7 @@ class TestKeepalivePokes:
         async with client:
             await asyncio.sleep(0.5)
 
-        poke_requests = [r for r in httpx_mock.get_requests() if "CheckCookie" in str(r.url)]
+        poke_requests = [r for r in httpx_mock.get_requests() if "RotateCookies" in str(r.url)]
         assert (
             len(poke_requests) >= 2
         ), f"Expected at least 2 keepalive pokes, got {len(poke_requests)}"
@@ -172,11 +172,11 @@ class TestKeepalivePokes:
         """A failing poke is swallowed and the loop continues."""
         # First poke: connection error. Subsequent pokes: 204.
         httpx_mock.add_exception(
-            url=CHECKCOOKIE_RE,
+            url=ROTATE_URL_RE,
             exception=httpx.ConnectError("simulated network blip"),
         )
         httpx_mock.add_response(
-            url=CHECKCOOKIE_RE,
+            url=ROTATE_URL_RE,
             is_optional=True,
             is_reusable=True,
             status_code=204,
@@ -194,7 +194,7 @@ class TestKeepalivePokes:
             assert client._core._keepalive_task is not None
             assert not client._core._keepalive_task.done()
 
-        poke_requests = [r for r in httpx_mock.get_requests() if "CheckCookie" in str(r.url)]
+        poke_requests = [r for r in httpx_mock.get_requests() if "RotateCookies" in str(r.url)]
         # First call raised; at least one further successful call must follow.
         assert (
             len(poke_requests) >= 2
@@ -211,7 +211,7 @@ class TestKeepalivePersistenceFailure:
         auth, storage_path = _storage_auth(tmp_path)
 
         httpx_mock.add_response(
-            url=CHECKCOOKIE_RE,
+            url=ROTATE_URL_RE,
             is_optional=True,
             is_reusable=True,
             status_code=204,
@@ -278,7 +278,7 @@ class TestKeepaliveExplicitStoragePath:
         )
 
         httpx_mock.add_response(
-            url=CHECKCOOKIE_RE,
+            url=ROTATE_URL_RE,
             is_optional=True,
             is_reusable=True,
             status_code=204,
@@ -381,7 +381,7 @@ class TestKeepalivePersistence:
 
         # The poke response sets a rotated 1PSIDTS on .google.com
         httpx_mock.add_response(
-            url=CHECKCOOKIE_RE,
+            url=ROTATE_URL_RE,
             is_optional=True,
             is_reusable=True,
             status_code=204,

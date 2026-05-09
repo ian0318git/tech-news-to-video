@@ -12,8 +12,9 @@ import httpx
 import pytest
 from pytest_httpx import HTTPXMock
 
+from notebooklm import auth as auth_module
 from notebooklm.auth import (
-    KEEPALIVE_POKE_URL,
+    KEEPALIVE_ROTATE_URL,
     NOTEBOOKLM_DISABLE_KEEPALIVE_POKE_ENV,
     AuthTokens,
     convert_rookiepy_cookies_to_storage_state,
@@ -720,7 +721,7 @@ class TestFetchTokens:
             request
             for request in httpx_mock.get_requests()
             if request.url.host == "accounts.google.com"
-            and not request.url.path.startswith("/CheckCookie")
+            and not request.url.path.startswith("/RotateCookies")
         ]
         assert len(account_requests) == 2
 
@@ -1893,18 +1894,59 @@ class TestConvertRookiepyCookies:
         assert result == {"cookies": [], "origins": []}
 
 
-_POKE_URL_RE = re.compile(r"^https://accounts\.google\.com/CheckCookie.*$")
+_POKE_URL_RE = re.compile(r"^https://accounts\.google\.com/RotateCookies$")
 _NOTEBOOKLM_HOMEPAGE_HTML = (
     b'<html><script>window.WIZ_global_data={"SNlM0e":"csrf_ok","FdrFJe":"sess_ok"};</script></html>'
 )
 
 
+def _stale_storage(path: Path, *, age_seconds: float) -> None:
+    """Backdate ``path``'s mtime so the L1 rate-limit guard does not skip the poke."""
+    target = path.stat().st_mtime - age_seconds
+    os.utime(path, (target, target))
+
+
+class TestIsRecentlyRotated:
+    """Direct boundary coverage for ``_is_recently_rotated``."""
+
+    def test_none_path_is_not_recent(self):
+        assert auth_module._is_recently_rotated(None) is False
+
+    def test_missing_file_is_not_recent(self, tmp_path):
+        assert auth_module._is_recently_rotated(tmp_path / "nope.json") is False
+
+    def test_just_written_file_is_recent(self, tmp_path):
+        path = tmp_path / "storage_state.json"
+        path.write_text("{}")
+        assert auth_module._is_recently_rotated(path) is True
+
+    def test_age_just_inside_window_is_recent(self, tmp_path):
+        path = tmp_path / "storage_state.json"
+        path.write_text("{}")
+        _stale_storage(path, age_seconds=auth_module._KEEPALIVE_RATE_LIMIT_SECONDS - 1.0)
+        assert auth_module._is_recently_rotated(path) is True
+
+    def test_age_just_past_window_is_not_recent(self, tmp_path):
+        path = tmp_path / "storage_state.json"
+        path.write_text("{}")
+        _stale_storage(path, age_seconds=auth_module._KEEPALIVE_RATE_LIMIT_SECONDS + 1.0)
+        assert auth_module._is_recently_rotated(path) is False
+
+    def test_future_mtime_is_not_recent(self, tmp_path):
+        """A future mtime (clock skew, NTP step) must not wedge the guard."""
+        path = tmp_path / "storage_state.json"
+        path.write_text("{}")
+        future = path.stat().st_mtime + 3600
+        os.utime(path, (future, future))
+        assert auth_module._is_recently_rotated(path) is False
+
+
 class TestKeepalivePoke:
-    """Tests for the proactive ``accounts.google.com/CheckCookie`` poke."""
+    """Tests for the proactive ``accounts.google.com/RotateCookies`` poke."""
 
     @pytest.mark.asyncio
     async def test_poke_made_by_default(self, httpx_mock: HTTPXMock):
-        """Token fetch hits CheckCookie before notebooklm.google.com."""
+        """Token fetch hits RotateCookies before notebooklm.google.com."""
         httpx_mock.add_response(
             url="https://notebooklm.google.com/",
             content=_NOTEBOOKLM_HOMEPAGE_HTML,
@@ -1914,8 +1956,28 @@ class TestKeepalivePoke:
 
         poke_requests = [r for r in httpx_mock.get_requests() if _POKE_URL_RE.match(str(r.url))]
         all_urls = [str(r.url) for r in httpx_mock.get_requests()]
-        assert len(poke_requests) == 1, f"expected exactly one CheckCookie request, got: {all_urls}"
-        assert str(poke_requests[0].url) == KEEPALIVE_POKE_URL
+        assert (
+            len(poke_requests) == 1
+        ), f"expected exactly one RotateCookies request, got: {all_urls}"
+        assert str(poke_requests[0].url) == KEEPALIVE_ROTATE_URL
+        assert poke_requests[0].method == "POST"
+
+    @pytest.mark.asyncio
+    async def test_poke_uses_jspb_body_and_origin(self, httpx_mock: HTTPXMock):
+        """Body matches the Chrome jspb sentinel; Origin is the accounts surface."""
+        httpx_mock.add_response(
+            url="https://notebooklm.google.com/",
+            content=_NOTEBOOKLM_HOMEPAGE_HTML,
+        )
+
+        await fetch_tokens({"SID": "x"})
+
+        poke_requests = [r for r in httpx_mock.get_requests() if _POKE_URL_RE.match(str(r.url))]
+        assert len(poke_requests) == 1
+        request = poke_requests[0]
+        assert request.content == b'[000,"-0000000000000000000"]'
+        assert request.headers.get("content-type") == "application/json"
+        assert request.headers.get("origin") == "https://accounts.google.com"
 
     @pytest.mark.asyncio
     async def test_poke_skipped_when_disabled(self, monkeypatch, httpx_mock: HTTPXMock):
@@ -1930,6 +1992,50 @@ class TestKeepalivePoke:
 
         poke_requests = [r for r in httpx_mock.get_requests() if _POKE_URL_RE.match(str(r.url))]
         assert poke_requests == []
+
+    @pytest.mark.asyncio
+    async def test_poke_skipped_when_storage_recently_rotated(
+        self, tmp_path, httpx_mock: HTTPXMock
+    ):
+        """Storage_state.json mtime within the rate-limit window suppresses the poke."""
+        storage_path = tmp_path / "storage_state.json"
+        storage_path.write_text(
+            json.dumps(
+                {"cookies": [{"name": "SID", "value": "x", "domain": ".google.com", "path": "/"}]}
+            )
+        )
+        # storage_state.json was just written — mtime is "now", well inside the 60s window.
+        httpx_mock.add_response(
+            url="https://notebooklm.google.com/",
+            content=_NOTEBOOKLM_HOMEPAGE_HTML,
+        )
+
+        await fetch_tokens_with_domains(path=storage_path)
+
+        poke_requests = [r for r in httpx_mock.get_requests() if _POKE_URL_RE.match(str(r.url))]
+        assert (
+            poke_requests == []
+        ), "rate-limit guard should skip RotateCookies when storage_state.json is fresh"
+
+    @pytest.mark.asyncio
+    async def test_poke_fires_when_storage_older_than_window(self, tmp_path, httpx_mock: HTTPXMock):
+        """An older storage_state.json mtime allows the rotation poke through."""
+        storage_path = tmp_path / "storage_state.json"
+        storage_path.write_text(
+            json.dumps(
+                {"cookies": [{"name": "SID", "value": "x", "domain": ".google.com", "path": "/"}]}
+            )
+        )
+        _stale_storage(storage_path, age_seconds=120)
+        httpx_mock.add_response(
+            url="https://notebooklm.google.com/",
+            content=_NOTEBOOKLM_HOMEPAGE_HTML,
+        )
+
+        await fetch_tokens_with_domains(path=storage_path)
+
+        poke_requests = [r for r in httpx_mock.get_requests() if _POKE_URL_RE.match(str(r.url))]
+        assert len(poke_requests) == 1, "expected RotateCookies poke when storage is stale"
 
     @pytest.mark.asyncio
     @pytest.mark.no_default_keepalive_mock
@@ -1953,7 +2059,7 @@ class TestKeepalivePoke:
     @pytest.mark.asyncio
     @pytest.mark.no_default_keepalive_mock
     async def test_poke_rotated_sidts_lands_in_jar(self, tmp_path, httpx_mock: HTTPXMock):
-        """Set-Cookie from CheckCookie response is persisted to storage_state.json."""
+        """Set-Cookie from RotateCookies response is persisted to storage_state.json."""
         storage_path = tmp_path / "storage_state.json"
         storage_path.write_text(
             json.dumps(
@@ -1975,9 +2081,11 @@ class TestKeepalivePoke:
                 }
             )
         )
+        # Backdate so the rate-limit guard doesn't pre-empt the poke.
+        _stale_storage(storage_path, age_seconds=120)
         httpx_mock.add_response(
             url=_POKE_URL_RE,
-            status_code=204,
+            status_code=200,
             headers={
                 "Set-Cookie": (
                     "__Secure-1PSIDTS=ROTATED; Domain=.google.com; Path=/; Secure; HttpOnly"
@@ -1996,51 +2104,6 @@ class TestKeepalivePoke:
         assert sidts_values == [
             "ROTATED"
         ], f"expected rotated SIDTS persisted to disk, got: {sidts_values}"
-
-    @pytest.mark.asyncio
-    @pytest.mark.no_default_keepalive_mock
-    async def test_poke_set_cookie_on_redirect_lands_in_jar(self, tmp_path, httpx_mock: HTTPXMock):
-        """Set-Cookie emitted on a CheckCookie 302 hop is captured (follow_redirects)."""
-        storage_path = tmp_path / "storage_state.json"
-        storage_path.write_text(
-            json.dumps(
-                {
-                    "cookies": [
-                        {"name": "SID", "value": "old_sid", "domain": ".google.com", "path": "/"}
-                    ]
-                }
-            )
-        )
-        # CheckCookie often 302s through an intermediate identity surface.
-        # The rotated cookie is set on the redirect response, not the terminal one.
-        httpx_mock.add_response(
-            url=_POKE_URL_RE,
-            status_code=302,
-            headers={
-                "Location": "https://accounts.google.com/ListAccounts",
-                "Set-Cookie": (
-                    "__Secure-1PSIDTS=ROTATED_ON_REDIRECT; "
-                    "Domain=.google.com; Path=/; Secure; HttpOnly"
-                ),
-            },
-        )
-        httpx_mock.add_response(
-            url="https://accounts.google.com/ListAccounts",
-            status_code=200,
-            content=b"",
-        )
-        httpx_mock.add_response(
-            url="https://notebooklm.google.com/",
-            content=_NOTEBOOKLM_HOMEPAGE_HTML,
-        )
-
-        await fetch_tokens_with_domains(path=storage_path)
-
-        rewritten = json.loads(storage_path.read_text())
-        sidts_values = [c["value"] for c in rewritten["cookies"] if c["name"] == "__Secure-1PSIDTS"]
-        assert sidts_values == [
-            "ROTATED_ON_REDIRECT"
-        ], f"expected redirect-emitted SIDTS persisted, got: {sidts_values}"
 
     @pytest.mark.asyncio
     @pytest.mark.no_default_keepalive_mock

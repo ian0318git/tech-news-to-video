@@ -13,9 +13,9 @@ from notebooklm.rpc import RPCMethod
 def _mock_keepalive_poke(request):
     """Default-mock the auth keepalive poke so tests don't trip on it.
 
-    ``_fetch_tokens_with_jar`` makes a best-effort GET to
-    ``accounts.google.com/CheckCookie`` to elicit SIDTS rotation. Tests that
-    use ``httpx_mock`` would otherwise fail with "no response set" when this
+    ``_fetch_tokens_with_jar`` makes a best-effort POST to
+    ``accounts.google.com/RotateCookies`` to rotate SIDTS. Tests that use
+    ``httpx_mock`` would otherwise fail with "no response set" when this
     request fires. The mock is optional+reusable so tests that don't trigger
     the poke aren't penalised.
 
@@ -30,10 +30,10 @@ def _mock_keepalive_poke(request):
         return
     httpx_mock = request.getfixturevalue("httpx_mock")
     httpx_mock.add_response(
-        url=re.compile(r"^https://accounts\.google\.com/CheckCookie.*$"),
+        url=re.compile(r"^https://accounts\.google\.com/RotateCookies$"),
         is_optional=True,
         is_reusable=True,
-        status_code=204,
+        status_code=200,
     )
 
 
@@ -45,7 +45,7 @@ def pytest_configure(config):
     )
     config.addinivalue_line(
         "markers",
-        "no_default_keepalive_mock: skip the default accounts.google.com/CheckCookie "
+        "no_default_keepalive_mock: skip the default accounts.google.com/RotateCookies "
         "mock so the test can register its own response",
     )
     # Disable Rich/Click formatting in tests to avoid ANSI escape codes in output

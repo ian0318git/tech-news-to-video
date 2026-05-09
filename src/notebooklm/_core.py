@@ -138,7 +138,7 @@ class ClientCore:
                 If provided, rpc_call will automatically retry once after refreshing.
             refresh_retry_delay: Delay in seconds before retrying after refresh.
             keepalive: Optional interval in seconds for a background task that pokes
-                ``accounts.google.com/CheckCookie`` while the client is open. ``None``
+                ``accounts.google.com/RotateCookies`` while the client is open. ``None``
                 (default) disables the task. Must be ``None`` or a positive finite
                 number; values below ``keepalive_min_interval`` are clamped up to
                 that floor.
@@ -311,6 +311,9 @@ class ClientCore:
                     return
 
                 try:
+                    # No storage_path: the per-call mtime guard targets rapid
+                    # ``from_storage()`` invocations; this loop is already
+                    # paced by ``keepalive_min_interval``.
                     await _poke_session(client)
                 except asyncio.CancelledError:
                     raise
