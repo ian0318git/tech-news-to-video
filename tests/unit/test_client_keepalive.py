@@ -304,6 +304,29 @@ class TestKeepaliveExplicitStoragePath:
             else:
                 pytest.fail("Rotated cookie was not persisted to the explicit storage path")
 
+    def test_explicit_storage_path_normalizes_onto_auth(self, tmp_path):
+        """The constructor copies ``storage_path`` onto ``auth.storage_path`` so
+        ``refresh_auth()`` and ``ClientCore.close()`` (which both read
+        ``self._core.auth.storage_path`` directly, not the keepalive-specific
+        path) persist to the same file.
+        """
+        storage_path = tmp_path / "storage_state.json"
+        storage_path.write_text('{"cookies": []}')
+        auth = AuthTokens(
+            cookies={"SID": "x"},
+            csrf_token="t",
+            session_id="s",
+            # storage_path intentionally None
+        )
+        assert auth.storage_path is None
+
+        client = NotebookLMClient(auth, storage_path=storage_path)
+
+        assert client.auth.storage_path == storage_path, (
+            "Explicit storage_path must be normalized onto auth so non-keepalive "
+            "code paths (refresh_auth, ClientCore.close) see the same file"
+        )
+
 
 class TestKeepalivePersistence:
     @pytest.mark.asyncio

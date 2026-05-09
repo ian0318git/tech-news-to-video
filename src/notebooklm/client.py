@@ -98,6 +98,15 @@ class NotebookLMClient:
                 60 s) to avoid accidentally rate-limiting Google's identity
                 surface.
         """
+        # Normalize the effective storage path onto the auth object so every
+        # downstream code path (refresh_auth, ClientCore.close on-close save,
+        # the keepalive loop) writes to the same file. Without this, an
+        # explicit ``storage_path=`` kwarg only reaches the keepalive loop
+        # while ``auth.storage_path is None`` causes refresh and on-close
+        # saves to silently skip persistence.
+        if storage_path is not None:
+            auth.storage_path = storage_path
+
         # Pass refresh_auth as callback for automatic retry on auth failures
         # Note: refresh_auth calls update_auth_headers internally
         self._core = ClientCore(
@@ -106,7 +115,7 @@ class NotebookLMClient:
             refresh_callback=self.refresh_auth,
             keepalive=keepalive,
             keepalive_min_interval=keepalive_min_interval,
-            keepalive_storage_path=storage_path,
+            keepalive_storage_path=auth.storage_path,
         )
 
         # Initialize sub-client APIs

@@ -275,11 +275,25 @@ class ClientCore:
                 if storage_path is None:
                     continue
 
+                # Snapshot the cookie jar on the event-loop thread before
+                # off-loading. ``httpx.Cookies`` is not documented as safe for
+                # concurrent access, and the live ``AsyncClient`` jar can keep
+                # mutating during the save (RPC redirects, the next poke
+                # iteration). ``copy.deepcopy`` on the jar fails (the internal
+                # ``http.cookiejar.CookieJar`` carries a non-picklable
+                # ``RLock``), so re-build a fresh jar by iterating the live
+                # one — which is exactly what ``httpx.Cookies(other_cookies)``
+                # does internally (`set_cookie` per cookie into a fresh
+                # ``CookieJar``). The iteration is atomic under the RLock, and
+                # ``http.cookiejar.Cookie`` objects are effectively immutable
+                # — a later ``set_cookie`` of the same name replaces the dict
+                # entry but does not mutate the previous object.
+                jar_snapshot = httpx.Cookies(client.cookies)
                 try:
                     # save_cookies_to_storage performs sync disk I/O; off-load to
                     # a worker thread so we don't stall the event loop on every
                     # iteration (matters for short intervals or slow disks).
-                    await asyncio.to_thread(save_cookies_to_storage, client.cookies, storage_path)
+                    await asyncio.to_thread(save_cookies_to_storage, jar_snapshot, storage_path)
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:  # noqa: BLE001
