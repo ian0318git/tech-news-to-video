@@ -2,10 +2,39 @@
 
 import json
 import os
+import re
 
 import pytest
 
 from notebooklm.rpc import RPCMethod
+
+
+@pytest.fixture(autouse=True)
+def _mock_keepalive_poke(request):
+    """Default-mock the auth keepalive poke so tests don't trip on it.
+
+    ``_fetch_tokens_with_jar`` makes a best-effort GET to
+    ``accounts.google.com/CheckCookie`` to elicit SIDTS rotation. Tests that
+    use ``httpx_mock`` would otherwise fail with "no response set" when this
+    request fires. The mock is optional+reusable so tests that don't trigger
+    the poke aren't penalised.
+
+    Tests that need full control over the poke response (e.g. to assert on
+    rotated Set-Cookie or simulate failure) should mark themselves with
+    ``@pytest.mark.no_default_keepalive_mock`` to skip this default and
+    register their own response.
+    """
+    if "httpx_mock" not in request.fixturenames:
+        return
+    if request.node.get_closest_marker("no_default_keepalive_mock"):
+        return
+    httpx_mock = request.getfixturevalue("httpx_mock")
+    httpx_mock.add_response(
+        url=re.compile(r"^https://accounts\.google\.com/CheckCookie.*$"),
+        is_optional=True,
+        is_reusable=True,
+        status_code=204,
+    )
 
 
 def pytest_configure(config):
@@ -13,6 +42,11 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers",
         "vcr: marks tests that use VCR cassettes (may be skipped if cassettes unavailable)",
+    )
+    config.addinivalue_line(
+        "markers",
+        "no_default_keepalive_mock: skip the default accounts.google.com/CheckCookie "
+        "mock so the test can register its own response",
     )
     # Disable Rich/Click formatting in tests to avoid ANSI escape codes in output
     # This ensures consistent test assertions regardless of -s flag

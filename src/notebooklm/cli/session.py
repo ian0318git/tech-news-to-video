@@ -141,7 +141,9 @@ def _handle_rookiepy_error(e: Exception, browser_name: str) -> None:
         console.print(f"[red]Failed to read cookies from {browser_name}:[/red] {e}")
 
 
-def _login_with_browser_cookies(storage_path: Path, browser_name: str) -> None:
+def _login_with_browser_cookies(
+    storage_path: Path, browser_name: str, profile: str | None = None
+) -> None:
     """Extract Google cookies from an installed browser via rookiepy.
 
     Args:
@@ -231,7 +233,7 @@ def _login_with_browser_cookies(storage_path: Path, browser_name: str) -> None:
 
     # Verify that cookies work.
     try:
-        run_async(fetch_tokens_with_domains(storage_path))
+        run_async(fetch_tokens_with_domains(storage_path, profile))
         logger.info("Cookies verified successfully")
         console.print("[green]Cookies verified successfully.[/green]")
     except ValueError as e:
@@ -422,7 +424,8 @@ def register_session_commands(cli):
         default=False,
         help="Start with a clean browser session (deletes cached browser profile). Use to switch Google accounts.",
     )
-    def login(storage, browser, browser_cookies, fresh):
+    @click.pass_context
+    def login(ctx, storage, browser, browser_cookies, fresh):
         """Log in to NotebookLM via browser.
 
         Opens a browser window for Google login. After logging in,
@@ -452,11 +455,19 @@ def register_session_commands(cli):
                     "[yellow]Warning: --fresh has no effect with --browser-cookies "
                     "(no browser profile is used).[/yellow]"
                 )
-            resolved_storage = Path(storage) if storage else get_storage_path()
-            _login_with_browser_cookies(resolved_storage, browser_cookies)
+            profile = ctx.obj.get("profile") if ctx.obj else None
+            resolved_storage = Path(storage) if storage else get_storage_path(profile=profile)
+            _login_with_browser_cookies(resolved_storage, browser_cookies, profile)
             return
 
-        storage_path = Path(storage) if storage else get_storage_path()
+        profile = ctx.obj.get("profile") if ctx.obj else None
+        storage_path = (
+            Path(storage)
+            if storage
+            else get_storage_path(profile=profile)
+            if profile
+            else get_storage_path()
+        )
         browser_profile = get_browser_profile_dir()
 
         if fresh and browser_profile.exists():
@@ -942,7 +953,8 @@ def register_session_commands(cli):
         "--test", "test_fetch", is_flag=True, help="Test token fetch (makes network request)"
     )
     @click.option("--json", "json_output", is_flag=True, help="Output as JSON")
-    def auth_check(test_fetch, json_output):
+    @click.pass_context
+    def auth_check(ctx, test_fetch, json_output):
         """Check authentication status and diagnose issues.
 
         Validates that authentication is properly configured by checking:
@@ -962,7 +974,8 @@ def register_session_commands(cli):
         """
         from ..auth import extract_cookies_from_storage, fetch_tokens_with_domains
 
-        storage_path = get_storage_path()
+        profile = ctx.obj.get("profile") if ctx.obj else None
+        storage_path = get_storage_path(profile=profile)
         has_env_var = bool(os.environ.get("NOTEBOOKLM_AUTH_JSON"))
         has_home_env = bool(os.environ.get("NOTEBOOKLM_HOME"))
 
@@ -1039,7 +1052,7 @@ def register_session_commands(cli):
         if test_fetch:
             try:
                 token_path = None if has_env_var else storage_path
-                csrf, session_id = run_async(fetch_tokens_with_domains(token_path))
+                csrf, session_id = run_async(fetch_tokens_with_domains(token_path, profile))
                 checks["token_fetch"] = True
                 details["csrf_length"] = len(csrf)
                 details["session_id_length"] = len(session_id)
@@ -1138,3 +1151,65 @@ def register_session_commands(cli):
             console.print(
                 "\n[yellow]Cookies may be expired. Run 'notebooklm login' to refresh.[/yellow]"
             )
+
+    @auth_group.command("refresh")
+    @click.option(
+        "--quiet", "-q", is_flag=True, help="Suppress success output (only print on error)"
+    )
+    @click.pass_context
+    def auth_refresh(ctx, quiet):
+        """Refresh stored cookies by exercising the auth path once.
+
+        One-shot keepalive: opens a session, runs the layer-1 poke against
+        ``accounts.google.com`` to elicit ``__Secure-1PSIDTS`` rotation,
+        fetches CSRF + session ID from ``notebooklm.google.com`` (discarded;
+        their side effect is the cookie jar), and persists the rotated jar
+        to ``storage_state.json`` on close. Designed to be scheduled by the
+        OS (launchd / systemd / cron) so that an otherwise-idle profile
+        does not stale out between user-driven calls.
+
+        Cadence: 15-20 minutes is the recommended interval. Tighter is
+        wasteful; significantly looser may cross the SIDTS server-side
+        validity window for your account/region.
+
+        Transient errors (e.g. ``httpx.RequestError`` from a flaky network)
+        are surfaced as exit 1 rather than retried in-process; the OS
+        scheduler's next firing is the retry mechanism.
+
+        \b
+        Examples:
+          notebooklm auth refresh                 # one-shot, exit 0/1
+          notebooklm --profile work auth refresh  # against a named profile
+          watch -n 1200 notebooklm auth refresh   # quick in-terminal loop
+
+        See docs/troubleshooting.md ("Cookie freshness for long-running /
+        unattended use") for launchd / systemd / cron recipes.
+        """
+        from ..auth import fetch_tokens_with_domains
+
+        # NOTEBOOKLM_AUTH_JSON has no writable backing store, so a keepalive
+        # poke would rotate SIDTS server-side but the rotated value would
+        # vanish on process exit — silent no-op in cron. Refuse with a clear
+        # message instead of pretending to succeed.
+        if os.environ.get("NOTEBOOKLM_AUTH_JSON"):
+            click.echo(
+                "Error: 'auth refresh' is incompatible with NOTEBOOKLM_AUTH_JSON. "
+                "The keepalive needs a writable storage_state.json to persist "
+                "rotated cookies. Either unset NOTEBOOKLM_AUTH_JSON for this "
+                "process and use a profile-backed storage file, or arrange for "
+                "the env var to be refreshed externally.",
+                err=True,
+            )
+            raise SystemExit(1)
+
+        profile = ctx.obj.get("profile") if ctx.obj else None
+        storage_path = get_storage_path(profile=profile)
+
+        try:
+            run_async(fetch_tokens_with_domains(storage_path, profile))
+        except Exception as exc:
+            click.echo(f"Error: {type(exc).__name__}: {exc}", err=True)
+            raise SystemExit(1) from exc
+
+        if not quiet:
+            console.print(f"[green]ok[/green] refreshed: {storage_path}")

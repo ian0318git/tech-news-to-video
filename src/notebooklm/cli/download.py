@@ -163,9 +163,10 @@ async def _download_artifacts_generic(
     # Get notebook and auth
     nb_id = require_notebook(notebook)
     storage_path = ctx.obj.get("storage_path") if ctx.obj else None
+    profile = ctx.obj.get("profile") if ctx.obj else None
     from ..auth import AuthTokens
 
-    auth = await AuthTokens.from_storage(storage_path)
+    auth = await AuthTokens.from_storage(storage_path, profile=profile)
 
     # Adjust extension for PPTX format (must be outside _download() to avoid UnboundLocalError)
     if artifact_type_name == "slide-deck" and slide_format == "pptx":
@@ -801,9 +802,10 @@ async def _download_interactive(
     """
     nb_id = require_notebook(notebook)
     storage_path = ctx.obj.get("storage_path") if ctx.obj else None
+    profile = ctx.obj.get("profile") if ctx.obj else None
     from ..auth import AuthTokens
 
-    auth = await AuthTokens.from_storage(storage_path)
+    auth = await AuthTokens.from_storage(storage_path, profile=profile)
 
     async with NotebookLMClient(auth) as client:
         nb_id_resolved = await resolve_notebook_id(client, nb_id)

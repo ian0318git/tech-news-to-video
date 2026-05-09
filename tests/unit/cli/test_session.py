@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import click
+import httpx
 import pytest
 from click.testing import CliRunner
 
@@ -1975,3 +1976,109 @@ class TestAuthLogoutCommand:
 
         assert result.exit_code == 1
         assert "context file" in result.output.lower()
+
+
+# =============================================================================
+# AUTH REFRESH COMMAND TESTS
+# =============================================================================
+
+
+class TestAuthRefreshCommand:
+    """Tests for the 'auth refresh' one-shot keepalive command."""
+
+    @pytest.fixture
+    def mock_storage_path(self, tmp_path):
+        storage_file = tmp_path / "storage_state.json"
+        storage_file.write_text(
+            json.dumps({"cookies": [{"name": "SID", "value": "x", "domain": ".google.com"}]})
+        )
+        with patch("notebooklm.cli.session.get_storage_path", return_value=storage_file):
+            yield storage_file
+
+    def test_auth_refresh_success(self, runner, mock_storage_path):
+        """auth refresh exits 0 and prints `ok` on a successful token fetch."""
+        with patch(
+            "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+        ) as mock_fetch:
+            mock_fetch.return_value = ("csrf_ok", "session_ok")
+            result = runner.invoke(cli, ["auth", "refresh"])
+        assert result.exit_code == 0
+        assert "ok" in result.output.lower()
+        mock_fetch.assert_awaited_once()
+
+    def test_auth_refresh_quiet_suppresses_success_output(self, runner, mock_storage_path):
+        """--quiet keeps stdout clean when refresh succeeds (cron-friendly)."""
+        with patch(
+            "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+        ) as mock_fetch:
+            mock_fetch.return_value = ("csrf_ok", "session_ok")
+            result = runner.invoke(cli, ["auth", "refresh", "--quiet"])
+        assert result.exit_code == 0
+        assert result.output.strip() == ""
+
+    def test_auth_refresh_failure_exits_nonzero(self, runner, mock_storage_path):
+        """Token fetch failure exits 1 with stderr message — picked up by cron logs."""
+        with patch(
+            "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+        ) as mock_fetch:
+            mock_fetch.side_effect = ValueError("Authentication expired or invalid.")
+            result = runner.invoke(cli, ["auth", "refresh"])
+        assert result.exit_code == 1
+        assert "authentication expired" in result.output.lower()
+
+    def test_auth_refresh_failure_includes_exception_class(self, runner, mock_storage_path):
+        """Sparse exception messages (e.g. httpx.ConnectTimeout) still get a
+        diagnostic class name in the cron log."""
+        with patch(
+            "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+        ) as mock_fetch:
+            mock_fetch.side_effect = httpx.ConnectTimeout("")  # empty message
+            result = runner.invoke(cli, ["auth", "refresh"])
+        assert result.exit_code == 1
+        assert "ConnectTimeout" in result.output
+
+    def test_auth_refresh_rejects_env_var_auth(self, runner, monkeypatch, mock_storage_path):
+        """NOTEBOOKLM_AUTH_JSON has no writable backing store; refreshing it
+        would silently rotate SIDTS but persist nothing. Refuse loudly."""
+        monkeypatch.setenv("NOTEBOOKLM_AUTH_JSON", '{"cookies":[]}')
+        with patch(
+            "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+        ) as mock_fetch:
+            result = runner.invoke(cli, ["auth", "refresh"])
+        assert result.exit_code == 1
+        assert "NOTEBOOKLM_AUTH_JSON" in result.output
+        assert "incompatible" in result.output.lower()
+        # Critical: no token fetch should run when the env var is set —
+        # otherwise we'd be doing a server-side rotation that gets lost.
+        mock_fetch.assert_not_awaited()
+
+    def test_auth_refresh_propagates_global_profile_flag(self, runner, tmp_path):
+        """`notebooklm --profile work auth refresh` resolves the work profile.
+
+        Guards against the launchd/cron case where the global -p flag must
+        flow through ctx.obj into fetch_tokens_with_domains.
+        """
+        work_storage = tmp_path / "work_storage_state.json"
+        work_storage.write_text(
+            json.dumps({"cookies": [{"name": "SID", "value": "y", "domain": ".google.com"}]})
+        )
+
+        def fake_storage_path(profile=None):
+            assert profile == "work", f"expected profile='work', got {profile!r}"
+            return work_storage
+
+        with (
+            patch("notebooklm.cli.session.get_storage_path", side_effect=fake_storage_path),
+            patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch,
+        ):
+            mock_fetch.return_value = ("csrf_ok", "session_ok")
+            result = runner.invoke(cli, ["--profile", "work", "auth", "refresh"])
+
+        assert result.exit_code == 0, result.output
+        # fetch_tokens_with_domains(path, profile) — verify the work profile
+        # was threaded through to the auth layer.
+        called_args = mock_fetch.call_args
+        assert called_args.args[0] == work_storage
+        assert called_args.args[1] == "work"

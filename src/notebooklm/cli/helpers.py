@@ -356,8 +356,7 @@ def get_client(ctx) -> tuple[dict, str, str]:
 
     from ..auth import fetch_tokens_with_domains
 
-    csrf, session_id = run_async(fetch_tokens_with_domains(resolved_storage_path))
-
+    csrf, session_id = run_async(fetch_tokens_with_domains(resolved_storage_path, profile))
     return cookies, csrf, session_id
 
 

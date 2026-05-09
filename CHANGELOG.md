@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Auto-refresh on auth expiry** - `fetch_tokens` now optionally runs a user-provided shell command when a Google session cookie has expired, reloads cookies from the same storage path, and retries once. Opt in by setting the `NOTEBOOKLM_REFRESH_CMD` environment variable to a command that rewrites `storage_state.json` (e.g. a sync script reading from a cookie vault). Refresh commands receive `NOTEBOOKLM_REFRESH_STORAGE_PATH` and `NOTEBOOKLM_REFRESH_PROFILE` so profile-aware scripts can target the active auth file. Covers every CLI entry point without changing the public API. Retry guards prevent refresh loops.
+- **Proactive SIDTS rotation poke** - Every `fetch_tokens` call now makes a best-effort GET to `https://accounts.google.com/CheckCookie` before hitting `notebooklm.google.com`. Google emits a rotated `__Secure-1PSIDTS` (the freshness partner of `__Secure-1PSID`) when the client touches the identity surface; RPC traffic against `notebooklm.google.com` alone does not appear to trigger rotation, so a keepalive that hits NotebookLM alone can silently stale out after ~10-30 minutes. The rotated `Set-Cookie` lands in the live httpx jar and is persisted by `ClientCore.close` (built on the on-close save introduced in #276). Failures are logged at DEBUG and never abort token fetch. Disable with `NOTEBOOKLM_DISABLE_KEEPALIVE_POKE=1` (e.g. networks that block `accounts.google.com`). Closes #312.
+- **`examples/refresh_browser_cookies.py`** - Sample `NOTEBOOKLM_REFRESH_CMD` script that re-extracts cookies from a live local browser via `notebooklm login --browser-cookies`, providing a turnkey recovery path for unattended automation when the in-process keepalive isn't enough (idle gaps, force-logout, password change).
+- **`notebooklm auth refresh` CLI command** - One-shot keepalive that opens a session, triggers the layer-1 SIDTS rotation poke against `accounts.google.com`, persists the rotated cookies to `storage_state.json`, and exits. Designed to be scheduled by the OS (launchd / systemd / cron / Task Scheduler / k8s CronJob) to keep an idle profile from staling out between user-driven calls. Pairs naturally with `--quiet` for log-only-on-error cron output. See `docs/troubleshooting.md` for per-OS scheduler recipes.
+
 ## [0.4.0] - 2026-05-09
 
 ### Added

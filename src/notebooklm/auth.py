@@ -27,11 +27,14 @@ Security Notes:
     - Path traversal protection is enforced on all file operations
 """
 
+import asyncio
 import json
 import logging
 import os
 import re
+import subprocess
 import tempfile
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeAlias
@@ -39,7 +42,7 @@ from typing import Any, TypeAlias
 import httpx
 
 from ._url_utils import contains_google_auth_redirect, is_google_auth_redirect
-from .paths import get_storage_path
+from .paths import get_storage_path, resolve_profile
 
 logger = logging.getLogger(__name__)
 
@@ -228,8 +231,6 @@ class AuthTokens:
             auth = await AuthTokens.from_storage(profile="work")
         """
         if path is None and (profile is not None or "NOTEBOOKLM_AUTH_JSON" not in os.environ):
-            from .paths import get_storage_path
-
             path = get_storage_path(profile=profile)
 
         storage_state = _load_storage_state(path)
@@ -237,10 +238,11 @@ class AuthTokens:
 
         # Build domain-preserving jar and use it for token fetch
         jar = build_cookie_jar(cookies=cookies)
-        csrf_token, session_id = await _fetch_tokens_with_jar(jar)
+        csrf_token, session_id, _ = await _fetch_tokens_with_refresh(jar, path, profile)
 
         # Persist any refreshed cookies from the token fetch
         save_cookies_to_storage(jar, path)
+        cookies = _cookie_map_from_jar(jar)
 
         return cls(
             cookies=cookies,
@@ -1017,11 +1019,173 @@ def _replace_cookie_jar(target: httpx.Cookies, source: httpx.Cookies) -> None:
         target.jar.set_cookie(cookie)
 
 
+NOTEBOOKLM_REFRESH_CMD_ENV = "NOTEBOOKLM_REFRESH_CMD"
+_REFRESH_ATTEMPTED_ENV = "_NOTEBOOKLM_REFRESH_ATTEMPTED"
+# The ContextVar prevents same-task retry loops in the parent process. The env
+# flag is passed only to child refresh commands so recursive CLI calls skip refresh.
+_REFRESH_ATTEMPTED_CONTEXT: ContextVar[bool] = ContextVar(
+    "_REFRESH_ATTEMPTED_CONTEXT", default=False
+)
+_REFRESH_LOCK = asyncio.Lock()
+_REFRESH_GENERATIONS: dict[str, int] = {}
+_AUTH_ERROR_SIGNALS = (
+    "authentication expired",
+    "redirected to",
+    "run 'notebooklm login'",
+)
+
+
+def _should_try_refresh(err: Exception) -> bool:
+    """True when an auth failure should trigger NOTEBOOKLM_REFRESH_CMD."""
+    if _REFRESH_ATTEMPTED_CONTEXT.get() or os.environ.get(_REFRESH_ATTEMPTED_ENV) == "1":
+        return False
+    if not os.environ.get(NOTEBOOKLM_REFRESH_CMD_ENV):
+        return False
+    msg = str(err).lower()
+    return any(sig in msg for sig in _AUTH_ERROR_SIGNALS)
+
+
+async def _run_refresh_cmd(storage_path: Path | None = None, profile: str | None = None) -> None:
+    """Run ``NOTEBOOKLM_REFRESH_CMD`` to refresh stored cookies.
+
+    Raises:
+        RuntimeError: If the refresh command is missing, times out, or exits
+            non-zero.
+    """
+    cmd = os.environ.get(NOTEBOOKLM_REFRESH_CMD_ENV)
+    if not cmd:
+        raise RuntimeError(f"{NOTEBOOKLM_REFRESH_CMD_ENV} is not set; cannot refresh cookies.")
+    refresh_env = os.environ.copy()
+    refresh_env[_REFRESH_ATTEMPTED_ENV] = "1"
+    refresh_env["NOTEBOOKLM_REFRESH_PROFILE"] = resolve_profile(profile)
+    refresh_env["NOTEBOOKLM_REFRESH_STORAGE_PATH"] = str(
+        storage_path or get_storage_path(profile=profile)
+    )
+    try:
+        result = await asyncio.to_thread(
+            subprocess.run,
+            cmd,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=refresh_env,
+        )
+    except (subprocess.TimeoutExpired, OSError) as refresh_err:
+        raise RuntimeError(
+            f"{NOTEBOOKLM_REFRESH_CMD_ENV} failed to execute: {refresh_err}"
+        ) from refresh_err
+    if result.returncode != 0:
+        output = (result.stderr or result.stdout).strip()
+        raise RuntimeError(f"{NOTEBOOKLM_REFRESH_CMD_ENV} exited {result.returncode}: {output}")
+    logger.info("NotebookLM cookies refreshed via %s", NOTEBOOKLM_REFRESH_CMD_ENV)
+
+
+async def _fetch_tokens_with_refresh(
+    cookie_jar: httpx.Cookies,
+    storage_path: Path | None = None,
+    profile: str | None = None,
+) -> tuple[str, str, bool]:
+    """Fetch tokens, optionally running NOTEBOOKLM_REFRESH_CMD on auth expiry."""
+    try:
+        csrf, session_id = await _fetch_tokens_with_jar(cookie_jar)
+        return csrf, session_id, False
+    except ValueError as err:
+        if not _should_try_refresh(err):
+            raise
+        logger.warning(
+            "NotebookLM auth failed (%s). Running %s to refresh cookies.",
+            err,
+            NOTEBOOKLM_REFRESH_CMD_ENV,
+        )
+        refresh_storage_path = storage_path or get_storage_path(profile=profile)
+        refresh_key = str(refresh_storage_path)
+        refresh_generation = _REFRESH_GENERATIONS.get(refresh_key, 0)
+        refresh_token = _REFRESH_ATTEMPTED_CONTEXT.set(True)
+        try:
+            async with _REFRESH_LOCK:
+                if _REFRESH_GENERATIONS.get(refresh_key, 0) == refresh_generation:
+                    await _run_refresh_cmd(refresh_storage_path, profile)
+                    _REFRESH_GENERATIONS[refresh_key] = refresh_generation + 1
+                fresh_jar = build_httpx_cookies_from_storage(refresh_storage_path)
+                _replace_cookie_jar(cookie_jar, fresh_jar)
+            csrf, session_id = await _fetch_tokens_with_jar(cookie_jar)
+            return csrf, session_id, True
+        finally:
+            _REFRESH_ATTEMPTED_CONTEXT.reset(refresh_token)
+
+
+def _cookie_map_from_jar(cookie_jar: httpx.Cookies) -> DomainCookieMap:
+    """Extract a domain-aware auth cookie map from an httpx cookie jar."""
+    return {
+        (cookie.name, cookie.domain): cookie.value
+        for cookie in cookie_jar.jar
+        if cookie.name
+        and cookie.domain
+        and cookie.value is not None
+        and _is_allowed_auth_domain(cookie.domain)
+    }
+
+
+def _update_cookie_input(target: CookieInput, fresh: DomainCookieMap) -> None:
+    """Update caller-provided cookies in place while preserving key style."""
+    use_domain_keys = any(isinstance(key, tuple) for key in target)
+    target.clear()
+    if use_domain_keys:
+        target.update(fresh)
+    else:
+        target.update(flatten_cookie_map(fresh))  # type: ignore[arg-type]
+
+
+# --- Keepalive poke ----------------------------------------------------------
+# Google's __Secure-1PSIDTS / __Secure-3PSIDTS cookies are the rotating freshness
+# partners of __Secure-1PSID / __Secure-3PSID. Their server-side validity window
+# is short (minutes-to-hours scale) and Google only emits a rotated value
+# (Set-Cookie) when the client touches the identity surface — typically
+# accounts.google.com/CheckCookie or ListAccounts. Pure RPC traffic against
+# notebooklm.google.com never triggers rotation, so a long-lived storage_state
+# silently stales out and every subsequent call fails with the
+# "Authentication expired or invalid" redirect (see issue #312).
+#
+# Hitting CheckCookie once per token-fetch elicits the rotation; the resulting
+# Set-Cookie lands in the live httpx jar, which #276 then persists on close.
+KEEPALIVE_POKE_URL = (
+    "https://accounts.google.com/CheckCookie?continue=https%3A%2F%2Fnotebooklm.google.com%2F"
+)
+NOTEBOOKLM_DISABLE_KEEPALIVE_POKE_ENV = "NOTEBOOKLM_DISABLE_KEEPALIVE_POKE"
+_KEEPALIVE_POKE_TIMEOUT = 15.0
+
+
+async def _poke_session(client: httpx.AsyncClient) -> None:
+    """Best-effort GET to ``accounts.google.com/CheckCookie`` to elicit SIDTS rotation.
+
+    Failures are logged at DEBUG and swallowed: this is purely a freshness
+    optimisation. The caller's request to notebooklm.google.com is the
+    authoritative health check.
+
+    Set ``NOTEBOOKLM_DISABLE_KEEPALIVE_POKE=1`` to disable (e.g., environments
+    that block ``accounts.google.com``).
+    """
+    if os.environ.get(NOTEBOOKLM_DISABLE_KEEPALIVE_POKE_ENV) == "1":
+        return
+    try:
+        await client.get(
+            KEEPALIVE_POKE_URL,
+            follow_redirects=True,
+            timeout=_KEEPALIVE_POKE_TIMEOUT,
+        )
+    except httpx.HTTPError as exc:
+        logger.debug("Keepalive poke to accounts.google.com failed (non-fatal): %s", exc)
+
+
 async def _fetch_tokens_with_jar(cookie_jar: httpx.Cookies) -> tuple[str, str]:
     """Internal: fetch CSRF and session tokens using a pre-built cookie jar.
 
     This is the single implementation for all token-fetch paths. All public
     functions (fetch_tokens, fetch_tokens_with_domains) delegate to this.
+
+    Before fetching tokens, makes a best-effort GET to accounts.google.com to
+    elicit __Secure-1PSIDTS rotation; see ``_poke_session``.
 
     Args:
         cookie_jar: httpx.Cookies jar with auth cookies (domain-preserving or fallback).
@@ -1036,6 +1200,8 @@ async def _fetch_tokens_with_jar(cookie_jar: httpx.Cookies) -> tuple[str, str]:
     logger.debug("Fetching CSRF and session tokens from NotebookLM")
 
     async with httpx.AsyncClient(cookies=cookie_jar) as client:
+        await _poke_session(client)
+
         response = await client.get(
             "https://notebooklm.google.com/",
             follow_redirects=True,
@@ -1065,13 +1231,22 @@ async def _fetch_tokens_with_jar(cookie_jar: httpx.Cookies) -> tuple[str, str]:
         return csrf, session_id
 
 
-async def fetch_tokens(cookies: CookieInput) -> tuple[str, str]:
-    """Fetch tokens from flat cookie dict. For backward compatibility.
+async def fetch_tokens(
+    cookies: CookieInput, storage_path: Path | None = None, profile: str | None = None
+) -> tuple[str, str]:
+    """Fetch tokens from a cookie mapping. For backward compatibility.
 
-    Prefer AuthTokens.from_storage() which preserves cookie domains.
+    Prefer AuthTokens.from_storage() which preserves cookie domains. If
+    ``NOTEBOOKLM_REFRESH_CMD`` is set and auth has expired, the command is run
+    through the platform shell, cookies are reloaded from ``storage_path`` or
+    the active profile storage path, and token fetch is retried once. Refresh
+    commands receive ``NOTEBOOKLM_REFRESH_STORAGE_PATH`` and
+    ``NOTEBOOKLM_REFRESH_PROFILE`` in their environment.
 
     Args:
-        cookies: Dict of Google auth cookies (name→value, no domain info).
+        cookies: Google auth cookies. Mutated in place on refresh.
+        storage_path: Optional storage_state.json path to reload after refresh.
+        profile: Optional profile name exposed to the refresh command.
 
     Returns:
         Tuple of (csrf_token, session_id)
@@ -1079,19 +1254,28 @@ async def fetch_tokens(cookies: CookieInput) -> tuple[str, str]:
     Raises:
         httpx.HTTPError: If request fails
         ValueError: If tokens cannot be extracted from response
+        RuntimeError: If ``NOTEBOOKLM_REFRESH_CMD`` is set but fails
     """
-    jar = build_cookie_jar(cookies=cookies)
-    return await _fetch_tokens_with_jar(jar)
+    jar = build_cookie_jar(cookies=cookies, storage_path=storage_path)
+    csrf, session_id, refreshed = await _fetch_tokens_with_refresh(jar, storage_path, profile)
+    if refreshed:
+        fresh = _cookie_map_from_jar(jar)
+        _update_cookie_input(cookies, fresh)
+    return csrf, session_id
 
 
-async def fetch_tokens_with_domains(path: Path | None = None) -> tuple[str, str]:
+async def fetch_tokens_with_domains(
+    path: Path | None = None, profile: str | None = None
+) -> tuple[str, str]:
     """Fetch tokens with domain-preserving cookies from storage.
 
-    Used by CLI helpers. Loads storage, builds jar, fetches tokens,
-    and persists any refreshed cookies back.
+    Used by CLI helpers. Loads storage, builds jar, fetches tokens, optionally
+    runs NOTEBOOKLM_REFRESH_CMD on auth expiry, and persists any refreshed
+    cookies back.
 
     Args:
         path: Path to storage_state.json. If provided, takes precedence over env vars.
+        profile: Optional profile name exposed to the refresh command.
 
     Returns:
         Tuple of (csrf_token, session_id)
@@ -1100,8 +1284,11 @@ async def fetch_tokens_with_domains(path: Path | None = None) -> tuple[str, str]
         FileNotFoundError: If storage file doesn't exist.
         httpx.HTTPError: If request fails.
         ValueError: If tokens cannot be extracted from response.
+        RuntimeError: If ``NOTEBOOKLM_REFRESH_CMD`` is set but fails.
     """
+    if path is None and (profile is not None or "NOTEBOOKLM_AUTH_JSON" not in os.environ):
+        path = get_storage_path(profile=profile)
     jar = build_httpx_cookies_from_storage(path)
-    result = await _fetch_tokens_with_jar(jar)
+    csrf, session_id, _ = await _fetch_tokens_with_refresh(jar, path, profile)
     save_cookies_to_storage(jar, path)
-    return result
+    return csrf, session_id
