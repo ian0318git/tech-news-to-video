@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from notebooklm import NotebookLMClient
+from notebooklm import AuthTokens, NotebookLMClient
 from notebooklm._core import MAX_CONVERSATION_CACHE_SIZE, ClientCore, is_auth_error
 from notebooklm.rpc import (
     AuthError,
@@ -31,6 +31,29 @@ class TestClientInitialization:
         async with NotebookLMClient(auth_tokens) as client:
             assert client._core._http_client is not None  # client is open
         assert client._core._http_client is None  # closed after exit
+
+    @pytest.mark.asyncio
+    async def test_close_does_not_sync_in_memory_auth_to_default_storage(self):
+        auth = AuthTokens(cookies={"SID": "scratch"}, csrf_token="csrf", session_id="session")
+        core = ClientCore(auth)
+        await core.open()
+
+        with patch("notebooklm._core.save_cookies_to_storage") as mock_save:
+            await core.close()
+
+        mock_save.assert_not_called()
+        assert core._http_client is None
+
+    @pytest.mark.asyncio
+    async def test_close_closes_http_client_when_cookie_sync_fails(self, auth_tokens, tmp_path):
+        auth_tokens.storage_path = tmp_path / "storage_state.json"
+        core = ClientCore(auth_tokens)
+        await core.open()
+
+        with patch("notebooklm._core.save_cookies_to_storage", side_effect=RuntimeError("boom")):
+            await core.close()
+
+        assert core._http_client is None
 
     @pytest.mark.asyncio
     async def test_client_raises_if_not_initialized(self, auth_tokens):
@@ -446,3 +469,82 @@ class TestGetSourceIds:
                 ids = await core.get_source_ids("nb_123")
 
             assert ids == []
+
+
+class TestCrossDomainCookiePreservation:
+    """Tests for cookie preservation during cross-domain redirects."""
+
+    @pytest.mark.asyncio
+    async def test_cookies_preserved_on_cross_domain_redirect(self, auth_tokens):
+        """Verify cookies persist when redirecting from notebooklm to accounts.google.com."""
+        async with NotebookLMClient(auth_tokens) as client:
+            core = client._core
+            http_client = core._http_client
+
+            # Set initial sentinel cookie in the jar
+            http_client.cookies.set("REDIRECT_SENTINEL", "survives_refresh", domain=".google.com")
+
+            # Simulate what happens during a redirect: update_auth_headers merges new cookies
+            # without wiping existing ones (like refreshed SID from accounts.google.com)
+            core.update_auth_headers()
+
+            # Verify original cookies are still present (not wiped)
+            # httpx.Cookies.get() returns None if cookie not found
+            assert (
+                http_client.cookies.get("REDIRECT_SENTINEL", domain=".google.com")
+                == "survives_refresh"
+            )
+
+    @pytest.mark.asyncio
+    async def test_update_auth_headers_merges_not_replaces(self, auth_tokens):
+        """Verify update_auth_headers merges new cookies, preserving live redirect cookies."""
+        async with NotebookLMClient(auth_tokens) as client:
+            core = client._core
+            http_client = core._http_client
+
+            # Simulate a live cookie received from accounts.google.com redirect
+            http_client.cookies.set(
+                "__Secure-1PSIDRTS", "redirect_refreshed_value", domain=".google.com"
+            )
+
+            # Now update auth headers (simulating a token refresh)
+            core.update_auth_headers()
+
+            # The EXACT value should still be there (merged, not replaced)
+            assert (
+                http_client.cookies.get("__Secure-1PSIDRTS", domain=".google.com")
+                == "redirect_refreshed_value"
+            )
+
+    @pytest.mark.asyncio
+    async def test_googleusercontent_cookies_not_reassigned(self, auth_tokens):
+        """Cookies for .googleusercontent.com must not be forced to .google.com."""
+        # Set a cookie with googleusercontent domain via the cookie_jar
+        auth_tokens.cookie_jar = httpx.Cookies()
+        auth_tokens.cookie_jar.set("download_token", "abc123", domain=".googleusercontent.com")
+        auth_tokens.cookie_jar.set("SID", "test_sid", domain=".google.com")
+
+        async with NotebookLMClient(auth_tokens) as client:
+            core = client._core
+            http = core._http_client
+
+            # The .googleusercontent.com cookie must remain on its original domain
+            assert http.cookies.get("download_token", domain=".googleusercontent.com") == "abc123"
+            # It must NOT appear on .google.com
+            assert http.cookies.get("download_token", domain=".google.com") is None
+
+    @pytest.mark.asyncio
+    async def test_update_auth_headers_preserves_redirect_cookies(self, auth_tokens):
+        """update_auth_headers must merge, not replace, preserving redirect cookies."""
+        async with NotebookLMClient(auth_tokens) as client:
+            core = client._core
+            http = core._http_client
+
+            # Simulate Google setting a cookie during a redirect
+            http.cookies.set("__Secure-1PSIDCC", "from_redirect", domain=".google.com")
+
+            # Now update auth headers
+            core.update_auth_headers()
+
+            # The redirect cookie must survive
+            assert http.cookies.get("__Secure-1PSIDCC", domain=".google.com") == "from_redirect"
