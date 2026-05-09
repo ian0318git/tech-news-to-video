@@ -2,15 +2,17 @@
 
 import asyncio
 import logging
+import math
 import time
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Coroutine
+from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlencode
 
 import httpx
 
-from .auth import AuthTokens, build_cookie_jar, save_cookies_to_storage
+from .auth import AuthTokens, _poke_session, build_cookie_jar, save_cookies_to_storage
 from .rpc import (
     BATCHEXECUTE_URL,
     AuthError,
@@ -35,6 +37,9 @@ MAX_CONVERSATION_CACHE_SIZE = 100
 DEFAULT_TIMEOUT = 30.0
 DEFAULT_CONNECT_TIMEOUT = 10.0  # Connection establishment timeout
 
+# Minimum keepalive interval to avoid accidentally rate-limiting accounts.google.com
+DEFAULT_KEEPALIVE_MIN_INTERVAL = 60.0
+
 # Auth error detection patterns (case-insensitive)
 AUTH_ERROR_PATTERNS = (
     "authentication",
@@ -43,6 +48,24 @@ AUTH_ERROR_PATTERNS = (
     "login",
     "re-authenticate",
 )
+
+
+def _resolve_keepalive_interval(keepalive: float | None, min_interval: float) -> float | None:
+    """Validate and clamp the keepalive interval.
+
+    ``None`` disables the background task. Otherwise both values must be
+    positive finite numbers; the effective interval is ``max(keepalive,
+    min_interval)`` so callers can't accidentally lower the rate-limit floor.
+    """
+    if not (math.isfinite(min_interval) and min_interval > 0):
+        raise ValueError(
+            f"keepalive_min_interval must be a positive finite number, got {min_interval!r}"
+        )
+    if keepalive is None:
+        return None
+    if not (math.isfinite(keepalive) and keepalive > 0):
+        raise ValueError(f"keepalive must be None or a positive finite number, got {keepalive!r}")
+    return max(keepalive, min_interval)
 
 
 def is_auth_error(error: Exception) -> bool:
@@ -98,6 +121,9 @@ class ClientCore:
         connect_timeout: float = DEFAULT_CONNECT_TIMEOUT,
         refresh_callback: Callable[[], Awaitable[AuthTokens]] | None = None,
         refresh_retry_delay: float = 0.2,
+        keepalive: float | None = None,
+        keepalive_min_interval: float = DEFAULT_KEEPALIVE_MIN_INTERVAL,
+        keepalive_storage_path: Path | None = None,
     ):
         """Initialize the core client.
 
@@ -110,6 +136,20 @@ class ClientCore:
             refresh_callback: Optional async callback to refresh auth tokens on failure.
                 If provided, rpc_call will automatically retry once after refreshing.
             refresh_retry_delay: Delay in seconds before retrying after refresh.
+            keepalive: Optional interval in seconds for a background task that pokes
+                ``accounts.google.com/CheckCookie`` while the client is open. ``None``
+                (default) disables the task. Must be ``None`` or a positive finite
+                number; values below ``keepalive_min_interval`` are clamped up to
+                that floor.
+            keepalive_min_interval: Lower bound for ``keepalive`` (defaults to 60s)
+                to avoid accidentally rate-limiting Google's identity surface.
+                Must be a positive finite number.
+            keepalive_storage_path: Optional storage path to persist rotated cookies
+                to from the keepalive loop. Falls back to ``auth.storage_path``.
+
+        Raises:
+            ValueError: If ``keepalive`` or ``keepalive_min_interval`` is not a
+                positive finite number.
         """
         self.auth = auth
         self._timeout = timeout
@@ -123,6 +163,16 @@ class ClientCore:
         self._reqid_counter: int = 100000
         # OrderedDict for FIFO eviction when cache exceeds MAX_CONVERSATION_CACHE_SIZE
         self._conversation_cache: OrderedDict[str, list[dict[str, Any]]] = OrderedDict()
+        # Keepalive background task configuration
+        self._keepalive_interval: float | None = _resolve_keepalive_interval(
+            keepalive, keepalive_min_interval
+        )
+        # Prefer the explicit storage_path if provided (e.g. NotebookLMClient(storage_path=...)
+        # with a manually-built AuthTokens), otherwise fall back to auth.storage_path.
+        self._keepalive_storage_path: Path | None = (
+            keepalive_storage_path if keepalive_storage_path is not None else auth.storage_path
+        )
+        self._keepalive_task: asyncio.Task[None] | None = None
 
     async def open(self) -> None:
         """Open the HTTP client connection.
@@ -155,11 +205,24 @@ class ClientCore:
                 follow_redirects=True,
             )
 
+            # Spawn the keepalive task once the client is ready
+            if self._keepalive_interval is not None:
+                self._keepalive_task = asyncio.create_task(
+                    self._keepalive_loop(self._keepalive_interval)
+                )
+
     async def close(self) -> None:
         """Close the HTTP client connection.
 
         Called automatically by NotebookLMClient.__aexit__.
         """
+        # Stop the keepalive task before tearing down the HTTP client so the
+        # loop can't issue a poke against an already-closed transport.
+        if self._keepalive_task is not None:
+            self._keepalive_task.cancel()
+            await asyncio.gather(self._keepalive_task, return_exceptions=True)
+            self._keepalive_task = None
+
         if self._http_client:
             try:
                 # Sync refreshed cookies only when auth came from an explicit file.
@@ -170,6 +233,64 @@ class ClientCore:
             finally:
                 await self._http_client.aclose()
                 self._http_client = None
+
+    async def _keepalive_loop(self, interval: float) -> None:
+        """Background loop that periodically pokes the identity surface.
+
+        Sleeps ``interval`` seconds between iterations, then calls
+        :func:`notebooklm.auth._poke_session` to elicit ``__Secure-1PSIDTS``
+        rotation. Any rotated cookies are persisted to ``storage_state.json``
+        immediately (off-loop, via :func:`asyncio.to_thread`) so a long-lived
+        client's freshness survives a crash.
+
+        Error handling is split by failure mode:
+
+        - Poke failures (network blips, ``accounts.google.com`` downtime) are
+          opportunistic and logged at DEBUG. The next iteration retries.
+        - Persistence failures hide the most important class of bug — a
+          rotated cookie that exists in memory but not on disk — so they are
+          logged at WARNING with the storage path.
+
+        Both classes never propagate; the loop only exits via
+        :class:`asyncio.CancelledError` from :meth:`close`.
+        """
+        logger.debug("Keepalive task started (interval=%.1fs)", interval)
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                client = self._http_client
+                if client is None:
+                    # Client closed concurrently; exit gracefully.
+                    return
+
+                try:
+                    await _poke_session(client)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # noqa: BLE001 - opportunistic best-effort
+                    logger.debug("Keepalive poke failed (non-fatal): %s", exc)
+                    continue
+
+                storage_path = self._keepalive_storage_path
+                if storage_path is None:
+                    continue
+
+                try:
+                    # save_cookies_to_storage performs sync disk I/O; off-load to
+                    # a worker thread so we don't stall the event loop on every
+                    # iteration (matters for short intervals or slow disks).
+                    await asyncio.to_thread(save_cookies_to_storage, client.cookies, storage_path)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "Keepalive cookie persistence to %s failed: %s",
+                        storage_path,
+                        exc,
+                    )
+        except asyncio.CancelledError:
+            logger.debug("Keepalive task cancelled")
+            raise
 
     @property
     def is_open(self) -> bool:

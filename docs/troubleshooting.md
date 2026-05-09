@@ -37,12 +37,24 @@ This means most "CSRF token expired" errors resolve automatically.
 
 #### Cookie freshness for long-running / unattended use
 
-Google rotates `__Secure-1PSIDTS` (the freshness partner of `__Secure-1PSID`) on a short schedule and emits the rotated value when the client touches an identity surface like `accounts.google.com`. RPC traffic against `notebooklm.google.com` alone does not appear to trigger rotation, so an unattended keepalive that "just calls list every 30 minutes" can die after ~10-30 minutes despite the cookies looking fine on disk. The library handles this in three layers, ordered from cheapest to heaviest:
+Google rotates `__Secure-1PSIDTS` (the freshness partner of `__Secure-1PSID`) on a short schedule and emits the rotated value when the client touches an identity surface like `accounts.google.com`. RPC traffic against `notebooklm.google.com` alone does not appear to trigger rotation, so an unattended keepalive that "just calls list every 30 minutes" can die after ~10-30 minutes despite the cookies looking fine on disk. The library handles this in five layers, ordered from cheapest to heaviest:
 
 1. **Per-call rotation poke (default ON).** Every `fetch_tokens` call makes a best-effort GET to `https://accounts.google.com/CheckCookie`. The rotated `Set-Cookie` lands in the httpx jar and is persisted on session close. Failures are logged at DEBUG and never abort the call.
    - Disable in restricted networks: `export NOTEBOOKLM_DISABLE_KEEPALIVE_POKE=1`
 
-2. **External recovery script (opt-in).** When auth has fully expired (idle past the rotation window, force-logout, password change), `fetch_tokens` can shell out to a user-provided refresh script, reload `storage_state.json`, and retry once.
+2. **Periodic background poke (opt-in, Python only).** For long-lived `NotebookLMClient` instances (workers, agents, `async with` blocks held open for hours) layer 1 is not enough — there are no `fetch_tokens` calls between RPCs to drive rotation. Pass `keepalive=<seconds>` and the client spawns an asyncio background task that pokes the same `CheckCookie` endpoint at the configured interval and persists any rotated `Set-Cookie` to `storage_state.json` immediately (so a crash doesn't lose the rotation). Persistence happens off-loop (`asyncio.to_thread`), so the loop never blocks the event loop on disk I/O.
+   ```python
+   async with await NotebookLMClient.from_storage(keepalive=600) as client:
+       # SIDTS is refreshed every ~10 minutes while this block is open.
+       ...
+   ```
+   - Disabled by default; pass `keepalive=None` to turn it off explicitly.
+   - Must be `None` or a positive finite number; `keepalive_min_interval` (default 60 s) clamps small values up to avoid hammering Google's identity surface. Invalid inputs (`0`, negative, `nan`, `inf`) raise `ValueError`.
+   - Persistence requires either `auth.storage_path` or the explicit `storage_path=` constructor arg to be set; without one of those, the loop pokes but does not write to disk.
+   - Poke failures are logged at DEBUG and never propagate. Persistence failures (the more dangerous failure mode — a rotation succeeded in memory but never landed on disk) are logged at WARNING with the storage path. Either way, the next iteration retries.
+   - Honors `NOTEBOOKLM_DISABLE_KEEPALIVE_POKE=1` (the poke itself becomes a no-op when set, but the task still wakes; pass `keepalive=None` to disable the loop entirely).
+
+3. **External recovery script (opt-in).** When auth has fully expired (idle past the rotation window, force-logout, password change), `fetch_tokens` can shell out to a user-provided refresh script, reload `storage_state.json`, and retry once.
    - Wire it up:
      ```bash
      pip install 'notebooklm-py[cookies]'
@@ -50,9 +62,9 @@ Google rotates `__Secure-1PSIDTS` (the freshness partner of `__Secure-1PSID`) on
      ```
    - The script in `examples/refresh_browser_cookies.py` re-runs `notebooklm login --browser-cookies` against your local browser. The library injects `NOTEBOOKLM_REFRESH_PROFILE` and `NOTEBOOKLM_REFRESH_STORAGE_PATH` so the script targets the right file. Retry is gated to once per process — a broken script can't loop.
 
-3. **Re-login (manual).** If the recovery script also fails (e.g. browser isn't logged in either), run `notebooklm login` interactively.
+4. **Re-login (manual).** If the recovery script also fails (e.g. browser isn't logged in either), run `notebooklm login` interactively.
 
-4. **External scheduler (`notebooklm auth refresh` + cron / launchd / systemd).** Layers 1-2 only fire when a Python process is running. If you go idle longer than the SIDTS server window between calls, no in-process layer can rotate. The fix is to wake the OS scheduler periodically and have it run a one-shot refresh.
+5. **External scheduler (`notebooklm auth refresh` + cron / launchd / systemd).** Layers 1-2 only fire when a Python process is running. If you go idle longer than the SIDTS server window between calls (i.e. you don't make `fetch_tokens` calls and don't hold a `NotebookLMClient` open), no in-process layer can rotate. The fix is to wake the OS scheduler periodically and have it run a one-shot refresh.
 
    The command is:
    ```bash
@@ -82,7 +94,7 @@ Google rotates `__Secure-1PSIDTS` (the freshness partner of `__Secure-1PSID`) on
    </dict>
    </plist>
    ```
-   Load: `launchctl load ~/Library/LaunchAgents/com.user.notebooklm-keepalive.plist`. Note that `StartInterval` is wall-clock-based but launchd does not fire missed firings on wake from sleep — a Mac that sleeps for hours will skip every interval until the next active tick. Layer 1 (the per-call poke) covers the next user-driven call automatically; if the gap is long enough that SIDTS expired during sleep, layer 2 (`NOTEBOOKLM_REFRESH_CMD`) is your recovery.
+   Load: `launchctl load ~/Library/LaunchAgents/com.user.notebooklm-keepalive.plist`. Note that `StartInterval` is wall-clock-based but launchd does not fire missed firings on wake from sleep — a Mac that sleeps for hours will skip every interval until the next active tick. Layer 1 (the per-call poke) covers the next user-driven call automatically; if the gap is long enough that SIDTS expired during sleep, layer 3 (`NOTEBOOKLM_REFRESH_CMD`) is your recovery.
 
    **Linux systemd user timer** (`~/.config/systemd/user/notebooklm-keepalive.{service,timer}`):
    ```ini
@@ -157,9 +169,9 @@ Google rotates `__Secure-1PSIDTS` (the freshness partner of `__Secure-1PSID`) on
    ```
    `concurrencyPolicy: Forbid` ensures a slow fire (e.g. a 60s `_run_refresh_cmd` timeout if you also have layer 2 wired up) doesn't overlap with the next 20-minute schedule and end up with two writers racing on `storage_state.json`.
 
-   What L4 cannot fix: server-side revocation (account locked, password changed, force sign-out) — that's still layer 2's job. Long device sleep where the OS scheduler doesn't fire — when the device wakes, the next call recovers via layer 1 if SIDTS is still alive, otherwise via layer 2.
+   What layer 5 cannot fix: server-side revocation (account locked, password changed, force sign-out) — that's still layer 3's job. Long device sleep where the OS scheduler doesn't fire — when the device wakes, the next call recovers via layer 1 if SIDTS is still alive, otherwise via layer 3.
 
-For most users layer 1 alone is enough. Add layer 2 for cron-driven or agent-driven workflows where there's no human at the terminal to run `notebooklm login`. Add layer 4 if you have an idle profile that needs to stay fresh between manual interactions.
+For most users layer 1 alone is enough. Add layer 2 when you hold a `NotebookLMClient` open for hours (no per-call rotation drives it). Add layer 3 for unattended workflows that may hit a fully-expired session and need to recover automatically. Add layer 5 if you have an idle profile that needs to stay fresh between manual interactions and there's no Python process to drive layers 1-2.
 
 #### macOS: `--browser-cookies` prompts for your password
 

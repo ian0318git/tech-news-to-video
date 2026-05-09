@@ -1,0 +1,349 @@
+"""Tests for the NotebookLMClient periodic keepalive task."""
+
+import asyncio
+import json
+import re
+
+import httpx
+import pytest
+from pytest_httpx import HTTPXMock
+
+from notebooklm.auth import AuthTokens
+from notebooklm.client import NotebookLMClient
+
+CHECKCOOKIE_RE = re.compile(r"^https://accounts\.google\.com/CheckCookie.*$")
+
+
+@pytest.fixture
+def mock_auth():
+    """Create AuthTokens with no storage path (default tests don't persist)."""
+    return AuthTokens(
+        cookies={"SID": "test_sid", "HSID": "test_hsid"},
+        csrf_token="test_csrf",
+        session_id="test_session",
+    )
+
+
+def _storage_auth(tmp_path) -> tuple[AuthTokens, "object"]:
+    """Build AuthTokens backed by a real storage_state.json under tmp_path."""
+    storage_path = tmp_path / "storage_state.json"
+    storage_path.write_text(
+        json.dumps(
+            {
+                "cookies": [
+                    {
+                        "name": "SID",
+                        "value": "initial_sid",
+                        "domain": ".google.com",
+                        "path": "/",
+                    },
+                ]
+            }
+        )
+    )
+    auth = AuthTokens(
+        cookies={"SID": "initial_sid"},
+        csrf_token="test_csrf",
+        session_id="test_session",
+        storage_path=storage_path,
+    )
+    return auth, storage_path
+
+
+class TestKeepaliveDisabledByDefault:
+    @pytest.mark.asyncio
+    async def test_keepalive_off_by_default(self, mock_auth, httpx_mock: HTTPXMock):
+        """No keepalive task is spawned and no extra HTTP calls fire by default."""
+        client = NotebookLMClient(mock_auth)
+        async with client:
+            assert client._core._keepalive_task is None
+            # Give the loop a chance to run; nothing should happen
+            await asyncio.sleep(0.1)
+
+        # No CheckCookie request should have been issued
+        for req in httpx_mock.get_requests():
+            assert "CheckCookie" not in str(req.url), f"Unexpected keepalive request: {req.url}"
+
+
+class TestKeepaliveLifecycle:
+    @pytest.mark.asyncio
+    @pytest.mark.no_default_keepalive_mock
+    async def test_spawns_task_on_enter_cancels_on_exit(self, mock_auth, httpx_mock: HTTPXMock):
+        """Task is created on __aenter__ and cleanly cancelled on __aexit__."""
+        httpx_mock.add_response(
+            url=CHECKCOOKIE_RE,
+            is_optional=True,
+            is_reusable=True,
+            status_code=204,
+        )
+
+        client = NotebookLMClient(
+            mock_auth,
+            keepalive=0.05,
+            keepalive_min_interval=0.01,
+        )
+
+        async with client:
+            task = client._core._keepalive_task
+            assert task is not None
+            assert not task.done()
+
+        # Task should be cleaned up; no warnings should be raised.
+        assert client._core._keepalive_task is None
+        # Either cancelled or finished; never left dangling.
+        assert task.done()
+
+
+class TestKeepaliveFloor:
+    @pytest.mark.asyncio
+    async def test_floor_clamps_low_interval(self, mock_auth):
+        """Passing keepalive below keepalive_min_interval is clamped up."""
+        client = NotebookLMClient(
+            mock_auth,
+            keepalive=10.0,
+            keepalive_min_interval=60.0,
+        )
+        assert client._core._keepalive_interval == 60.0
+
+    @pytest.mark.asyncio
+    async def test_floor_does_not_lower_higher_interval(self, mock_auth):
+        """Larger keepalive values pass through unchanged."""
+        client = NotebookLMClient(
+            mock_auth,
+            keepalive=600.0,
+            keepalive_min_interval=60.0,
+        )
+        assert client._core._keepalive_interval == 600.0
+
+    @pytest.mark.asyncio
+    async def test_none_keeps_disabled(self, mock_auth):
+        """``keepalive=None`` keeps the loop disabled regardless of floor."""
+        client = NotebookLMClient(
+            mock_auth,
+            keepalive=None,
+            keepalive_min_interval=60.0,
+        )
+        assert client._core._keepalive_interval is None
+
+
+class TestKeepaliveValidation:
+    @pytest.mark.parametrize("bad", [0, 0.0, -1, -0.5, float("nan"), float("inf")])
+    def test_rejects_non_positive_or_non_finite_keepalive(self, mock_auth, bad):
+        """``keepalive`` must be ``None`` or a positive finite number."""
+        with pytest.raises(ValueError, match="keepalive"):
+            NotebookLMClient(mock_auth, keepalive=bad)
+
+    @pytest.mark.parametrize("bad", [0, 0.0, -1, -0.5, float("nan"), float("inf")])
+    def test_rejects_non_positive_or_non_finite_floor(self, mock_auth, bad):
+        """``keepalive_min_interval`` must be a positive finite number."""
+        with pytest.raises(ValueError, match="keepalive_min_interval"):
+            NotebookLMClient(mock_auth, keepalive=120.0, keepalive_min_interval=bad)
+
+
+class TestKeepalivePokes:
+    @pytest.mark.asyncio
+    @pytest.mark.no_default_keepalive_mock
+    async def test_pokes_at_interval(self, mock_auth, httpx_mock: HTTPXMock):
+        """At least two CheckCookie pokes fire within a short window."""
+        httpx_mock.add_response(
+            url=CHECKCOOKIE_RE,
+            is_optional=True,
+            is_reusable=True,
+            status_code=204,
+        )
+
+        client = NotebookLMClient(
+            mock_auth,
+            keepalive=0.05,
+            keepalive_min_interval=0.01,
+        )
+
+        async with client:
+            await asyncio.sleep(0.5)
+
+        poke_requests = [r for r in httpx_mock.get_requests() if "CheckCookie" in str(r.url)]
+        assert (
+            len(poke_requests) >= 2
+        ), f"Expected at least 2 keepalive pokes, got {len(poke_requests)}"
+
+    @pytest.mark.asyncio
+    @pytest.mark.no_default_keepalive_mock
+    async def test_failure_does_not_crash_loop(self, mock_auth, httpx_mock: HTTPXMock):
+        """A failing poke is swallowed and the loop continues."""
+        # First poke: connection error. Subsequent pokes: 204.
+        httpx_mock.add_exception(
+            url=CHECKCOOKIE_RE,
+            exception=httpx.ConnectError("simulated network blip"),
+        )
+        httpx_mock.add_response(
+            url=CHECKCOOKIE_RE,
+            is_optional=True,
+            is_reusable=True,
+            status_code=204,
+        )
+
+        client = NotebookLMClient(
+            mock_auth,
+            keepalive=0.05,
+            keepalive_min_interval=0.01,
+        )
+
+        async with client:
+            await asyncio.sleep(0.4)
+            # Task is still running after the failure
+            assert client._core._keepalive_task is not None
+            assert not client._core._keepalive_task.done()
+
+        poke_requests = [r for r in httpx_mock.get_requests() if "CheckCookie" in str(r.url)]
+        # First call raised; at least one further successful call must follow.
+        assert (
+            len(poke_requests) >= 2
+        ), f"Loop should have retried after failure; got {len(poke_requests)} pokes"
+
+
+class TestKeepalivePersistenceFailure:
+    @pytest.mark.asyncio
+    @pytest.mark.no_default_keepalive_mock
+    async def test_persistence_failure_logs_warning_and_continues(
+        self, tmp_path, httpx_mock: HTTPXMock, monkeypatch, caplog
+    ):
+        """A failing ``save_cookies_to_storage`` is logged at WARNING; loop continues."""
+        auth, storage_path = _storage_auth(tmp_path)
+
+        httpx_mock.add_response(
+            url=CHECKCOOKIE_RE,
+            is_optional=True,
+            is_reusable=True,
+            status_code=204,
+        )
+
+        save_calls = []
+
+        def boom(cookies, path):
+            save_calls.append(path)
+            raise OSError("simulated disk full")
+
+        monkeypatch.setattr("notebooklm._core.save_cookies_to_storage", boom)
+
+        client = NotebookLMClient(
+            auth,
+            keepalive=0.05,
+            keepalive_min_interval=0.01,
+        )
+
+        with caplog.at_level("WARNING", logger="notebooklm._core"):
+            async with client:
+                # Wait for at least 2 save attempts
+                for _ in range(50):
+                    if len(save_calls) >= 2:
+                        break
+                    await asyncio.sleep(0.05)
+
+        assert len(save_calls) >= 2, "Loop should retry after a persistence failure"
+        warnings = [
+            r for r in caplog.records if r.levelname == "WARNING" and "persistence" in r.message
+        ]
+        assert warnings, "A persistence failure should surface as a WARNING log record"
+        assert str(storage_path) in warnings[0].message
+
+
+class TestKeepaliveExplicitStoragePath:
+    @pytest.mark.asyncio
+    @pytest.mark.no_default_keepalive_mock
+    async def test_explicit_storage_path_used_when_auth_lacks_one(
+        self, tmp_path, httpx_mock: HTTPXMock
+    ):
+        """``NotebookLMClient(storage_path=...)`` is honored even when ``auth.storage_path`` is ``None``."""
+        # storage_state.json on disk, but auth.storage_path stays None
+        storage_path = tmp_path / "storage_state.json"
+        storage_path.write_text(
+            json.dumps(
+                {
+                    "cookies": [
+                        {
+                            "name": "SID",
+                            "value": "manual_sid",
+                            "domain": ".google.com",
+                            "path": "/",
+                        },
+                    ]
+                }
+            )
+        )
+        auth = AuthTokens(
+            cookies={"SID": "manual_sid"},
+            csrf_token="t",
+            session_id="s",
+            # NOTE: storage_path is *not* set on auth
+        )
+
+        httpx_mock.add_response(
+            url=CHECKCOOKIE_RE,
+            is_optional=True,
+            is_reusable=True,
+            status_code=204,
+            headers={
+                "Set-Cookie": (
+                    "__Secure-1PSIDTS=rotated_via_explicit; Domain=.google.com; Path=/; Secure"
+                ),
+            },
+        )
+
+        client = NotebookLMClient(
+            auth,
+            storage_path=storage_path,
+            keepalive=0.05,
+            keepalive_min_interval=0.01,
+        )
+
+        async with client:
+            for _ in range(50):
+                if "rotated_via_explicit" in storage_path.read_text():
+                    break
+                await asyncio.sleep(0.05)
+            else:
+                pytest.fail("Rotated cookie was not persisted to the explicit storage path")
+
+
+class TestKeepalivePersistence:
+    @pytest.mark.asyncio
+    @pytest.mark.no_default_keepalive_mock
+    async def test_persists_rotated_cookies_without_aexit(self, tmp_path, httpx_mock: HTTPXMock):
+        """Rotated Set-Cookie from a poke is written to storage between pokes."""
+        auth, storage_path = _storage_auth(tmp_path)
+
+        # The poke response sets a rotated 1PSIDTS on .google.com
+        httpx_mock.add_response(
+            url=CHECKCOOKIE_RE,
+            is_optional=True,
+            is_reusable=True,
+            status_code=204,
+            headers={
+                "Set-Cookie": (
+                    "__Secure-1PSIDTS=rotated_value_xyz; Domain=.google.com; Path=/; Secure"
+                ),
+            },
+        )
+
+        client = NotebookLMClient(
+            auth,
+            keepalive=0.05,
+            keepalive_min_interval=0.01,
+        )
+
+        async with client:
+            # Wait long enough for at least one poke + persist
+            for _ in range(50):
+                if "rotated_value_xyz" in storage_path.read_text():
+                    break
+                await asyncio.sleep(0.05)
+            else:
+                pytest.fail(
+                    "Rotated cookie was not persisted to storage_state.json before __aexit__ ran"
+                )
+
+            # Sanity: the rotated cookie was written *while* the client was open,
+            # not just at close time.
+            data = json.loads(storage_path.read_text())
+            cookie_names = {c["name"] for c in data["cookies"]}
+            assert "__Secure-1PSIDTS" in cookie_names

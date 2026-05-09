@@ -208,16 +208,29 @@ class NotebookLMClient:
     @classmethod
     async def from_storage(
         cls, path: str | None = None, timeout: float = 30.0,
-        profile: str | None = None
+        profile: str | None = None,
+        keepalive: float | None = None,
+        keepalive_min_interval: float = 60.0,
     ) -> "NotebookLMClient"
 
     def __init__(
         self, auth: AuthTokens, timeout: float = 30.0,
-        storage_path: Path | None = None
+        storage_path: Path | None = None,
+        keepalive: float | None = None,
+        keepalive_min_interval: float = 60.0,
     )
 
     async def refresh_auth(self) -> AuthTokens
 ```
+
+**Long-lived clients:** pass `keepalive=<seconds>` to spawn a background task
+that periodically pokes `accounts.google.com` and persists any rotated
+`__Secure-1PSIDTS` cookie to `storage_state.json`. This keeps a worker /
+agent / long-running `async with` block from silently staling out. Disabled
+by default (`keepalive=None`). Values below `keepalive_min_interval` (default
+`60.0`) are clamped up to that floor. See [Cookie freshness for long-running
+/ unattended use](troubleshooting.md#cookie-freshness-for-long-running--unattended-use)
+for the full layered story.
 
 ---
 
