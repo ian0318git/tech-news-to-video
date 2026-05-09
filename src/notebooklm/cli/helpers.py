@@ -149,6 +149,11 @@ async def import_with_retry(
     a copy of the same sources (a single timeout cascade can otherwise inflate
     a 60-source import to 300+ sources across 5-6 retries).
 
+    If the pre-import source snapshot is unavailable, retries still filter out
+    URLs that are already visible after each timeout, but the returned list may
+    undercount server-side imports because the function cannot prove those
+    sources were absent before this call.
+
     This is intentionally CLI-only policy. Library consumers calling
     `client.research.import_sources()` directly still get one-shot behavior.
     """
@@ -171,7 +176,7 @@ async def import_with_retry(
     # additions from another session and pre-existing URLs cannot satisfy it.
     baseline_ids: set[str] | None
     try:
-        baseline = await client.sources.list(notebook_id)
+        baseline = await client.sources.list(notebook_id, strict=True)
         baseline_ids = {src.id for src in baseline}
     except (NetworkError, RPCError) as snapshot_exc:
         logger.warning(
@@ -193,16 +198,20 @@ async def import_with_retry(
             # Verify server-side state before retrying. The IMPORT_RESEARCH RPC
             # frequently times out at the client (30s) after a successful
             # server-side write; retrying then duplicates every source.
-            if baseline_ids is not None and requested_urls_norm:
+            if requested_urls_norm:
                 try:
-                    current = await client.sources.list(notebook_id)
-                    new_sources = [src for src in current if src.id not in baseline_ids]
+                    current = await client.sources.list(notebook_id, strict=True)
+                    new_sources = (
+                        [src for src in current if src.id not in baseline_ids]
+                        if baseline_ids is not None
+                        else []
+                    )
                     new_urls_norm = {_normalize_url(src.url) for src in new_sources if src.url}
                     current_urls_norm = {_normalize_url(src.url) for src in current if src.url}
                     # Success requires every requested URL to appear among the
                     # *new* sources. Trivial-true cases (pre-existing URLs) and
                     # concurrent unrelated additions both fail this check.
-                    if requested_urls_norm.issubset(new_urls_norm):
+                    if baseline_ids is not None and requested_urls_norm.issubset(new_urls_norm):
                         logger.warning(
                             "IMPORT_RESEARCH timed out for notebook %s but "
                             "sources.list shows all %d requested URLs among "

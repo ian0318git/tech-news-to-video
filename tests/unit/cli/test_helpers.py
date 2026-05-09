@@ -30,7 +30,7 @@ from notebooklm.cli.helpers import (
     set_current_notebook,
     with_client,
 )
-from notebooklm.exceptions import NetworkError, RPCTimeoutError
+from notebooklm.exceptions import NetworkError, RPCError, RPCTimeoutError
 from notebooklm.types import ArtifactType
 
 # =============================================================================
@@ -1046,6 +1046,62 @@ class TestImportWithRetry:
         assert client.research.import_sources.await_count == 2
         retry_call_sources = client.research.import_sources.await_args_list[1].args[2]
         assert retry_call_sources == [{"url": "https://two.example.com", "title": "Source 2"}]
+        mock_sleep.assert_awaited_once_with(5)
+
+    @pytest.mark.asyncio
+    async def test_snapshot_failure_deduplicates_retries_without_verified_success(self):
+        """A malformed pre-import snapshot must not masquerade as an empty
+        notebook. Without a reliable baseline we can still drop URLs already
+        visible after a timeout, but we must not classify all current rows as
+        newly imported by this call.
+        """
+        source_1 = MagicMock(id="src_1", title="Source 1", url="https://one.example.com")
+        source_2 = MagicMock(id="src_2", title="Source 2", url="https://two.example.com")
+        source_3 = MagicMock(id="src_3", title="Source 3", url="https://three.example.com")
+        sources = [
+            {"url": "https://one.example.com", "title": "Source 1"},
+            {"url": "https://two.example.com", "title": "Source 2"},
+            {"url": "https://three.example.com", "title": "Source 3"},
+        ]
+        client = MagicMock()
+        client.sources.list = AsyncMock(
+            side_effect=[
+                RPCError("snapshot unavailable"),
+                [source_1],
+                [source_1, source_2, source_3],
+            ]
+        )
+        client.research.import_sources = AsyncMock(
+            side_effect=[
+                RPCTimeoutError("Timed out", timeout_seconds=30.0),
+                RPCTimeoutError("Timed out", timeout_seconds=30.0),
+            ]
+        )
+
+        with (
+            patch("notebooklm.cli.helpers.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+            patch("notebooklm.cli.helpers.console"),
+        ):
+            imported = await import_with_retry(
+                client,
+                "nb_123",
+                "task_123",
+                sources,
+                initial_delay=5,
+            )
+
+        assert imported == []
+        assert client.research.import_sources.await_count == 2
+        assert client.sources.list.await_count == 3
+        assert all(
+            awaited_call.kwargs.get("strict") is True
+            for awaited_call in client.sources.list.await_args_list
+        )
+        assert client.research.import_sources.await_args_list[0].args[2] == sources
+        assert client.research.import_sources.await_args_list[1].args[2] == [
+            {"url": "https://two.example.com", "title": "Source 2"},
+            {"url": "https://three.example.com", "title": "Source 3"},
+        ]
         mock_sleep.assert_awaited_once_with(5)
 
     @pytest.mark.asyncio

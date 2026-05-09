@@ -120,8 +120,9 @@ def create_mock_client():
             MockNotebook("notebook_test", "Notebook Test"),
         ]
 
-    def make_source_list(notebook_id):
+    def make_source_list(notebook_id, *, strict=False):
         """Return source list that matches common test IDs."""
+        del strict
         return [
             MockSource("src_1", "Source One"),
             MockSource("src_2", "Source Two"),

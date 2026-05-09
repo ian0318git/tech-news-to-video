@@ -51,11 +51,27 @@ class SourcesAPI:
         """
         self._core = core
 
-    async def list(self, notebook_id: str) -> list[Source]:
+    @staticmethod
+    def _handle_malformed_list_response(
+        notebook_id: str,
+        message: str,
+        *log_args: object,
+        strict: bool,
+        error_detail: str = "API response structure changed",
+    ) -> list[Source]:
+        logger.warning("SourcesAPI.list: " + message, notebook_id, *log_args)
+        if strict:
+            raise RPCError(f"Could not list sources for {notebook_id}: {error_detail}")
+        return []
+
+    async def list(self, notebook_id: str, *, strict: bool = False) -> list[Source]:
         """List all sources in a notebook.
 
         Args:
             notebook_id: The notebook ID.
+            strict: Raise RPCError on malformed source-list responses instead
+                of returning an empty list. Intended for internal flows where
+                a malformed snapshot must not be treated as an empty notebook.
 
         Returns:
             List of Source objects.
@@ -69,31 +85,32 @@ class SourcesAPI:
         )
 
         if not notebook or not isinstance(notebook, list) or len(notebook) == 0:
-            logger.warning(
+            return self._handle_malformed_list_response(
+                notebook_id,
                 "Empty or invalid notebook response when listing sources for %s "
                 "(API response structure may have changed)",
-                notebook_id,
+                strict=strict,
             )
-            return []
 
         nb_info = notebook[0]
         if not isinstance(nb_info, list) or len(nb_info) <= 1:
-            logger.warning(
+            return self._handle_malformed_list_response(
+                notebook_id,
                 "Unexpected notebook structure for %s: expected list with sources at index 1 "
                 "(API structure may have changed)",
-                notebook_id,
+                strict=strict,
             )
-            return []
 
         sources_list = nb_info[1]
         if not isinstance(sources_list, list):
-            logger.warning(
+            return self._handle_malformed_list_response(
+                notebook_id,
                 "Sources data for %s is not a list (type=%s), returning empty list "
                 "(API structure may have changed)",
-                notebook_id,
                 type(sources_list).__name__,
+                strict=strict,
+                error_detail=f"sources data is {type(sources_list).__name__}, not list",
             )
-            return []
 
         # Convert raw source data to Source objects
         sources = []

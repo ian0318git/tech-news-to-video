@@ -1041,6 +1041,34 @@ class TestListSourcesMalformedResponse:
 
         assert sources == []
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("rpc_result", "message"),
+        [
+            ([], "API response structure changed"),
+            (["just_a_string"], "API response structure changed"),
+            ([["just_a_title"]], "API response structure changed"),
+            ([["Notebook Title", None]], "sources data is NoneType, not list"),
+        ],
+    )
+    async def test_list_sources_strict_raises_for_malformed_response(
+        self,
+        rpc_result,
+        message,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+        build_rpc_response,
+    ):
+        """Strict mode exposes malformed source-list responses to callers
+        that must distinguish API-structure failures from empty notebooks.
+        """
+        response = build_rpc_response(RPCMethod.GET_NOTEBOOK, rpc_result)
+        httpx_mock.add_response(content=response.encode())
+
+        async with NotebookLMClient(auth_tokens) as client:
+            with pytest.raises(RPCError, match=message):
+                await client.sources.list("nb_123", strict=True)
+
 
 class TestListSourcesParsingEdgeCases:
     """Tests for list() per-source parsing edge cases (lines 100-143)."""
