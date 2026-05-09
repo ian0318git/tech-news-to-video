@@ -304,11 +304,14 @@ class TestKeepaliveExplicitStoragePath:
             else:
                 pytest.fail("Rotated cookie was not persisted to the explicit storage path")
 
-    def test_explicit_storage_path_normalizes_onto_auth(self, tmp_path):
-        """The constructor copies ``storage_path`` onto ``auth.storage_path`` so
-        ``refresh_auth()`` and ``ClientCore.close()`` (which both read
+    def test_explicit_storage_path_normalizes_onto_auth_without_mutating_caller(self, tmp_path):
+        """The constructor exposes ``storage_path`` on ``client.auth`` so
+        ``refresh_auth()`` and ``ClientCore.close()`` (which read
         ``self._core.auth.storage_path`` directly, not the keepalive-specific
-        path) persist to the same file.
+        path) persist to the same file. Crucially, the caller's original
+        ``AuthTokens`` is *not* mutated, so reusing one ``AuthTokens`` across
+        multiple ``NotebookLMClient`` instances with different storage paths
+        is safe.
         """
         storage_path = tmp_path / "storage_state.json"
         storage_path.write_text('{"cookies": []}')
@@ -323,8 +326,49 @@ class TestKeepaliveExplicitStoragePath:
         client = NotebookLMClient(auth, storage_path=storage_path)
 
         assert client.auth.storage_path == storage_path, (
-            "Explicit storage_path must be normalized onto auth so non-keepalive "
+            "Explicit storage_path must be reflected on client.auth so non-keepalive "
             "code paths (refresh_auth, ClientCore.close) see the same file"
+        )
+        assert auth.storage_path is None, (
+            "Caller's AuthTokens must not be mutated — sharing one AuthTokens "
+            "across clients with different storage paths must not leak between them"
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.no_default_keepalive_mock
+    async def test_close_persists_to_explicit_storage_path(
+        self, tmp_path, monkeypatch, httpx_mock: HTTPXMock
+    ):
+        """``ClientCore.close()`` calls ``save_cookies_to_storage`` with the
+        explicit constructor ``storage_path`` even when keepalive never ran
+        and ``auth.storage_path`` was ``None`` originally — proving the
+        normalization actually wires the on-close save, not just the
+        keepalive loop.
+        """
+        storage_path = tmp_path / "storage_state.json"
+        storage_path.write_text('{"cookies": []}')
+        auth = AuthTokens(
+            cookies={"SID": "x"},
+            csrf_token="t",
+            session_id="s",
+            # storage_path intentionally None
+        )
+
+        save_calls: list[tuple[object, object]] = []
+
+        def spy(cookies, path):
+            save_calls.append((cookies, path))
+
+        monkeypatch.setattr("notebooklm._core.save_cookies_to_storage", spy)
+
+        client = NotebookLMClient(auth, storage_path=storage_path)
+        async with client:
+            pass  # no RPC calls; keepalive disabled by default
+
+        # close()'s on-close save must have fired with the explicit storage_path
+        assert any(call[1] == storage_path for call in save_calls), (
+            f"Expected close() to persist to {storage_path}, "
+            f"but got: {[(type(c[0]).__name__, c[1]) for c in save_calls]}"
         )
 
 

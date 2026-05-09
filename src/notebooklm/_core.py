@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import math
+import threading
 import time
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Coroutine
@@ -173,6 +174,11 @@ class ClientCore:
             keepalive_storage_path if keepalive_storage_path is not None else auth.storage_path
         )
         self._keepalive_task: asyncio.Task[None] | None = None
+        # Serializes keepalive's worker-thread save with close()'s on-close save
+        # so that newer state always wins. Without this, an in-flight keepalive
+        # save kicked off before close() can finish *after* close()'s own save
+        # and clobber it (an older snapshot overwriting the freshest state).
+        self._save_lock = threading.Lock()
 
     async def open(self) -> None:
         """Open the HTTP client connection.
@@ -226,8 +232,18 @@ class ClientCore:
         if self._http_client:
             try:
                 # Sync refreshed cookies only when auth came from an explicit file.
+                # Hold ``_save_lock`` so we serialize with any keepalive save still
+                # finishing in a worker thread — close() owns the freshest jar
+                # and must win, not the older snapshot.
                 if self.auth.storage_path is not None:
-                    save_cookies_to_storage(self._http_client.cookies, self.auth.storage_path)
+                    storage_path = self.auth.storage_path
+                    cookies = self._http_client.cookies
+
+                    def _final_save() -> None:
+                        with self._save_lock:
+                            save_cookies_to_storage(cookies, storage_path)
+
+                    await asyncio.to_thread(_final_save)
             except Exception as e:
                 logger.warning("Failed to sync refreshed cookies during close: %s", e)
             finally:
@@ -275,25 +291,29 @@ class ClientCore:
                 if storage_path is None:
                     continue
 
-                # Snapshot the cookie jar on the event-loop thread before
-                # off-loading. ``httpx.Cookies`` is not documented as safe for
-                # concurrent access, and the live ``AsyncClient`` jar can keep
-                # mutating during the save (RPC redirects, the next poke
-                # iteration). ``copy.deepcopy`` on the jar fails (the internal
-                # ``http.cookiejar.CookieJar`` carries a non-picklable
-                # ``RLock``), so re-build a fresh jar by iterating the live
-                # one — which is exactly what ``httpx.Cookies(other_cookies)``
-                # does internally (`set_cookie` per cookie into a fresh
-                # ``CookieJar``). The iteration is atomic under the RLock, and
-                # ``http.cookiejar.Cookie`` objects are effectively immutable
-                # — a later ``set_cookie`` of the same name replaces the dict
-                # entry but does not mutate the previous object.
+                # Snapshot the cookie jar synchronously on the event-loop thread
+                # so the worker isn't iterating a live jar that the AsyncClient
+                # may be mutating. ``httpx.Cookies(other)`` builds a fresh
+                # ``CookieJar`` by re-inserting each cookie reference; cookies
+                # in ``http.cookiejar`` are replaced (not mutated) on update,
+                # so the snapshot is stable for the worker's read.
                 jar_snapshot = httpx.Cookies(client.cookies)
+
+                # Hold ``_save_lock`` so close()'s final save can't run
+                # concurrently with this one. close() also takes the lock,
+                # so even if our awaiter is cancelled, close() waits for
+                # us before doing its own write — newer state wins.
+                # Default-arg binding pins the loop-variable values to this
+                # iteration (not late-bound).
+                def _save_under_lock(
+                    jar=jar_snapshot, path=storage_path, lock=self._save_lock
+                ) -> None:
+                    with lock:
+                        save_cookies_to_storage(jar, path)
+
                 try:
-                    # save_cookies_to_storage performs sync disk I/O; off-load to
-                    # a worker thread so we don't stall the event loop on every
-                    # iteration (matters for short intervals or slow disks).
-                    await asyncio.to_thread(save_cookies_to_storage, jar_snapshot, storage_path)
+                    # Off-load disk I/O so we don't stall the event loop.
+                    await asyncio.to_thread(_save_under_lock)
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:  # noqa: BLE001

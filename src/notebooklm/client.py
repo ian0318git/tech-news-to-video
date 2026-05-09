@@ -19,6 +19,7 @@ Example:
         result = await client.chat.ask(notebook_id, "What is this about?")
 """
 
+import dataclasses
 import logging
 import os
 import re
@@ -103,9 +104,12 @@ class NotebookLMClient:
         # the keepalive loop) writes to the same file. Without this, an
         # explicit ``storage_path=`` kwarg only reaches the keepalive loop
         # while ``auth.storage_path is None`` causes refresh and on-close
-        # saves to silently skip persistence.
-        if storage_path is not None:
-            auth.storage_path = storage_path
+        # saves to silently skip persistence. ``dataclasses.replace`` instead
+        # of in-place mutation so a caller reusing ``AuthTokens`` across
+        # multiple clients (with different storage paths) doesn't see one
+        # client's path leak into another.
+        if storage_path is not None and auth.storage_path != storage_path:
+            auth = dataclasses.replace(auth, storage_path=storage_path)
 
         # Pass refresh_auth as callback for automatic retry on auth failures
         # Note: refresh_auth calls update_auth_headers internally
