@@ -28,11 +28,13 @@ Security Notes:
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
 import re
 import subprocess
+import sys
 import tempfile
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -849,6 +851,57 @@ def build_cookie_jar(
     return jar
 
 
+@contextlib.contextmanager
+def _file_lock_exclusive(lock_path: Path) -> Any:
+    """Cross-process exclusive lock on ``lock_path`` for the duration of the block.
+
+    Multiple Python processes that all save to the same ``storage_state.json``
+    (e.g. a long-running ``NotebookLMClient(keepalive=...)`` worker plus a
+    cron-driven ``notebooklm auth refresh``) would otherwise race on the read-
+    merge-write cycle and lose updates. The lock is held on a sentinel file
+    sibling to the storage file (``.storage_state.json.lock``), since locking
+    the storage file itself would interfere with the atomic temp-rename below.
+
+    POSIX uses ``fcntl.flock``, Windows uses ``msvcrt.locking``; both are
+    blocking. The lock is per-process: threads within one process aren't
+    serialized — that's the intra-process ``threading.Lock`` in ``ClientCore``.
+    If the lock can't be acquired (e.g. unsupported filesystem like NFS where
+    flock semantics vary), the save proceeds without locking and a DEBUG log
+    line records the fallback; correctness on NFS is best-effort.
+    """
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    locked = False
+    try:
+        try:
+            if sys.platform == "win32":
+                import msvcrt
+
+                msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(fd, fcntl.LOCK_EX)
+            locked = True
+        except OSError as exc:
+            logger.debug("save_cookies_to_storage: file lock unavailable (%s); proceeding", exc)
+        yield
+    finally:
+        if locked:
+            try:
+                if sys.platform == "win32":
+                    import msvcrt
+
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+            except OSError as exc:
+                logger.debug("save_cookies_to_storage: failed to release file lock (%s)", exc)
+        os.close(fd)
+
+
 def save_cookies_to_storage(cookie_jar: httpx.Cookies, path: Path | None = None) -> None:
     """Save an updated httpx.Cookies jar back to Playwright storage_state.json.
 
@@ -857,6 +910,12 @@ def save_cookies_to_storage(cookie_jar: httpx.Cookies, path: Path | None = None)
     serialized back to disk so the session remains valid across CLI invocations.
 
     If auth was loaded from an environment variable (no file), this is a no-op.
+
+    Cross-process safety: the read-merge-write cycle is wrapped in an OS-level
+    file lock (``.storage_state.json.lock``) so concurrent writers from
+    different Python processes (e.g. an in-process ``NotebookLMClient`` keepalive
+    plus a cron-driven ``notebooklm auth refresh``) serialize cleanly rather
+    than tearing or losing updates.
 
     Args:
         cookie_jar: The httpx.Cookies object containing the latest cookies.
@@ -874,81 +933,85 @@ def save_cookies_to_storage(cookie_jar: httpx.Cookies, path: Path | None = None)
         logger.debug("Skipping cookie sync: No storage file path available")
         return
 
-    if not path.exists():
-        logger.debug("Skipping cookie sync: Storage file not found at %s", path)
-        return
+    lock_path = path.with_name(f".{path.name}.lock")
+    with _file_lock_exclusive(lock_path):
+        if not path.exists():
+            logger.debug("Skipping cookie sync: Storage file not found at %s", path)
+            return
 
-    try:
-        storage_data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception as e:
-        logger.warning("Failed to read storage state for cookie sync: %s", e)
-        return
+        try:
+            storage_data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as e:
+            logger.warning("Failed to read storage state for cookie sync: %s", e)
+            return
 
-    if not isinstance(storage_data, dict) or "cookies" not in storage_data:
-        return
+        if not isinstance(storage_data, dict) or "cookies" not in storage_data:
+            return
 
-    cookies_by_key = {
-        (cookie.name, cookie.domain): cookie
-        for cookie in cookie_jar.jar
-        if cookie.name and cookie.domain and _is_allowed_cookie_domain(cookie.domain)
-    }
+        cookies_by_key = {
+            (cookie.name, cookie.domain): cookie
+            for cookie in cookie_jar.jar
+            if cookie.name and cookie.domain and _is_allowed_cookie_domain(cookie.domain)
+        }
 
-    updated_count = 0
-    stored_keys: set[CookieKey] = set()
-    for stored_cookie in storage_data["cookies"]:
-        name = stored_cookie.get("name")
-        domain = stored_cookie.get("domain", "")
-        if not name or not domain:
-            continue
+        updated_count = 0
+        stored_keys: set[CookieKey] = set()
+        for stored_cookie in storage_data["cookies"]:
+            name = stored_cookie.get("name")
+            domain = stored_cookie.get("domain", "")
+            if not name or not domain:
+                continue
 
-        key = (name, domain)
-        stored_keys.update(_cookie_key_variants(key))
-        refreshed_cookie = _find_cookie_for_storage(cookies_by_key, key, stored_cookie.get("value"))
-        if refreshed_cookie is None:
-            continue
+            key = (name, domain)
+            stored_keys.update(_cookie_key_variants(key))
+            refreshed_cookie = _find_cookie_for_storage(
+                cookies_by_key, key, stored_cookie.get("value")
+            )
+            if refreshed_cookie is None:
+                continue
 
-        new_expires = refreshed_cookie.expires if refreshed_cookie.expires is not None else -1
-        changed = (
-            stored_cookie.get("value") != refreshed_cookie.value
-            or stored_cookie.get("expires") != new_expires
-        )
-        if changed:
-            stored_cookie["value"] = refreshed_cookie.value
-            stored_cookie["expires"] = new_expires
-            stored_cookie["path"] = refreshed_cookie.path or stored_cookie.get("path", "/")
-            stored_cookie["secure"] = refreshed_cookie.secure
-            stored_cookie["httpOnly"] = _cookie_is_http_only(refreshed_cookie)
+            new_expires = refreshed_cookie.expires if refreshed_cookie.expires is not None else -1
+            changed = (
+                stored_cookie.get("value") != refreshed_cookie.value
+                or stored_cookie.get("expires") != new_expires
+            )
+            if changed:
+                stored_cookie["value"] = refreshed_cookie.value
+                stored_cookie["expires"] = new_expires
+                stored_cookie["path"] = refreshed_cookie.path or stored_cookie.get("path", "/")
+                stored_cookie["secure"] = refreshed_cookie.secure
+                stored_cookie["httpOnly"] = _cookie_is_http_only(refreshed_cookie)
+                updated_count += 1
+
+        for key, cookie in cookies_by_key.items():
+            if key in stored_keys:
+                continue
+            storage_data["cookies"].append(_cookie_to_storage_state(cookie))
             updated_count += 1
 
-    for key, cookie in cookies_by_key.items():
-        if key in stored_keys:
-            continue
-        storage_data["cookies"].append(_cookie_to_storage_state(cookie))
-        updated_count += 1
-
-    if updated_count > 0:
-        temp_path: Path | None = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                "w",
-                encoding="utf-8",
-                dir=path.parent,
-                prefix=f".{path.name}.",
-                suffix=".tmp",
-                delete=False,
-            ) as temp_file:
-                temp_file.write(json.dumps(storage_data, indent=2))
-                temp_path = Path(temp_file.name)
-            os.chmod(temp_path, 0o600)
-            temp_path.replace(path)
-            logger.debug("Successfully synced %d refreshed cookies to %s", updated_count, path)
-        except Exception as e:
-            logger.warning("Failed to write updated cookies to %s: %s", path, e)
-            if temp_path is not None:
-                try:
-                    temp_path.unlink(missing_ok=True)
-                except Exception as cleanup_err:
-                    logger.debug("Failed to clean up temp file %s: %s", temp_path, cleanup_err)
+        if updated_count > 0:
+            temp_path: Path | None = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    "w",
+                    encoding="utf-8",
+                    dir=path.parent,
+                    prefix=f".{path.name}.",
+                    suffix=".tmp",
+                    delete=False,
+                ) as temp_file:
+                    temp_file.write(json.dumps(storage_data, indent=2, ensure_ascii=False))
+                    temp_path = Path(temp_file.name)
+                os.chmod(temp_path, 0o600)
+                temp_path.replace(path)
+                logger.debug("Successfully synced %d refreshed cookies to %s", updated_count, path)
+            except Exception as e:
+                logger.warning("Failed to write updated cookies to %s: %s", path, e)
+                if temp_path is not None:
+                    try:
+                        temp_path.unlink(missing_ok=True)
+                    except Exception as cleanup_err:
+                        logger.debug("Failed to clean up temp file %s: %s", temp_path, cleanup_err)
 
 
 def _cookie_is_http_only(cookie: Any) -> bool:

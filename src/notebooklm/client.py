@@ -254,9 +254,12 @@ class NotebookLMClient:
         self._core.update_auth_headers()
 
         # Persist refreshed cookies back to disk so the next CLI invocation
-        # picks up the updated short-lived tokens (e.g., __Secure-1PSIDCC)
-        from .auth import save_cookies_to_storage
-
-        save_cookies_to_storage(http_client.cookies, self._core.auth.storage_path)
+        # picks up the updated short-lived tokens (e.g., __Secure-1PSIDCC).
+        # Routed through ClientCore.save_cookies so it serializes with the
+        # keepalive worker and the on-close save via ``_save_lock`` — without
+        # that, refresh_auth's synchronous save can race with an in-flight
+        # keepalive save and an older snapshot can clobber the freshly
+        # refreshed tokens.
+        await self._core.save_cookies(http_client.cookies)
 
         return self._core.auth

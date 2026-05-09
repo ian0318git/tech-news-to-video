@@ -414,3 +414,158 @@ class TestKeepalivePersistence:
             data = json.loads(storage_path.read_text())
             cookie_names = {c["name"] for c in data["cookies"]}
             assert "__Secure-1PSIDTS" in cookie_names
+
+
+class TestSaveCookiesUnification:
+    """Tests for ClientCore.save_cookies — the single chokepoint that close,
+    keepalive, and refresh_auth all route through."""
+
+    @pytest.mark.asyncio
+    async def test_save_cookies_takes_in_process_lock_before_writing(self, tmp_path, monkeypatch):
+        """``ClientCore.save_cookies`` holds ``_save_lock`` for the duration of
+        the worker-thread write, so an older snapshot can't clobber a newer one
+        within the same process."""
+        from notebooklm._core import ClientCore
+
+        auth = AuthTokens(
+            cookies={"SID": "x"},
+            csrf_token="t",
+            session_id="s",
+            storage_path=tmp_path / "storage_state.json",
+        )
+        (tmp_path / "storage_state.json").write_text('{"cookies": []}')
+        core = ClientCore(auth)
+
+        lock_held_during_save: list[bool] = []
+
+        def spy(jar, path):
+            """Record whether ``_save_lock`` is held at the moment of the disk write."""
+            lock_held_during_save.append(core._save_lock.locked())
+
+        monkeypatch.setattr("notebooklm._core.save_cookies_to_storage", spy)
+
+        await core.save_cookies(httpx.Cookies())
+
+        assert lock_held_during_save == [True], (
+            "save_cookies must hold _save_lock for the duration of "
+            "save_cookies_to_storage so newer state always wins"
+        )
+
+    @pytest.mark.asyncio
+    async def test_refresh_auth_routes_save_through_save_cookies(
+        self, tmp_path, monkeypatch, httpx_mock: HTTPXMock
+    ):
+        """``refresh_auth`` no longer calls ``save_cookies_to_storage`` directly;
+        it routes through ``ClientCore.save_cookies`` so the in-process lock is
+        held — preventing an older keepalive snapshot from clobbering the
+        freshly-refreshed tokens."""
+        storage_path = tmp_path / "storage_state.json"
+        storage_path.write_text(
+            json.dumps(
+                {
+                    "cookies": [
+                        {
+                            "name": "SID",
+                            "value": "x",
+                            "domain": ".google.com",
+                            "path": "/",
+                        },
+                    ]
+                }
+            )
+        )
+        auth = AuthTokens(
+            cookies={"SID": "x", "HSID": "y"},
+            csrf_token="old_csrf",
+            session_id="old_session",
+            storage_path=storage_path,
+        )
+
+        # NotebookLM homepage with new tokens (refresh_auth scrapes these)
+        httpx_mock.add_response(
+            url="https://notebooklm.google.com/",
+            content=b'<html><script>window.WIZ_global_data={"SNlM0e":"new_csrf","FdrFJe":"new_sid"};</script></html>',
+        )
+
+        client = NotebookLMClient(auth)
+
+        save_calls: list[bool] = []
+
+        def spy(jar, path):
+            """Record whether ``_save_lock`` is held when refresh_auth's save fires."""
+            save_calls.append(client._core._save_lock.locked())
+
+        monkeypatch.setattr("notebooklm._core.save_cookies_to_storage", spy)
+
+        async with client:
+            await client.refresh_auth()
+
+        # At least one save (refresh_auth) plus close()'s on-close save.
+        assert len(save_calls) >= 1
+        assert all(save_calls), (
+            "Every save fired during refresh_auth + close must be under the "
+            f"in-process lock; got {save_calls}"
+        )
+
+
+class TestCrossProcessFileLock:
+    """Tests for the OS-level file lock inside save_cookies_to_storage that
+    serializes writes from different Python processes (e.g. an in-process
+    keepalive plus a cron-driven `notebooklm auth refresh`)."""
+
+    def test_save_cookies_to_storage_acquires_file_lock(self, tmp_path, monkeypatch):
+        """``save_cookies_to_storage`` calls ``fcntl.flock(LOCK_EX)`` (POSIX)
+        before reading or writing the storage file."""
+        import sys
+
+        if sys.platform == "win32":
+            pytest.skip("POSIX-specific test; Windows uses msvcrt.locking")
+
+        import fcntl
+
+        from notebooklm.auth import save_cookies_to_storage
+
+        storage_path = tmp_path / "storage_state.json"
+        storage_path.write_text(
+            '{"cookies": [{"name": "SID", "value": "old", "domain": ".google.com", "path": "/"}]}'
+        )
+
+        flock_calls: list[int] = []
+        original_flock = fcntl.flock
+
+        def spy_flock(fd, op):
+            """Record each ``fcntl.flock`` operation while still performing it."""
+            flock_calls.append(op)
+            return original_flock(fd, op)
+
+        monkeypatch.setattr("fcntl.flock", spy_flock)
+
+        jar = httpx.Cookies()
+        jar.set("SID", "new", domain=".google.com", path="/")
+
+        save_cookies_to_storage(jar, storage_path)
+
+        assert (
+            fcntl.LOCK_EX in flock_calls
+        ), f"Expected an LOCK_EX call before the save, got: {flock_calls}"
+        assert (
+            fcntl.LOCK_UN in flock_calls
+        ), f"Expected an LOCK_UN call after the save, got: {flock_calls}"
+
+    def test_save_cookies_to_storage_creates_lock_sentinel(self, tmp_path):
+        """The lock file is a sibling of the storage file with a `.lock` suffix
+        so the storage file itself is free for the atomic temp-rename."""
+        from notebooklm.auth import save_cookies_to_storage
+
+        storage_path = tmp_path / "storage_state.json"
+        storage_path.write_text(
+            '{"cookies": [{"name": "SID", "value": "old", "domain": ".google.com", "path": "/"}]}'
+        )
+
+        jar = httpx.Cookies()
+        jar.set("SID", "new", domain=".google.com", path="/")
+
+        save_cookies_to_storage(jar, storage_path)
+
+        lock_path = storage_path.with_name(f".{storage_path.name}.lock")
+        assert lock_path.exists(), f"Expected lock sentinel at {lock_path}"
