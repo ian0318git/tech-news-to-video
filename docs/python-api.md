@@ -85,6 +85,38 @@ client = NotebookLMClient(auth)
 auth = AuthTokens.from_storage(profile="work")
 ```
 
+**Building a storage state from existing browser cookies (`[cookies]` extra):**
+
+Install with the optional `cookies` extra to pull cookies from a locally installed browser via [rookiepy](https://pypi.org/project/rookiepy/) — useful for headless environments where you cannot run Playwright:
+
+```bash
+pip install "notebooklm-py[cookies]"
+```
+
+```python
+import json
+import os
+import rookiepy
+from notebooklm import NotebookLMClient
+from notebooklm.auth import convert_rookiepy_cookies_to_storage_state
+
+# Pull Google cookies from Chrome (or .firefox(), .edge(), .safari(), .load() for auto-detect)
+raw = rookiepy.chrome(domains=[".google.com", "notebooklm.google.com"])
+storage_state = convert_rookiepy_cookies_to_storage_state(raw)
+
+# Persist for future runs; restrict to owner-only on POSIX since this file holds auth cookies
+storage_path = "/path/to/storage_state.json"
+with open(storage_path, "w") as f:
+    json.dump(storage_state, f)
+if os.name != "nt":
+    os.chmod(storage_path, 0o600)
+
+async with await NotebookLMClient.from_storage(storage_path) as client:
+    notebooks = await client.notebooks.list()
+```
+
+The helper converts the cookie list returned by `rookiepy` into the storage-state format `NotebookLMClient.from_storage()` expects — the actual cookie extraction (and Google-account selection) happens in the `rookiepy.<browser>(...)` call. As a result, the storage state reflects whichever Google account is currently active in the source browser on `google.com` / `notebooklm.google.com`. The CLI equivalent is `notebooklm login --browser-cookies <browser>`.
+
 **Environment Variable Support:**
 
 The library respects these environment variables for authentication:

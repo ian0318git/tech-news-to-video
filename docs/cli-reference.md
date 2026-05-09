@@ -271,11 +271,13 @@ Authenticate with Google NotebookLM via browser.
 notebooklm login [OPTIONS]
 ```
 
-Opens a Chromium browser with a persistent profile. Log in to your Google account, then press Enter in the terminal to save the session.
+By default, opens a Chromium browser with a persistent profile. Log in to your Google account, then press Enter in the terminal to save the session. Use `--browser msedge` for Microsoft Edge, or `--browser-cookies <browser>` to import cookies from an already-logged-in browser without launching Playwright.
 
 **Options:**
-- `--storage PATH` - Where to save storage_state.json (default: `$NOTEBOOKLM_HOME/storage_state.json`)
+- `--storage PATH` - Where to save storage_state.json (default: `$NOTEBOOKLM_HOME/profiles/<profile>/storage_state.json`)
 - `--browser [chromium|msedge]` - Browser to use for login (default: `chromium`). Use `msedge` for Microsoft Edge.
+- `--browser-cookies <auto|chrome|edge|firefox|safari|brave|arc|...>` - Read cookies from an installed browser instead of launching Playwright. Pass an explicit browser name, or `auto` to let rookiepy auto-detect. Requires `pip install "notebooklm-py[cookies]"`.
+- `--fresh` - Start with a clean browser session (deletes the cached browser profile). Use to switch Google accounts. Has no effect with `--browser-cookies`.
 
 **Examples:**
 ```bash
@@ -284,7 +286,23 @@ notebooklm login
 
 # Use Microsoft Edge (for orgs that require Edge for SSO)
 notebooklm login --browser msedge
+
+# Reuse cookies from your already-logged-in Chrome session
+notebooklm login --browser-cookies chrome
+
+# Auto-detect any supported browser via rookiepy
+notebooklm login --browser-cookies auto
+
+# Populate a named profile via cookie import
+notebooklm --profile work login --browser-cookies chrome
+
+# Force a clean browser session before logging in
+notebooklm login --fresh
 ```
+
+**Notes on `--browser-cookies`:**
+- Honors `--profile` / `NOTEBOOKLM_PROFILE` and writes to that profile's `storage_state.json`.
+- Always extracts cookies for the source browser's currently-active Google account on `google.com` / `notebooklm.google.com`. To populate multiple profiles from one browser, switch the active Google account in the browser between runs (or use a different browser per profile).
 
 ### Session: `use`
 
