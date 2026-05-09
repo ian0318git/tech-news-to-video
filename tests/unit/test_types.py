@@ -31,7 +31,22 @@ class TestNotebook:
 
         assert notebook.id == "nb_123"
         assert notebook.title == "My Notebook"
+        assert notebook.sources_count == 0
         assert notebook.is_owner is True
+
+    def test_from_api_response_counts_sources(self):
+        """Test parsing notebook source count from embedded source entries."""
+        data = ["My Notebook", [["src_1"], ["src_2"], ["src_3"]], "nb_123", "📓"]
+        notebook = Notebook.from_api_response(data)
+
+        assert notebook.sources_count == 3
+
+    def test_from_api_response_none_sources_count_defaults_to_zero(self):
+        """Test parsing notebook source count when source entries are absent."""
+        data = ["My Notebook", None, "nb_123", "📓"]
+        notebook = Notebook.from_api_response(data)
+
+        assert notebook.sources_count == 0
 
     def test_from_api_response_with_timestamp(self):
         """Test parsing notebook with timestamp."""

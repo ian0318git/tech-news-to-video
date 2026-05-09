@@ -26,6 +26,8 @@ class TestListNotebooks:
         assert all(isinstance(nb, Notebook) for nb in notebooks)
         assert notebooks[0].title == "My First Notebook"
         assert notebooks[0].id == "nb_001"
+        assert notebooks[0].sources_count == 2
+        assert notebooks[1].sources_count == 0
 
     @pytest.mark.asyncio
     async def test_list_notebooks_request_format(
