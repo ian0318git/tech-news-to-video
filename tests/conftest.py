@@ -10,6 +10,32 @@ from notebooklm.rpc import RPCMethod
 
 
 @pytest.fixture(autouse=True)
+def _reset_poke_state():
+    """Reset module-level rotation guards between tests.
+
+    The ``notebooklm.auth`` rotation throttle keeps two pieces of module-global
+    state that persist across tests and would otherwise leak:
+
+    1. ``_LAST_POKE_ATTEMPT_MONOTONIC`` (``dict[Path | None, float]``) — keyed
+       per-profile. Without clearing, the first test to poke any profile sets
+       the timestamp and subsequent tests in that file see "we just poked"
+       and silently skip the POST they're asserting on.
+    2. ``_POKE_LOCKS_BY_LOOP`` (``WeakKeyDictionary[loop, dict[..., Lock]]``) —
+       in production each per-loop entry is reclaimed automatically when its
+       loop is GC'd. In tests the loop typically outlives the explicit
+       cleanup point (pytest-asyncio's loop teardown happens after fixtures
+       run), so we clear it eagerly to keep tests independent.
+    """
+    from notebooklm import auth as _auth
+
+    _auth._LAST_POKE_ATTEMPT_MONOTONIC.clear()
+    _auth._POKE_LOCKS_BY_LOOP.clear()
+    yield
+    _auth._LAST_POKE_ATTEMPT_MONOTONIC.clear()
+    _auth._POKE_LOCKS_BY_LOOP.clear()
+
+
+@pytest.fixture(autouse=True)
 def _mock_keepalive_poke(request):
     """Default-mock the auth keepalive poke so tests don't trip on it.
 

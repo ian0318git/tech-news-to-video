@@ -143,8 +143,17 @@ class TestKeepaliveValidation:
 class TestKeepalivePokes:
     @pytest.mark.asyncio
     @pytest.mark.no_default_keepalive_mock
-    async def test_pokes_at_interval(self, mock_auth, httpx_mock: HTTPXMock):
-        """At least two RotateCookies pokes fire within a short window."""
+    async def test_pokes_at_interval(self, mock_auth, httpx_mock: HTTPXMock, monkeypatch):
+        """At least two RotateCookies pokes fire within a short window.
+
+        The test uses sub-second intervals to keep wall-clock cheap; the
+        in-process rate-limit window (60 s in production) would otherwise
+        suppress every iteration past the first. Patch the window down so
+        the loop's pacing is the only thing being tested here.
+        """
+        from notebooklm import auth as _auth
+
+        monkeypatch.setattr(_auth, "_KEEPALIVE_RATE_LIMIT_SECONDS", 0.0)
         httpx_mock.add_response(
             url=ROTATE_URL_RE,
             is_optional=True,
@@ -168,8 +177,16 @@ class TestKeepalivePokes:
 
     @pytest.mark.asyncio
     @pytest.mark.no_default_keepalive_mock
-    async def test_failure_does_not_crash_loop(self, mock_auth, httpx_mock: HTTPXMock):
-        """A failing poke is swallowed and the loop continues."""
+    async def test_failure_does_not_crash_loop(self, mock_auth, httpx_mock: HTTPXMock, monkeypatch):
+        """A failing poke is swallowed and the loop continues.
+
+        Same rate-limit-window patch as ``test_pokes_at_interval``: the
+        sub-second test interval would otherwise be debounced into a single
+        attempt by the in-process claim.
+        """
+        from notebooklm import auth as _auth
+
+        monkeypatch.setattr(_auth, "_KEEPALIVE_RATE_LIMIT_SECONDS", 0.0)
         # First poke: connection error. Subsequent pokes: 204.
         httpx_mock.add_exception(
             url=ROTATE_URL_RE,
