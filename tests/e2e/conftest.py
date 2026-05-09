@@ -2,6 +2,7 @@
 
 import logging
 import os
+import sys
 import warnings
 from collections.abc import AsyncGenerator
 from pathlib import Path
@@ -18,7 +19,66 @@ except ImportError:
 
 from notebooklm import NotebookLMClient
 from notebooklm.auth import AuthTokens, load_auth_from_storage
-from notebooklm.paths import get_home_dir
+from notebooklm.paths import get_profile_dir
+
+# =============================================================================
+# --profile flag plumbing
+# =============================================================================
+# `--profile NAME` selects the NotebookLM profile for the test session by
+# setting ``NOTEBOOKLM_PROFILE``. The flag is applied in two places:
+#
+# 1. At module import (via ``_argv_profile``) so the module-level
+#    ``requires_auth = pytest.mark.skipif(not has_auth(), ...)`` below resolves
+#    auth under the selected profile. ``pytest_configure`` runs *after*
+#    conftest import, which is too late for that marker. The early peek only
+#    sees ``sys.argv`` — flags injected via ``addopts`` in ``pytest.ini`` /
+#    ``pyproject.toml`` are not visible until ``pytest_configure``.
+# 2. In ``pytest_configure``, as a backstop for invocations that mutate
+#    sys.argv after conftest is imported (e.g. ``pytest.main(args=...)``)
+#    and to pick up ``--profile`` from ``addopts``.
+#
+# ``pytest_unconfigure`` restores the prior env var so the mutation does not
+# leak across the rest of the pytest process (matters for IDE/in-process runs).
+
+# Records prior NOTEBOOKLM_PROFILE state on first mutation; ``None`` means we
+# never mutated. ``(was_set, value)`` lets unconfigure restore an existing
+# value or pop the var entirely.
+_PROFILE_PRIOR: tuple[bool, str | None] | None = None
+
+
+def _argv_profile(argv: list[str] | None = None) -> str | None:
+    """Extract ``--profile NAME`` or ``--profile=NAME`` from argv.
+
+    Iterates from the end so the *last* occurrence wins (matching argparse
+    semantics for ``action="store"``), and rejects values that look like
+    another flag (``--profile --verbose`` should not consume ``--verbose``
+    as the profile name).
+    """
+    args = sys.argv if argv is None else argv
+    for i in range(len(args) - 1, -1, -1):
+        arg = args[i]
+        if arg.startswith("--profile="):
+            return arg.split("=", 1)[1]
+        if arg == "--profile" and i + 1 < len(args):
+            value = args[i + 1]
+            if not value.startswith("-"):
+                return value
+    return None
+
+
+def _apply_profile(profile: str) -> None:
+    """Set ``NOTEBOOKLM_PROFILE``; record prior state for ``pytest_unconfigure``."""
+    global _PROFILE_PRIOR
+    if _PROFILE_PRIOR is None:
+        _PROFILE_PRIOR = (
+            "NOTEBOOKLM_PROFILE" in os.environ,
+            os.environ.get("NOTEBOOKLM_PROFILE"),
+        )
+    os.environ["NOTEBOOKLM_PROFILE"] = profile
+
+
+if _early := _argv_profile():
+    _apply_profile(_early)
 
 # =============================================================================
 # Constants
@@ -82,13 +142,43 @@ requires_auth = pytest.mark.skipif(
 
 
 def pytest_addoption(parser):
-    """Add --include-variants option for e2e tests."""
+    """Add E2E test command-line options."""
     parser.addoption(
         "--include-variants",
         action="store_true",
         default=False,
         help="Include variant tests (skipped by default to save API quota)",
     )
+    parser.addoption(
+        "--profile",
+        action="store",
+        default=None,
+        metavar="NAME",
+        help="NotebookLM profile to use for E2E tests (overrides NOTEBOOKLM_PROFILE env var)",
+    )
+
+
+def pytest_configure(config):
+    """Re-apply --profile after CLI parsing (backstop for the import-time peek).
+
+    Precedence: --profile flag > NOTEBOOKLM_PROFILE env var > config default.
+    """
+    profile = config.getoption("--profile")
+    if profile:
+        _apply_profile(profile)
+
+
+def pytest_unconfigure(config):
+    """Restore the original ``NOTEBOOKLM_PROFILE`` if we mutated it."""
+    global _PROFILE_PRIOR
+    if _PROFILE_PRIOR is None:
+        return
+    was_set, prev = _PROFILE_PRIOR
+    _PROFILE_PRIOR = None
+    if was_set and prev is not None:
+        os.environ["NOTEBOOKLM_PROFILE"] = prev
+    else:
+        os.environ.pop("NOTEBOOKLM_PROFILE", None)
 
 
 def pytest_collection_modifyitems(config, items):
@@ -247,8 +337,8 @@ _generation_cleanup_done = False
 
 
 def _get_generation_notebook_id_path() -> Path:
-    """Get the path to the generation notebook ID file."""
-    return get_home_dir() / GENERATION_NOTEBOOK_ID_FILE
+    """Get the path to the generation notebook ID file (per active profile)."""
+    return get_profile_dir() / GENERATION_NOTEBOOK_ID_FILE
 
 
 def _load_stored_generation_notebook_id() -> str | None:
@@ -391,7 +481,8 @@ async def generation_notebook_id(client):
 
     This fixture uses a hybrid approach:
     1. Check NOTEBOOKLM_GENERATION_NOTEBOOK_ID env var
-    2. If not set, check for stored ID in NOTEBOOKLM_HOME/generation_notebook_id
+    2. If not set, check for a stored ID in the active profile cache
+       (~/.notebooklm/profiles/<name>/generation_notebook_id)
     3. If not found, auto-create a notebook and store its ID
 
     All notebook IDs (env var or stored) are verified to exist before use.
@@ -465,8 +556,8 @@ _multi_source_cleanup_done = False
 
 
 def _get_multi_source_notebook_id_path() -> Path:
-    """Get the path to the multi-source notebook ID file."""
-    return get_home_dir() / MULTI_SOURCE_NOTEBOOK_ID_FILE
+    """Get the path to the multi-source notebook ID file (per active profile)."""
+    return get_profile_dir() / MULTI_SOURCE_NOTEBOOK_ID_FILE
 
 
 def _load_stored_multi_source_notebook_id() -> str | None:
@@ -595,7 +686,8 @@ async def multi_source_notebook_id(client):
 
     This fixture uses a hybrid approach similar to generation_notebook_id:
     1. Check NOTEBOOKLM_MULTI_SOURCE_NOTEBOOK_ID env var
-    2. If not set, check for stored ID
+    2. If not set, check for a stored ID in the active profile cache
+       (~/.notebooklm/profiles/<name>/multi_source_notebook_id)
     3. If not found, auto-create a notebook with 3 sources
 
     All IDs are verified to exist before use.
