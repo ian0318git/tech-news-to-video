@@ -1259,9 +1259,37 @@ class TestAllowedCookieDomains:
         """Test ALLOWED_COOKIE_DOMAINS contains expected domains."""
         from notebooklm.auth import ALLOWED_COOKIE_DOMAINS
 
-        assert ".google.com" in ALLOWED_COOKIE_DOMAINS
-        assert any(domain == ".notebooklm.google.com" for domain in ALLOWED_COOKIE_DOMAINS)
-        assert "notebooklm.google.com" in ALLOWED_COOKIE_DOMAINS
+        # Single set-difference assertion. CodeQL's
+        # py/incomplete-url-substring-sanitization heuristic flags per-line
+        # ``"<literal>" in ALLOWED_COOKIE_DOMAINS`` patterns as if they were
+        # substring sanitization of a URL, even though this is set-membership
+        # against a constant. The set-diff form has no string-in-string
+        # appearance and reads at least as clearly.
+        expected = {
+            # Core NotebookLM/Google auth domains
+            ".google.com",
+            "google.com",
+            ".notebooklm.google.com",
+            "notebooklm.google.com",
+            ".googleusercontent.com",
+            "accounts.google.com",
+            ".accounts.google.com",
+            # Sibling Google product domains added in issue #360
+            ".youtube.com",
+            "youtube.com",
+            "accounts.youtube.com",
+            ".accounts.youtube.com",
+            "drive.google.com",
+            ".drive.google.com",
+            "docs.google.com",
+            ".docs.google.com",
+            "myaccount.google.com",
+            ".myaccount.google.com",
+            "mail.google.com",
+            ".mail.google.com",
+        }
+        missing = expected - ALLOWED_COOKIE_DOMAINS
+        assert not missing, f"ALLOWED_COOKIE_DOMAINS is missing: {missing}"
 
 
 # =============================================================================
@@ -1449,28 +1477,53 @@ class TestIsAllowedAuthDomain:
         assert _is_allowed_auth_domain(".google.de") is True  # Germany
         assert _is_allowed_auth_domain(".google.fr") is True  # France
 
+    def test_accepts_sibling_google_products(self):
+        """Test accepts sibling Google product domains (issue #360)."""
+        from notebooklm.auth import _is_allowed_auth_domain
+
+        # YouTube
+        assert _is_allowed_auth_domain(".youtube.com") is True
+        assert _is_allowed_auth_domain("youtube.com") is True
+        assert _is_allowed_auth_domain("accounts.youtube.com") is True
+        assert _is_allowed_auth_domain(".accounts.youtube.com") is True
+        # Drive / Docs / myaccount / mail
+        assert _is_allowed_auth_domain("drive.google.com") is True
+        assert _is_allowed_auth_domain(".drive.google.com") is True
+        assert _is_allowed_auth_domain("docs.google.com") is True
+        assert _is_allowed_auth_domain(".docs.google.com") is True
+        assert _is_allowed_auth_domain("myaccount.google.com") is True
+        assert _is_allowed_auth_domain(".myaccount.google.com") is True
+        assert _is_allowed_auth_domain("mail.google.com") is True
+
     def test_rejects_unrelated_domains(self):
         """Test rejects non-Google domains."""
         from notebooklm.auth import _is_allowed_auth_domain
 
-        assert _is_allowed_auth_domain(".youtube.com") is False
         assert _is_allowed_auth_domain("evil.com") is False
         assert _is_allowed_auth_domain(".evil-google.com") is False
+        assert _is_allowed_auth_domain(".not-youtube.com") is False
+        assert _is_allowed_auth_domain("notyoutube.com") is False
 
     def test_rejects_malicious_google_lookalikes(self):
         """Test rejects domains that look like Google but aren't."""
         from notebooklm.auth import _is_allowed_auth_domain
 
         assert _is_allowed_auth_domain("google.com.evil.sg") is False
-        assert _is_allowed_auth_domain(".mail.google.com") is False
-        assert _is_allowed_auth_domain(".evilnotebooklm.google.com") is False
+        # Note: post-#360 unification, .mail.google.com is accepted (it's a
+        # legitimate Google-owned subdomain). Only foreign suffixes are rejected.
         assert _is_allowed_auth_domain(".google.com.evil") is False
         assert _is_allowed_auth_domain(".evilnotebooklm.google.com.evil") is False
         assert _is_allowed_auth_domain(".not-google.com.sg") is False
         assert _is_allowed_auth_domain(".google.zz") is False  # Invalid ccTLD
 
     def test_requires_leading_dot_for_regional(self):
-        """Test regional domains must have leading dot."""
+        """Test regional domains require leading dot.
+
+        Regional ccTLDs like ``google.com.sg`` (no leading dot) are not in
+        ALLOWED_COOKIE_DOMAINS and are not accepted by ``_is_google_domain``
+        (which requires the leading dot for regional patterns) or by the
+        suffix paths (which require the leading-dot suffix).
+        """
         from notebooklm.auth import _is_allowed_auth_domain
 
         assert _is_allowed_auth_domain("google.com.sg") is False
@@ -1542,13 +1595,27 @@ class TestIsAllowedCookieDomainRegional:
         assert _is_allowed_cookie_domain("accounts.google.com") is True
         assert _is_allowed_cookie_domain("lh3.googleusercontent.com") is True
 
+    def test_accepts_sibling_google_products(self):
+        """Test accepts sibling Google product domains (issue #360)."""
+        from notebooklm.auth import _is_allowed_cookie_domain
+
+        assert _is_allowed_cookie_domain(".youtube.com") is True
+        assert _is_allowed_cookie_domain("youtube.com") is True
+        assert _is_allowed_cookie_domain("accounts.youtube.com") is True
+        assert _is_allowed_cookie_domain(".accounts.youtube.com") is True
+        assert _is_allowed_cookie_domain("drive.google.com") is True
+        assert _is_allowed_cookie_domain("docs.google.com") is True
+        assert _is_allowed_cookie_domain("myaccount.google.com") is True
+        assert _is_allowed_cookie_domain("mail.google.com") is True
+
     def test_rejects_invalid_domains(self):
         """Test rejects invalid domains."""
         from notebooklm.auth import _is_allowed_cookie_domain
 
         assert _is_allowed_cookie_domain(".google.zz") is False
         assert _is_allowed_cookie_domain("evil-google.com") is False
-        assert _is_allowed_cookie_domain(".youtube.com") is False
+        assert _is_allowed_cookie_domain(".not-youtube.com") is False
+        assert _is_allowed_cookie_domain("notyoutube.com") is False
 
 
 class TestExtractCookiesRegionalDomains:
@@ -1649,23 +1716,20 @@ class TestExtractCookiesRegionalDomains:
         cookies = extract_cookies_from_storage(storage_state)
         assert cookies["SID"] == "sid_global", ".google.com should win (regional first)"
 
-    def test_rejects_youtube_sid_but_accepts_regional_sid(self):
-        """Test rejects SID from youtube but accepts from regional Google domain."""
+    def test_regional_google_sid_outranks_sibling_product_sid(self):
+        """Regional Google SID outranks YouTube SID when both are present.
+
+        Post-#360 the allowlist accepts sibling-product cookies, but the
+        priority ladder still prefers a regional Google SID over a YouTube
+        SID when both are seen, because YouTube falls into the unranked tier
+        (priority 0) and regional Google domains sit at priority 1.
+        """
         storage_state = {
             "cookies": [
-                # YouTube SID should be rejected (not a Google auth domain)
                 {"name": "SID", "value": "youtube_sid", "domain": ".youtube.com"},
+                {"name": "SID", "value": "regional_sid", "domain": ".google.com.sg"},
             ]
         }
-
-        # Should fail because no valid SID from allowed domain
-        with pytest.raises(ValueError, match="Missing required cookies"):
-            extract_cookies_from_storage(storage_state)
-
-        # But if we add a regional Google SID, it should work
-        storage_state["cookies"].append(
-            {"name": "SID", "value": "regional_sid", "domain": ".google.com.sg"}
-        )
         cookies = extract_cookies_from_storage(storage_state)
         assert cookies["SID"] == "regional_sid"
 
@@ -1747,6 +1811,147 @@ class TestLoadHttpxCookiesRegional:
 
         cookies = load_httpx_cookies(path=storage_file)
         assert cookies.get("SID", domain=".google.de") == "sid_de"
+
+
+class TestSiblingGoogleProductExtraction:
+    """Test cookie extraction from sibling Google product domains (issue #360).
+
+    Pre-#360 the auth allowlist was strictly NotebookLM-shaped: cookies on
+    ``.youtube.com``, ``drive.google.com``, ``docs.google.com``,
+    ``myaccount.google.com``, and ``.mail.google.com`` were dropped at
+    extraction. The unified allowlist now keeps them so future flows that
+    traverse those domains have the cookies they need.
+    """
+
+    SIBLING_DOMAINS = [
+        ".youtube.com",
+        "youtube.com",
+        "accounts.youtube.com",
+        ".accounts.youtube.com",
+        "drive.google.com",
+        ".drive.google.com",
+        "docs.google.com",
+        ".docs.google.com",
+        "myaccount.google.com",
+        ".myaccount.google.com",
+        "mail.google.com",
+        ".mail.google.com",
+    ]
+
+    @pytest.mark.parametrize("domain", SIBLING_DOMAINS)
+    def test_extract_cookies_with_domains_keeps_sibling_cookies(self, domain):
+        """``extract_cookies_with_domains`` retains sibling-product cookies."""
+        storage_state = {
+            "cookies": [
+                # Required SID on .google.com so extraction doesn't fail
+                {"name": "SID", "value": "base_sid", "domain": ".google.com"},
+                # Sibling-product cookie that pre-#360 would have been dropped
+                {"name": "PRODUCT_TOKEN", "value": "sibling", "domain": domain},
+            ]
+        }
+        cookie_map = extract_cookies_with_domains(storage_state)
+        assert ("PRODUCT_TOKEN", domain) in cookie_map
+        assert cookie_map[("PRODUCT_TOKEN", domain)] == "sibling"
+
+    @pytest.mark.parametrize("domain", SIBLING_DOMAINS)
+    def test_load_httpx_cookies_keeps_sibling_cookies(self, tmp_path, domain):
+        """``load_httpx_cookies`` (download path) accepts sibling-product cookies."""
+        storage_state = {
+            "cookies": [
+                {"name": "SID", "value": "base_sid", "domain": ".google.com"},
+                {"name": "PRODUCT_TOKEN", "value": "sibling", "domain": domain},
+            ]
+        }
+        storage_file = tmp_path / "storage.json"
+        storage_file.write_text(json.dumps(storage_state))
+
+        cookies = load_httpx_cookies(path=storage_file)
+        assert cookies.get("PRODUCT_TOKEN", domain=domain) == "sibling"
+
+    @pytest.mark.parametrize("domain", SIBLING_DOMAINS)
+    def test_convert_rookiepy_keeps_sibling_cookies(self, domain):
+        """rookiepy → storage_state conversion keeps sibling-product cookies."""
+        raw = [
+            {
+                "domain": domain,
+                "name": "PRODUCT_TOKEN",
+                "value": "sibling",
+                "path": "/",
+                "secure": True,
+                "expires": None,
+                "http_only": False,
+            }
+        ]
+        result = convert_rookiepy_cookies_to_storage_state(raw)
+        assert len(result["cookies"]) == 1
+        assert result["cookies"][0]["domain"] == domain
+
+    def test_strict_allowlisted_domains_still_work(self):
+        """Regression: pre-existing strict-allowlisted domains keep working.
+
+        Ensures the unification didn't accidentally drop any of the original
+        canonical NotebookLM auth domains.
+        """
+        storage_state = {
+            "cookies": [
+                {"name": "SID", "value": "v1", "domain": ".google.com"},
+                {"name": "HSID", "value": "v2", "domain": ".google.com"},
+                {"name": "OSID", "value": "v3", "domain": "notebooklm.google.com"},
+                {"name": "OSID2", "value": "v4", "domain": ".notebooklm.google.com"},
+                {"name": "ACC", "value": "v5", "domain": "accounts.google.com"},
+                {"name": "ACC2", "value": "v6", "domain": ".accounts.google.com"},
+                {"name": "MEDIA", "value": "v7", "domain": ".googleusercontent.com"},
+            ]
+        }
+        cookie_map = extract_cookies_with_domains(storage_state)
+        assert ("SID", ".google.com") in cookie_map
+        assert ("HSID", ".google.com") in cookie_map
+        assert ("OSID", "notebooklm.google.com") in cookie_map
+        assert ("OSID2", ".notebooklm.google.com") in cookie_map
+        assert ("ACC", "accounts.google.com") in cookie_map
+        assert ("ACC2", ".accounts.google.com") in cookie_map
+        assert ("MEDIA", ".googleusercontent.com") in cookie_map
+
+    def test_unified_filter_rejects_unrelated_domains(self):
+        """Regression: cookies from unrelated domains are still rejected."""
+        storage_state = {
+            "cookies": [
+                {"name": "SID", "value": "v1", "domain": ".google.com"},
+                {"name": "EVIL", "value": "x", "domain": ".evil.com"},
+                {"name": "EVIL2", "value": "y", "domain": ".not-google.com"},
+                {"name": "EVIL3", "value": "z", "domain": ".evil-google.com"},
+                {"name": "EVIL4", "value": "w", "domain": ".not-youtube.com"},
+            ]
+        }
+        cookie_map = extract_cookies_with_domains(storage_state)
+        kept_names = {name for name, _ in cookie_map}
+        assert kept_names == {"SID"}
+
+
+class TestRookiepyDomainsCoverage:
+    """Confirm ``_login_with_browser_cookies`` would request sibling domains.
+
+    The login path constructs its rookiepy ``domains`` list from
+    ``ALLOWED_COOKIE_DOMAINS + regional ccTLDs``, so adding a domain to the
+    constant automatically widens what we ask the browser for. This test pins
+    that contract — if someone narrows the constant later, the contract here
+    flags it.
+    """
+
+    def test_allowlist_covers_sibling_products(self):
+        from notebooklm.auth import ALLOWED_COOKIE_DOMAINS
+
+        for domain in (
+            ".youtube.com",
+            "accounts.youtube.com",
+            "drive.google.com",
+            "docs.google.com",
+            "myaccount.google.com",
+        ):
+            assert domain in ALLOWED_COOKIE_DOMAINS, (
+                f"{domain!r} must be in ALLOWED_COOKIE_DOMAINS so "
+                "_login_with_browser_cookies asks rookiepy for it (issue #360)"
+            )
 
 
 class TestConvertRookiepyCookies:
@@ -1878,18 +2083,64 @@ class TestConvertRookiepyCookies:
         assert result["cookies"][0]["domain"] == ".notebooklm.google.com"
         assert result["cookies"][0]["name"] == "OSID"
 
-    def test_other_google_subdomains_filtered(self):
-        """Auth conversion only keeps explicitly allowed Google subdomains."""
+    def test_sibling_google_product_subdomains_kept(self):
+        """Auth conversion keeps sibling Google product cookies (issue #360).
+
+        Pre-#360 the auth allowlist was strict and dropped subdomains like
+        ``.mail.google.com``. The unified allowlist now matches the broader
+        download policy so cookies from ``.youtube.com``, ``drive.google.com``,
+        ``docs.google.com``, ``myaccount.google.com``, and ``.mail.google.com``
+        survive extraction.
+        """
         raw = [
             {
-                "domain": ".mail.google.com",
-                "name": "OSID",
-                "value": "x",
+                "domain": domain,
+                "name": "SID",
+                "value": "v",
                 "path": "/",
                 "secure": True,
                 "expires": None,
                 "http_only": False,
             }
+            for domain in (
+                ".mail.google.com",
+                ".youtube.com",
+                ".drive.google.com",
+                ".docs.google.com",
+                ".myaccount.google.com",
+            )
+        ]
+        result = convert_rookiepy_cookies_to_storage_state(raw)
+        kept_domains = {c["domain"] for c in result["cookies"]}
+        assert kept_domains == {
+            ".mail.google.com",
+            ".youtube.com",
+            ".drive.google.com",
+            ".docs.google.com",
+            ".myaccount.google.com",
+        }
+
+    def test_unrelated_domains_still_filtered(self):
+        """Cookies from non-Google domains are still dropped."""
+        raw = [
+            {
+                "domain": ".evil.com",
+                "name": "SID",
+                "value": "x",
+                "path": "/",
+                "secure": True,
+                "expires": None,
+                "http_only": False,
+            },
+            {
+                "domain": ".not-google.com",
+                "name": "SID",
+                "value": "x",
+                "path": "/",
+                "secure": True,
+                "expires": None,
+                "http_only": False,
+            },
         ]
         result = convert_rookiepy_cookies_to_storage_state(raw)
         assert result == {"cookies": [], "origins": []}

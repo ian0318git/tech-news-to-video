@@ -61,16 +61,48 @@ CookieInput: TypeAlias = DomainCookieMap | FlatCookieMap
 # Minimum required cookies (must have at least SID for basic auth)
 MINIMUM_REQUIRED_COOKIES = {"SID"}
 
-# Cookie domains to extract from storage state
-# Includes googleusercontent.com for authenticated media downloads
+# Cookie domains to extract from storage state.
+#
+# Includes:
+#   - notebooklm.google.com (the API host)
+#   - .google.com / accounts.google.com (auth + token refresh)
+#   - .googleusercontent.com (authenticated media downloads)
+#   - sibling Google products (YouTube, Drive, Docs, myaccount, mail) so future
+#     auth/rotation flows that traverse those domains have cookies available.
+#     See issue #360 for the rationale; these are not load-bearing in any
+#     current code path but make the allowlist symmetric with what a logged-in
+#     browser session actually carries.
+#
+# This set is also fed verbatim to ``rookiepy.load(domains=...)`` by
+# ``_login_with_browser_cookies``, so adding a domain here automatically
+# extends what we ask the browser for at login time.
 ALLOWED_COOKIE_DOMAINS = {
     ".google.com",
+    "google.com",  # Host-only Domain=google.com cookies (rare but possible)
     # Playwright storage_state may preserve the leading dot for NotebookLM cookies.
     ".notebooklm.google.com",
     "notebooklm.google.com",
     ".googleusercontent.com",
     "accounts.google.com",  # Required for token refresh redirects
     ".accounts.google.com",  # http.cookiejar may normalize Domain=accounts.google.com
+    # Sibling Google products — auth/rotation flows may traverse these.
+    # Both dotted and non-dotted variants are listed so that http.cookiejar
+    # normalization (which can add a leading dot) doesn't drop a cookie at the
+    # next extraction; same defensive pattern as accounts.google.com above.
+    ".youtube.com",
+    "youtube.com",
+    "accounts.youtube.com",
+    ".accounts.youtube.com",
+    "drive.google.com",
+    ".drive.google.com",
+    "docs.google.com",
+    ".docs.google.com",
+    "myaccount.google.com",
+    ".myaccount.google.com",
+    # Optional — not load-bearing in any current flow, but kept for symmetry
+    # with what a logged-in browser session actually holds.
+    "mail.google.com",
+    ".mail.google.com",
 }
 
 # Regional Google ccTLDs where Google may set auth cookies
@@ -325,18 +357,32 @@ def _is_google_domain(domain: str) -> bool:
 def _is_allowed_auth_domain(domain: str) -> bool:
     """Check if a cookie domain is allowed for auth cookie extraction.
 
-    Includes exact matches against ALLOWED_COOKIE_DOMAINS plus regional
-    Google domains (e.g., .google.com.sg, .google.co.uk, .google.de) where
-    SID cookies may be set for users in those regions.
+    Thin alias of :func:`_is_allowed_cookie_domain`. Both auth-jar building
+    and download-cookie loading (and the persistence path that filters which
+    cookies get saved back) share a single allowlist policy:
+
+    1. Exact match against :data:`ALLOWED_COOKIE_DOMAINS` (covers the API host,
+       sibling Google products like YouTube/Drive/Docs/myaccount, and the
+       leading-dot variants ``http.cookiejar`` may normalize to).
+    2. Regional Google ccTLDs (``.google.com.sg``, ``.google.co.uk``,
+       ``.google.de``, …) where SID cookies may be set for users in those
+       regions.
+    3. Suffix matches for Google subdomains (``lh3.google.com``,
+       ``accounts.google.com``) and ``.googleusercontent.com`` /
+       ``.usercontent.google.com`` for authenticated media downloads.
+
+    The previous strict / broad split (#334 / fea8315) created an asymmetry
+    where ``save_cookies_to_storage`` would persist cookies that the next
+    extraction would silently drop. Issue #360 collapsed both filters into
+    this single policy.
 
     Args:
         domain: Cookie domain to check (e.g., '.google.com', '.google.com.sg')
 
     Returns:
-        True if domain is allowed for auth cookies.
+        True if domain is allowed for auth/download cookies.
     """
-    # Check if domain is in the primary allowlist or is a valid Google domain (base or regional)
-    return domain in ALLOWED_COOKIE_DOMAINS or _is_google_domain(domain)
+    return _is_allowed_cookie_domain(domain)
 
 
 def _auth_domain_priority(domain: str) -> int:
@@ -668,19 +714,33 @@ def load_auth_from_storage(path: Path | None = None) -> dict[str, str]:
 
 
 def _is_allowed_cookie_domain(domain: str) -> bool:
-    """Check if a cookie domain is allowed for downloads.
+    """Canonical cookie-domain allowlist for both auth and downloads.
 
-    Uses a combination of:
-    1. Exact matches against ALLOWED_COOKIE_DOMAINS
-    2. Valid Google domains (including regional like .google.com.sg, .google.co.uk)
-    3. Suffix matching for Google subdomains (lh3.google.com, etc.)
-    4. Suffix matching for googleusercontent.com domains
+    This is the single source of truth for "is this cookie domain one we
+    accept?". Both the auth-extraction path and the download path go through
+    here — :func:`_is_allowed_auth_domain` is a thin alias preserved for
+    call-site readability. See issue #360 for why the split was collapsed.
+
+    A domain is allowed if any of the following holds:
+
+    1. Exact match against :data:`ALLOWED_COOKIE_DOMAINS` (the API host,
+       sibling Google products like ``.youtube.com`` / ``drive.google.com`` /
+       ``docs.google.com`` / ``myaccount.google.com``, ``accounts.google.com``,
+       and the leading-dot variants ``http.cookiejar`` may normalize to).
+    2. Valid Google domain via :func:`_is_google_domain` (regional ccTLDs:
+       ``.google.com.sg``, ``.google.co.uk``, ``.google.de``, …).
+    3. Subdomain of ``.google.com``, ``.googleusercontent.com``, or
+       ``.usercontent.google.com`` (e.g. ``lh3.google.com``,
+       ``lh3.googleusercontent.com``).
+
+    The leading-dot suffix check ensures lookalikes like ``evil-google.com``
+    are rejected.
 
     Args:
         domain: Cookie domain to check (e.g., '.google.com', 'lh3.google.com')
 
     Returns:
-        True if domain is allowed for downloads.
+        True if domain is allowed for auth/download cookies.
     """
     # Exact match against the primary allowlist
     if domain in ALLOWED_COOKIE_DOMAINS:
