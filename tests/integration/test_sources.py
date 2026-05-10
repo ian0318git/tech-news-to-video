@@ -1635,6 +1635,48 @@ class TestGetFulltextEdgeCases:
         assert "main content" in fulltext.content
 
     @pytest.mark.asyncio
+    async def test_get_fulltext_youtube_url_at_index_5(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+        build_rpc_response,
+    ):
+        """Regression: YouTube fulltext metadata stores URL at result[0][2][5][0]."""
+        response = build_rpc_response(
+            RPCMethod.GET_SOURCE,
+            [
+                [
+                    "src_yt",
+                    "YouTube Video",
+                    [
+                        None,
+                        0,
+                        None,
+                        None,
+                        9,
+                        [
+                            "https://www.youtube.com/watch?v=dcWU-qD8ISQ",
+                            "dcWU-qD8ISQ",
+                            "john newquist",
+                        ],
+                        None,
+                        None,
+                    ],
+                ],
+                None,
+                None,
+                [[["Transcript content."]]],
+            ],
+        )
+        httpx_mock.add_response(content=response.encode())
+
+        async with NotebookLMClient(auth_tokens) as client:
+            fulltext = await client.sources.get_fulltext("nb_123", "src_yt")
+
+        assert fulltext._type_code == 9
+        assert fulltext.url == "https://www.youtube.com/watch?v=dcWU-qD8ISQ"
+
+    @pytest.mark.asyncio
     async def test_get_fulltext_source_type_only_empty_url_list(
         self,
         auth_tokens,

@@ -753,6 +753,7 @@ class TestPollStatusMediaReadiness:
 
         status = await api.poll_status("nb_123", "task_123")
         assert status.status == "completed"
+        assert status.url == "https://audio.url/file.mp4"
 
     @pytest.mark.asyncio
     async def test_poll_status_audio_completed_without_url(self, mock_artifacts_api):
@@ -777,6 +778,70 @@ class TestPollStatusMediaReadiness:
         status = await api.poll_status("nb_123", "task_123")
         # Should downgrade to in_progress because URL is missing
         assert status.status == "in_progress"
+
+    @pytest.mark.asyncio
+    async def test_poll_status_video_completed_with_url(self, mock_artifacts_api):
+        """poll_status surfaces the video download URL when extractable."""
+        api, mock_core = mock_artifacts_api
+
+        mock_core.rpc_call.return_value = [
+            [
+                [
+                    "task_123",
+                    "Video Overview",
+                    3,  # VIDEO
+                    None,
+                    3,  # COMPLETED
+                    None,
+                    None,
+                    None,
+                    [[["https://video.url/file.mp4", 4, "video/mp4"]]],
+                ]
+            ]
+        ]
+
+        status = await api.poll_status("nb_123", "task_123")
+        assert status.status == "completed"
+        assert status.url == "https://video.url/file.mp4"
+
+    @pytest.mark.asyncio
+    async def test_poll_status_infographic_completed_with_url(self, mock_artifacts_api):
+        """poll_status surfaces the infographic image URL when extractable."""
+        api, mock_core = mock_artifacts_api
+
+        mock_core.rpc_call.return_value = [
+            [
+                [
+                    "task_123",
+                    "Infographic",
+                    7,  # INFOGRAPHIC
+                    None,
+                    3,  # COMPLETED
+                    [None, None, [["ignored", ["https://image.url/info.png"]]]],
+                ]
+            ]
+        ]
+
+        status = await api.poll_status("nb_123", "task_123")
+        assert status.status == "completed"
+        assert status.url == "https://image.url/info.png"
+
+    @pytest.mark.asyncio
+    async def test_poll_status_slide_deck_completed_with_url(self, mock_artifacts_api):
+        """poll_status surfaces the slide-deck PDF URL when extractable."""
+        api, mock_core = mock_artifacts_api
+
+        mock_core.rpc_call.return_value = [
+            [
+                ["task_123", "Slides", 8, None, 3]
+                + [None] * 11
+                + [[None, None, None, "https://slides.url/deck.pdf"]]
+            ]
+        ]
+
+        status = await api.poll_status("nb_123", "task_123")
+        assert status.status == "completed"
+        assert status.url == "https://slides.url/deck.pdf"
 
     @pytest.mark.asyncio
     async def test_poll_status_video_completed_without_url(self, mock_artifacts_api):

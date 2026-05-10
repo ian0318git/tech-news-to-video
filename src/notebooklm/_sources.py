@@ -4,7 +4,6 @@ import asyncio
 import builtins
 import logging
 import re
-from datetime import datetime
 from pathlib import Path
 from time import monotonic
 from typing import Any
@@ -24,6 +23,7 @@ from .types import (
     SourceNotFoundError,
     SourceProcessingError,
     SourceTimeoutError,
+    _extract_source_created_at,
     _extract_source_url,
 )
 
@@ -128,14 +128,7 @@ class SourcesAPI:
                 url = _extract_source_url(src[2] if len(src) > 2 else None, allow_bare_http=False)
 
                 # Extract timestamp from src[2][2] - [seconds, nanoseconds]
-                created_at = None
-                if len(src) > 2 and isinstance(src[2], list) and len(src[2]) > 2:
-                    timestamp_list = src[2][2]
-                    if isinstance(timestamp_list, list) and len(timestamp_list) > 0:
-                        try:
-                            created_at = datetime.fromtimestamp(timestamp_list[0])
-                        except (TypeError, ValueError):
-                            pass
+                created_at = _extract_source_created_at(src[2] if len(src) > 2 else None)
 
                 # Extract status from src[3][1]
                 # See SourceStatus enum for valid values
@@ -729,15 +722,13 @@ class SourcesAPI:
             if len(result) > 0 and isinstance(result[0], list) and len(result[0]) > 1:
                 title = result[0][1] if isinstance(result[0][1], str) else ""
 
-                # Source type at result[0][2][4]
+                # Source type at result[0][2][4]; source URLs may be stored
+                # at [7][0] for web/PDF sources or [5][0] for YouTube sources.
                 if len(result[0]) > 2 and isinstance(result[0][2], list):
-                    if len(result[0][2]) > 4:
-                        source_type = result[0][2][4]
-
-                    # URL at result[0][2][7][0]
-                    if len(result[0][2]) > 7 and isinstance(result[0][2][7], list):
-                        if len(result[0][2][7]) > 0:
-                            url = result[0][2][7][0]
+                    metadata = result[0][2]
+                    if len(metadata) > 4:
+                        source_type = metadata[4]
+                    url = _extract_source_url(metadata, allow_bare_http=False)
 
             # Content blocks at result[3][0]
             # Each block may be nested arrays with text strings

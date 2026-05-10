@@ -143,6 +143,21 @@ class TestSource:
         assert source.title == "Nested Source"
         assert source.url == "https://example.com"
 
+    def test_from_api_response_nested_format_with_timestamp(self):
+        """Source.from_api_response should preserve creation timestamps when present."""
+        ts = 1704067200
+        data = [
+            [
+                ["src_ts"],
+                "Timestamped Source",
+                [None, None, [ts, 0], None, 5, None, None, ["https://example.com"]],
+            ]
+        ]
+        source = Source.from_api_response(data)
+
+        assert source.created_at is not None
+        assert source.created_at.timestamp() == ts
+
     def test_from_api_response_deeply_nested(self):
         """Test parsing deeply nested format."""
         data = [
@@ -461,6 +476,166 @@ class TestArtifact:
         assert artifact.created_at is not None
         assert artifact.created_at.timestamp() == ts
 
+    def test_from_api_response_audio_url(self):
+        """Completed audio artifacts expose their download URL."""
+        data = [
+            "art_audio",
+            "Audio",
+            1,
+            None,
+            3,
+            None,
+            [None, None, None, None, None, [["https://audio.example/file.mp4", None, "audio/mp4"]]],
+        ]
+        artifact = Artifact.from_api_response(data)
+
+        assert artifact.url == "https://audio.example/file.mp4"
+
+    def test_from_api_response_video_url_prefers_mp4_quality(self):
+        """Video artifacts expose the preferred MP4 download URL."""
+        data = [
+            "art_video",
+            "Video",
+            3,
+            None,
+            3,
+            None,
+            None,
+            None,
+            [
+                [
+                    ["https://video.example/low.webm", 1, "video/webm"],
+                    ["https://video.example/high.mp4", 4, "video/mp4"],
+                ]
+            ],
+        ]
+        artifact = Artifact.from_api_response(data)
+
+        assert artifact.url == "https://video.example/high.mp4"
+
+    def test_from_api_response_video_url_returns_last_mp4_when_no_quality_4(self):
+        """When no quality-4 MP4 is present, the last MP4 wins (documents the
+        implicit ordering used by both the extractor and download_video)."""
+        data = [
+            "art_video",
+            "Video",
+            3,
+            None,
+            3,
+            None,
+            None,
+            None,
+            [
+                [
+                    ["https://video.example/first.mp4", 2, "video/mp4"],
+                    ["https://video.example/middle.webm", 1, "video/webm"],
+                    ["https://video.example/last.mp4", 3, "video/mp4"],
+                ]
+            ],
+        ]
+        artifact = Artifact.from_api_response(data)
+
+        assert artifact.url == "https://video.example/last.mp4"
+
+    def test_from_api_response_video_url_falls_back_to_first_non_mp4(self):
+        """With no MP4 in any variant, the first valid URL is returned."""
+        data = [
+            "art_video",
+            "Video",
+            3,
+            None,
+            3,
+            None,
+            None,
+            None,
+            [
+                [
+                    ["https://video.example/a.webm", 1, "video/webm"],
+                    ["https://video.example/b.webm", 2, "video/webm"],
+                ]
+            ],
+        ]
+        artifact = Artifact.from_api_response(data)
+
+        assert artifact.url == "https://video.example/a.webm"
+
+    def test_from_api_response_audio_url_finds_mp4_at_non_zero_position(self):
+        """Audio extractor must find an audio/mp4 entry even when it is not the
+        first item in the media list — regression against the legacy
+        first-item-only check."""
+        data = [
+            "art_audio",
+            "Audio",
+            1,
+            None,
+            3,
+            None,
+            [
+                None,
+                None,
+                None,
+                None,
+                None,
+                [
+                    ["https://audio.example/preview.bin", None, "application/octet-stream"],
+                    ["https://audio.example/file.mp4", None, "audio/mp4"],
+                ],
+            ],
+        ]
+        artifact = Artifact.from_api_response(data)
+
+        assert artifact.url == "https://audio.example/file.mp4"
+
+    def test_from_api_response_audio_url_falls_back_to_first_url_when_no_mp4(self):
+        """If no audio/mp4 entry exists, the first valid URL is returned."""
+        data = [
+            "art_audio",
+            "Audio",
+            1,
+            None,
+            3,
+            None,
+            [
+                None,
+                None,
+                None,
+                None,
+                None,
+                [
+                    ["https://audio.example/a.ogg", None, "audio/ogg"],
+                    ["https://audio.example/b.wav", None, "audio/wav"],
+                ],
+            ],
+        ]
+        artifact = Artifact.from_api_response(data)
+
+        assert artifact.url == "https://audio.example/a.ogg"
+
+    def test_from_api_response_infographic_url(self):
+        """Infographic artifacts expose their image URL."""
+        data = [
+            "art_info",
+            "Infographic",
+            7,
+            None,
+            3,
+            [None, None, [["ignored", ["https://image.example/info.png"]]]],
+        ]
+        artifact = Artifact.from_api_response(data)
+
+        assert artifact.url == "https://image.example/info.png"
+
+    def test_from_api_response_slide_deck_url(self):
+        """Slide deck artifacts expose the PDF URL."""
+        data = (
+            ["art_slides", "Slides", 8, None, 3]
+            + [None] * 11
+            + [[None, None, None, "https://slides.example/deck.pdf"]]
+        )
+        artifact = Artifact.from_api_response(data)
+
+        assert artifact.url == "https://slides.example/deck.pdf"
+
     def test_from_api_response_with_variant(self):
         """Test parsing artifact with variant code (quiz/flashcards)."""
         data = ["art_quiz", "Quiz", 4, None, 3, None, None, None, None, [None, [2]]]
@@ -558,6 +733,58 @@ class TestArtifact:
         artifact = Artifact.from_api_response(["id", "Audio", 1, None, 3])
 
         assert artifact.report_subtype is None
+
+
+class TestExtractArtifactUrlMalformedShapes:
+    """Defensive coverage for the URL extractor helpers — every malformed-shape
+    branch must return ``None`` instead of raising, so callers (Artifact.url,
+    GenerationStatus.url, _is_media_ready, download_audio/video/infographic)
+    can rely on the helper as a single source of truth."""
+
+    def test_extract_artifact_url_unknown_type_returns_none(self):
+        from notebooklm.types import _extract_artifact_url
+
+        assert _extract_artifact_url(["any", "data"], None) is None
+        assert _extract_artifact_url(["any", "data"], 99) is None
+
+    def test_extract_audio_handles_short_or_non_list_data(self):
+        from notebooklm.types import _extract_audio_artifact_url
+
+        assert _extract_audio_artifact_url([1, 2, 3]) is None  # too short
+        assert _extract_audio_artifact_url([0] * 6 + ["not_a_list"]) is None  # data[6] not list
+        assert _extract_audio_artifact_url([0] * 6 + [[1, 2, 3]]) is None  # data[6] too short
+        assert _extract_audio_artifact_url([0] * 6 + [[0] * 5 + ["not_a_list"]]) is None
+        assert _extract_audio_artifact_url([0] * 6 + [[0] * 5 + [[]]]) is None  # empty media list
+
+    def test_extract_video_handles_short_or_non_list_data(self):
+        from notebooklm.types import _extract_video_artifact_url
+
+        assert _extract_video_artifact_url([1, 2, 3]) is None  # too short
+        assert _extract_video_artifact_url([0] * 8 + ["not_a_list"]) is None
+        assert _extract_video_artifact_url([0] * 8 + [[]]) is None  # empty data[8]
+        assert _extract_video_artifact_url([0] * 8 + [["not_a_list"]]) is None
+        assert _extract_video_artifact_url([0] * 8 + [[[None, None, "video/mp4"]]]) is None
+
+    def test_extract_infographic_handles_malformed_data(self):
+        from notebooklm.types import _extract_infographic_artifact_url
+
+        assert _extract_infographic_artifact_url([]) is None
+        assert _extract_infographic_artifact_url(["not_a_list"]) is None
+        assert _extract_infographic_artifact_url([[1]]) is None  # item too short
+        assert _extract_infographic_artifact_url([[1, 2, "not_a_list"]]) is None
+        assert _extract_infographic_artifact_url([[1, 2, []]]) is None  # empty content
+        assert _extract_infographic_artifact_url([[1, 2, [["only_one"]]]]) is None
+
+    def test_extract_slide_deck_handles_short_or_non_string_data(self):
+        from notebooklm.types import _extract_slide_deck_artifact_url
+
+        assert _extract_slide_deck_artifact_url([1, 2, 3]) is None  # too short
+        assert _extract_slide_deck_artifact_url([0] * 16 + ["not_a_list"]) is None
+        assert _extract_slide_deck_artifact_url([0] * 16 + [[1, 2, 3]]) is None  # too short
+        assert _extract_slide_deck_artifact_url([0] * 16 + [[None, None, None, 12345]]) is None
+        assert (
+            _extract_slide_deck_artifact_url([0] * 16 + [[None, None, None, "ftp://bad"]]) is None
+        )
 
 
 class TestArtifactKindProperty:

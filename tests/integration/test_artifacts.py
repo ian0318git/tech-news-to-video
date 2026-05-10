@@ -1629,7 +1629,7 @@ class TestDownloadAudioErrorPaths:
         httpx_mock.add_response(content=response.encode())
 
         async with NotebookLMClient(auth_tokens) as client:
-            with pytest.raises(ArtifactParseError, match="Invalid audio metadata structure"):
+            with pytest.raises(ArtifactParseError, match="Could not extract download URL"):
                 await client.artifacts.download_audio("nb_123", "/tmp/audio.mp4")
 
     @pytest.mark.asyncio
@@ -1654,7 +1654,7 @@ class TestDownloadAudioErrorPaths:
         httpx_mock.add_response(content=response.encode())
 
         async with NotebookLMClient(auth_tokens) as client:
-            with pytest.raises(ArtifactParseError, match="No media URLs found"):
+            with pytest.raises(ArtifactParseError, match="Could not extract download URL"):
                 await client.artifacts.download_audio("nb_123", "/tmp/audio.mp4")
 
     @pytest.mark.asyncio
