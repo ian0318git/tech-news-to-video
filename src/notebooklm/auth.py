@@ -30,6 +30,7 @@ Security Notes:
 import asyncio
 import contextlib
 import errno
+import http.cookiejar
 import json
 import logging
 import os
@@ -272,11 +273,12 @@ class AuthTokens:
         if path is None and (profile is not None or "NOTEBOOKLM_AUTH_JSON" not in os.environ):
             path = get_storage_path(profile=profile)
 
-        storage_state = _load_storage_state(path)
-        cookies = extract_cookies_with_domains(storage_state)
-
-        # Build domain-preserving jar and use it for token fetch
-        jar = build_cookie_jar(cookies=cookies)
+        # Build the cookie jar via the lossless loader so path/secure/httpOnly
+        # survive into the live jar. The earlier
+        # extract_cookies_with_domains -> build_cookie_jar pipeline only carried
+        # (name, domain) -> value and dropped the same attributes the load
+        # paths in #365 fixed.
+        jar = build_httpx_cookies_from_storage(path)
         csrf_token, session_id, _ = await _fetch_tokens_with_refresh(jar, path, profile)
 
         # Persist any refreshed cookies from the token fetch
@@ -790,16 +792,16 @@ def load_httpx_cookies(path: Path | None = None) -> "httpx.Cookies":
     storage_state = _load_storage_state(path)
 
     cookies = httpx.Cookies()
-    cookie_names = set()
+    cookie_names: set[str] = set()
 
-    for cookie in storage_state.get("cookies", []):
-        domain = cookie.get("domain", "")
-        name = cookie.get("name", "")
-        value = cookie.get("value", "")
+    for entry in storage_state.get("cookies", []):
+        domain = entry.get("domain", "")
+        name = entry.get("name", "")
+        value = entry.get("value", "")
 
         # Only include cookies from explicitly allowed domains
         if _is_allowed_cookie_domain(domain) and name and value:
-            cookies.set(name, value, domain=domain)
+            cookies.jar.set_cookie(_storage_entry_to_cookie(entry))
             cookie_names.add(name)
 
     # Validate that essential cookies are present
@@ -876,11 +878,32 @@ def build_httpx_cookies_from_storage(path: Path | None = None) -> "httpx.Cookies
         ValueError: If required cookies are missing or JSON is malformed.
     """
     storage_state = _load_storage_state(path)
-    cookie_map = extract_cookies_with_domains(storage_state)
 
     cookies = httpx.Cookies()
-    for (name, domain), value in cookie_map.items():
-        cookies.set(name, value, domain=domain)
+    # Dedup by (name, domain) to stay symmetric with save_cookies_to_storage,
+    # which keys cookies_by_key on the same pair. Cookie identity per RFC 6265
+    # is (name, domain, path), but the save side cannot represent multiple
+    # path-scoped siblings yet — so the load side keeps a compatible model
+    # rather than constructing pairs that would silently collapse on save.
+    seen_keys: set[CookieKey] = set()
+    for entry in storage_state.get("cookies", []):
+        domain = entry.get("domain", "")
+        name = entry.get("name")
+        value = entry.get("value", "")
+        if not _is_allowed_auth_domain(domain) or not name or not value:
+            continue
+        key = (name, domain)
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        cookies.jar.set_cookie(_storage_entry_to_cookie(entry))
+
+    cookie_names = {name for name, _ in seen_keys}
+    missing = MINIMUM_REQUIRED_COOKIES - cookie_names
+    if missing:
+        raise ValueError(
+            f"Missing required cookies: {missing}\nRun 'notebooklm login' to authenticate."
+        )
 
     return cookies
 
@@ -1142,6 +1165,44 @@ def _cookie_to_storage_state(cookie: Any) -> dict[str, Any]:
         "secure": cookie.secure,
         "sameSite": "None",
     }
+
+
+def _storage_entry_to_cookie(entry: dict[str, Any]) -> http.cookiejar.Cookie:
+    """Construct a faithful ``http.cookiejar.Cookie`` from a storage_state entry.
+
+    ``httpx.Cookies.set(name, value, domain=...)`` accepts only those three
+    fields, so cookies loaded that way drop ``path``, ``secure``, and
+    ``httpOnly``. Each load+save round-trip would erode attributes until disk
+    stabilized at ``Path=/``, ``secure=false``, ``httpOnly=false`` — silently
+    breaking ``__Host-`` prefix invariants and any future server-enforced
+    attribute. This helper is the load-side mirror of
+    :func:`_cookie_to_storage_state` so the round-trip is lossless. See #365.
+    """
+    domain = entry.get("domain", "") or ""
+    expires = entry.get("expires")
+    expires_value = None if expires in (None, -1) else expires
+    # _cookie_is_http_only checks key presence via has_nonstandard_attr; the
+    # value is irrelevant. Use "" instead of None so the typed signature
+    # ``rest: Mapping[str, str]`` is honored.
+    rest: dict[str, str] = {"HttpOnly": ""} if entry.get("httpOnly") else {}
+    return http.cookiejar.Cookie(
+        version=0,
+        name=entry.get("name", "") or "",
+        value=entry.get("value", "") or "",
+        port=None,
+        port_specified=False,
+        domain=domain,
+        domain_specified=bool(domain),
+        domain_initial_dot=domain.startswith("."),
+        path=entry.get("path") or "/",
+        path_specified=True,
+        secure=bool(entry.get("secure", False)),
+        expires=expires_value,
+        discard=expires_value is None,
+        comment=None,
+        comment_url=None,
+        rest=rest,
+    )
 
 
 def _cookie_key_variants(key: CookieKey) -> set[CookieKey]:
