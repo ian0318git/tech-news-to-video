@@ -380,50 +380,6 @@ class TestDeprecationWarnings:
 # =============================================================================
 
 
-class TestIsValidMediaUrl:
-    """Test _is_valid_media_url helper method."""
-
-    def test_valid_https_url(self, mock_artifacts_api):
-        """Test that valid HTTPS URL returns True."""
-        api, _ = mock_artifacts_api
-        assert api._is_valid_media_url("https://example.com/audio.mp3") is True
-
-    def test_valid_http_url(self, mock_artifacts_api):
-        """Test that valid HTTP URL returns True."""
-        api, _ = mock_artifacts_api
-        assert api._is_valid_media_url("http://example.com/video.mp4") is True
-
-    def test_invalid_string_no_protocol(self, mock_artifacts_api):
-        """Test that string without http(s) returns False."""
-        api, _ = mock_artifacts_api
-        assert api._is_valid_media_url("example.com/audio.mp3") is False
-
-    def test_invalid_ftp_url(self, mock_artifacts_api):
-        """Test that FTP URL returns False."""
-        api, _ = mock_artifacts_api
-        assert api._is_valid_media_url("ftp://example.com/file.mp3") is False
-
-    def test_empty_string(self, mock_artifacts_api):
-        """Test that empty string returns False."""
-        api, _ = mock_artifacts_api
-        assert api._is_valid_media_url("") is False
-
-    def test_none_value(self, mock_artifacts_api):
-        """Test that None returns False."""
-        api, _ = mock_artifacts_api
-        assert api._is_valid_media_url(None) is False
-
-    def test_integer_value(self, mock_artifacts_api):
-        """Test that integer returns False."""
-        api, _ = mock_artifacts_api
-        assert api._is_valid_media_url(123) is False
-
-    def test_list_value(self, mock_artifacts_api):
-        """Test that list returns False."""
-        api, _ = mock_artifacts_api
-        assert api._is_valid_media_url(["https://example.com"]) is False
-
-
 class TestIsMediaReady:
     """Test _is_media_ready helper method."""
 
@@ -531,10 +487,9 @@ class TestIsMediaReady:
         """Regression for issue #330: pre-URL metadata must not register as ready.
 
         Before the URL is populated, the inner URL-entry list is empty (or
-        missing the URL string). The previous implementation passed this list
-        to ``_is_valid_media_url`` directly and got ``False`` by accident,
-        which masked the broken structural check. Verify the empty-inner-list
-        case explicitly.
+        missing the URL string). Verify the empty-inner-list case explicitly so
+        readiness depends on the URL-entry structure rather than accidental
+        validation failure.
         """
         api, _ = mock_artifacts_api
         art = [
@@ -598,7 +553,7 @@ class TestIsMediaReady:
     def test_infographic_with_valid_url(self, mock_artifacts_api):
         """Test infographic artifact with valid URL returns True.
 
-        The _find_infographic_url method iterates backwards through art, looking for:
+        The shared infographic extractor scans artifact entries looking for:
         - item[2] = non-empty list (content)
         - item[2][0] = list with len > 1 (first_content)
         - item[2][0][1] = non-empty list (img_data)

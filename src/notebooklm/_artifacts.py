@@ -51,8 +51,6 @@ from .types import (
     GenerationStatus,
     ReportSuggestion,
     _extract_artifact_url,
-    _extract_infographic_artifact_url,
-    _is_valid_artifact_url,
 )
 
 logger = logging.getLogger(__name__)
@@ -2301,14 +2299,6 @@ class ArtifactsAPI:
             return ArtifactTypeCode(artifact_type).name
         except ValueError:
             return str(artifact_type)
-
-    def _is_valid_media_url(self, value: Any) -> bool:
-        """Check if value is a valid HTTP(S) URL."""
-        return _is_valid_artifact_url(value)
-
-    def _find_infographic_url(self, art: builtins.list[Any]) -> str | None:
-        """Extract infographic image URL from artifact data."""
-        return _extract_infographic_artifact_url(art)
 
     def _is_media_ready(self, art: builtins.list[Any], artifact_type: int) -> bool:
         """Check if media artifact has URLs populated.

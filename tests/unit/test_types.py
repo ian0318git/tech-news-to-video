@@ -21,7 +21,28 @@ from notebooklm.types import (
     SourceFulltext,
     SourceType,
     UnknownTypeWarning,
+    _is_valid_artifact_url,
 )
+
+
+class TestArtifactUrlValidation:
+    """Test the canonical artifact URL validation helper."""
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            ("https://example.com/audio.mp3", True),
+            ("http://example.com/video.mp4", True),
+            ("example.com/audio.mp3", False),
+            ("ftp://example.com/file.mp3", False),
+            ("", False),
+            (None, False),
+            (123, False),
+            (["https://example.com"], False),
+        ],
+    )
+    def test_url_validation(self, value, expected):
+        assert _is_valid_artifact_url(value) is expected
 
 
 class TestTimestampParsing:
