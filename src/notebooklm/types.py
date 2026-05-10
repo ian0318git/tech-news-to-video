@@ -295,6 +295,14 @@ def _extract_source_url(metadata: Any, *, allow_bare_http: bool = True) -> str |
     return url
 
 
+def _datetime_from_timestamp(value: Any) -> datetime | None:
+    """Convert an API seconds timestamp to ``datetime``, returning ``None`` if invalid."""
+    try:
+        return datetime.fromtimestamp(value)
+    except (TypeError, ValueError, OSError, OverflowError):
+        return None
+
+
 def _extract_source_created_at(metadata: Any) -> datetime | None:
     """Extract a source creation timestamp from a ``src[2]`` metadata array."""
     if not isinstance(metadata, list) or len(metadata) <= 2:
@@ -304,10 +312,7 @@ def _extract_source_created_at(metadata: Any) -> datetime | None:
     if not isinstance(timestamp_list, list) or not timestamp_list:
         return None
 
-    try:
-        return datetime.fromtimestamp(timestamp_list[0])
-    except (TypeError, ValueError):
-        return None
+    return _datetime_from_timestamp(timestamp_list[0])
 
 
 def _is_valid_artifact_url(value: Any) -> bool:
@@ -550,10 +555,7 @@ class Notebook:
         if len(data) > 5 and isinstance(data[5], list) and len(data[5]) > 5:
             ts_data = data[5][5]
             if isinstance(ts_data, list) and len(ts_data) > 0:
-                try:
-                    created_at = datetime.fromtimestamp(ts_data[0])
-                except (TypeError, ValueError):
-                    pass
+                created_at = _datetime_from_timestamp(ts_data[0])
 
         # Extract ownership - data[5][1] = False means owner, True means shared
         is_owner = True
@@ -990,10 +992,7 @@ class Artifact:
         # Extract timestamp from data[15][0]
         created_at = None
         if len(data) > 15 and isinstance(data[15], list) and len(data[15]) > 0:
-            try:
-                created_at = datetime.fromtimestamp(data[15][0])
-            except (TypeError, ValueError):
-                pass
+            created_at = _datetime_from_timestamp(data[15][0])
 
         # Extract variant code from data[9][1][0] for quiz/flashcard distinction
         variant = None
@@ -1057,10 +1056,7 @@ class Artifact:
             if len(inner) > 2 and isinstance(inner[2], list) and len(inner[2]) > 2:
                 ts_data = inner[2][2]
                 if isinstance(ts_data, list) and len(ts_data) > 0:
-                    try:
-                        created_at = datetime.fromtimestamp(ts_data[0])
-                    except (TypeError, ValueError):
-                        pass
+                    created_at = _datetime_from_timestamp(ts_data[0])
 
         return cls(
             id=str(mind_map_id),
@@ -1265,10 +1261,7 @@ class Note:
 
         created_at = None
         if len(data) > 3 and isinstance(data[3], list) and len(data[3]) > 0:
-            try:
-                created_at = datetime.fromtimestamp(data[3][0])
-            except (TypeError, ValueError):
-                pass
+            created_at = _datetime_from_timestamp(data[3][0])
 
         return cls(
             id=str(note_id),

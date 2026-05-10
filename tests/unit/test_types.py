@@ -1,6 +1,7 @@
 """Unit tests for types module dataclasses and parsing."""
 
 import warnings
+from unittest.mock import patch
 
 import pytest
 
@@ -21,6 +22,35 @@ from notebooklm.types import (
     SourceType,
     UnknownTypeWarning,
 )
+
+
+class TestTimestampParsing:
+    def test_datetime_from_timestamp_valid_value(self):
+        """Timestamp helper should preserve valid epoch-second values."""
+        from notebooklm.types import _datetime_from_timestamp
+
+        ts = 1704067200
+        parsed = _datetime_from_timestamp(ts)
+
+        assert parsed is not None
+        assert parsed.timestamp() == ts
+
+    def test_datetime_from_timestamp_oserror(self):
+        """Platform-specific timestamp errors should normalize to None."""
+        from notebooklm.types import _datetime_from_timestamp
+
+        with patch("notebooklm.types.datetime") as mock_datetime:
+            mock_datetime.fromtimestamp.side_effect = OSError("timestamp out of range")
+            parsed = _datetime_from_timestamp(1704067200)
+
+        assert parsed is None
+
+    @pytest.mark.parametrize("value", ["bad", None, float("inf"), float("-inf")])
+    def test_datetime_from_timestamp_invalid_value(self, value):
+        """Invalid or out-of-range timestamp values should normalize to None."""
+        from notebooklm.types import _datetime_from_timestamp
+
+        assert _datetime_from_timestamp(value) is None
 
 
 class TestNotebook:
@@ -110,6 +140,22 @@ class TestNotebook:
 
         assert notebook.created_at is None
 
+    def test_from_api_response_out_of_range_timestamp(self):
+        """Platform timestamp range errors should not escape notebook parsing."""
+        data = [
+            "Notebook",
+            [],
+            "nb_123",
+            "📓",
+            None,
+            [None, None, None, None, None, [1704067200, 0]],
+        ]
+
+        data[5][5][0] = float("inf")
+        notebook = Notebook.from_api_response(data)
+
+        assert notebook.created_at is None
+
     def test_from_api_response_non_string_title(self):
         """Test parsing when title is not a string."""
         data = [123, [], "nb_123", "📓"]
@@ -157,6 +203,21 @@ class TestSource:
 
         assert source.created_at is not None
         assert source.created_at.timestamp() == ts
+
+    def test_from_api_response_nested_format_out_of_range_timestamp(self):
+        """Source timestamp range errors should produce None rather than raising."""
+        data = [
+            [
+                ["src_ts"],
+                "Timestamped Source",
+                [None, None, [1704067200, 0], None, 5, None, None, ["https://example.com"]],
+            ]
+        ]
+
+        data[0][2][2][0] = float("inf")
+        source = Source.from_api_response(data)
+
+        assert source.created_at is None
 
     def test_from_api_response_deeply_nested(self):
         """Test parsing deeply nested format."""
@@ -475,6 +536,47 @@ class TestArtifact:
 
         assert artifact.created_at is not None
         assert artifact.created_at.timestamp() == ts
+
+    def test_from_api_response_out_of_range_timestamp(self):
+        """Artifact timestamp range errors should produce None rather than raising."""
+        data = [
+            "art_123",
+            "Audio",
+            1,
+            None,
+            3,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            [float("inf")],
+        ]
+        artifact = Artifact.from_api_response(data)
+
+        assert artifact.created_at is None
+
+    def test_from_mind_map_out_of_range_timestamp(self):
+        """Mind map timestamp range errors should produce None rather than raising."""
+        data = [
+            "mind_map_123",
+            [
+                "mind_map_123",
+                "{}",
+                [1, "user_id", [float("inf"), 0]],
+                None,
+                "Mind Map",
+            ],
+        ]
+        artifact = Artifact.from_mind_map(data)
+
+        assert artifact is not None
+        assert artifact.created_at is None
 
     def test_from_api_response_audio_url(self):
         """Completed audio artifacts expose their download URL."""
@@ -1011,6 +1113,13 @@ class TestNote:
 
         assert note.created_at is not None
         assert note.created_at.timestamp() == ts
+
+    def test_from_api_response_out_of_range_timestamp(self):
+        """Note timestamp range errors should produce None rather than raising."""
+        data = ["note_123", "Title", "Content", [float("inf")]]
+        note = Note.from_api_response(data, "nb_123")
+
+        assert note.created_at is None
 
     def test_from_api_response_empty(self):
         """Test parsing with minimal data."""
