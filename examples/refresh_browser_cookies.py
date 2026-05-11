@@ -58,16 +58,18 @@ def main() -> int:
     # Use `python -m notebooklm.notebooklm_cli` instead of the `notebooklm` console
     # script so the script works inside venvs where the console script isn't on PATH
     # (e.g. cron jobs that don't source the venv's activate).
+    # `--profile` is a top-level Click option and must come BEFORE the `login`
+    # subcommand — Click rejects it after `login`.
     return subprocess.call(
         [
             sys.executable,
             "-m",
             "notebooklm.notebooklm_cli",
+            "--profile",
+            profile,
             "login",
             "--browser-cookies",
             browser,
-            "--profile",
-            profile,
             "--storage",
             storage,
         ]

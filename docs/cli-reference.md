@@ -1,7 +1,7 @@
 # CLI Reference
 
 **Status:** Active
-**Last Updated:** 2026-03-13
+**Last Updated:** 2026-05-11
 
 Complete command reference for the `notebooklm` CLI—providing full programmatic access to all NotebookLM features, including capabilities not exposed in the web UI.
 
@@ -50,6 +50,8 @@ See [Configuration](configuration.md) for details on environment variables and C
 | `auth check` | Diagnose authentication issues | `notebooklm auth check` |
 | `auth check --test` | Validate with network test | `notebooklm auth check --test` |
 | `auth check --json` | Output as JSON | `notebooklm auth check --json` |
+| `auth refresh` | One-shot SIDTS rotation poke (for OS schedulers) | `notebooklm auth refresh` |
+| `auth refresh --quiet` | Refresh; suppress success output | `notebooklm auth refresh --quiet` |
 | `doctor` | Check environment health | `notebooklm doctor` |
 | `doctor --fix` | Auto-fix detected issues | `notebooklm doctor --fix` |
 | `doctor --json` | Output diagnostics as JSON | `notebooklm doctor --json` |
@@ -488,6 +490,43 @@ notebooklm auth check --json
 - Verify auth setup in CI/CD environments
 - Check if cookies are from correct domain (regional vs .google.com)
 - Diagnose NOTEBOOKLM_AUTH_JSON environment variable issues
+
+### Session: `auth refresh`
+
+One-shot keepalive: open a session, trigger the layer-1 SIDTS rotation poke against `accounts.google.com`, persist the rotated cookies to `storage_state.json`, and exit. Designed to be invoked by the OS scheduler (launchd / systemd / cron / Task Scheduler / k8s CronJob) so an otherwise-idle profile does not stale out between user-driven calls.
+
+```bash
+notebooklm auth refresh [OPTIONS]
+```
+
+**Options:**
+- `--quiet`, `-q` - Suppress success output; print only on error (cron-friendly)
+
+**Cadence:** 15-20 minutes is the recommended interval. Tighter is wasteful (the 60 s mtime guard would skip it anyway); significantly looser may cross the `__Secure-1PSIDTS` server-side validity window for your account/region.
+
+**Requires file-backed authentication.** `auth refresh` refuses to run when `NOTEBOOKLM_AUTH_JSON` is set, because the inline-JSON auth mode has no writable backing store to persist rotated cookies into. Use a profile-backed `storage_state.json` (the default) or set `NOTEBOOKLM_HOME` / `--profile` to point at one.
+
+**Exit codes:**
+- `0` - the auth path completed without raising. The rotation POST is **best-effort**: exit 0 also covers (a) the 60 s mtime guard skipping the POST, (b) `NOTEBOOKLM_DISABLE_KEEPALIVE_POKE=1` being set, (c) another process holding the cross-process rotate lock, and (d) a transient `httpx` error during the POST being caught and logged at DEBUG. Treat exit 0 as "no error" rather than "rotation occurred." For verification, enable `NOTEBOOKLM_LOG_LEVEL=DEBUG` and check for the `RotateCookies` log line.
+- `1` - a fatal error reached the CLI layer (e.g. `NOTEBOOKLM_AUTH_JSON` set, missing `storage_state.json`, invalid profile, `httpx.RequestError` not swallowed by the rotate guard). The OS scheduler's next firing is the retry mechanism; this command does not retry in-process.
+
+**Examples:**
+```bash
+# One-shot refresh against the default profile
+notebooklm auth refresh
+
+# Refresh a named profile (works with --profile / NOTEBOOKLM_PROFILE)
+notebooklm --profile work auth refresh
+
+# Quiet variant for cron / systemd
+notebooklm --profile work auth refresh --quiet
+```
+
+**Pairs with:**
+- `NOTEBOOKLM_REFRESH_CMD` for in-process auth-expiry recovery (covers the case where `auth refresh` itself fails because cookies have already expired beyond rotation)
+- `keepalive=<seconds>` on `NotebookLMClient` for in-process long-lived workers (no OS scheduler needed)
+
+See [Troubleshooting](troubleshooting.md) for full per-OS scheduler recipes (launchd plist, systemd user timer, cron, Task Scheduler, k8s CronJob).
 
 ### Source: `add-research`
 

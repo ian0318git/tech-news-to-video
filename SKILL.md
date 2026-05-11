@@ -133,6 +133,7 @@ Before starting workflows, verify the CLI is ready:
 | Authenticate | `notebooklm login` |
 | Diagnose auth issues | `notebooklm auth check` |
 | Diagnose auth (full) | `notebooklm auth check --test` |
+| One-shot cookie keepalive (for cron) | `notebooklm auth refresh --quiet` |
 | List notebooks | `notebooklm list` |
 | Create notebook | `notebooklm create "Title"` |
 | Set context | `notebooklm use <notebook_id>` |

@@ -1,7 +1,7 @@
 # Python API Reference
 
 **Status:** Active
-**Last Updated:** 2026-03-12
+**Last Updated:** 2026-05-11
 
 Complete reference for the `notebooklm` Python library.
 
@@ -386,7 +386,7 @@ print(f"Keywords: {guide['keywords']}")
 | `download_audio(notebook_id, output_path, artifact_id=None)` | `str, str, str` | `str` | Download audio to file (MP4/MP3) |
 | `download_video(notebook_id, output_path, artifact_id=None)` | `str, str, str` | `str` | Download video to file (MP4) |
 | `download_infographic(notebook_id, output_path, artifact_id=None)` | `str, str, str` | `str` | Download infographic to file (PNG) |
-| `download_slide_deck(notebook_id, output_path, artifact_id=None)` | `str, str, str` | `str` | Download slide deck as PDF |
+| `download_slide_deck(notebook_id, output_path, artifact_id=None, output_format="pdf")` | `str, str, str, str` | `str` | Download slide deck as PDF or PPTX (`output_format`: `"pdf"` or `"pptx"`) |
 | `download_report(notebook_id, output_path, artifact_id=None)` | `str, str, str` | `str` | Download report as Markdown (.md) |
 | `download_mind_map(notebook_id, output_path, artifact_id=None)` | `str, str, str` | `str` | Download mind map as JSON (.json) |
 | `download_data_table(notebook_id, output_path, artifact_id=None)` | `str, str, str` | `str` | Download data table as CSV (.csv) |
@@ -836,10 +836,23 @@ class Source:
     title: Optional[str]
     url: Optional[str]
     created_at: Optional[datetime]
+    status: int                          # 1=processing, 2=ready, 3=error, 5=preparing (defaults to READY)
 
     @property
     def kind(self) -> SourceType:
         """Get source type as SourceType enum."""
+
+    @property
+    def is_ready(self) -> bool:
+        """status == SourceStatus.READY"""
+
+    @property
+    def is_processing(self) -> bool:
+        """status == SourceStatus.PROCESSING"""
+
+    @property
+    def is_error(self) -> bool:
+        """status == SourceStatus.ERROR"""
 ```
 
 **Type Identification:**
@@ -868,7 +881,7 @@ print(f"Type: {source.kind}")  # "Type: pdf"
 class Artifact:
     id: str
     title: str
-    status: int                     # 1=processing, 2=pending, 3=completed
+    status: int                     # 1=processing, 2=pending, 3=completed, 4=failed
     created_at: Optional[datetime]
     url: Optional[str]
 
@@ -909,6 +922,47 @@ if artifact.is_quiz:
     print("This is a quiz")
 elif artifact.is_flashcards:
     print("This is a flashcard deck")
+```
+
+### GenerationStatus
+
+Returned by `poll_status`, `wait_for_completion`, and most artifact generation methods (`generate_audio`, `generate_video`, `generate_report`, `generate_quiz`, `generate_flashcards`, `generate_slide_deck`, `generate_infographic`, `generate_data_table`). Note that `generate_mind_map` returns a `dict[str, Any]` instead — the mind map is delivered as JSON inline rather than polled.
+
+```python
+@dataclass
+class GenerationStatus:
+    task_id: str                          # Same value as Artifact.id once complete
+    status: str                           # "pending" | "in_progress" | "completed" | "failed" | "not_found"
+    url: str | None = None                # Populated for media artifacts when status == "completed"
+    error: str | None = None
+    error_code: str | None = None         # e.g. "USER_DISPLAYABLE_ERROR" for rate limits
+    metadata: dict[str, Any] | None = None
+
+    @property
+    def is_complete(self) -> bool:
+        """Check if generation is complete."""
+
+    @property
+    def is_failed(self) -> bool:
+        """Check if generation failed."""
+
+    @property
+    def is_pending(self) -> bool:
+        """Check if generation is pending."""
+
+    @property
+    def is_rate_limited(self) -> bool:
+        """Check if generation failed due to rate limiting."""
+```
+
+**`url` semantics:** `poll_status` populates `url` for media artifact types (audio, video, infographic, slide-deck PDF) as soon as the server reports the asset as ready. Slide decks expose the PDF URL here; for the editable PowerPoint, use `client.artifacts.download_slide_deck(..., output_format="pptx")` instead.
+
+```python
+status = await client.artifacts.generate_audio(notebook_id)
+final = await client.artifacts.wait_for_completion(notebook_id, status.task_id)
+if final.is_complete and final.url:
+    # Stream the asset directly instead of re-fetching artifact metadata
+    ...
 ```
 
 ### AskResult
