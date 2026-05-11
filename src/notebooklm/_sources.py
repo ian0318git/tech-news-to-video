@@ -955,7 +955,6 @@ class SourcesAPI:
         headers = {
             "Accept": "*/*",
             "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
-            "Cookie": self._core.auth.cookie_header,
             "Origin": "https://notebooklm.google.com",
             "Referer": "https://notebooklm.google.com/",
             "x-goog-authuser": "0",
@@ -972,7 +971,19 @@ class SourcesAPI:
             }
         )
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        # Pass the live cookie jar (not a flat Cookie header) so httpx scopes
+        # cookies by Domain attribute, matching browser behavior. The /upload/_/
+        # endpoint is served by Scotty, which validates host-sensitive cookies
+        # (notably OSID) against the request host: an OSID issued for
+        # myaccount.google.com leaked to notebooklm.google.com is rejected with
+        # HTTP 500 and x-goog-upload-status: final. A real browser would never
+        # send the foreign-host OSID; Domain-scoping the jar enforces the same.
+        # Using get_http_client().cookies (instead of auth.cookie_jar) so we
+        # pick up SIDCC/SIDTS rotations applied during the live session. See #373.
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(10.0, read=60.0),
+            cookies=self._core.get_http_client().cookies,
+        ) as client:
             response = await client.post(url, headers=headers, content=body)
             response.raise_for_status()
 
@@ -997,7 +1008,6 @@ class SourcesAPI:
         headers = {
             "Accept": "*/*",
             "Content-Type": "application/x-www-form-urlencoded;charset=utf-8",
-            "Cookie": self._core.auth.cookie_header,
             "Origin": "https://notebooklm.google.com",
             "Referer": "https://notebooklm.google.com/",
             "x-goog-authuser": "0",
@@ -1011,6 +1021,12 @@ class SourcesAPI:
                 while chunk := f.read(65536):  # 64KB chunks
                     yield chunk
 
-        async with httpx.AsyncClient(timeout=300.0) as client:
+        # See _start_resumable_upload: pass the live cookie jar so httpx scopes
+        # cookies per Domain attribute. Scotty validates OSID against host
+        # and rejects foreign-host cookies. (#373)
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(10.0, read=300.0),
+            cookies=self._core.get_http_client().cookies,
+        ) as client:
             response = await client.post(upload_url, headers=headers, content=file_stream())
             response.raise_for_status()
