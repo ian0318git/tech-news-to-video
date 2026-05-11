@@ -124,21 +124,26 @@ class TestFromStorage:
             await NotebookLMClient.from_storage(str(tmp_path / "nonexistent.json"))
 
     @pytest.mark.asyncio
-    async def test_from_storage_with_default_path(self, httpx_mock: HTTPXMock):
+    async def test_from_storage_with_default_path(
+        self, tmp_path, monkeypatch, request, httpx_mock: HTTPXMock
+    ):
         """Test from_storage uses default path when none specified."""
-        from notebooklm.paths import get_storage_path
+        import notebooklm.paths as paths_mod
 
-        default_storage_path = get_storage_path()
+        real_storage_path = paths_mod.get_storage_path()
+        real_storage_mtime = (
+            real_storage_path.stat().st_mtime_ns if real_storage_path.exists() else None
+        )
 
-        # Create storage file at default location
-        if not default_storage_path.parent.exists():
-            default_storage_path.parent.mkdir(parents=True, exist_ok=True)
+        active_profile = paths_mod.get_active_profile()
+        request.addfinalizer(lambda: paths_mod.set_active_profile(active_profile))
+        paths_mod.set_active_profile(None)
+        monkeypatch.setenv("NOTEBOOKLM_HOME", str(tmp_path))
+        monkeypatch.setenv("NOTEBOOKLM_PROFILE", "default")
+        monkeypatch.delenv("NOTEBOOKLM_AUTH_JSON", raising=False)
 
-        # IMPORTANT: Back up existing auth file if it exists
-        backup_path = default_storage_path.with_suffix(".json.bak")
-        had_existing_file = default_storage_path.exists()
-        if had_existing_file:
-            backup_path.write_text(default_storage_path.read_text())
+        default_storage_path = paths_mod.get_storage_path()
+        assert tmp_path in default_storage_path.parents
 
         storage_state = {
             "cookies": [
@@ -147,24 +152,23 @@ class TestFromStorage:
             ]
         }
 
-        # Only run if we can write to default location
+        default_storage_path.parent.mkdir(parents=True, exist_ok=True)
+        default_storage_path.write_text(json.dumps(storage_state))
+
+        html = '"SNlM0e":"csrf" "FdrFJe":"sess"'
+        httpx_mock.add_response(
+            url="https://notebooklm.google.com/",
+            content=html.encode(),
+        )
+
         try:
-            default_storage_path.write_text(json.dumps(storage_state))
-
-            html = '"SNlM0e":"csrf" "FdrFJe":"sess"'
-            httpx_mock.add_response(content=html.encode())
-
             client = await NotebookLMClient.from_storage()
             assert client.auth.cookies[("SID", ".google.com")] == "default_sid"
-        except PermissionError:
-            pytest.skip("Cannot write to default storage path")
         finally:
-            # Restore original file or clean up test file
-            if had_existing_file:
-                default_storage_path.write_text(backup_path.read_text())
-                backup_path.unlink()
-            elif default_storage_path.exists():
-                default_storage_path.unlink()
+            if real_storage_mtime is None:
+                assert not real_storage_path.exists()
+            else:
+                assert real_storage_path.stat().st_mtime_ns == real_storage_mtime
 
 
 # =============================================================================
