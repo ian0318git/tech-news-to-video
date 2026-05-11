@@ -19,7 +19,40 @@ except ImportError:
 
 from notebooklm import NotebookLMClient
 from notebooklm.auth import AuthTokens, load_auth_from_storage
+from notebooklm.exceptions import ChatError
 from notebooklm.paths import get_profile_dir
+
+# Substrings in ChatError / skip messages that mark a server-side rate-limit
+# or quota rejection rather than a client bug. Covers both the explicit
+# UserDisplayableError message and the HTTP-status-wrapped 429 path in
+# _chat.py:156, plus the generation skip phrase in assert_generation_started.
+_RATE_LIMIT_PHRASES = (
+    "rate limit",
+    "rate limited",
+    "rejected by the api",
+    "429",
+    "too many requests",
+)
+
+
+def _install_chat_rate_limit_skip(client: NotebookLMClient) -> None:
+    """Wrap ``client.chat.ask`` so rate-limit ``ChatError``s become skips.
+
+    Non-rate-limit ``ChatError``s (HTTP, auth, parse) still raise so real
+    defects stay visible.
+    """
+    original_ask = client.chat.ask
+
+    async def _ask_with_skip(*args, **kwargs):
+        try:
+            return await original_ask(*args, **kwargs)
+        except ChatError as e:
+            if any(phrase in str(e).lower() for phrase in _RATE_LIMIT_PHRASES):
+                pytest.skip(str(e))
+            raise
+
+    client.chat.ask = _ask_with_skip
+
 
 # =============================================================================
 # --profile flag plumbing
@@ -181,6 +214,48 @@ def pytest_unconfigure(config):
         os.environ.pop("NOTEBOOKLM_PROFILE", None)
 
 
+def _skip_reason(report) -> str:
+    longrepr = report.longrepr
+    if isinstance(longrepr, tuple) and len(longrepr) >= 3:
+        return str(longrepr[2])
+    return str(longrepr) if longrepr else ""
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    """Surface chat rate-limit skips so they're visible despite green CI.
+
+    Without this, the L1 skip-fixture (_install_chat_rate_limit_skip) makes
+    Google-side throttling invisible — the job stays green but coverage
+    silently degrades. Emit a pytest summary section plus, on GitHub Actions,
+    a warning annotation and step-summary entry.
+    """
+    nodeids = [
+        report.nodeid
+        for report in terminalreporter.stats.get("skipped", [])
+        if any(phrase in _skip_reason(report).lower() for phrase in _RATE_LIMIT_PHRASES)
+    ]
+    if not nodeids:
+        return
+
+    terminalreporter.write_sep("=", f"rate-limit skips ({len(nodeids)})", yellow=True)
+    for nodeid in nodeids:
+        terminalreporter.write_line(f"  {nodeid}")
+
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary_path:
+        try:
+            with open(summary_path, "a", encoding="utf-8") as f:
+                f.write(f"\n### Rate-limit skips: {len(nodeids)}\n\n")
+                for nodeid in nodeids:
+                    f.write(f"- `{nodeid}`\n")
+        except OSError:
+            pass
+
+    if os.environ.get("GITHUB_ACTIONS"):
+        joined = ", ".join(nodeids)
+        print(f"::warning::{len(nodeids)} test(s) skipped due to rate-limit: {joined}")
+
+
 def pytest_collection_modifyitems(config, items):
     """Skip variant tests by default unless --include-variants is passed."""
     if config.getoption("--include-variants"):
@@ -238,6 +313,7 @@ def auth_tokens() -> AuthTokens:
 @pytest.fixture
 async def client(auth_tokens) -> AsyncGenerator[NotebookLMClient, None]:
     async with NotebookLMClient(auth_tokens, storage_path=auth_tokens.storage_path) as c:
+        _install_chat_rate_limit_skip(c)
         yield c
 
 
