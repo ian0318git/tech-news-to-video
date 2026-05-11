@@ -59,8 +59,89 @@ DomainCookieMap: TypeAlias = dict[CookieKey, str]
 FlatCookieMap: TypeAlias = dict[str, str]
 CookieInput: TypeAlias = DomainCookieMap | FlatCookieMap
 
-# Minimum required cookies (must have at least SID for basic auth)
-MINIMUM_REQUIRED_COOKIES = {"SID"}
+# Tier 1: cookies whose absence Google rejects deterministically.
+#
+# - ``SID``: only individually-required cookie (singleton ablation).
+# - ``__Secure-1PSIDTS``: directly accepted by Google's homepage check, OR
+#   recoverable via the RotateCookies POST when other auth cookies are intact.
+#   When neither path is viable the homepage GET 302s to login.
+#
+# See ``docs/auth-keepalive.md`` §3.5 for the ablation methodology and the full
+# 16-pair failure table backing this set.
+MINIMUM_REQUIRED_COOKIES = {"SID", "__Secure-1PSIDTS"}
+
+
+_EXTRACTION_HINT = (
+    "This typically means --browser-cookies extraction was incomplete "
+    "(Chrome 127+ App-Bound Encryption can cause silent partial reads). "
+    "Run 'notebooklm login' to re-authenticate."
+)
+
+# Tier 2 fires per cookie-load; a single CLI run can hit it 2-3 times across
+# the four loader entry points. One warning per process is enough signal.
+_SECONDARY_BINDING_WARNED = False
+
+
+def _has_valid_secondary_binding(cookie_names: set[str]) -> bool:
+    """Tier 2 acceptance check (see ``MINIMUM_REQUIRED_COOKIES``).
+
+    Pair-wise ablation against a live Google session reveals that the
+    NotebookLM homepage GET requires *at least one* of two redundant
+    secondary-binding paths in addition to Tier 1:
+
+    - ``OSID`` (recent-sign-in binding), OR
+    - both ``APISID`` AND ``SAPISID`` (legacy XSSI binding pair).
+
+    Without either, Google 302s to ``accounts.google.com/v3/signin`` even when
+    ``SID`` and ``__Secure-1PSIDTS`` are present and otherwise valid.
+    """
+    if "OSID" in cookie_names:
+        return True
+    return {"APISID", "SAPISID"} <= cookie_names
+
+
+def _validate_required_cookies(
+    cookie_names: set[str],
+    *,
+    context: str = "",
+    extra_diagnostics: list[str] | None = None,
+) -> None:
+    """Enforce the Tier 1 cookie-set rule (raise) and warn on Tier 2 violation.
+
+    Hybrid rollout: Tier 1 (``MINIMUM_REQUIRED_COOKIES``) is a hard requirement
+    because its ablation evidence is unambiguous — Google rejects deterministically
+    and there is no recovery path inside the library. Tier 2 (secondary binding,
+    see ``_has_valid_secondary_binding``) is logged as a warning so partial
+    extractions surface in user logs without breaking edge-case auth flows we
+    haven't ablated yet (e.g. Workspace SSO). After one release of telemetry
+    this can be promoted to a hard raise.
+
+    Args:
+        cookie_names: Names of cookies present in the loaded set (any domain).
+        context: Optional suffix for the Tier 1 error message
+            (e.g. ``" for downloads"``).
+        extra_diagnostics: Optional extra lines inserted into the Tier 1 error
+            (e.g. observed cookies, source domains) for friendlier diagnosis.
+    """
+    missing = MINIMUM_REQUIRED_COOKIES - cookie_names
+    if missing:
+        missing_names = ", ".join(sorted(missing))
+        parts = [f"Missing required cookies{context}: {missing_names}"]
+        if extra_diagnostics:
+            parts.extend(extra_diagnostics)
+        parts.append(_EXTRACTION_HINT)
+        raise ValueError("\n".join(parts))
+
+    if not _has_valid_secondary_binding(cookie_names):
+        global _SECONDARY_BINDING_WARNED
+        if not _SECONDARY_BINDING_WARNED:
+            _SECONDARY_BINDING_WARNED = True
+            logger.warning(
+                "Cookie set lacks a secondary binding (need OSID, or both APISID "
+                "and SAPISID). Google may reject auth on the next call. %s",
+                _EXTRACTION_HINT,
+            )
+
 
 # Cookie domains to extract from storage state.
 #
@@ -539,20 +620,20 @@ def extract_cookies_from_storage(storage_state: dict[str, Any]) -> dict[str, str
         if "SID" in cookie_domains:
             logger.debug("SID cookie from domain: %s", cookie_domains["SID"])
 
-    missing = MINIMUM_REQUIRED_COOKIES - set(cookies.keys())
-    if missing:
-        # Provide more helpful error message with diagnostic info
+    # Build diagnostic extras only on the failure path. The successful path is
+    # by far the common case; iterating the cookie list to compute found-names
+    # and Google domains every call would be wasted work.
+    cookie_names = set(cookies.keys())
+    extras: list[str] = []
+    if not MINIMUM_REQUIRED_COOKIES.issubset(cookie_names):
         all_domains = {c.get("domain", "") for c in storage_state.get("cookies", [])}
         google_domains = sorted(d for d in all_domains if "google" in d.lower())
         found_names = list(cookies.keys())[:5]
-
-        error_parts = [f"Missing required cookies: {missing}"]
         if found_names:
-            error_parts.append(f"Found cookies: {found_names}{'...' if len(cookies) > 5 else ''}")
+            extras.append(f"Found cookies: {found_names}{'...' if len(cookies) > 5 else ''}")
         if google_domains:
-            error_parts.append(f"Google domains in storage: {google_domains}")
-        error_parts.append("Run 'notebooklm login' to authenticate.")
-        raise ValueError("\n".join(error_parts))
+            extras.append(f"Google domains in storage: {google_domains}")
+    _validate_required_cookies(cookie_names, extra_diagnostics=extras)
 
     return cookies
 
@@ -804,13 +885,7 @@ def load_httpx_cookies(path: Path | None = None) -> "httpx.Cookies":
             cookies.jar.set_cookie(_storage_entry_to_cookie(entry))
             cookie_names.add(name)
 
-    # Validate that essential cookies are present
-    missing = MINIMUM_REQUIRED_COOKIES - cookie_names
-    if missing:
-        raise ValueError(
-            f"Missing required cookies for downloads: {missing}\n"
-            f"Run 'notebooklm login' to re-authenticate."
-        )
+    _validate_required_cookies(cookie_names, context=" for downloads")
 
     return cookies
 
@@ -850,13 +925,7 @@ def extract_cookies_with_domains(
             cookie_map[key] = value
 
     # Validate required cookies exist (any domain)
-    cookie_names = {name for name, _ in cookie_map}
-    missing = MINIMUM_REQUIRED_COOKIES - cookie_names
-    if missing:
-        raise ValueError(
-            f"Missing required cookies: {missing}\nRun 'notebooklm login' to authenticate."
-        )
-
+    _validate_required_cookies({name for name, _ in cookie_map})
     return cookie_map
 
 
@@ -898,13 +967,7 @@ def build_httpx_cookies_from_storage(path: Path | None = None) -> "httpx.Cookies
         seen_keys.add(key)
         cookies.jar.set_cookie(_storage_entry_to_cookie(entry))
 
-    cookie_names = {name for name, _ in seen_keys}
-    missing = MINIMUM_REQUIRED_COOKIES - cookie_names
-    if missing:
-        raise ValueError(
-            f"Missing required cookies: {missing}\nRun 'notebooklm login' to authenticate."
-        )
-
+    _validate_required_cookies({name for name, _ in seen_keys})
     return cookies
 
 

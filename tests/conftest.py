@@ -25,14 +25,18 @@ def _reset_poke_state():
        loop is GC'd. In tests the loop typically outlives the explicit
        cleanup point (pytest-asyncio's loop teardown happens after fixtures
        run), so we clear it eagerly to keep tests independent.
+    3. ``_SECONDARY_BINDING_WARNED`` — one-shot flag for the Tier 2 cookie
+       warning. Reset so tests can independently observe the warning fire.
     """
     from notebooklm import auth as _auth
 
     _auth._LAST_POKE_ATTEMPT_MONOTONIC.clear()
     _auth._POKE_LOCKS_BY_LOOP.clear()
+    _auth._SECONDARY_BINDING_WARNED = False
     yield
     _auth._LAST_POKE_ATTEMPT_MONOTONIC.clear()
     _auth._POKE_LOCKS_BY_LOOP.clear()
+    _auth._SECONDARY_BINDING_WARNED = False
 
 
 @pytest.fixture(autouse=True)
@@ -84,7 +88,13 @@ def pytest_configure(config):
 
 @pytest.fixture
 def sample_storage_state():
-    """Sample Playwright storage state with valid cookies."""
+    """Sample Playwright storage state with valid cookies.
+
+    Carries the full Tier 1 set (``SID`` + ``__Secure-1PSIDTS``) plus
+    ``APISID`` + ``SAPISID`` as the secondary binding so it satisfies the
+    library's pre-flight validation. See ``MINIMUM_REQUIRED_COOKIES`` and
+    ``_has_valid_secondary_binding`` in ``src/notebooklm/auth.py``.
+    """
     return {
         "cookies": [
             {"name": "SID", "value": "test_sid", "domain": ".google.com"},
@@ -92,6 +102,7 @@ def sample_storage_state():
             {"name": "SSID", "value": "test_ssid", "domain": ".google.com"},
             {"name": "APISID", "value": "test_apisid", "domain": ".google.com"},
             {"name": "SAPISID", "value": "test_sapisid", "domain": ".google.com"},
+            {"name": "__Secure-1PSIDTS", "value": "test_1psidts", "domain": ".google.com"},
         ]
     }
 

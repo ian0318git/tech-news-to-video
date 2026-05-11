@@ -18,7 +18,7 @@ ROTATE_URL_RE = re.compile(r"^https://accounts\.google\.com/RotateCookies$")
 def mock_auth():
     """Create AuthTokens with no storage path (default tests don't persist)."""
     return AuthTokens(
-        cookies={"SID": "test_sid", "HSID": "test_hsid"},
+        cookies={"SID": "test_sid", "__Secure-1PSIDTS": "test_1psidts", "HSID": "test_hsid"},
         csrf_token="test_csrf",
         session_id="test_session",
     )
@@ -37,12 +37,18 @@ def _storage_auth(tmp_path) -> tuple[AuthTokens, "object"]:
                         "domain": ".google.com",
                         "path": "/",
                     },
+                    {
+                        "name": "__Secure-1PSIDTS",
+                        "value": "test_1psidts",
+                        "domain": ".google.com",
+                        "path": "/",
+                    },
                 ]
             }
         )
     )
     auth = AuthTokens(
-        cookies={"SID": "initial_sid"},
+        cookies={"SID": "initial_sid", "__Secure-1PSIDTS": "test_1psidts"},
         csrf_token="test_csrf",
         session_id="test_session",
         storage_path=storage_path,
@@ -333,7 +339,7 @@ class TestKeepaliveExplicitStoragePath:
         storage_path = tmp_path / "storage_state.json"
         storage_path.write_text('{"cookies": []}')
         auth = AuthTokens(
-            cookies={"SID": "x"},
+            cookies={"SID": "x", "__Secure-1PSIDTS": "test_1psidts"},
             csrf_token="t",
             session_id="s",
             # storage_path intentionally None
@@ -365,7 +371,7 @@ class TestKeepaliveExplicitStoragePath:
         storage_path = tmp_path / "storage_state.json"
         storage_path.write_text('{"cookies": []}')
         auth = AuthTokens(
-            cookies={"SID": "x"},
+            cookies={"SID": "x", "__Secure-1PSIDTS": "test_1psidts"},
             csrf_token="t",
             session_id="s",
             # storage_path intentionally None
@@ -445,7 +451,7 @@ class TestSaveCookiesUnification:
         from notebooklm._core import ClientCore
 
         auth = AuthTokens(
-            cookies={"SID": "x"},
+            cookies={"SID": "x", "__Secure-1PSIDTS": "test_1psidts"},
             csrf_token="t",
             session_id="s",
             storage_path=tmp_path / "storage_state.json",
@@ -487,12 +493,18 @@ class TestSaveCookiesUnification:
                             "domain": ".google.com",
                             "path": "/",
                         },
+                        {
+                            "name": "__Secure-1PSIDTS",
+                            "value": "test_1psidts",
+                            "domain": ".google.com",
+                            "path": "/",
+                        },
                     ]
                 }
             )
         )
         auth = AuthTokens(
-            cookies={"SID": "x", "HSID": "y"},
+            cookies={"SID": "x", "__Secure-1PSIDTS": "test_1psidts", "HSID": "y"},
             csrf_token="old_csrf",
             session_id="old_session",
             storage_path=storage_path,

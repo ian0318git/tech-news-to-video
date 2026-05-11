@@ -512,7 +512,7 @@ class TestWithClientDecorator:
 
         runner = CliRunner()
         with patch("notebooklm.cli.helpers.load_auth_from_storage") as mock_load:
-            mock_load.return_value = {"SID": "test"}
+            mock_load.return_value = {"SID": "test", "__Secure-1PSIDTS": "test_1psidts"}
             with patch(
                 "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
             ) as mock_fetch:
@@ -563,7 +563,7 @@ class TestWithClientDecorator:
 
         runner = CliRunner()
         with patch("notebooklm.cli.helpers.load_auth_from_storage") as mock_load:
-            mock_load.return_value = {"SID": "test"}
+            mock_load.return_value = {"SID": "test", "__Secure-1PSIDTS": "test_1psidts"}
             with patch(
                 "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
             ) as mock_fetch:
@@ -590,7 +590,7 @@ class TestWithClientDecorator:
 
         runner = CliRunner()
         with patch("notebooklm.cli.helpers.load_auth_from_storage") as mock_load:
-            mock_load.return_value = {"SID": "test"}
+            mock_load.return_value = {"SID": "test", "__Secure-1PSIDTS": "test_1psidts"}
             with patch(
                 "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
             ) as mock_fetch:
@@ -616,7 +616,7 @@ class TestWithClientDecorator:
 
         runner = CliRunner()
         with patch("notebooklm.cli.helpers.load_auth_from_storage") as mock_load:
-            mock_load.return_value = {"SID": "test"}
+            mock_load.return_value = {"SID": "test", "__Secure-1PSIDTS": "test_1psidts"}
             with patch(
                 "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
             ) as mock_fetch:
@@ -640,7 +640,7 @@ class TestGetClient:
         ctx.obj = None
 
         with patch("notebooklm.cli.helpers.load_auth_from_storage") as mock_load:
-            mock_load.return_value = {"SID": "test_sid"}
+            mock_load.return_value = {"SID": "test_sid", "__Secure-1PSIDTS": "test_1psidts"}
             with patch(
                 "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
             ) as mock_fetch:
@@ -648,7 +648,7 @@ class TestGetClient:
 
                 cookies, csrf, session = get_client(ctx)
 
-        assert cookies == {"SID": "test_sid"}
+        assert cookies == {"SID": "test_sid", "__Secure-1PSIDTS": "test_1psidts"}
         assert csrf == "csrf_token"
         assert session == "session_id"
 
@@ -657,7 +657,7 @@ class TestGetClient:
         ctx.obj = {"storage_path": "/custom/path"}
 
         with patch("notebooklm.cli.helpers.load_auth_from_storage") as mock_load:
-            mock_load.return_value = {"SID": "test"}
+            mock_load.return_value = {"SID": "test", "__Secure-1PSIDTS": "test_1psidts"}
             with patch(
                 "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
             ) as mock_fetch:
@@ -674,7 +674,7 @@ class TestGetAuthTokens:
         ctx.obj = None
 
         with patch("notebooklm.cli.helpers.load_auth_from_storage") as mock_load:
-            mock_load.return_value = {"SID": "test_sid"}
+            mock_load.return_value = {"SID": "test_sid", "__Secure-1PSIDTS": "test_1psidts"}
             with patch(
                 "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
             ) as mock_fetch:
@@ -682,8 +682,11 @@ class TestGetAuthTokens:
 
                 auth = get_auth_tokens(ctx)
 
-        assert auth.cookies == {("SID", ".google.com"): "test_sid"}
-        assert auth.flat_cookies == {"SID": "test_sid"}
+        assert auth.cookies == {
+            ("SID", ".google.com"): "test_sid",
+            ("__Secure-1PSIDTS", ".google.com"): "test_1psidts",
+        }
+        assert auth.flat_cookies == {"SID": "test_sid", "__Secure-1PSIDTS": "test_1psidts"}
         assert auth.csrf_token == "csrf_token"
         assert auth.session_id == "session_id"
 
@@ -693,7 +696,18 @@ class TestGetAuthTokens:
         ctx.obj = {"storage_path": storage_path, "profile": None}
         monkeypatch.setenv(
             "NOTEBOOKLM_AUTH_JSON",
-            json.dumps({"cookies": [{"name": "SID", "value": "env", "domain": ".google.com"}]}),
+            json.dumps(
+                {
+                    "cookies": [
+                        {"name": "SID", "value": "env", "domain": ".google.com"},
+                        {
+                            "name": "__Secure-1PSIDTS",
+                            "value": "test_1psidts",
+                            "domain": ".google.com",
+                        },
+                    ]
+                }
+            ),
         )
 
         with (
@@ -704,14 +718,16 @@ class TestGetAuthTokens:
             patch("notebooklm.auth.build_httpx_cookies_from_storage") as mock_env_jar,
             patch("notebooklm.cli.helpers.build_cookie_jar") as mock_build_jar,
         ):
-            mock_load.return_value = {"SID": "file"}
+            mock_load.return_value = {"SID": "file", "__Secure-1PSIDTS": "test_1psidts"}
             mock_fetch.return_value = ("csrf", "session")
             mock_build_jar.return_value = httpx.Cookies()
 
             auth = get_auth_tokens(ctx)
 
         mock_env_jar.assert_not_called()
-        mock_build_jar.assert_called_once_with(cookies={"SID": "file"}, storage_path=storage_path)
+        mock_build_jar.assert_called_once_with(
+            cookies={"SID": "file", "__Secure-1PSIDTS": "test_1psidts"}, storage_path=storage_path
+        )
         assert auth.storage_path == storage_path
 
 

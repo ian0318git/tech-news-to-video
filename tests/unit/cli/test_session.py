@@ -27,6 +27,7 @@ def mock_auth():
     with patch("notebooklm.cli.helpers.load_auth_from_storage") as mock:
         mock.return_value = {
             "SID": "test",
+            "__Secure-1PSIDTS": "test_1psidts",
             "HSID": "test",
             "SSID": "test",
             "APISID": "test",
@@ -1137,6 +1138,7 @@ class TestAuthCheckCommand:
         storage_data = {
             "cookies": [
                 {"name": "SID", "value": "test_sid", "domain": ".google.com"},
+                {"name": "__Secure-1PSIDTS", "value": "test_1psidts", "domain": ".google.com"},
                 {"name": "HSID", "value": "test_hsid", "domain": ".google.com"},
                 {"name": "SSID", "value": "test_ssid", "domain": ".google.com"},
             ]
@@ -1154,6 +1156,7 @@ class TestAuthCheckCommand:
         storage_data = {
             "cookies": [
                 {"name": "SID", "value": "test_sid", "domain": ".google.com"},
+                {"name": "__Secure-1PSIDTS", "value": "test_1psidts", "domain": ".google.com"},
                 {"name": "HSID", "value": "test_hsid", "domain": ".google.com"},
             ]
         }
@@ -1170,11 +1173,42 @@ class TestAuthCheckCommand:
         assert output["checks"]["sid_cookie"] is True
         assert "SID" in output["details"]["cookies_found"]
 
+    def test_auth_check_missing_1psidts_surfaces_tier1_error(self, runner, mock_storage_path):
+        """SID present but ``__Secure-1PSIDTS`` absent must surface the Tier 1 error.
+
+        Pinned by the #371 two-tier pre-flight: ``MINIMUM_REQUIRED_COOKIES``
+        now contains both ``SID`` and ``__Secure-1PSIDTS``; the load helpers
+        in ``auth.py`` raise on absence, and ``auth check`` reports the raised
+        ``ValueError`` so users see the new diagnostic.
+
+        Note: ``auth check`` itself returns exit code 0 regardless — that's a
+        pre-existing UX gap orthogonal to #371. We assert on the surfaced
+        error text instead, which is what users would actually see.
+        """
+        storage_data = {
+            "cookies": [
+                {"name": "SID", "value": "test_sid", "domain": ".google.com"},
+                # Note: __Secure-1PSIDTS deliberately omitted.
+                {"name": "HSID", "value": "test_hsid", "domain": ".google.com"},
+                {"name": "SSID", "value": "test_ssid", "domain": ".google.com"},
+            ]
+        }
+        mock_storage_path.write_text(json.dumps(storage_data))
+
+        result = runner.invoke(cli, ["auth", "check", "--json"])
+
+        assert result.exit_code == 0
+        output = json.loads(result.output)
+        assert output["status"] == "error"
+        assert output["checks"]["cookies_present"] is False
+        assert "__Secure-1PSIDTS" in output["details"].get("error", "")
+
     def test_auth_check_with_test_flag_success(self, runner, mock_storage_path):
         """Test auth check --test with successful token fetch."""
         storage_data = {
             "cookies": [
                 {"name": "SID", "value": "test_sid", "domain": ".google.com"},
+                {"name": "__Secure-1PSIDTS", "value": "test_1psidts", "domain": ".google.com"},
             ]
         }
         mock_storage_path.write_text(json.dumps(storage_data))
@@ -1195,6 +1229,7 @@ class TestAuthCheckCommand:
         storage_data = {
             "cookies": [
                 {"name": "SID", "value": "test_sid", "domain": ".google.com"},
+                {"name": "__Secure-1PSIDTS", "value": "test_1psidts", "domain": ".google.com"},
             ]
         }
         mock_storage_path.write_text(json.dumps(storage_data))
@@ -1216,6 +1251,7 @@ class TestAuthCheckCommand:
         storage_data = {
             "cookies": [
                 {"name": "SID", "value": "test_sid", "domain": ".google.com"},
+                {"name": "__Secure-1PSIDTS", "value": "test_1psidts", "domain": ".google.com"},
             ]
         }
         mock_storage_path.write_text(json.dumps(storage_data))
@@ -1243,6 +1279,7 @@ class TestAuthCheckCommand:
         env_storage = {
             "cookies": [
                 {"name": "SID", "value": "env_sid", "domain": ".google.com"},
+                {"name": "__Secure-1PSIDTS", "value": "test_1psidts", "domain": ".google.com"},
             ]
         }
         monkeypatch.setenv("NOTEBOOKLM_AUTH_JSON", json.dumps(env_storage))
@@ -1259,6 +1296,7 @@ class TestAuthCheckCommand:
         storage_data = {
             "cookies": [
                 {"name": "SID", "value": "test_sid", "domain": ".google.com"},
+                {"name": "__Secure-1PSIDTS", "value": "test_1psidts", "domain": ".google.com"},
                 {"name": "NID", "value": "test_nid", "domain": ".google.com.sg"},
             ]
         }
@@ -1275,9 +1313,11 @@ class TestAuthCheckCommand:
         storage_data = {
             "cookies": [
                 {"name": "SID", "value": "test_sid", "domain": ".google.com"},
+                {"name": "__Secure-1PSIDTS", "value": "test_1psidts", "domain": ".google.com"},
                 {"name": "HSID", "value": "test_hsid", "domain": ".google.com"},
                 {"name": "SSID", "value": "test_ssid", "domain": ".google.com"},
                 {"name": "SID", "value": "regional_sid", "domain": ".google.com.sg"},
+                {"name": "__Secure-1PSIDTS", "value": "test_1psidts", "domain": ".google.com.sg"},
                 {"name": "__Secure-1PSID", "value": "secure1", "domain": ".google.com"},
             ]
         }
@@ -1304,6 +1344,7 @@ class TestAuthCheckCommand:
         storage_data = {
             "cookies": [
                 {"name": "SID", "value": "test_sid", "domain": ".google.com"},
+                {"name": "__Secure-1PSIDTS", "value": "test_1psidts", "domain": ".google.com"},
             ]
         }
         mock_storage_path.write_text(json.dumps(storage_data))
@@ -1632,6 +1673,15 @@ class TestLoginBrowserCookies:
                 "expires": 1234567890,
                 "http_only": False,
             },
+            {
+                "domain": ".google.com",
+                "name": "__Secure-1PSIDTS",
+                "value": "test_1psidts",
+                "path": "/",
+                "secure": True,
+                "expires": 1234567890,
+                "http_only": False,
+            },
         ]
         mock_rookiepy = MagicMock()
         mock_rookiepy.load = MagicMock(return_value=mock_cookies)
@@ -1658,6 +1708,15 @@ class TestLoginBrowserCookies:
                 "domain": ".google.com",
                 "name": "SID",
                 "value": "abc",
+                "path": "/",
+                "secure": True,
+                "expires": None,
+                "http_only": False,
+            },
+            {
+                "domain": ".google.com",
+                "name": "__Secure-1PSIDTS",
+                "value": "test_1psidts",
                 "path": "/",
                 "secure": True,
                 "expires": None,
@@ -1722,6 +1781,15 @@ class TestLoginBrowserCookies:
                 "domain": ".google.com",
                 "name": "SID",
                 "value": "mysid",
+                "path": "/",
+                "secure": True,
+                "expires": 9999,
+                "http_only": False,
+            },
+            {
+                "domain": ".google.com",
+                "name": "__Secure-1PSIDTS",
+                "value": "test_1psidts",
                 "path": "/",
                 "secure": True,
                 "expires": 9999,
@@ -1990,7 +2058,18 @@ class TestAuthRefreshCommand:
     def mock_storage_path(self, tmp_path):
         storage_file = tmp_path / "storage_state.json"
         storage_file.write_text(
-            json.dumps({"cookies": [{"name": "SID", "value": "x", "domain": ".google.com"}]})
+            json.dumps(
+                {
+                    "cookies": [
+                        {"name": "SID", "value": "x", "domain": ".google.com"},
+                        {
+                            "name": "__Secure-1PSIDTS",
+                            "value": "test_1psidts",
+                            "domain": ".google.com",
+                        },
+                    ]
+                }
+            )
         )
         with patch("notebooklm.cli.session.get_storage_path", return_value=storage_file):
             yield storage_file
@@ -2060,7 +2139,18 @@ class TestAuthRefreshCommand:
         """
         work_storage = tmp_path / "work_storage_state.json"
         work_storage.write_text(
-            json.dumps({"cookies": [{"name": "SID", "value": "y", "domain": ".google.com"}]})
+            json.dumps(
+                {
+                    "cookies": [
+                        {"name": "SID", "value": "y", "domain": ".google.com"},
+                        {
+                            "name": "__Secure-1PSIDTS",
+                            "value": "test_1psidts",
+                            "domain": ".google.com",
+                        },
+                    ]
+                }
+            )
         )
 
         def fake_storage_path(profile=None):

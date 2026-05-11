@@ -18,7 +18,7 @@ from notebooklm.rpc import AuthError, RPCError, RPCMethod
 def mock_auth():
     """Create a mock AuthTokens object."""
     return AuthTokens(
-        cookies={"SID": "test_sid", "HSID": "test_hsid"},
+        cookies={"SID": "test_sid", "__Secure-1PSIDTS": "test_1psidts", "HSID": "test_hsid"},
         csrf_token="test_csrf",
         session_id="test_session",
     )
@@ -98,6 +98,7 @@ class TestFromStorage:
         storage_state = {
             "cookies": [
                 {"name": "SID", "value": "test_sid", "domain": ".google.com"},
+                {"name": "__Secure-1PSIDTS", "value": "test_1psidts", "domain": ".google.com"},
                 {"name": "HSID", "value": "test_hsid", "domain": ".google.com"},
             ]
         }
@@ -142,6 +143,7 @@ class TestFromStorage:
         storage_state = {
             "cookies": [
                 {"name": "SID", "value": "default_sid", "domain": ".google.com"},
+                {"name": "__Secure-1PSIDTS", "value": "test_1psidts", "domain": ".google.com"},
             ]
         }
 
@@ -388,7 +390,7 @@ class TestClientCoreRefreshCallback:
         """ClientCore should store refresh callback."""
 
         auth = AuthTokens(
-            cookies={"SID": "test"},
+            cookies={"SID": "test", "__Secure-1PSIDTS": "test_1psidts"},
             csrf_token="csrf",
             session_id="sid",
         )
@@ -403,7 +405,7 @@ class TestClientCoreRefreshCallback:
         """ClientCore should default refresh_callback to None."""
 
         auth = AuthTokens(
-            cookies={"SID": "test"},
+            cookies={"SID": "test", "__Secure-1PSIDTS": "test_1psidts"},
             csrf_token="csrf",
             session_id="sid",
         )
@@ -414,7 +416,7 @@ class TestClientCoreRefreshCallback:
     def test_refresh_lock_created_when_callback_provided(self):
         """ClientCore should create refresh lock when callback provided."""
         auth = AuthTokens(
-            cookies={"SID": "test"},
+            cookies={"SID": "test", "__Secure-1PSIDTS": "test_1psidts"},
             csrf_token="csrf",
             session_id="sid",
         )
@@ -430,7 +432,7 @@ class TestClientCoreRefreshCallback:
         """ClientCore should NOT create refresh lock when no callback."""
 
         auth = AuthTokens(
-            cookies={"SID": "test"},
+            cookies={"SID": "test", "__Secure-1PSIDTS": "test_1psidts"},
             csrf_token="csrf",
             session_id="sid",
         )
@@ -449,7 +451,7 @@ class TestRpcCallAutoRetry:
     async def test_retries_on_http_401_error(self):
         """rpc_call should retry once after HTTP 401 if callback provided."""
         auth = AuthTokens(
-            cookies={"SID": "test"},
+            cookies={"SID": "test", "__Secure-1PSIDTS": "test_1psidts"},
             csrf_token="csrf",
             session_id="sid",
         )
@@ -492,7 +494,7 @@ class TestRpcCallAutoRetry:
     async def test_retries_on_rpc_auth_error(self):
         """rpc_call should retry once after RPC auth error if callback provided."""
         auth = AuthTokens(
-            cookies={"SID": "test"},
+            cookies={"SID": "test", "__Secure-1PSIDTS": "test_1psidts"},
             csrf_token="csrf",
             session_id="sid",
         )
@@ -536,7 +538,7 @@ class TestRpcCallAutoRetry:
     async def test_no_retry_without_callback(self):
         """rpc_call should NOT retry if no refresh_callback provided."""
         auth = AuthTokens(
-            cookies={"SID": "test"},
+            cookies={"SID": "test", "__Secure-1PSIDTS": "test_1psidts"},
             csrf_token="csrf",
             session_id="sid",
         )
@@ -563,7 +565,7 @@ class TestRpcCallAutoRetry:
     async def test_no_infinite_retry(self):
         """rpc_call should only retry once, not infinitely."""
         auth = AuthTokens(
-            cookies={"SID": "test"},
+            cookies={"SID": "test", "__Secure-1PSIDTS": "test_1psidts"},
             csrf_token="csrf",
             session_id="sid",
         )
@@ -599,7 +601,7 @@ class TestRpcCallAutoRetry:
     async def test_no_retry_on_non_auth_error(self):
         """rpc_call should NOT retry on non-auth errors (HTTP 500)."""
         auth = AuthTokens(
-            cookies={"SID": "test"},
+            cookies={"SID": "test", "__Secure-1PSIDTS": "test_1psidts"},
             csrf_token="csrf",
             session_id="sid",
         )
@@ -633,7 +635,7 @@ class TestRpcCallAutoRetry:
     async def test_refresh_failure_raises_original_error(self):
         """If refresh fails, should raise original error with chained exception."""
         auth = AuthTokens(
-            cookies={"SID": "test"},
+            cookies={"SID": "test", "__Secure-1PSIDTS": "test_1psidts"},
             csrf_token="csrf",
             session_id="sid",
         )
@@ -662,7 +664,7 @@ class TestRpcCallAutoRetry:
     async def test_concurrent_refresh_uses_shared_task(self):
         """Concurrent auth errors should share a single refresh task."""
         auth = AuthTokens(
-            cookies={"SID": "test"},
+            cookies={"SID": "test", "__Secure-1PSIDTS": "test_1psidts"},
             csrf_token="csrf",
             session_id="sid",
         )

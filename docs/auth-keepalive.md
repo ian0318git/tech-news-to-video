@@ -20,13 +20,11 @@ Google session cookies (`SID`, `__Secure-1PSID`, `__Secure-1PSIDTS`, `OSID`,
 and friends) extracted from a real browser sign-in. Two clocks govern how long
 those cookies stay valid:
 
-- **`__Secure-1PSIDTS` rotates ~every 10 minutes server-side.** Without an
-  active rotation refresh, `*PSIDTS` ages out and every subsequent RPC call
-  fails with `Authentication expired or invalid` (issue
-  [#312](https://github.com/teng-lin/notebooklm-py/issues/312)).
+- **`__Secure-1PSIDTS` has a *recommended* rotation cadence of ~600 s** (self-reported by Google as `["identity.hfcr",600]` on the `RotateCookies` response), but the **prior value remains valid for far longer than 600 s**. Empirical observation on a stable IP, non-Workspace account: a frozen `__Secure-1PSIDTS` continued authenticating for **32+ hours** without any client-side rotation, and Google naturally rotated it only **once** in 29 hours of continuous probing. The "10-minute server-side TTL" framing earlier in this project's history was too strong; 600 s is what active clients are *expected* to do, not what gets enforced. Worst-case profiles (datacenter egress, cross-IP, Workspace policy, incomplete extraction) can collapse this to hours or less.
 - **`SID` and `__Secure-1PSID`** have very long server-side lifetimes (months
   to years for daily-active accounts) and effectively don't expire under
   normal usage as long as Google sees periodic activity.
+- **Cookie set completeness matters more than freshness.** Pair-wise ablation showed Google rejects any cookie set where `__Secure-1PSIDTS` is missing along with any one other cookie, even though removing `__Secure-1PSIDTS` alone is recoverable. See §3.5 for the full accept-rule model.
 
 A long-lived client must therefore drive `*PSIDTS` rotation itself. Empirically
 the cleanest mechanism is a direct `POST` to
@@ -78,10 +76,13 @@ re-authentications?**
 The naïve answer ("cookies have expiry timestamps; trust them") is wrong on
 two counts:
 
-1. The most consequential auth cookie (`__Secure-1PSIDTS`) has an **explicit
-   server-side TTL of ~10 minutes** that's not encoded in the cookie's
-   `Expires` attribute. The on-disk `Expires` field is irrelevant to its
-   server-side validity.
+1. The most consequential auth cookie (`__Secure-1PSIDTS`) has a **server-side
+   recommended rotation cadence of ~600 s** (Google's own self-report) that's
+   not encoded in the cookie's `Expires` attribute. The on-disk `Expires` field
+   is irrelevant to its server-side validity. The *recommended* cadence is
+   distinct from the *actual* validity window — empirically the prior value
+   keeps working for hours-to-days on stable network identities. See §3.5 for
+   ablation data.
 2. Even cookies with a year-long `Expires` will be **revoked early by Google's
    risk model** if the access pattern looks unusual (no JS execution, no
    browser fingerprint, IP changes, long inactivity gaps).
@@ -126,11 +127,11 @@ Naming conventions:
   who you are, slow to change — from **freshness** — you're using the
   session right now, fast to expire:
 
-  | Family | Role | Server-side TTL |
-  |---|---|---|
-  | `*SID` (also `HSID`, `SSID`, `APISID`, `SAPISID`, …) | Long-lived identity ("user X, session Y") | Months → ~1 year |
-  | `*SIDTS` (`__Secure-1PSIDTS`, `__Secure-3PSIDTS`) | Rotating freshness partner of `*SID` | **~10 min** |
-  | `*SIDCC` (`SIDCC`, `__Secure-1PSIDCC`, `__Secure-3PSIDCC`) | Per-request "session continuity check" | ~5 min sliding window |
+  | Family | Role | Recommended rotation cadence | Empirical validity of a stale value |
+  |---|---|---|---|
+  | `*SID` (also `HSID`, `SSID`, `APISID`, `SAPISID`, …) | Long-lived identity ("user X, session Y") | Months → ~1 year | Same — practically never expires for active accounts |
+  | `*SIDTS` (`__Secure-1PSIDTS`, `__Secure-3PSIDTS`) | Rotating freshness partner of `*SID` | **~600 s** (Google's self-report) | **Hours-to-days** on stable IP / non-Workspace (measured: 32+ h frozen still authenticating) |
+  | `*SIDCC` (`SIDCC`, `__Secure-1PSIDCC`, `__Secure-3PSIDCC`) | Per-request "session continuity check" | Issued on every request | Not enforced for accept/reject — Google reissues but doesn't validate freshness |
 
 A few cookies sit outside this taxonomy:
 
@@ -669,6 +670,113 @@ Before assuming Google has changed anything:
    by [#360](https://github.com/teng-lin/notebooklm-py/issues/360).
 5. **Only after the above all check out**, investigate Google-side
    causes (risk-scoring, Workspace policy, DBSC).
+
+### 3.5 Empirical cookie requirements (single- and pair-wise ablation)
+
+Tracked separately from §3.4: which cookies does Google *actually* require?
+This section documents the empirical accept-rule that backs the library's
+two-tier `_validate_required_cookies()` pre-flight (see `auth.py` —
+`MINIMUM_REQUIRED_COOKIES` and `_has_valid_secondary_binding()` for the
+authoritative values; the historical permissive `{"SID"}` check was
+replaced in [#371](https://github.com/teng-lin/notebooklm-py/issues/371)).
+
+**Methodology.** Take a known-good `storage_state.json`, drop one or two
+cookies at a time, run `notebooklm --storage <variant> list`, record whether
+Google accepts the call (200 + RPC succeeds) or redirects to login
+(`accounts.google.com/v3/signin`). Tested on the `teng-lin-9414` profile, a
+non-Workspace consumer account on stable home IP.
+
+**Singleton ablation (16 candidate cookies, drop one at a time):** every
+cookie *except* `SID` could be removed individually with `notebooks.list` still
+succeeding. For most of them Google reissued the missing cookie via
+`Set-Cookie` during the call and the library wrote it back automatically.
+A handful (`HSID`, `SSID`, `APISID`, `SAPISID`, `__Secure-1PSIDTS`,
+`__Host-GAPS`) were not reissued — yet the call still succeeded. The library
+is highly resilient to single-cookie absence in this regime.
+
+**Pair-wise ablation (105 pairs of those 16 cookies, drop two at a time,
+excluding pairs containing `SID`):** **16 of 105 pairs failed** with
+`Authentication expired or invalid` → redirect to signin. The failure pattern
+is precise:
+
+- **14 failures involve `__Secure-1PSIDTS`** paired with any one of the
+  remaining cookies. Although `__Secure-1PSIDTS` is individually removable
+  (Google mints a fresh one via `RotateCookies`), that mint POST requires the
+  rest of the cookie set to authenticate. Drop `__Secure-1PSIDTS` + anything
+  else → recovery breaks.
+- **2 failures don't involve `__Secure-1PSIDTS`:**
+  - `APISID` + `OSID` removed
+  - `SAPISID` + `OSID` removed
+
+The two non-`__Secure-1PSIDTS` failures expose a separate accept-rule.
+
+**The accept-rule model that fits 100% of observed outcomes.** Google accepts
+the NotebookLM homepage GET when both hold:
+
+1. **Identity present:** `SID` is valid (and `__Secure-1PSIDTS` is either
+   directly present, or recoverable via `RotateCookies` POST — which means
+   the full ambient cookie set must be present).
+2. **At least one secondary binding present:**
+   - Either `OSID` is present, OR
+   - Both `APISID` *and* `SAPISID` are present.
+
+Confirmation test (pair 28/105): dropping `APISID + SAPISID` together while
+`OSID` remains → call succeeds. Model predicts OK; observed OK.
+
+| Variant | `SID` | `OSID` | `APISID+SAPISID` pair | `__Secure-1PSIDTS` (or recoverable) | Predicted | Observed |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| Baseline | ✓ | ✓ | ✓ | ✓ | OK | OK |
+| Drop `__Secure-1PSIDTS` only | ✓ | ✓ | ✓ | recoverable | OK | OK |
+| Drop `__Secure-1PSIDTS` + any one other | ✓ | ✓ | ✓ | broken (mint POST fails) | FAIL | FAIL |
+| Drop `OSID` only | ✓ | ✗ | ✓ | ✓ | OK (AP*SID path) | OK |
+| Drop `APISID + SAPISID` | ✓ | ✓ | ✗ | ✓ | OK (OSID path) | OK |
+| Drop `APISID + OSID` | ✓ | ✗ | ✗ | ✓ | FAIL | FAIL |
+| Drop `SAPISID + OSID` | ✓ | ✗ | ✗ | ✓ | FAIL | FAIL |
+
+The model fits all 105 + 16 = 121 data points without exception.
+
+**Why this matters for `MINIMUM_REQUIRED_COOKIES`.** Before #371 the library
+trusted any storage with `SID` present, which permitted Google-rejected cookie
+sets to reach the wire. The result was the user-facing "auth expires
+immediately after `notebooklm login`" pattern reported in
+[#133](https://github.com/teng-lin/notebooklm-py/issues/133),
+[#332](https://github.com/teng-lin/notebooklm-py/issues/332), and others.
+
+The pre-flight now catches all 16 ablation failures via a two-tier check in
+`_validate_required_cookies()`:
+
+```python
+MINIMUM_REQUIRED_COOKIES = {"SID", "__Secure-1PSIDTS"}  # Tier 1: raise
+
+def _has_valid_secondary_binding(cookie_names: set[str]) -> bool:  # Tier 2: warn
+    if "OSID" in cookie_names:
+        return True
+    return {"APISID", "SAPISID"} <= cookie_names
+```
+
+Hybrid rollout: Tier 1 raises (unambiguous evidence); Tier 2 logs a warning
+once per process so partial extractions surface without breaking edge-case
+flows (e.g. Workspace SSO) that we haven't ablated. See
+[#371](https://github.com/teng-lin/notebooklm-py/issues/371).
+
+**Caveats.**
+
+- All 121 ablation runs were on a single profile (non-Workspace, stable IP).
+  Workspace accounts may have different accept-rules; we haven't tested.
+- We tested `notebooks.list` only. Other code paths (chat, generate, download)
+  share the same auth machinery but theoretically could have different
+  sensitivities — though we haven't observed any.
+- This is a *model fit* to 121 data points, not a confirmed mechanism. The
+  exact server-side logic would require capturing the precise HTTP request
+  on success vs failure and identifying the missing signal.
+- The accept-rule is what governs *acceptance*. The freshness clock (§3.1)
+  still applies on top of it — a session with a valid accept-tuple can still
+  be killed by Google's risk model independent of which cookies are present.
+
+**Reproducer.** `tests/manual/test_cookie_ablation.py` (one-shot singleton)
+and `tests/manual/test_cookie_ablation_pairs.py` (105 pairs, ~10 min wall).
+Each operates on copies of a known-good `storage_state.json` — never mutates
+the original.
 
 
 ---
