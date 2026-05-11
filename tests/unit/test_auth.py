@@ -1553,6 +1553,92 @@ class TestAuthTokensFromStorage:
         assert sid.has_nonstandard_attr("HttpOnly")
 
 
+class TestLoaderFlatCookieParity:
+    """Regression tests for #375.
+
+    ``load_auth_from_storage`` (CLI helper) and ``AuthTokens.from_storage``
+    (library entry point) must agree on the flat name→value mapping for the
+    same storage_state — otherwise out-of-tree scripts that read
+    ``auth.cookie_header`` see different cookies depending on which loader
+    produced them.
+    """
+
+    @pytest.mark.asyncio
+    async def test_osid_on_non_base_domains_matches(self, tmp_path, httpx_mock: HTTPXMock) -> None:
+        """OSID lives on myaccount.google.com and notebooklm.google.com only.
+
+        The deterministic priority order (``_auth_domain_priority``) ranks
+        ``notebooklm.google.com`` (2) above unranked allowlisted hosts (0),
+        so both loaders must surface the notebooklm.google.com value.
+        """
+        storage_file = tmp_path / "storage_state.json"
+        storage_state = {
+            "cookies": [
+                # Tier 1 required cookies on .google.com so both loaders accept.
+                {"name": "SID", "value": "sid", "domain": ".google.com"},
+                {"name": "__Secure-1PSIDTS", "value": "psidts", "domain": ".google.com"},
+                {"name": "HSID", "value": "hsid", "domain": ".google.com"},
+                {"name": "SSID", "value": "ssid", "domain": ".google.com"},
+                # OSID only exists on non-base hosts; myaccount comes first so a
+                # naive first-wins flattener would pick it, but the priority
+                # rules say notebooklm.google.com must win.
+                {
+                    "name": "OSID",
+                    "value": "from-myaccount",
+                    "domain": "myaccount.google.com",
+                },
+                {
+                    "name": "OSID",
+                    "value": "from-notebooklm",
+                    "domain": "notebooklm.google.com",
+                },
+            ]
+        }
+        storage_file.write_text(json.dumps(storage_state))
+
+        html = '"SNlM0e":"csrf_token" "FdrFJe":"session_id"'
+        httpx_mock.add_response(content=html.encode())
+
+        cli_cookies = load_auth_from_storage(storage_file)
+        lib_tokens = await AuthTokens.from_storage(storage_file)
+
+        assert cli_cookies["OSID"] == lib_tokens.flat_cookies["OSID"]
+        assert cli_cookies["OSID"] == "from-notebooklm"
+
+    @pytest.mark.asyncio
+    async def test_base_domain_still_wins_on_both_paths(
+        self, tmp_path, httpx_mock: HTTPXMock
+    ) -> None:
+        """When .google.com is present it must win on both loaders."""
+        storage_file = tmp_path / "storage_state.json"
+        storage_state = {
+            "cookies": [
+                {
+                    "name": "SID",
+                    "value": "from-regional",
+                    "domain": ".google.com.sg",
+                },
+                {"name": "SID", "value": "from-base", "domain": ".google.com"},
+                {"name": "__Secure-1PSIDTS", "value": "psidts", "domain": ".google.com"},
+                {"name": "HSID", "value": "hsid", "domain": ".google.com"},
+                {"name": "SSID", "value": "ssid", "domain": ".google.com"},
+                # Tier 2 binding — silences the secondary-binding warning that
+                # would otherwise log on every load (issue #372).
+                {"name": "OSID", "value": "osid", "domain": "notebooklm.google.com"},
+            ]
+        }
+        storage_file.write_text(json.dumps(storage_state))
+
+        html = '"SNlM0e":"csrf_token" "FdrFJe":"session_id"'
+        httpx_mock.add_response(content=html.encode())
+
+        cli_cookies = load_auth_from_storage(storage_file)
+        lib_tokens = await AuthTokens.from_storage(storage_file)
+
+        assert cli_cookies["SID"] == "from-base"
+        assert lib_tokens.flat_cookies["SID"] == "from-base"
+
+
 # =============================================================================
 # COOKIE DOMAIN VALIDATION TESTS
 # =============================================================================
@@ -2918,10 +3004,9 @@ class TestPokeConcurrencyThrottling:
             await auth_module._poke_session(client, storage_path)
 
         poke_requests = [r for r in httpx_mock.get_requests() if _POKE_URL_RE.match(str(r.url))]
-        assert len(poke_requests) == 1, (
-            f"infra failure must fail open and let rotation proceed; "
-            f"got {len(poke_requests)} POSTs"
-        )
+        assert (
+            len(poke_requests) == 1
+        ), f"infra failure must fail open and let rotation proceed; got {len(poke_requests)} POSTs"
 
     @pytest.mark.asyncio
     @pytest.mark.no_default_keepalive_mock

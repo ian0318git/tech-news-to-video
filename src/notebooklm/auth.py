@@ -314,10 +314,10 @@ class AuthTokens:
     def flat_cookies(self) -> FlatCookieMap:
         """Return a legacy name→value cookie mapping.
 
-        When the same cookie name exists on multiple domains, the base
-        ``.google.com`` value wins for compatibility with the previous flat
-        representation. Domain-aware HTTP operations should use ``cookie_jar``
-        or ``cookies`` directly instead.
+        Duplicate-name resolution follows :func:`_auth_domain_priority` so the
+        result matches what :func:`load_auth_from_storage` produces for the same
+        storage state (see issue #375). Domain-aware HTTP operations should use
+        ``cookie_jar`` or ``cookies`` directly instead.
         """
         return flatten_cookie_map(self.cookies)
 
@@ -392,13 +392,25 @@ def normalize_cookie_map(cookies: CookieInput | None) -> DomainCookieMap:
 
 
 def flatten_cookie_map(cookies: CookieInput | None) -> FlatCookieMap:
-    """Flatten domain-aware cookies for legacy raw Cookie header callers."""
+    """Flatten domain-aware cookies for legacy raw Cookie header callers.
+
+    Duplicate-name resolution mirrors :func:`extract_cookies_from_storage`:
+    domains are ranked by :func:`_auth_domain_priority` (``.google.com`` >
+    ``.notebooklm.google.com`` > ``notebooklm.google.com`` > regional > other).
+    Named tiers are strictly distinct, so the cross-tier case from #375 (e.g.
+    ``OSID`` on ``myaccount.google.com`` (tier 0) vs ``notebooklm.google.com``
+    (tier 2)) resolves the same way regardless of input order. Within a single
+    tier, first occurrence in iteration order wins — matching
+    :func:`extract_cookies_from_storage`'s within-tier semantics.
+    """
     flat: FlatCookieMap = {}
+    priorities: dict[str, int] = {}
 
     for (name, domain), value in normalize_cookie_map(cookies).items():
-        is_base_domain = domain == ".google.com"
-        if name not in flat or is_base_domain:
+        priority = _auth_domain_priority(domain)
+        if name not in flat or priority > priorities[name]:
             flat[name] = value
+            priorities[name] = priority
 
     return flat
 
@@ -767,12 +779,18 @@ def _load_storage_state(path: Path | None = None) -> dict[str, Any]:
 
 
 def load_auth_from_storage(path: Path | None = None) -> dict[str, str]:
-    """Load Google cookies from storage.
+    """Load Google cookies from storage as a flat name→value dict.
 
     Loads authentication cookies with the following precedence:
     1. Explicit path argument (from --storage CLI flag)
     2. NOTEBOOKLM_AUTH_JSON environment variable (inline JSON, no file needed)
     3. File at $NOTEBOOKLM_HOME/storage_state.json (or ~/.notebooklm/storage_state.json)
+
+    Duplicate-name resolution follows :func:`_auth_domain_priority`, matching
+    :attr:`AuthTokens.flat_cookies` for the same storage state — previously the
+    two paths disagreed on names that live only on non-base hosts (e.g.
+    ``OSID`` on ``myaccount.google.com`` vs ``notebooklm.google.com``). See
+    issue #375.
 
     Args:
         path: Path to storage_state.json. If provided, takes precedence over env vars.
