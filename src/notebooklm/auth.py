@@ -1642,7 +1642,10 @@ def _merge_cookies_with_snapshot(
             # CAS-guard for value updates: if our snapshot had this key in any
             # leading-dot variant and disk's current value differs from the
             # snapshot value, a sibling process has rewritten the row between
-            # our open and our save. Preserve their write rather than clobber.
+            # our open and our save. Preserve their write rather than clobber,
+            # unless disk has already converged to our current value; in that
+            # case the save intent is satisfied and the caller may advance its
+            # baseline.
             # Variant-aware lookup mirrors the delta match above: if the snapshot
             # was keyed on ``accounts.google.com`` but the matched delta key is
             # the leading-dot variant, a plain ``.get(matched_delta_key)`` would
@@ -1656,7 +1659,11 @@ def _merge_cookies_with_snapshot(
                 None,
             )
             stored_value = stored_cookie.get("value")
-            if snapshot_entry is not None and stored_value != snapshot_entry.value:
+            if (
+                snapshot_entry is not None
+                and stored_value != snapshot_entry.value
+                and stored_value != matched_delta_cookie.value
+            ):
                 logger.debug(
                     "Skipped CAS-guarded value update of %s on %s: disk value "
                     "differs from snapshot (sibling write preserved)",

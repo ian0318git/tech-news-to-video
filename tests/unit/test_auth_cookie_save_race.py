@@ -1407,6 +1407,141 @@ class TestCASVariantAware:
             "the cookie as newly acquired"
         )
 
+    @pytest.mark.asyncio
+    async def test_variant_aware_cas_rejection_then_recovery_through_real_plumbing(
+        self, tmp_path, monkeypatch
+    ):
+        """Composition of variant-aware CAS + variant-aware baseline through real plumbing.
+
+        Wires the full ``AuthTokens.from_storage`` -> ``ClientCore`` ->
+        ``save_cookies`` plumbing rather than driving the helpers directly,
+        so this complements the unit-level coverage in
+        ``test_rejected_variant_preserves_original_baseline_variant`` and
+        ``test_cas_protects_across_leading_dot_variant``.
+
+        Timeline:
+
+        1. Disk row for ``OSID`` uses the bare-host domain
+           ``accounts.google.com``.
+        2. ``AuthTokens.from_storage`` loads the jar, then the mocked token
+           fetch rotates ``OSID`` and re-keys it on the leading-dot variant
+           ``.accounts.google.com`` (the domain variance the CAS / baseline
+           code must paper over). Inside the same mock, a sibling process
+           rewrites disk's bare-host row to a third value.
+        3. The pre-client save runs through real
+           ``save_cookies_to_storage``: the variant-aware CAS lookup spots
+           the disk drift via the bare-host snapshot entry and rejects the
+           dotted delta. ``from_storage`` then runs the real
+           ``advance_cookie_snapshot_after_save``, which must preserve the
+           bare-host baseline rather than dropping the key.
+        4. A Set-Cookie aligns the in-memory jar to disk (``OSID`` reset to
+           the sibling's value) and a second ``ClientCore.save_cookies``
+           runs. With the variant-aware baseline preserved by step 3, the
+           second save recognizes convergence, advances cleanly, and a later
+           rotation can persist without re-clobbering the sibling write.
+        """
+        from notebooklm import auth as auth_mod
+        from notebooklm._core import ClientCore
+
+        storage = tmp_path / "storage_state.json"
+        _write_storage(
+            storage,
+            [
+                _stored_cookie("SID", "sid"),
+                _stored_cookie("__Secure-1PSIDTS", "psidts"),
+                _stored_cookie("OSID", "OLD", domain="accounts.google.com"),
+            ],
+        )
+
+        async def fake_fetch_with_refresh(cookie_jar, storage_path, profile):
+            # Drop the bare-host OSID from the jar and re-key it on the
+            # leading-dot variant so the in-memory jar diverges from disk on
+            # domain shape — the exact variance the variant-aware CAS lookup
+            # has to bridge.
+            cookie_jar.delete("OSID", domain="accounts.google.com")
+            cookie_jar.set("OSID", "OURS", domain=".accounts.google.com", path="/")
+            # Sibling-process write between snapshot and our save.
+            cookies = _read_cookies(storage_path)
+            for cookie in cookies:
+                if cookie["name"] == "OSID":
+                    cookie["value"] = "SIBLING"
+            _write_storage(storage_path, cookies)
+            return ("csrf", "session", False, None)
+
+        monkeypatch.setattr(auth_mod, "_fetch_tokens_with_refresh", fake_fetch_with_refresh)
+
+        # Pre-client save runs through the real save_cookies_to_storage; the
+        # CAS rejection must keep SIBLING on disk and the variant-aware
+        # baseline-preservation must end up with the bare-host snapshot.
+        auth = await auth_mod.AuthTokens.from_storage(path=storage)
+
+        assert _cookie_value(storage, "OSID", "accounts.google.com") == "SIBLING", (
+            "First save must CAS-reject via the variant-aware lookup so the "
+            "sibling-process write survives on disk"
+        )
+        bare_key = CookieSnapshotKey("OSID", "accounts.google.com", "/")
+        dotted_key = CookieSnapshotKey("OSID", ".accounts.google.com", "/")
+        assert auth.cookie_snapshot is not None
+        assert auth.cookie_snapshot.get(bare_key) is not None
+        assert auth.cookie_snapshot[bare_key].value == "OLD", (
+            "advance_cookie_snapshot_after_save must preserve the bare-host "
+            "baseline entry that originally covered the CAS-rejected dotted "
+            "delta — otherwise the next save would treat OSID as newly "
+            "acquired and the variant lookup would silently fail"
+        )
+        assert dotted_key not in auth.cookie_snapshot, (
+            "The post-save snapshot's dotted variant must be popped when the "
+            "bare-host baseline is restored, so the rejected delta isn't "
+            "absorbed into the new baseline"
+        )
+
+        # Stand up the real ClientCore so the second save flows through
+        # ClientCore.save_cookies (lock + to_thread + baseline advance), not
+        # straight into save_cookies_to_storage.
+        core = ClientCore(auth)
+        await core.open()
+        try:
+            assert core._loaded_cookie_snapshot is not None
+            assert core._loaded_cookie_snapshot[bare_key].value == "OLD", (
+                "ClientCore.open must inherit the variant-aware preserved "
+                "baseline from AuthTokens.cookie_snapshot"
+            )
+
+            # Set-Cookie aligns the in-memory dotted OSID with what disk now
+            # holds. Run the second save through the real ClientCore plumbing.
+            assert core._http_client is not None
+            _set_cookie_value(core._http_client.cookies, "OSID", "SIBLING")
+            await core.save_cookies(core._http_client.cookies)
+
+            assert _cookie_value(storage, "OSID", "accounts.google.com") == "SIBLING", (
+                "Second save must not re-clobber the sibling write — the "
+                "variant-aware CAS lookup must still see the disk/baseline "
+                "divergence through the leading-dot variant"
+            )
+            assert core._loaded_cookie_snapshot is not None
+            assert core._loaded_cookie_snapshot.get(dotted_key) is not None
+            assert core._loaded_cookie_snapshot[dotted_key].value == "SIBLING", (
+                "After the second save, disk already matches the current "
+                "dotted-variant jar value, so the save must recover from the "
+                "prior CAS rejection and advance baseline to the converged "
+                "value instead of keeping the stale OLD baseline forever"
+            )
+
+            _set_cookie_value(core._http_client.cookies, "OSID", "NEXT")
+            await core.save_cookies(core._http_client.cookies)
+
+            assert _cookie_value(storage, "OSID", "accounts.google.com") == "NEXT", (
+                "After convergence advances the baseline, a later OSID "
+                "rotation must persist through the variant-aware lookup"
+            )
+            assert core._loaded_cookie_snapshot is not None
+            assert core._loaded_cookie_snapshot[dotted_key].value == "NEXT", (
+                "The successful follow-up rotation should advance the dotted "
+                "baseline to the value now reflected on disk"
+            )
+        finally:
+            await core.close()
+
 
 class TestSaveCookiesSeesLatestBaselineUnderContention:
     """``ClientCore.save_cookies`` captures ``original_snapshot`` on the
