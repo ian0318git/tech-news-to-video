@@ -1,5 +1,6 @@
 """Tests for download CLI commands."""
 
+import json
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -389,6 +390,42 @@ class TestDownloadFlags:
 
             # File should remain unchanged
             assert output_file.read_bytes() == b"existing content"
+
+
+# =============================================================================
+# JSON OUTPUT UNICODE TESTS
+# =============================================================================
+
+
+class TestDownloadJsonOutputUnicode:
+    def test_download_json_output_preserves_unicode(self, runner, mock_auth):
+        """`download <type> --json` should emit CJK / emoji as real UTF-8, not \\uXXXX."""
+        fake_result = {
+            "artifact_id": "audio_123",
+            "title": "中文音频 🎧",
+            "output_path": "音频.mp3",
+        }
+
+        async def fake_download_generic(*args, **kwargs):
+            return fake_result
+
+        with (
+            patch.object(download_module, "_download_artifacts_generic", fake_download_generic),
+            patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch,
+        ):
+            mock_fetch.return_value = ("csrf", "session")
+            result = runner.invoke(cli, ["download", "audio", "--json", "-n", "nb_123"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["title"] == "中文音频 🎧"
+        assert data["output_path"] == "音频.mp3"
+        # Raw output must contain real CJK/emoji, not escaped sequences.
+        assert "中文音频" in result.output
+        assert "🎧" in result.output
+        assert "\\u" not in result.output
 
 
 # =============================================================================

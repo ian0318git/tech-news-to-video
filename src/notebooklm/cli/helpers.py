@@ -788,9 +788,9 @@ def with_client(f):
 # =============================================================================
 
 
-def json_output_response(data: dict) -> None:
+def json_output_response(data: dict | list) -> None:
     """Print JSON response (no colors for machine parsing)."""
-    click.echo(json.dumps(data, indent=2, default=str))
+    click.echo(json.dumps(data, indent=2, default=str, ensure_ascii=False))
 
 
 def json_error_response(code: str, message: str, extra: dict | None = None) -> None:
@@ -804,7 +804,7 @@ def json_error_response(code: str, message: str, extra: dict | None = None) -> N
     response = {"error": True, "code": code, "message": message}
     if extra:
         response.update(extra)
-    click.echo(json.dumps(response, indent=2))
+    click.echo(json.dumps(response, indent=2, default=str, ensure_ascii=False))
     raise SystemExit(1)
 
 

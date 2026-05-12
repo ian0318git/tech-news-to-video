@@ -1,11 +1,12 @@
 """Tests for centralized CLI error handling."""
 
 import json
+from pathlib import Path
 
 import pytest
 
 import notebooklm.cli._encoding as encoding_module
-from notebooklm.cli.error_handler import handle_errors
+from notebooklm.cli.error_handler import _output_error, handle_errors
 from notebooklm.exceptions import (
     AuthError,
     ConfigurationError,
@@ -140,6 +141,38 @@ class TestHandleErrorsJsonOutput:
         assert data["error"] is True
         assert data["code"] == "UNEXPECTED_ERROR"
         assert "Something broke" in data["message"]
+
+    def test_error_handler_json_output_preserves_unicode(self, capsys):
+        """CJK / emoji in error messages should be emitted as real UTF-8."""
+        with pytest.raises(SystemExit), handle_errors(json_output=True):
+            raise ValidationError("笔记本未找到 🔍")
+
+        output = capsys.readouterr().out
+        data = json.loads(output)
+        assert "笔记本未找到 🔍" in data["message"]
+        # Raw output must contain real CJK/emoji, not escaped sequences.
+        assert "笔记本未找到" in output
+        assert "🔍" in output
+        assert "\\u" not in output
+
+    def test_output_error_serializes_path_in_extra(self, capsys):
+        """_output_error must not crash on non-primitive extras like pathlib.Path."""
+        with pytest.raises(SystemExit) as exc_info:
+            _output_error(
+                "Bad path",
+                "PATH_ERROR",
+                json_output=True,
+                exit_code=1,
+                extra={"path": Path("tmp_test_path")},
+            )
+
+        assert exc_info.value.code == 1
+        output = capsys.readouterr().out
+        data = json.loads(output)
+        assert data["error"] is True
+        assert data["code"] == "PATH_ERROR"
+        assert data["message"] == "Bad path"
+        assert data["path"] == str(Path("tmp_test_path"))
 
 
 class TestHandleErrorsTextOutput:

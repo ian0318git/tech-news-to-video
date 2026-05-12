@@ -586,6 +586,33 @@ class TestArtifactSuggestions:
             assert len(data) == 1
             assert data[0]["title"] == "Topic 1"
 
+    def test_artifact_suggestions_json_preserves_unicode(self, runner, mock_auth):
+        """CJK / emoji in suggestion titles should be emitted as real UTF-8."""
+        with patch_client_for_module("artifact") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.artifacts.suggest_reports = AsyncMock(
+                return_value=[
+                    MagicMock(title="中文主题 🚀", description="说明", prompt="问题"),
+                ]
+            )
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["artifact", "suggestions", "-n", "nb_123", "--json"])
+
+            assert result.exit_code == 0
+            data = json.loads(result.output)
+            assert data[0]["title"] == "中文主题 🚀"
+            assert data[0]["description"] == "说明"
+            assert data[0]["prompt"] == "问题"
+            # Raw output must contain real CJK/emoji, not escaped sequences.
+            assert "中文主题" in result.output
+            assert "🚀" in result.output
+            assert "\\u" not in result.output
+
 
 # =============================================================================
 # COMMAND EXISTENCE TESTS

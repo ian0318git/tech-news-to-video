@@ -12,7 +12,6 @@ Commands:
     flashcards   Download flashcard deck
 """
 
-import json
 from collections.abc import Awaitable, Callable
 from functools import partial
 from pathlib import Path
@@ -31,6 +30,7 @@ from .download_helpers import (
 from .helpers import (
     console,
     handle_error,
+    json_output_response,
     require_notebook,
     resolve_notebook_id,
     run_async,
@@ -660,7 +660,7 @@ def _run_artifact_download(ctx, artifact_type: str, **kwargs) -> None:
         )
 
         if json_output:
-            console.print(json.dumps(result, indent=2))
+            json_output_response(result)
             return
 
         _display_download_result(result, artifact_type)
