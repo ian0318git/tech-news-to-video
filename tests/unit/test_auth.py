@@ -29,6 +29,7 @@ from notebooklm.auth import (
     load_auth_from_storage,
     load_httpx_cookies,
     save_cookies_to_storage,
+    snapshot_cookie_jar,
 )
 
 
@@ -697,10 +698,11 @@ class TestCookieAttributePreservation:
         storage_file.write_text(json.dumps(self._attr_storage_state()))
 
         jar = build_httpx_cookies_from_storage(storage_file)
+        snapshot = snapshot_cookie_jar(jar)
         for cookie in jar.jar:
             if cookie.name == "SID":
                 cookie.value = "rotated-sid"
-        save_cookies_to_storage(jar, storage_file)
+        save_cookies_to_storage(jar, storage_file, original_snapshot=snapshot)
 
         on_disk = json.loads(storage_file.read_text())
         sid_entry = next(c for c in on_disk["cookies"] if c["name"] == "SID")
@@ -725,7 +727,7 @@ class TestCookieAttributePreservation:
         storage_file.write_text(json.dumps(self._attr_storage_state()))
 
         jar = build_httpx_cookies_from_storage(storage_file)
-        save_cookies_to_storage(jar, storage_file)
+        save_cookies_to_storage(jar, storage_file, original_snapshot=snapshot_cookie_jar(jar))
 
         reloaded = build_httpx_cookies_from_storage(storage_file)
         sid = self._find_cookie(reloaded, "SID", ".google.com")
@@ -742,10 +744,11 @@ class TestCookieAttributePreservation:
         gaps = self._find_cookie(jar, "__Host-GAPS", "accounts.google.com")
         assert gaps.expires is None
 
+        snapshot = snapshot_cookie_jar(jar)
         for cookie in jar.jar:
             if cookie.name == "__Host-GAPS":
                 cookie.value = "rotated-gaps"
-        save_cookies_to_storage(jar, storage_file)
+        save_cookies_to_storage(jar, storage_file, original_snapshot=snapshot)
 
         on_disk = json.loads(storage_file.read_text())
         gaps_entry = next(c for c in on_disk["cookies"] if c["name"] == "__Host-GAPS")
@@ -1041,10 +1044,11 @@ class TestFetchTokens:
         )
 
         jar = httpx.Cookies()
+        empty_snapshot = snapshot_cookie_jar(jar)
         jar.set("SID", "sid", domain=".google.com")
         jar.set("ACCOUNT_REFRESH", "fresh", domain=".accounts.google.com")
 
-        save_cookies_to_storage(jar, storage_file)
+        save_cookies_to_storage(jar, storage_file, original_snapshot=empty_snapshot)
 
         storage_state = json.loads(storage_file.read_text())
         assert (
@@ -1062,7 +1066,14 @@ class TestFetchTokens:
             json.dumps(
                 {
                     "cookies": [
-                        {"name": "SID", "value": "old", "domain": ".google.com"},
+                        {
+                            "name": "SID",
+                            "value": "old",
+                            "domain": ".google.com",
+                            "path": "/",
+                            "httpOnly": True,
+                            "secure": False,
+                        },
                         {
                             "name": "__Secure-1PSIDTS",
                             "value": "test_1psidts",
@@ -1075,9 +1086,11 @@ class TestFetchTokens:
         storage_file.chmod(0o600)
 
         jar = httpx.Cookies()
+        jar.set("SID", "old", domain=".google.com")
+        snapshot = snapshot_cookie_jar(jar)
         jar.set("SID", "new", domain=".google.com")
 
-        save_cookies_to_storage(jar, storage_file)
+        save_cookies_to_storage(jar, storage_file, original_snapshot=snapshot)
 
         assert storage_file.stat().st_mode & 0o777 == 0o600
         storage_state = json.loads(storage_file.read_text())

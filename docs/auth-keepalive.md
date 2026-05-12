@@ -401,33 +401,42 @@ reading `auth.py` against the lifecycle of `NotebookLMClient` /
 
 #### 3.4.1 Stale in-memory clobbers fresh disk (the "few-hours" pattern)
 
-The most likely culprit when rotation seems to silently fail.
-`save_cookies_to_storage` (`auth.py:1003–1036`) merges the in-memory
-jar onto disk using a **value-difference rule**: for each cookie on
-disk, if the in-memory variant has a different value, write the
-in-memory value. There is no generation counter, no mtime comparison,
-and no dirty flag.
+> **Resolved in #361.** ``ClientCore`` now captures an open-time
+> ``CookieSnapshotKey -> CookieSnapshotValue`` snapshot of its jar; ``save_cookies_to_storage``
+> accepts an ``original_snapshot=...`` kwarg and, when provided, writes only
+> the deltas (cookies whose persisted tuple differs from the snapshot) plus deletions
+> (cookies present in the snapshot but absent from the jar) — both arms
+> CAS-guarded against the current on-disk cookie value so a sibling-process
+> value write on the same key is never clobbered. Cookies the in-process code never
+> touched are left to whatever a sibling process may have written, so the
+> stale-overwrite-fresh race below cannot fire. The
+> ``original_snapshot=None`` form remains as a public-API back-compat shim
+> but emits a ``DeprecationWarning``; every in-tree caller passes a
+> snapshot. See ``tests/unit/test_auth_cookie_save_race.py`` for the
+> canonical timeline test plus value-update CAS and refresh-cmd
+> re-snapshot coverage.
 
-Failure timeline:
+The original failure timeline (historical — the resolution box above
+describes the in-tree fix):
 
 | t | Process A (long-lived, `keepalive=None`) | Process B (CLI invocation) | Disk state |
 |---|---|---|---|
 | 0 | `from_storage()` → reads `*PSIDTS=OLD` | — | `OLD` |
 | +5 m | working (batchexecute traffic only; never touches identity surface) | `from_storage()` rotates → `*PSIDTS=NEW` → saves under flock | `NEW` |
-| +10 m | `close()` → save runs under flock → reads disk (`NEW`) → A's in-memory (`OLD`) differs → **A writes `OLD`** | done | **`OLD` (clobbered)** |
+| +10 m | `close()` → save runs under flock → reads disk (`NEW`) → A's in-memory (`OLD`) differs → **A writes `OLD`** (pre-#361 only) | done | **`OLD` (clobbered)** |
 | +60 m+ | next request to `notebooklm.google.com` fails — rotation never effectively landed | | |
 
 The cross-process flock added in
 [#344](https://github.com/teng-lin/notebooklm-py/pull/344) prevents
-interleaved writes but not stale-overwrites-fresh.
+interleaved writes but not stale-overwrites-fresh. #361 added the
+snapshot/delta machinery on top to close the remaining gap.
 
 **Defensive comparison across the ecosystem.** This codebase is, as far
-as a survey can establish, the *most defensive* OSS implementation —
-and even we have this gap. Peers fare worse:
+as a survey can establish, the *most defensive* OSS implementation:
 
 | Project | Atomic temp-replace | Flock | Per-cookie merge | Stale-overwrite-fresh |
 |---|---|---|---|---|
-| `notebooklm-py` (us) | ✅ | ✅ (post-#344) | ✅ | ❌ (this section) |
+| `notebooklm-py` (us) | ✅ | ✅ (post-#344) | ✅ path-aware snapshot/delta CAS (post-#361) | ✅ closed |
 | HanaokaYuzu/Gemini-API | ❌ | ❌ | ❌ (full-jar overwrite) | ❌ |
 | yt-dlp ([cookies.py#L1333-L1352](https://github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/cookies.py#L1333-L1352)) | ❌ (`f.truncate(0)` then write) | ❌ | ❌ (full-jar overwrite) | ❌ |
 | Bard-API, ytmusicapi, gpsoauth, browser_cookie3, rookiepy | n/a (read-only) | n/a | n/a | n/a |
@@ -438,21 +447,24 @@ browser per invocation, no long-lived process mutating shared state —
 so it gets away with full-overwrite-no-flock-no-temp-replace. Our
 threat model (long-lived clients + cron-driven `auth refresh` +
 parallel CLI invocations all writing the same `storage_state.json`)
-genuinely needs the defenses we have, plus the §3.4.1 gap closed. The
-peer-ecosystem state of the art is "last writer wins, hope for the
-best."
+genuinely needs the defenses we have. The peer-ecosystem state of the
+art is "last writer wins, hope for the best."
 
-Possible fixes (not yet implemented):
+Fix shipped in #361 (write-only-deltas + dirty-flag against open-time
+snapshot, with value-CAS guards against the live on-disk value on both
+write and deletion). Attribute-only refreshes are still detected and
+persisted as deltas, but attribute-only sibling drift does not block later
+value rotations; the stale-overwrite hazard is about cookie values. The
+two alternatives considered and rejected:
 
-- **Re-read disk after flock acquisition**, compare each in-memory
-  cookie against the value loaded at `open()` time; only overwrite
-  cookies the in-process code actually changed (dirty-flag pattern).
-- **Generation counter** stamped on every cookie write — refuse to
-  downgrade.
-- **Write-only-deltas**: persist only cookies whose in-memory value
-  differs from open-time snapshot; leave the rest to disk.
+- **Generation counter** stamped on every cookie write — would require
+  every external writer to opt in to the new format and breaks
+  compatibility with Playwright's `storage_state.json` schema.
+- **Full bidirectional sync** — overkill for a session-token store;
+  the snapshot/delta CAS shape converges to the same correctness without
+  a schema change.
 
-Mitigations available today:
+Mitigations available today (still useful even with the fix in place):
 
 - Pass `keepalive=N` to long-lived `NotebookLMClient` instances so
   rotation actually fires in-process (in-memory stays fresh, save is
@@ -462,6 +474,17 @@ Mitigations available today:
   `storage_state.json`.
 
 #### 3.4.2 The `(name, domain)` collapse — `path` ignored
+
+> **Resolved in #361 (side effect).** The snapshot/delta path now uses a
+> path-aware ``CookieSnapshotKey(name, domain, path)`` NamedTuple, and
+> ``build_httpx_cookies_from_storage`` loads all path variants into the live
+> jar. Two storage entries with the same ``(name, domain)`` but different paths
+> are distinct keys and survive a load → save round trip in the live jar/save
+> path. The legacy ``(name, domain)`` maps listed below (``AuthTokens.cookies``,
+> ``AuthTokens.cookie_header``, ``_cookie_map_from_jar``,
+> ``extract_cookies_with_domains``, etc.) are intentionally still lossy because
+> their public return type cannot represent path; they are compatibility
+> surfaces, not the persistence-merge hot path that fired §3.4.1.
 
 Multiple paths in `auth.py` key cookies by `(name, domain)` and drop
 `path`:
@@ -660,14 +683,18 @@ Before assuming Google has changed anything:
    `NOTEBOOKLM_LOG_LEVEL=DEBUG` and look for "Keepalive RotateCookies
    skipped: storage refreshed before flock acquired" — that means the
    guards are working. If you see fresh saves immediately followed by
-   sibling saves with stale values, you're hitting §3.4.1.
+   sibling saves with stale values, you're likely on the legacy
+   `original_snapshot=None` save path or a pre-#361 build.
 3. **Check storage_state.json `mtime` cadence** — should be ≤ a few
    minutes after each active session if rotation is landing. Hours-old
    mtime means rotation isn't sticking.
 4. **Diff the cookie set across two invocations**. Cookies appearing
-   in one run and missing in the next now point primarily at path
-   collapse (§3.4.2); the §3.4.3 whitelist-asymmetry shape was closed
-   by [#360](https://github.com/teng-lin/notebooklm-py/issues/360).
+   in one run and missing in the next: the §3.4.2 path-collapse and
+   §3.4.3 whitelist-asymmetry shapes were closed by
+   [#361](https://github.com/teng-lin/notebooklm-py/pull/363) and
+   [#360](https://github.com/teng-lin/notebooklm-py/pull/362)
+   respectively. New cookie-set drift is more likely to point at
+   §3.4.7 round-trip attribute erosion.
 5. **Only after the above all check out**, investigate Google-side
    causes (risk-scoring, Workspace policy, DBSC).
 

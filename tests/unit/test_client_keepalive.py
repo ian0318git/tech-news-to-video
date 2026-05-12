@@ -242,7 +242,7 @@ class TestKeepalivePersistenceFailure:
 
         save_calls = []
 
-        def boom(cookies, path):
+        def boom(cookies, path, **kwargs):
             save_calls.append(path)
             raise OSError("simulated disk full")
 
@@ -379,7 +379,7 @@ class TestKeepaliveExplicitStoragePath:
 
         save_calls: list[tuple[object, object]] = []
 
-        def spy(cookies, path):
+        def spy(cookies, path, **kwargs):
             save_calls.append((cookies, path))
 
         monkeypatch.setattr("notebooklm._core.save_cookies_to_storage", spy)
@@ -460,10 +460,19 @@ class TestSaveCookiesUnification:
         core = ClientCore(auth)
 
         lock_held_during_save: list[bool] = []
+        call_kwargs: list[dict] = []
 
-        def spy(jar, path):
-            """Record whether ``_save_lock`` is held at the moment of the disk write."""
+        def spy(jar, path, **kwargs):
+            """Record lock state and the kwargs.
+
+            Capturing ``kwargs`` here is the regression guard for the §3.4.1
+            fix: if ``ClientCore.save_cookies`` ever stops threading
+            ``original_snapshot=`` through, the assertion below catches it
+            before production silently reverts to legacy merge.
+            """
             lock_held_during_save.append(core._save_lock.locked())
+            call_kwargs.append(kwargs)
+            return True
 
         monkeypatch.setattr("notebooklm._core.save_cookies_to_storage", spy)
 
@@ -472,6 +481,10 @@ class TestSaveCookiesUnification:
         assert lock_held_during_save == [True], (
             "save_cookies must hold _save_lock for the duration of "
             "save_cookies_to_storage so newer state always wins"
+        )
+        assert len(call_kwargs) == 1 and "original_snapshot" in call_kwargs[0], (
+            "save_cookies must forward original_snapshot= to save_cookies_to_storage "
+            "(dropping the kwarg would silently revert to legacy full-merge)"
         )
 
     @pytest.mark.asyncio
@@ -519,10 +532,19 @@ class TestSaveCookiesUnification:
         client = NotebookLMClient(auth)
 
         save_calls: list[bool] = []
+        snapshot_kwarg_present: list[bool] = []
 
-        def spy(jar, path):
-            """Record whether ``_save_lock`` is held when refresh_auth's save fires."""
+        def spy(jar, path, **kwargs):
+            """Record whether ``_save_lock`` is held when refresh_auth's save fires
+            and whether ``original_snapshot=`` was forwarded.
+
+            The snapshot-kwarg check is the §3.4.1 regression guard: refresh_auth
+            must route through the snapshot/delta path, never the legacy
+            full-merge path.
+            """
             save_calls.append(client._core._save_lock.locked())
+            snapshot_kwarg_present.append("original_snapshot" in kwargs)
+            return True
 
         monkeypatch.setattr("notebooklm._core.save_cookies_to_storage", spy)
 
@@ -534,6 +556,11 @@ class TestSaveCookiesUnification:
         assert all(save_calls), (
             "Every save fired during refresh_auth + close must be under the "
             f"in-process lock; got {save_calls}"
+        )
+        assert all(snapshot_kwarg_present), (
+            "Every save fired during refresh_auth + close must forward "
+            "original_snapshot= so the snapshot/delta path is taken, never "
+            "the legacy full-merge fallback"
         )
 
 
@@ -569,10 +596,13 @@ class TestCrossProcessFileLock:
 
         monkeypatch.setattr("fcntl.flock", spy_flock)
 
+        from notebooklm.auth import snapshot_cookie_jar
+
         jar = httpx.Cookies()
+        empty_snapshot = snapshot_cookie_jar(jar)
         jar.set("SID", "new", domain=".google.com", path="/")
 
-        save_cookies_to_storage(jar, storage_path)
+        save_cookies_to_storage(jar, storage_path, original_snapshot=empty_snapshot)
 
         assert (
             fcntl.LOCK_EX in flock_calls
@@ -584,7 +614,7 @@ class TestCrossProcessFileLock:
     def test_save_cookies_to_storage_creates_lock_sentinel(self, tmp_path):
         """The lock file is a sibling of the storage file with a `.lock` suffix
         so the storage file itself is free for the atomic temp-rename."""
-        from notebooklm.auth import save_cookies_to_storage
+        from notebooklm.auth import save_cookies_to_storage, snapshot_cookie_jar
 
         storage_path = tmp_path / "storage_state.json"
         storage_path.write_text(
@@ -592,9 +622,10 @@ class TestCrossProcessFileLock:
         )
 
         jar = httpx.Cookies()
+        empty_snapshot = snapshot_cookie_jar(jar)
         jar.set("SID", "new", domain=".google.com", path="/")
 
-        save_cookies_to_storage(jar, storage_path)
+        save_cookies_to_storage(jar, storage_path, original_snapshot=empty_snapshot)
 
         lock_path = storage_path.with_name(f".{storage_path.name}.lock")
         assert lock_path.exists(), f"Expected lock sentinel at {lock_path}"

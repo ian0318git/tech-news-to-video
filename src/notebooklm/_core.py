@@ -13,7 +13,16 @@ from urllib.parse import urlencode
 
 import httpx
 
-from .auth import AuthTokens, _rotate_cookies, build_cookie_jar, save_cookies_to_storage
+from .auth import (
+    AuthTokens,
+    CookieSaveResult,
+    CookieSnapshot,
+    _rotate_cookies,
+    advance_cookie_snapshot_after_save,
+    build_cookie_jar,
+    save_cookies_to_storage,
+    snapshot_cookie_jar,
+)
 from .rpc import (
     BATCHEXECUTE_URL,
     AuthError,
@@ -179,6 +188,12 @@ class ClientCore:
         # save kicked off before close() can finish *after* close()'s own save
         # and clobber it (an older snapshot overwriting the freshest state).
         self._save_lock = threading.Lock()
+        # Open-time cookie snapshot — the input to the dirty-flag/delta merge
+        # in save_cookies_to_storage. Captured in ``open()`` and forwarded
+        # through every ``save_cookies`` call so a stale in-memory jar can't
+        # clobber sibling-process writes (docs/auth-keepalive.md §3.4.1).
+        # Per-instance, never module-global.
+        self._loaded_cookie_snapshot: CookieSnapshot | None = None
 
     async def open(self) -> None:
         """Open the HTTP client connection.
@@ -211,6 +226,18 @@ class ClientCore:
                 follow_redirects=True,
             )
 
+            # Capture the open-time snapshot AFTER the AsyncClient is built
+            # (httpx normalizes domains on ingest) but BEFORE any rotation
+            # could possibly fire. When AuthTokens carries a snapshot from a
+            # failed pre-client save, keep it so the unpersisted delta can be
+            # retried instead of treating the already-mutated jar as clean.
+            self._loaded_cookie_snapshot = (
+                dict(self.auth.cookie_snapshot)
+                if self.auth.cookie_snapshot is not None
+                else snapshot_cookie_jar(self._http_client.cookies)
+            )
+            self.auth.cookie_snapshot = self._loaded_cookie_snapshot
+
             # Spawn the keepalive task once the client is ready
             if self._keepalive_interval is not None:
                 self._keepalive_task = asyncio.create_task(
@@ -231,6 +258,12 @@ class ClientCore:
            serialize through this lock so the newer caller always wins.
         3. **Off-load** the actual save to a worker thread via
            ``asyncio.to_thread`` so disk I/O never stalls the event loop.
+        4. **Refresh the baseline snapshot** on success so that a subsequent
+           save in this client computes deltas against what we just
+           persisted — not against the open-time snapshot. Without this
+           step the same delta would re-apply on every save, silently
+           clobbering any sibling-process write that landed between two of
+           our own saves (the keepalive + close common case).
 
         Cross-process serialization is handled at a different layer — the
         OS-level file lock inside :func:`save_cookies_to_storage` itself.
@@ -246,12 +279,50 @@ class ClientCore:
         if effective_path is None:
             return
 
-        snapshot = httpx.Cookies(jar)
+        jar_copy = httpx.Cookies(jar)
+        # Computed on the loop thread off ``jar_copy`` so the worker can refresh
+        # the baseline without re-snapshotting a jar that may have mutated in
+        # the meantime (next keepalive poke, in-flight RPC redirect).
+        post_save_snapshot = snapshot_cookie_jar(jar_copy)
 
-        def _save(s=snapshot, p=effective_path, lock=self._save_lock) -> None:
+        def _save(
+            s: httpx.Cookies = jar_copy,
+            p: Path = effective_path,
+            lock: threading.Lock = self._save_lock,
+            post: CookieSnapshot = post_save_snapshot,
+            client: ClientCore = self,
+        ) -> None:
             """Worker-thread save: hold the in-process lock around the disk write."""
             with lock:
-                save_cookies_to_storage(s, p)
+                # Read the baseline INSIDE the lock so a prior save that
+                # completed while we were queued advances ours too. Capturing
+                # this on the loop thread would let a concurrent save observe
+                # a stale baseline, compute deltas against pre-prior-save
+                # state, hit CAS rejection on every key, and silently lose
+                # the local rotation.
+                snap = client._loaded_cookie_snapshot
+                # Advance successful keys while preserving CAS-rejected ones.
+                # A silent I/O error leaves the baseline untouched; an
+                # exception does too. See class-level
+                # ``_loaded_cookie_snapshot``.
+                result = save_cookies_to_storage(
+                    s,
+                    p,
+                    original_snapshot=snap,
+                    return_result=True,
+                )
+                if isinstance(result, CookieSaveResult):
+                    if result.ok:
+                        client._loaded_cookie_snapshot = post
+                    elif result.cas_rejected_keys:
+                        client._loaded_cookie_snapshot = advance_cookie_snapshot_after_save(
+                            snap, post, result.cas_rejected_keys
+                        )
+                    if client._loaded_cookie_snapshot is not None:
+                        client.auth.cookie_snapshot = client._loaded_cookie_snapshot
+                elif result:
+                    client._loaded_cookie_snapshot = post
+                    client.auth.cookie_snapshot = post
 
         await asyncio.to_thread(_save)
 
