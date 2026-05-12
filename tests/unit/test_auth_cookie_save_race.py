@@ -1475,22 +1475,45 @@ class TestSaveCookiesSeesLatestBaselineUnderContention:
 
         monkeypatch.setattr("notebooklm._core.save_cookies_to_storage", capture_save)
 
+        # Explicit barrier: each coroutine records its submission and the
+        # second arrival sets ``both_submitted``; both then ``await`` the
+        # event before running ``func``. Because asyncio coroutines on one
+        # loop don't preempt, the ``append``/``set`` pair is already atomic
+        # from each coroutine's POV — no extra lock needed. The barrier is
+        # an ``asyncio.Event`` (suspending wait) rather than ``threading.Event``
+        # (busy-poll) so the test doesn't depend on the loop preferring to
+        # resume a particular task. Once ``both_submitted`` is set, both
+        # coroutines proceed regardless of resume order — free-threaded
+        # CPython, uvloop, or any future loop implementation must honour
+        # this barrier.
         submitted: list[tuple] = []
+        both_submitted = asyncio.Event()
 
         async def fake_to_thread(func, /, *args, **kwargs):
             submitted.append((func, args, kwargs))
-            while len(submitted) < 2:
-                await asyncio.sleep(0)
+            if len(submitted) == 2:
+                both_submitted.set()
+            await both_submitted.wait()
             return func(*args, **kwargs)
 
         monkeypatch.setattr("notebooklm._core.asyncio.to_thread", fake_to_thread)
 
-        # Two jars representing distinct post-rotation states. First save
-        # rotates *PSIDTS to v1; second to v2. Built with fresh jar.set()
-        # calls so the Cookie objects are NOT aliased between jars (httpx's
-        # ``Cookies(other)`` copy-constructor re-uses Cookie object refs).
-        # Submitted via gather so both save_cookies() coroutines reach their
-        # asyncio.to_thread before either worker advances the baseline.
+        # Two jars representing distinct post-rotation states. The save that
+        # acquires ``_save_lock`` first rotates *PSIDTS away from v0; the
+        # second must then observe that rotation as its baseline. Built with
+        # fresh jar.set() calls so the Cookie objects are NOT aliased between
+        # jars (httpx's ``Cookies(other)`` copy-constructor re-uses Cookie
+        # object refs). Submitted via gather so both save_cookies()
+        # coroutines reach their asyncio.to_thread before either worker
+        # advances the baseline.
+        #
+        # Note on naming: ``jar_a`` / ``jar_b`` are intentionally
+        # call-order-agnostic. After the barrier releases, either jar may end
+        # up as ``captured_calls[0]`` depending on which coroutine the loop
+        # resumes first — that ordering is precisely what we DON'T want this
+        # test to depend on. The assertion below uses positional names
+        # (first/second by worker execution order, not by gather argument
+        # order) to stay robust across schedulers.
         assert core._http_client is not None
 
         def _fresh_jar(psidts_value: str) -> httpx.Cookies:
@@ -1499,13 +1522,13 @@ class TestSaveCookiesSeesLatestBaselineUnderContention:
             j.set("__Secure-1PSIDTS", psidts_value, domain=".google.com", path="/")
             return j
 
-        jar_v1 = _fresh_jar("v1")
-        jar_v2 = _fresh_jar("v2")
+        jar_a = _fresh_jar("v1")
+        jar_b = _fresh_jar("v2")
 
         try:
             await asyncio.gather(
-                core.save_cookies(jar_v1),
-                core.save_cookies(jar_v2),
+                core.save_cookies(jar_a),
+                core.save_cookies(jar_b),
             )
         finally:
             await core.close()
@@ -1521,9 +1544,10 @@ class TestSaveCookiesSeesLatestBaselineUnderContention:
         assert first_baseline == "v0" and second_baseline == first_jar, (
             "When two saves serialize through _save_lock, the second worker "
             "must observe the baseline advanced by the first. Observed "
-            f"(jar, baseline) pairs for *PSIDTS: {captured_pairs}. If both baselines "
-            "are v0, the snapshot was captured on the loop thread before "
-            "the lock — a stale-baseline race risking lost updates."
+            f"(jar, baseline) pairs for *PSIDTS: {captured_pairs}. "
+            "If both baselines are v0, the snapshot was captured on the "
+            "loop thread before the lock — a stale-baseline race risking "
+            "lost updates."
         )
 
 
