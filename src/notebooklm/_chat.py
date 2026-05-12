@@ -617,7 +617,10 @@ class ChatAPI:
         except ChatError:
             raise
         except Exception:
-            pass  # Ignore parse failures; let normal empty-answer handling proceed
+            logger.debug(
+                "Could not parse chat error payload; continuing with empty-answer handling",
+                exc_info=True,
+            )
 
     def _parse_citations(self, first: list) -> list[ChatReference]:
         """Parse citation details from response structure.
