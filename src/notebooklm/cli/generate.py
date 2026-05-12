@@ -441,6 +441,7 @@ def generate_audio(
     type=click.Choice(
         [
             "auto",
+            "custom",
             "classic",
             "whiteboard",
             "kawaii",
@@ -453,6 +454,7 @@ def generate_audio(
     ),
     default="auto",
 )
+@click.option("--style-prompt", default=None, help="Custom visual style prompt")
 @click.option(
     "--language",
     default=None,
@@ -469,6 +471,7 @@ def generate_video(
     notebook_id,
     video_format,
     style,
+    style_prompt,
     language,
     source_ids,
     wait,
@@ -488,6 +491,7 @@ def generate_video(
     Example:
       notebooklm generate video "a funny explainer for kids age 5"
       notebooklm generate video "professional presentation" --style classic
+      notebooklm generate video --style custom --style-prompt "hand-drawn diagrams"
       notebooklm generate video --format cinematic "documentary overview"
       notebooklm generate video -s src_001 "from specific source"
     """
@@ -503,6 +507,7 @@ def generate_video(
     }
     style_map = {
         "auto": VideoStyle.AUTO_SELECT,
+        "custom": VideoStyle.CUSTOM,
         "classic": VideoStyle.CLASSIC,
         "whiteboard": VideoStyle.WHITEBOARD,
         "kawaii": VideoStyle.KAWAII,
@@ -513,6 +518,13 @@ def generate_video(
         "paper-craft": VideoStyle.PAPER_CRAFT,
     }
     is_cinematic = video_format == "cinematic"
+    normalized_style_prompt = style_prompt.strip() if style_prompt is not None else None
+    if is_cinematic and normalized_style_prompt:
+        raise click.UsageError("--style-prompt cannot be used with cinematic video")
+    if not is_cinematic and style == "custom" and not normalized_style_prompt:
+        raise click.UsageError("--style custom requires --style-prompt")
+    if not is_cinematic and normalized_style_prompt and style != "custom":
+        raise click.UsageError("--style-prompt requires --style custom")
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
@@ -534,6 +546,7 @@ def generate_video(
                     instructions=description or None,
                     video_format=format_map[video_format],
                     video_style=style_map[style],
+                    style_prompt=normalized_style_prompt,
                 )
 
             timeout = 1800.0 if is_cinematic else 600.0

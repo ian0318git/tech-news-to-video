@@ -17,7 +17,8 @@ import pytest
 from notebooklm._artifacts import ArtifactsAPI
 from notebooklm._chat import ChatAPI
 from notebooklm.auth import AuthTokens
-from notebooklm.rpc import InfographicStyle
+from notebooklm.exceptions import ValidationError
+from notebooklm.rpc import InfographicStyle, VideoFormat, VideoStyle
 
 
 @pytest.fixture
@@ -280,6 +281,89 @@ class TestArtifactsSourceSelection:
 
         assert source_ids_triple == [[["src_a"]], [["src_b"]]]
         assert source_ids_double == [["src_a"], ["src_b"]]
+
+    @pytest.mark.asyncio
+    async def test_generate_video_custom_style_prompt_encoding(self, mock_core, mock_notes_api):
+        """Test custom video style prompt is encoded after the style code."""
+        api = ArtifactsAPI(mock_core, mock_notes_api)
+        mock_core.rpc_call.return_value = [["artifact_456", "Video", 3, None, 1]]
+
+        await api.generate_video(
+            notebook_id="nb_123",
+            source_ids=["src_a"],
+            video_style=VideoStyle.CUSTOM,
+            style_prompt="  Use hand-drawn diagrams  ",
+        )
+
+        params = mock_core.rpc_call.call_args.args[1]
+        video_config = params[2][8][2]
+        assert video_config[5] == VideoStyle.CUSTOM.value
+        assert video_config[6] == "Use hand-drawn diagrams"
+
+    @pytest.mark.asyncio
+    async def test_generate_video_custom_style_requires_prompt(self, mock_core, mock_notes_api):
+        api = ArtifactsAPI(mock_core, mock_notes_api)
+
+        with pytest.raises(ValidationError, match="style_prompt is required"):
+            await api.generate_video(
+                notebook_id="nb_123",
+                source_ids=["src_a"],
+                video_style=VideoStyle.CUSTOM,
+            )
+
+    @pytest.mark.asyncio
+    async def test_generate_video_custom_style_rejects_empty_prompt(
+        self, mock_core, mock_notes_api
+    ):
+        api = ArtifactsAPI(mock_core, mock_notes_api)
+
+        with pytest.raises(ValidationError, match="style_prompt is required"):
+            await api.generate_video(
+                notebook_id="nb_123",
+                source_ids=["src_a"],
+                video_style=VideoStyle.CUSTOM,
+                style_prompt="",
+            )
+
+    @pytest.mark.asyncio
+    async def test_generate_video_custom_style_rejects_blank_prompt(
+        self, mock_core, mock_notes_api
+    ):
+        api = ArtifactsAPI(mock_core, mock_notes_api)
+
+        with pytest.raises(ValidationError, match="style_prompt is required"):
+            await api.generate_video(
+                notebook_id="nb_123",
+                source_ids=["src_a"],
+                video_style=VideoStyle.CUSTOM,
+                style_prompt="   ",
+            )
+
+    @pytest.mark.asyncio
+    async def test_generate_video_style_prompt_requires_custom_style(
+        self, mock_core, mock_notes_api
+    ):
+        api = ArtifactsAPI(mock_core, mock_notes_api)
+
+        with pytest.raises(ValidationError, match="style_prompt requires"):
+            await api.generate_video(
+                notebook_id="nb_123",
+                source_ids=["src_a"],
+                video_style=VideoStyle.ANIME,
+                style_prompt="Use hand-drawn diagrams",
+            )
+
+    @pytest.mark.asyncio
+    async def test_generate_video_cinematic_rejects_style_prompt(self, mock_core, mock_notes_api):
+        api = ArtifactsAPI(mock_core, mock_notes_api)
+
+        with pytest.raises(ValidationError, match="cinematic"):
+            await api.generate_video(
+                notebook_id="nb_123",
+                source_ids=["src_a"],
+                video_format=VideoFormat.CINEMATIC,
+                style_prompt="Use hand-drawn diagrams",
+            )
 
     @pytest.mark.asyncio
     async def test_generate_report_source_encoding(self, mock_core, mock_notes_api):

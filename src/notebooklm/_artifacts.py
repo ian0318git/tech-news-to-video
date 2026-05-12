@@ -427,6 +427,7 @@ class ArtifactsAPI:
         instructions: str | None = None,
         video_format: VideoFormat | None = None,
         video_style: VideoStyle | None = None,
+        style_prompt: str | None = None,
     ) -> GenerationStatus:
         """Generate a Video Overview.
 
@@ -438,12 +439,22 @@ class ArtifactsAPI:
             instructions: Custom instructions for video generation.
             video_format: EXPLAINER or BRIEF.
             video_style: AUTO_SELECT, CLASSIC, WHITEBOARD, etc.
+            style_prompt: Custom visual style instructions. Requires
+                ``video_style=VideoStyle.CUSTOM``.
 
         Returns:
             GenerationStatus with task_id for polling.
         """
         if language is None:
             language = get_default_language()
+        normalized_style_prompt = style_prompt.strip() if style_prompt is not None else None
+        if video_format == VideoFormat.CINEMATIC and normalized_style_prompt:
+            raise ValidationError("style_prompt is not supported for cinematic videos")
+        if video_style == VideoStyle.CUSTOM and not normalized_style_prompt:
+            raise ValidationError("style_prompt is required when video_style is CUSTOM")
+        if normalized_style_prompt and video_style != VideoStyle.CUSTOM:
+            raise ValidationError("style_prompt requires video_style=VideoStyle.CUSTOM")
+
         if source_ids is None:
             source_ids = await self._core.get_source_ids(notebook_id)
 
@@ -452,6 +463,17 @@ class ArtifactsAPI:
 
         format_code = video_format.value if video_format else None
         style_code = video_style.value if video_style else None
+
+        video_config = [
+            source_ids_double,
+            language,
+            instructions,
+            None,
+            format_code,
+            style_code,
+        ]
+        if normalized_style_prompt:
+            video_config.append(normalized_style_prompt)
 
         params = [
             [2],
@@ -468,14 +490,7 @@ class ArtifactsAPI:
                 [
                     None,
                     None,
-                    [
-                        source_ids_double,
-                        language,
-                        instructions,
-                        None,
-                        format_code,
-                        style_code,
-                    ],
+                    video_config,
                 ],
             ],
         ]

@@ -169,6 +169,89 @@ class TestGenerateVideo:
 
             assert result.exit_code == 0
 
+    def test_generate_video_with_custom_style_prompt(self, runner, mock_auth):
+        with patch_client_for_module("generate") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.artifacts.generate_video = AsyncMock(
+                return_value={"artifact_id": "video_123", "status": "processing"}
+            )
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli,
+                    [
+                        "generate",
+                        "video",
+                        "--style",
+                        "custom",
+                        "--style-prompt",
+                        "  Use hand-drawn diagrams  ",
+                        "-n",
+                        "nb_123",
+                    ],
+                )
+
+            assert result.exit_code == 0
+            mock_client.artifacts.generate_video.assert_awaited_once()
+            kwargs = mock_client.artifacts.generate_video.await_args.kwargs
+            assert kwargs["video_style"].name == "CUSTOM"
+            assert kwargs["style_prompt"] == "Use hand-drawn diagrams"
+
+    def test_generate_video_custom_style_requires_prompt(
+        self, runner, mock_auth, mock_fetch_tokens
+    ):
+        result = runner.invoke(
+            cli,
+            ["generate", "video", "--style", "custom", "-n", "nb_123"],
+        )
+
+        assert result.exit_code == 1
+        assert "--style custom requires --style-prompt" in result.output
+
+    def test_generate_video_custom_style_rejects_blank_prompt(
+        self, runner, mock_auth, mock_fetch_tokens
+    ):
+        result = runner.invoke(
+            cli,
+            [
+                "generate",
+                "video",
+                "--style",
+                "custom",
+                "--style-prompt",
+                "   ",
+                "-n",
+                "nb_123",
+            ],
+        )
+
+        assert result.exit_code == 1
+        assert "--style custom requires --style-prompt" in result.output
+
+    def test_generate_video_style_prompt_requires_custom_style(
+        self, runner, mock_auth, mock_fetch_tokens
+    ):
+        result = runner.invoke(
+            cli,
+            [
+                "generate",
+                "video",
+                "--style",
+                "anime",
+                "--style-prompt",
+                "Use hand-drawn diagrams",
+                "-n",
+                "nb_123",
+            ],
+        )
+
+        assert result.exit_code == 1
+        assert "--style-prompt requires --style custom" in result.output
+
 
 # =============================================================================
 # GENERATE CINEMATIC VIDEO TESTS
@@ -238,6 +321,24 @@ class TestGenerateCinematicVideo:
             assert result.exit_code == 0
             # Should call generate_cinematic_video (not generate_video) despite --style
             mock_client.artifacts.generate_cinematic_video.assert_called_once()
+
+    def test_generate_cinematic_video_rejects_style_prompt(
+        self, runner, mock_auth, mock_fetch_tokens
+    ):
+        result = runner.invoke(
+            cli,
+            [
+                "generate",
+                "cinematic-video",
+                "--style-prompt",
+                "Use hand-drawn diagrams",
+                "-n",
+                "nb_123",
+            ],
+        )
+
+        assert result.exit_code == 1
+        assert "--style-prompt cannot be used with cinematic video" in result.output
 
 
 # =============================================================================
