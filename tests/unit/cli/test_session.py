@@ -2975,6 +2975,11 @@ class TestLoginMultiAccount:
         assert result.exit_code != 0
         assert "browser-cookies" in result.output
 
+    def test_authuser_option_is_not_exposed(self, runner):
+        result = runner.invoke(cli, ["login", "--browser-cookies", "chrome", "--authuser", "1"])
+        assert result.exit_code != 0
+        assert "No such option: --authuser" in result.output
+
     def test_all_accounts_combined_with_account_rejected(self, runner):
         result = runner.invoke(
             cli,

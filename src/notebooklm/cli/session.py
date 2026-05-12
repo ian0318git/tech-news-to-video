@@ -225,7 +225,6 @@ def _login_browser_cookies_single(
     *,
     storage: str | None,
     account_email: str | None,
-    authuser: int | None,
     profile_name: str | None,
     active_profile: str | None,
 ) -> None:
@@ -241,7 +240,7 @@ def _login_browser_cookies_single(
     """
     explicit_storage = Path(storage) if storage else None
 
-    if account_email is None and authuser is None and profile_name is None:
+    if account_email is None and profile_name is None:
         # Path 1: existing behavior — extract default account into active profile.
         resolved_storage = explicit_storage or get_storage_path(profile=active_profile)
         _login_with_browser_cookies(resolved_storage, browser_cookies, active_profile)
@@ -250,7 +249,7 @@ def _login_browser_cookies_single(
     # Path 2: targeted extraction. We need the email to derive a profile name
     # when --profile-name is omitted.
     raw_cookies, accounts = _enumerate_browser_accounts(browser_cookies)
-    selected = _select_account(accounts, account_email=account_email, authuser=authuser)
+    selected = _select_account(accounts, account_email=account_email)
 
     target_profile = profile_name or email_to_profile_name(selected.email)
     if profile_name is not None:
@@ -336,13 +335,11 @@ def _select_account(
     accounts: list[Any],
     *,
     account_email: str | None,
-    authuser: int | None,
 ) -> Any:
     """Pick the requested account from a discovery result.
 
     Email is the user-facing selector because it is stable across browser
-    account reordering. ``authuser`` remains as a hidden compatibility escape
-    hatch for existing scripts.
+    account reordering. Without an email, select the browser's default account.
     """
     if account_email:
         requested = account_email.strip().casefold()
@@ -355,18 +352,7 @@ def _select_account(
             f"Available accounts: {available}"
         )
         raise SystemExit(1)
-    if authuser is None:
-        return next(a for a in accounts if a.is_default)
-    for account in accounts:
-        if account.authuser == authuser:
-            return account
-    available = ", ".join(a.email for a in accounts)
-    console.print(
-        "[red]Requested browser account index was not found among signed-in "
-        "accounts.[/red]\n"
-        f"Available accounts: {available}"
-    )
-    raise SystemExit(1)
+    return next(a for a in accounts if a.is_default)
 
 
 def _write_extracted_cookies(
@@ -983,13 +969,6 @@ def register_session_commands(cli):
         ),
     )
     @click.option(
-        "--authuser",
-        type=click.IntRange(min=0),
-        default=None,
-        hidden=True,
-        help=("Internal compatibility option. Prefer --account EMAIL."),
-    )
-    @click.option(
         "--all-accounts",
         "all_accounts",
         is_flag=True,
@@ -1023,7 +1002,6 @@ def register_session_commands(cli):
         browser,
         browser_cookies,
         account_email,
-        authuser,
         all_accounts,
         profile_name,
         fresh,
@@ -1051,25 +1029,14 @@ def register_session_commands(cli):
             raise SystemExit(1)
 
         if browser_cookies is None and (
-            account_email is not None
-            or authuser is not None
-            or all_accounts
-            or profile_name is not None
+            account_email is not None or all_accounts or profile_name is not None
         ):
             console.print(
                 "[red]Error: --account, --all-accounts, and --profile-name "
                 "require --browser-cookies.[/red]"
             )
             raise SystemExit(1)
-        if account_email is not None and authuser is not None:
-            console.print(
-                "[red]Error: --account cannot be combined with the legacy "
-                "account-index option.[/red]"
-            )
-            raise SystemExit(1)
-        if all_accounts and (
-            account_email is not None or authuser is not None or profile_name is not None
-        ):
+        if all_accounts and (account_email is not None or profile_name is not None):
             console.print(
                 "[red]Error: --all-accounts cannot be combined with "
                 "--account or --profile-name.[/red]"
@@ -1097,7 +1064,6 @@ def register_session_commands(cli):
                 browser_cookies,
                 storage=storage,
                 account_email=account_email,
-                authuser=authuser,
                 profile_name=profile_name,
                 active_profile=active_profile,
             )
