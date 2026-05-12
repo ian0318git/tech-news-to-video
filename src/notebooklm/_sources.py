@@ -4,6 +4,7 @@ import asyncio
 import builtins
 import logging
 import re
+from dataclasses import replace
 from pathlib import Path
 from time import monotonic
 from typing import Any
@@ -13,7 +14,7 @@ import httpx
 
 from ._core import ClientCore
 from ._url_utils import is_youtube_url
-from .exceptions import ValidationError
+from .exceptions import NetworkError, ValidationError
 from .rpc import UPLOAD_URL, RPCError, RPCMethod
 from .rpc.types import SourceStatus
 from .types import (
@@ -406,6 +407,8 @@ class SourcesAPI:
         mime_type: str | None = None,
         wait: bool = False,
         wait_timeout: float = 120.0,
+        *,
+        title: str | None = None,
     ) -> Source:
         """Add a file source to a notebook using resumable upload.
 
@@ -413,11 +416,20 @@ class SourcesAPI:
         1. Register source intent with RPC → get SOURCE_ID
         2. Start upload session with SOURCE_ID (get upload URL)
         3. Stream upload file content (memory-efficient for large files)
+        4. Optionally rename the source if a custom ``title`` was supplied
+           (the file-add RPC has no title slot, so a follow-up
+           ``UPDATE_SOURCE`` is the only way to set one).
 
         Args:
             notebook_id: The notebook ID.
             file_path: Path to the file to upload.
             mime_type: MIME type of the file (not used in current implementation).
+            title: Optional display title. When provided and different from the
+                source filename, a rename is issued after upload so the source
+                appears with this title in the UI and API responses. Leading and
+                trailing whitespace is stripped; empty titles are rejected. If
+                the post-upload rename fails, the upload is preserved, a warning
+                is logged, and the returned source keeps the filename title.
             wait: If True, wait for source to be ready before returning.
             wait_timeout: Maximum seconds to wait if wait=True (default: 120).
 
@@ -432,6 +444,11 @@ class SourcesAPI:
             - Word: application/vnd.openxmlformats-officedocument.wordprocessingml.document
         """
         logger.debug("Adding file source to notebook %s: %s", notebook_id, file_path)
+        if title is not None:
+            title = title.strip()
+            if not title:
+                raise ValidationError("Title cannot be empty or whitespace-only")
+
         file_path = Path(file_path).resolve()
 
         if not file_path.exists():
@@ -462,6 +479,26 @@ class SourcesAPI:
             title=filename,
             _type_code=None,  # Placeholder until processed
         )
+
+        # Step 4: Apply custom title if requested. The file-add RPC ignores any
+        # title hint, so a separate UPDATE_SOURCE call is the only way to honor
+        # the caller's intent.
+        if title is not None and title != filename:
+            try:
+                renamed = await self.rename(notebook_id, source_id, title)
+                # Use any metadata UPDATE_SOURCE returned, but force _type_code
+                # back to None because rename runs before file processing finishes.
+                source = replace(renamed, _type_code=None)
+            except (RPCError, NetworkError):
+                # Don't fail the whole upload if the rename fails — the file is
+                # already uploaded. Surface a warning so the caller can retry.
+                logger.warning(
+                    "Source %s uploaded but rename to %r failed; keeping default title %r",
+                    source_id,
+                    title,
+                    filename,
+                    exc_info=True,
+                )
 
         if wait:
             return await self.wait_until_ready(notebook_id, source.id, timeout=wait_timeout)
