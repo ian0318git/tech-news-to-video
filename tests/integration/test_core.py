@@ -78,7 +78,19 @@ class TestIsAuthError:
         assert is_auth_error(ServerError("500 error")) is False
 
     def test_returns_false_for_client_error(self):
+        # ClientError subclass is explicitly excluded (already mapped, no retry).
+        # Raw httpx 400 is treated as an auth error; see
+        # test_returns_true_for_400_http_status_error.
         assert is_auth_error(ClientError("400 bad request")) is False
+
+    def test_returns_true_for_400_http_status_error(self):
+        # NotebookLM returns 400 (not 401/403) when the CSRF token in the at=
+        # body param is stale. is_auth_error must include 400 so the layer-1
+        # refresh_auth retry path fires for stale CSRF.
+        mock_response = MagicMock()
+        mock_response.status_code = 400
+        error = httpx.HTTPStatusError("400", request=MagicMock(), response=mock_response)
+        assert is_auth_error(error) is True
 
     def test_returns_false_for_rpc_timeout_error(self):
         assert is_auth_error(RPCTimeoutError("timed out")) is False
@@ -170,8 +182,14 @@ class TestRPCCallHTTPErrors:
 
     @pytest.mark.asyncio
     async def test_client_error_400(self, auth_tokens):
+        # With the stale-CSRF fix, HTTP 400 is treated as an auth error and
+        # routed through _try_refresh_and_retry first. To exercise the raw
+        # 400 → ClientError mapping (back-compat for callers that don't opt
+        # in to auto-refresh), clear the refresh callback so is_auth_error's
+        # gate in rpc_call short-circuits and the status mapping runs.
         async with NotebookLMClient(auth_tokens) as client:
             core = client._core
+            core._refresh_callback = None
 
             mock_response = MagicMock()
             mock_response.status_code = 400

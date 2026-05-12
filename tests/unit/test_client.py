@@ -339,6 +339,19 @@ class TestIsAuthError:
         error = httpx.HTTPStatusError("Forbidden", request=request, response=response)
         assert is_auth_error(error) is True
 
+    def test_http_400_is_auth_error(self):
+        """HTTP 400 should be detected as auth error.
+
+        Google's batchexecute endpoint returns 400 (not 401/403) when the
+        CSRF token in the ``at=`` body param is stale. is_auth_error must
+        include 400 so the refresh_auth retry path fires for stale CSRF.
+        """
+
+        request = httpx.Request("POST", "https://example.com")
+        response = httpx.Response(400, request=request)
+        error = httpx.HTTPStatusError("Bad Request", request=request, response=response)
+        assert is_auth_error(error) is True
+
     def test_http_500_is_not_auth_error(self):
         """HTTP 500 should NOT be detected as auth error."""
 
@@ -714,3 +727,121 @@ class TestRpcCallAutoRetry:
         assert (
             refresh_count[0] == 1
         ), f"Refresh should be called exactly once, got {refresh_count[0]}"
+
+    @pytest.mark.asyncio
+    async def test_400_triggers_auth_refresh(self):
+        """HTTP 400 (stale CSRF) should trigger refresh + retry (closes #392).
+
+        NotebookLM returns 400 — not 401/403 — when the at= body param is
+        stale. The refresh_auth callback must fire and the retried call
+        must succeed.
+        """
+        auth = AuthTokens(
+            cookies={"SID": "test", "__Secure-1PSIDTS": "test_1psidts"},
+            csrf_token="csrf",
+            session_id="sid",
+        )
+
+        refresh_called = []
+
+        async def mock_refresh():
+            refresh_called.append(True)
+            return auth
+
+        core = ClientCore(auth, refresh_callback=mock_refresh, refresh_retry_delay=0)
+
+        call_count = [0]
+
+        async def mock_post(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                # First call fails with HTTP 400 (stale CSRF)
+                request = httpx.Request("POST", args[0])
+                response = httpx.Response(400, request=request)
+                raise httpx.HTTPStatusError("Bad Request", request=request, response=response)
+            # Second call (after refresh) succeeds
+            response = MagicMock()
+            response.text = ')]}\'\\n[["wrb.fr","wXbhsf",[["result"]]]]'
+            response.raise_for_status = MagicMock()
+            return response
+
+        core._http_client = MagicMock()
+        core._http_client.post = mock_post
+        core._http_client.headers = {"Cookie": "old"}
+
+        with patch("notebooklm._core.decode_response", return_value=["result"]):
+            result = await core.rpc_call(RPCMethod.LIST_NOTEBOOKS, [])
+
+        assert len(refresh_called) == 1, "refresh_callback should be called once on 400"
+        assert call_count[0] == 2, "RPC should be called twice (original + retry)"
+        assert result == ["result"]
+
+    @pytest.mark.asyncio
+    async def test_400_without_refresh_callback_raises_client_error(self):
+        """HTTP 400 with no refresh_callback must still map to ClientError.
+
+        Back-compat: callers that don't opt in to auto-refresh see the
+        existing 400 → ClientError behavior. The is_auth_error gate in
+        rpc_call requires both the auth match AND a refresh_callback.
+        """
+        auth = AuthTokens(
+            cookies={"SID": "test", "__Secure-1PSIDTS": "test_1psidts"},
+            csrf_token="csrf",
+            session_id="sid",
+        )
+
+        core = ClientCore(auth)  # No refresh_callback
+
+        call_count = [0]
+
+        async def mock_post(*args, **kwargs):
+            call_count[0] += 1
+            request = httpx.Request("POST", args[0])
+            response = httpx.Response(400, request=request)
+            raise httpx.HTTPStatusError("Bad Request", request=request, response=response)
+
+        core._http_client = MagicMock()
+        core._http_client.post = mock_post
+
+        # ClientError is the 4xx (non-401/403) mapping in rpc_call
+        from notebooklm.rpc import ClientError
+
+        with pytest.raises(ClientError):
+            await core.rpc_call(RPCMethod.LIST_NOTEBOOKS, [])
+
+        assert call_count[0] == 1, "Should not retry without callback"
+
+    @pytest.mark.asyncio
+    async def test_400_refresh_failure_propagates_original_error(self):
+        """If refresh fails after a 400, the original 400 surfaces (chained).
+
+        Mirrors test_refresh_failure_raises_original_error but with 400
+        instead of 401 — verifies the new is_auth_error branch flows
+        through the same _try_refresh_and_retry error-chaining path.
+        """
+        auth = AuthTokens(
+            cookies={"SID": "test", "__Secure-1PSIDTS": "test_1psidts"},
+            csrf_token="csrf",
+            session_id="sid",
+        )
+
+        async def failing_refresh():
+            raise ValueError("Refresh failed - cookies expired")
+
+        core = ClientCore(auth, refresh_callback=failing_refresh, refresh_retry_delay=0)
+
+        async def mock_post(*args, **kwargs):
+            request = httpx.Request("POST", args[0])
+            response = httpx.Response(400, request=request)
+            raise httpx.HTTPStatusError("Bad Request", request=request, response=response)
+
+        core._http_client = MagicMock()
+        core._http_client.post = mock_post
+
+        with pytest.raises(httpx.HTTPStatusError) as exc_info:
+            await core.rpc_call(RPCMethod.LIST_NOTEBOOKS, [])
+
+        # Surfaced exception is the original 400, chained from the refresh failure
+        assert exc_info.value.response.status_code == 400
+        assert exc_info.value.__cause__ is not None
+        assert "Refresh failed" in str(exc_info.value.__cause__)

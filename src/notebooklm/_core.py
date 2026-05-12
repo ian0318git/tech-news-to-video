@@ -99,9 +99,14 @@ def is_auth_error(error: Exception) -> bool:
     ):
         return False
 
-    # HTTP 401/403 are auth errors
+    # HTTP 400/401/403 are auth errors.
+    # Google returns 400 for expired CSRF tokens (not 401/403). Layer-1
+    # recovery (refresh_auth) re-extracts SNlM0e from the NotebookLM
+    # homepage and retries with a fresh token. The retry guard
+    # (``_is_retry`` in ``rpc_call``) bounds wasted refreshes on legitimate
+    # 400s (bad payload) to one extra GET per call.
     if isinstance(error, httpx.HTTPStatusError):
-        return error.response.status_code in (401, 403)
+        return error.response.status_code in (400, 401, 403)
 
     # RPCError with auth-related message
     if isinstance(error, RPCError):
