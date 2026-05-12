@@ -2511,7 +2511,10 @@ class TestWaitUntilReadyErrorPaths:
         """Test wait_until_ready() raises SourceProcessingError when source is in ERROR state (line 235)."""
         from notebooklm.types import SourceProcessingError
 
-        # Source has ERROR status (status=3)
+        # Source has ERROR status (status=3). Use a non-audio terminal type
+        # (3 = PDF) at metadata[4] so the audio-tolerance gate (#391) does
+        # not keep polling. Audio (type 10) and unclassified types can briefly
+        # report status=3 transiently; PDF cannot.
         response = build_rpc_response(
             RPCMethod.GET_NOTEBOOK,
             [
@@ -2521,7 +2524,7 @@ class TestWaitUntilReadyErrorPaths:
                         [
                             ["src_error"],
                             "Failed Source",
-                            [None, 0],
+                            [None, 0, None, None, 3],  # metadata[4]=3 (PDF)
                             [None, 3],  # status=ERROR
                         ]
                     ],
