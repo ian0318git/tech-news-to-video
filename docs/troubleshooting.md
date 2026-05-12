@@ -195,6 +195,19 @@ Workarounds, ordered by hassle:
    ```
    This is the simplest answer for unattended macOS use.
 
+   **Firefox Multi-Account Containers note.** If your Google session
+   lives inside a container, unscoped `--browser-cookies firefox` will
+   merge cookies from every container into one jar (see issues
+   [#366](https://github.com/teng-lin/notebooklm-py/issues/366) /
+   [#367](https://github.com/teng-lin/notebooklm-py/issues/367)) and
+   produce an inconsistent session. Use the explicit container syntax:
+   ```bash
+   notebooklm login --browser-cookies 'firefox::Work'    # named container
+   notebooklm login --browser-cookies 'firefox::none'    # no-container default
+   ```
+   When a container is in use, the unscoped form also emits a yellow
+   warning pointing at this syntax.
+
 5. **Truly headless servers.** `--browser-cookies` is not the right tool — there's no live browser to extract from. Either re-extract on a workstation and ship `storage_state.json` to the server, or accept that human interaction is needed when cookies finally expire.
 
 Quick diagnostic:

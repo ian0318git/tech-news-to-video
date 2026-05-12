@@ -327,6 +327,34 @@ class TestContextManagement:
             clear_context()
             assert not context_file.exists()
 
+    def test_clear_context_preserves_account_metadata(self, tmp_path):
+        context_file = tmp_path / "context.json"
+        context_file.write_text(
+            json.dumps(
+                {
+                    "notebook_id": "test",
+                    "conversation_id": "conv",
+                    "account": {"authuser": 1, "email": "bob@example.com"},
+                }
+            )
+        )
+        with patch("notebooklm.cli.helpers.get_context_path", return_value=context_file):
+            assert clear_context() is True
+
+        assert json.loads(context_file.read_text()) == {
+            "account": {"authuser": 1, "email": "bob@example.com"}
+        }
+
+    def test_clear_context_can_remove_account_metadata(self, tmp_path):
+        context_file = tmp_path / "context.json"
+        context_file.write_text(
+            json.dumps({"account": {"authuser": 1, "email": "bob@example.com"}})
+        )
+        with patch("notebooklm.cli.helpers.get_context_path", return_value=context_file):
+            assert clear_context(clear_account=True) is True
+
+        assert not context_file.exists()
+
     def test_clear_context_no_file(self, tmp_path):
         """clear_context should not raise if file doesn't exist"""
         context_file = tmp_path / "nonexistent.json"
@@ -372,6 +400,18 @@ class TestContextManagement:
             data = json.loads(context_file.read_text())
             assert data["notebook_id"] == "nb_new"
             assert "conversation_id" not in data
+
+    def test_set_current_notebook_preserves_account_metadata(self, tmp_path):
+        context_file = tmp_path / "context.json"
+        context_file.write_text(
+            json.dumps({"account": {"authuser": 1, "email": "bob@example.com"}})
+        )
+        with patch("notebooklm.cli.helpers.get_context_path", return_value=context_file):
+            set_current_notebook("nb_new", title="New Notebook")
+
+        data = json.loads(context_file.read_text())
+        assert data["notebook_id"] == "nb_new"
+        assert data["account"] == {"authuser": 1, "email": "bob@example.com"}
 
 
 class TestRequireNotebook:
@@ -1632,3 +1672,77 @@ class TestImportWithRetry:
 
         # Only the original attempt — no retry after cancellation.
         assert client.research.import_sources.await_count == 1
+
+
+class TestGetAuthTokensAuthuser:
+    """Regression for #359: get_auth_tokens must read authuser from context.json
+    so RPC URLs route to the right Google account."""
+
+    def test_authuser_from_context_json_propagates_to_authtokens(self, tmp_path):
+        storage = tmp_path / "storage_state.json"
+        storage.write_text(
+            json.dumps(
+                {
+                    "cookies": [
+                        {"name": "SID", "value": "x", "domain": ".google.com"},
+                        {"name": "HSID", "value": "x", "domain": ".google.com"},
+                        {"name": "SSID", "value": "x", "domain": ".google.com"},
+                        {"name": "APISID", "value": "x", "domain": ".google.com"},
+                        {"name": "SAPISID", "value": "x", "domain": ".google.com"},
+                        {"name": "__Secure-1PSIDTS", "value": "x", "domain": ".google.com"},
+                    ]
+                }
+            )
+        )
+        (tmp_path / "context.json").write_text(
+            json.dumps({"account": {"authuser": 2, "email": "bob@example.com"}}),
+            encoding="utf-8",
+        )
+
+        ctx = MagicMock()
+        ctx.obj = {"storage_path": storage, "profile": None}
+
+        token_fetch = object()
+        with (
+            patch("notebooklm.auth.fetch_tokens_with_domains", new=lambda *_, **__: token_fetch),
+            patch(
+                "notebooklm.cli.helpers.run_async",
+                return_value=("csrf_v2", "sess_v2"),
+            ),
+        ):
+            tokens = get_auth_tokens(ctx)
+
+        assert tokens.authuser == 2
+        assert tokens.csrf_token == "csrf_v2"
+
+    def test_default_authuser_when_no_account_metadata(self, tmp_path):
+        storage = tmp_path / "storage_state.json"
+        storage.write_text(
+            json.dumps(
+                {
+                    "cookies": [
+                        {"name": "SID", "value": "x", "domain": ".google.com"},
+                        {"name": "HSID", "value": "x", "domain": ".google.com"},
+                        {"name": "SSID", "value": "x", "domain": ".google.com"},
+                        {"name": "APISID", "value": "x", "domain": ".google.com"},
+                        {"name": "SAPISID", "value": "x", "domain": ".google.com"},
+                        {"name": "__Secure-1PSIDTS", "value": "x", "domain": ".google.com"},
+                    ]
+                }
+            )
+        )
+
+        ctx = MagicMock()
+        ctx.obj = {"storage_path": storage, "profile": None}
+
+        token_fetch = object()
+        with (
+            patch("notebooklm.auth.fetch_tokens_with_domains", new=lambda *_, **__: token_fetch),
+            patch(
+                "notebooklm.cli.helpers.run_async",
+                return_value=("csrf", "sess"),
+            ),
+        ):
+            tokens = get_auth_tokens(ctx)
+
+        assert tokens.authuser == 0

@@ -464,12 +464,18 @@ def get_auth_tokens(ctx) -> AuthTokens:
     else:
         jar = build_cookie_jar(cookies=cookies, storage_path=resolved_storage_path)
 
+    # Read persisted account routing so RPC URLs target the same Google
+    # account the tokens were minted for.
+    from ..auth import get_account_email_for_storage, get_authuser_for_storage
+
     return AuthTokens(
         cookies=cookies,
         csrf_token=csrf,
         session_id=session_id,
         storage_path=resolved_storage_path,
         cookie_jar=jar,
+        authuser=get_authuser_for_storage(resolved_storage_path),
+        account_email=get_account_email_for_storage(resolved_storage_path),
     )
 
 
@@ -539,7 +545,16 @@ def set_current_notebook(
     context_file = get_context_path()
     context_file.parent.mkdir(parents=True, exist_ok=True)
 
-    data: dict[str, str | bool] = {"notebook_id": notebook_id}
+    data: dict[str, Any] = {}
+    if context_file.exists():
+        try:
+            existing = json.loads(context_file.read_text(encoding="utf-8"))
+            if isinstance(existing, dict) and isinstance(existing.get("account"), dict):
+                data["account"] = existing["account"]
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    data["notebook_id"] = notebook_id
     if title:
         data["title"] = title
     if is_owner is not None:
@@ -550,15 +565,40 @@ def set_current_notebook(
     context_file.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-def clear_context() -> bool:
+def clear_context(*, clear_account: bool = False) -> bool:
     """Clear the current context.
 
-    Returns True if a context file was removed, False if none existed.
+    By default, only notebook/conversation fields are cleared; account
+    metadata used for multi-account auth routing is preserved. ``auth logout``
+    passes ``clear_account=True`` to remove the whole file.
+
+    Returns True if a context file was changed or removed, False if none existed.
     """
     context_file = get_context_path()
     if context_file.exists():
-        context_file.unlink()
-        return True
+        if clear_account:
+            context_file.unlink()
+            return True
+        try:
+            data = json.loads(context_file.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            context_file.unlink()
+            return True
+        if not isinstance(data, dict):
+            context_file.unlink()
+            return True
+        original = dict(data)
+        for key in ("notebook_id", "title", "is_owner", "created_at", "conversation_id"):
+            data.pop(key, None)
+        if not data:
+            context_file.unlink()
+            return True
+        if data != original:
+            context_file.write_text(
+                json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
+            return True
+        return False
     return False
 
 

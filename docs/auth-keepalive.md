@@ -312,6 +312,45 @@ list from `ALLOWED_COOKIE_DOMAINS + GOOGLE_REGIONAL_CCTLDS` — because
 dropping any one silently breaks specific code paths (e.g. losing
 `.notebooklm.google.com`-scoped cookies breaks artifact downloads).
 
+#### Firefox Multi-Account Containers
+
+`rookiepy` 0.5.6 issues `SELECT host, path, isSecure, expiry, name,
+value, isHttpOnly, sameSite FROM moz_cookies` with no filter on the
+`originAttributes` column ([investigation in #366](https://github.com/teng-lin/notebooklm-py/issues/366)).
+Firefox stores per-container cookies with `originAttributes =
+'^userContextId=N…'`, so cookies from every Multi-Account Container
+(plus the no-container default) get merged into a single jar. The
+`moz_cookies` UNIQUE constraint is `(name, host, path, originAttributes)`,
+so duplicate `(host, name, path)` rows across containers really exist;
+which one wins after merging is arbitrary. For users who isolate their
+Google session in a container (a common privacy practice), unscoped
+`--browser-cookies firefox` silently produces an inconsistent or wrong
+session.
+
+To target a specific container, use the `firefox::<container-name>`
+syntax (ported from yt-dlp's [container-aware extractor](https://github.com/yt-dlp/yt-dlp/blob/c8695f52a91f0d2aabbba7b7200c1099bfa9a3e5/yt_dlp/cookies.py#L149-L177)):
+
+```bash
+# Read cookies only from the named container:
+notebooklm login --browser-cookies 'firefox::Work'
+
+# Read cookies only from the no-container default:
+notebooklm login --browser-cookies 'firefox::none'
+
+# Unscoped (back-compat): merges every container. Emits a yellow warning
+# if the profile is actually using containers.
+notebooklm login --browser-cookies firefox
+```
+
+Container names match against `containers.json` adjacent to
+`cookies.sqlite`. Both user-defined `name` fields and built-in
+`l10nID`-derived labels are recognised (e.g. `firefox::Personal`
+matches the stock `userContextPersonal.label`). The extractor bypasses
+`rookiepy` entirely and talks to `cookies.sqlite` directly via
+`sqlite3` (the DB is copied to a temp dir first, so a running Firefox
+doesn't lock us out). See `src/notebooklm/_firefox_containers.py` for
+the implementation.
+
 ### 2.5 Three timers people confuse
 
 When reading code or issue threads, distinguish:

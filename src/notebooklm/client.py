@@ -36,7 +36,7 @@ from ._settings import SettingsAPI
 from ._sharing import SharingAPI
 from ._sources import SourcesAPI
 from ._url_utils import is_google_auth_redirect
-from .auth import AuthTokens
+from .auth import AuthTokens, authuser_query
 
 logger = logging.getLogger(__name__)
 
@@ -224,7 +224,10 @@ class NotebookLMClient:
             ValueError: If token extraction fails (page structure may have changed).
         """
         http_client = self._core.get_http_client()
-        response = await http_client.get(f"{get_base_url()}/")
+        url = f"{get_base_url()}/"
+        if self.auth.account_email or self.auth.authuser:
+            url = f"{url}?{authuser_query(self.auth.authuser, self.auth.account_email)}"
+        response = await http_client.get(url)
         response.raise_for_status()
 
         # Check for redirect to login page

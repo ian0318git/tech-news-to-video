@@ -15,6 +15,7 @@ import httpx
 from ._core import ClientCore
 from ._env import get_base_url
 from ._url_utils import is_youtube_url
+from .auth import authuser_query, format_authuser_value
 from .exceptions import NetworkError, ValidationError
 from .rpc import RPCError, RPCMethod, get_upload_url
 from .rpc.types import SourceStatus
@@ -1110,15 +1111,22 @@ class SourcesAPI:
         """Start a resumable upload session and get the upload URL."""
         import json
 
+        auth_route = format_authuser_value(
+            self._core.auth.authuser,
+            self._core.auth.account_email,
+        )
         base_url = get_base_url()
-        url = f"{get_upload_url()}?authuser=0"
+        url = (
+            f"{get_upload_url()}?"
+            f"{authuser_query(self._core.auth.authuser, self._core.auth.account_email)}"
+        )
 
         headers = {
             "Accept": "*/*",
             "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
             "Origin": base_url,
             "Referer": f"{base_url}/",
-            "x-goog-authuser": "0",
+            "x-goog-authuser": auth_route,
             "x-goog-upload-command": "start",
             "x-goog-upload-header-content-length": str(file_size),
             "x-goog-upload-protocol": "resumable",
@@ -1167,12 +1175,16 @@ class SourcesAPI:
             file_path: Path to the file to upload.
         """
         base_url = get_base_url()
+        auth_route = format_authuser_value(
+            self._core.auth.authuser,
+            self._core.auth.account_email,
+        )
         headers = {
             "Accept": "*/*",
             "Content-Type": "application/x-www-form-urlencoded;charset=utf-8",
+            "x-goog-authuser": auth_route,
             "Origin": base_url,
             "Referer": f"{base_url}/",
-            "x-goog-authuser": "0",
             "x-goog-upload-command": "upload, finalize",
             "x-goog-upload-offset": "0",
         }

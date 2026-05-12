@@ -190,6 +190,7 @@ Other useful CLI commands:
 ```bash
 notebooklm auth check --test         # Diagnose auth/cookie issues
 notebooklm auth refresh --quiet      # One-shot cookie keepalive (for cron / launchd / systemd)
+notebooklm auth refresh --browser-cookies chrome  # Re-extract and repair account routing
 notebooklm agent show codex          # Print bundled Codex instructions
 notebooklm agent show claude         # Print bundled Claude Code skill template
 notebooklm language list             # List supported output languages

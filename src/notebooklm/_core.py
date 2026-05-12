@@ -21,6 +21,7 @@ from .auth import (
     _rotate_cookies,
     advance_cookie_snapshot_after_save,
     build_cookie_jar,
+    format_authuser_value,
     save_cookies_to_storage,
     snapshot_cookie_jar,
 )
@@ -454,13 +455,22 @@ class ClientCore:
         Returns:
             Full URL with query parameters.
         """
-        params = {
+        params: dict[str, str] = {
             "rpcids": rpc_method.value,
             "source-path": source_path,
             "f.sid": self.auth.session_id,
             "hl": get_default_language(),
             "rt": "c",
         }
+        # Multi-account: route batchexecute to the same Google account the
+        # auth tokens were minted for. Email is preferred when known because
+        # Google's integer account indices can change as browser accounts are
+        # added or removed.
+        if self.auth.account_email or self.auth.authuser:
+            params["authuser"] = format_authuser_value(
+                self.auth.authuser,
+                self.auth.account_email,
+            )
         return f"{get_batchexecute_url()}?{urlencode(params)}"
 
     async def rpc_call(

@@ -860,7 +860,7 @@ class TestRefreshCmdResnapshot:
 
         # Stub the token fetch to return refreshed=True and mutate the jar
         # in place (mirroring _replace_cookie_jar after NOTEBOOKLM_REFRESH_CMD).
-        async def fake_fetch_with_refresh(cookie_jar, storage_path, profile):
+        async def fake_fetch_with_refresh(cookie_jar, storage_path, profile, *, authuser=0):
             # Simulate the wholesale jar swap: clear & repopulate with new values.
             cookie_jar.jar.clear()
             cookie_jar.set("SID", "post", domain=".google.com", path="/")
@@ -907,7 +907,7 @@ class TestRefreshCmdResnapshot:
             ],
         )
 
-        async def fake_fetch_with_refresh(cookie_jar, storage_path, profile):
+        async def fake_fetch_with_refresh(cookie_jar, storage_path, profile, *, authuser=0):
             cookie_jar.jar.clear()
             cookie_jar.set("SID", "post", domain=".google.com", path="/")
             cookie_jar.set("__Secure-1PSIDTS", "post_refresh", domain=".google.com", path="/")
@@ -1133,7 +1133,7 @@ class TestBaselineNotAdvancedOnSaveFailure:
             ],
         )
 
-        async def fake_fetch_with_refresh(cookie_jar, storage_path, profile):
+        async def fake_fetch_with_refresh(cookie_jar, storage_path, profile, *, authuser=0):
             _set_cookie_value(cookie_jar, "__Secure-1PSIDTS", "mutated")
             return ("csrf", "session", False, None)
 
@@ -1453,7 +1453,7 @@ class TestCASVariantAware:
             ],
         )
 
-        async def fake_fetch_with_refresh(cookie_jar, storage_path, profile):
+        async def fake_fetch_with_refresh(cookie_jar, storage_path, profile, *, authuser=0):
             # Drop the bare-host OSID from the jar and re-key it on the
             # leading-dot variant so the in-memory jar diverges from disk on
             # domain shape — the exact variance the variant-aware CAS lookup
@@ -1721,7 +1721,7 @@ class TestRefreshCmdSnapshotCapturedBeforeRetryFetch:
 
         fetch_calls = 0
 
-        async def fake_fetch_tokens_with_jar(cookie_jar, storage_path):
+        async def fake_fetch_tokens_with_jar(cookie_jar, storage_path, *, authuser=0):
             nonlocal fetch_calls
             fetch_calls += 1
             if fetch_calls == 1:

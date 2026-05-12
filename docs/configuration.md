@@ -258,7 +258,7 @@ notebooklm login
 **One-off override with `--storage`:**
 
 ```bash
-notebooklm --storage /path/to/account.json list
+notebooklm --storage /path/to/storage_state.json list
 ```
 
 ## CI/CD Configuration
