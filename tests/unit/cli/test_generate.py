@@ -1080,6 +1080,105 @@ class TestResolveLanguageDirect:
             result = generate_module.resolve_language(None)
         assert result == "en"
 
+    def test_env_overrides_config(self, monkeypatch):
+        """NOTEBOOKLM_HL set, config also set, no flag → env wins over config."""
+        import importlib
+
+        monkeypatch.setenv("NOTEBOOKLM_HL", "ja")
+        generate_module = importlib.import_module("notebooklm.cli.generate")
+        with patch.object(generate_module, "get_language", return_value="zh_Hans"):
+            result = generate_module.resolve_language(None)
+        assert result == "ja"
+
+    def test_flag_overrides_env(self, monkeypatch):
+        """Explicit --language argument wins over NOTEBOOKLM_HL env var."""
+        import importlib
+
+        monkeypatch.setenv("NOTEBOOKLM_HL", "ja")
+        generate_module = importlib.import_module("notebooklm.cli.generate")
+        with patch.object(generate_module, "get_language", return_value="zh_Hans"):
+            result = generate_module.resolve_language("ko")
+        assert result == "ko"
+
+    def test_env_only_no_config(self, monkeypatch):
+        """NOTEBOOKLM_HL set, no config, no flag → env wins over default."""
+        import importlib
+
+        monkeypatch.setenv("NOTEBOOKLM_HL", "ja")
+        generate_module = importlib.import_module("notebooklm.cli.generate")
+        with patch.object(generate_module, "get_language", return_value=None):
+            result = generate_module.resolve_language(None)
+        assert result == "ja"
+
+    def test_empty_env_falls_through_to_config(self, monkeypatch):
+        """Empty NOTEBOOKLM_HL is treated as unset and config wins."""
+        import importlib
+
+        monkeypatch.setenv("NOTEBOOKLM_HL", "")
+        generate_module = importlib.import_module("notebooklm.cli.generate")
+        with patch.object(generate_module, "get_language", return_value="zh_Hans"):
+            result = generate_module.resolve_language(None)
+        assert result == "zh_Hans"
+
+    def test_invalid_env_raises_bad_parameter(self, monkeypatch):
+        """An unsupported NOTEBOOKLM_HL value still gets validated."""
+        import importlib
+
+        import click
+
+        monkeypatch.setenv("NOTEBOOKLM_HL", "xx_INVALID")
+        generate_module = importlib.import_module("notebooklm.cli.generate")
+        with (
+            patch.object(generate_module, "get_language", return_value=None),
+            pytest.raises(click.BadParameter) as exc_info,
+        ):
+            generate_module.resolve_language(None)
+        assert "xx_INVALID" in str(exc_info.value)
+
+    def test_resolve_language_rejects_invalid_config_value(self):
+        """An unsupported language stored in the config file gets validated."""
+        import importlib
+
+        import click
+
+        generate_module = importlib.import_module("notebooklm.cli.generate")
+        with (
+            patch.object(generate_module, "get_language", return_value="xx_INVALID"),
+            pytest.raises(click.BadParameter) as exc_info,
+        ):
+            generate_module.resolve_language(None)
+        assert "xx_INVALID" in str(exc_info.value)
+        assert "notebooklm language list" in str(exc_info.value)
+
+    def test_resolve_language_accepts_valid_config_value(self):
+        """A supported language stored in the config file is returned as-is."""
+        import importlib
+
+        generate_module = importlib.import_module("notebooklm.cli.generate")
+        with patch.object(generate_module, "get_language", return_value="ja"):
+            result = generate_module.resolve_language(None)
+        assert result == "ja"
+
+    def test_resolve_language_treats_whitespace_env_as_unset(self, monkeypatch):
+        """Whitespace-only NOTEBOOKLM_HL falls through to config, not rejected."""
+        import importlib
+
+        monkeypatch.setenv("NOTEBOOKLM_HL", "   ")
+        generate_module = importlib.import_module("notebooklm.cli.generate")
+        with patch.object(generate_module, "get_language", return_value="ja"):
+            result = generate_module.resolve_language(None)
+        assert result == "ja"
+
+    def test_resolve_language_treats_whitespace_env_as_unset_no_config(self, monkeypatch):
+        """Whitespace-only NOTEBOOKLM_HL with no config falls through to default."""
+        import importlib
+
+        monkeypatch.setenv("NOTEBOOKLM_HL", "   ")
+        generate_module = importlib.import_module("notebooklm.cli.generate")
+        with patch.object(generate_module, "get_language", return_value=None):
+            result = generate_module.resolve_language(None)
+        assert result == "en"
+
 
 # =============================================================================
 # _OUTPUT_GENERATION_STATUS DIRECT TESTS

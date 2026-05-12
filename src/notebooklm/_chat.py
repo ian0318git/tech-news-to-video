@@ -15,6 +15,7 @@ from urllib.parse import quote, urlencode
 import httpx
 
 from ._core import ClientCore
+from ._env import get_default_language
 from .exceptions import ChatError, NetworkError, ValidationError
 from .rpc import RPCMethod, get_query_url
 from .types import AskResult, ChatReference, ConversationTurn
@@ -133,7 +134,7 @@ class ChatAPI:
         self._core._reqid_counter += 100000
         url_params = {
             "bl": os.environ.get("NOTEBOOKLM_BL", _DEFAULT_BL),
-            "hl": "en",
+            "hl": get_default_language(),
             "_reqid": str(self._core._reqid_counter),
             "rt": "c",
         }

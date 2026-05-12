@@ -13,6 +13,7 @@ from urllib.parse import urlencode
 
 import httpx
 
+from ._env import get_default_language
 from .auth import (
     AuthTokens,
     CookieSaveResult,
@@ -457,6 +458,7 @@ class ClientCore:
             "rpcids": rpc_method.value,
             "source-path": source_path,
             "f.sid": self.auth.session_id,
+            "hl": get_default_language(),
             "rt": "c",
         }
         return f"{get_batchexecute_url()}?{urlencode(params)}"

@@ -14,6 +14,7 @@ Commands:
 """
 
 import asyncio
+import os
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -135,11 +136,11 @@ async def generate_with_retry(
 
 
 def resolve_language(language: str | None) -> str:
-    """Resolve language from CLI flag, config, or default.
+    """Resolve language from CLI flag, NOTEBOOKLM_HL env, config, or default.
 
-    Priority: CLI flag > config file > "en" default.
-    Uses explicit None checks to avoid treating empty string as falsy.
-    Validates that the language code is supported.
+    Priority: ``--language`` flag > ``NOTEBOOKLM_HL`` env var > config file
+    > "en" default. Uses explicit None checks to avoid treating empty
+    string as falsy. Validates each candidate against the supported list.
     """
     if language is not None:
         if language not in SUPPORTED_LANGUAGES:
@@ -149,8 +150,23 @@ def resolve_language(language: str | None) -> str:
                 param_hint="'--language'",
             )
         return language
+    env_lang = os.environ.get("NOTEBOOKLM_HL", "").strip()
+    if env_lang:
+        if env_lang not in SUPPORTED_LANGUAGES:
+            raise click.BadParameter(
+                f"Unknown language code: {env_lang}\n"
+                "Run 'notebooklm language list' to see supported codes.",
+                param_hint="'NOTEBOOKLM_HL'",
+            )
+        return env_lang
     config_lang = get_language()
     if config_lang is not None:
+        if config_lang not in SUPPORTED_LANGUAGES:
+            raise click.BadParameter(
+                f"Unknown language code in config: {config_lang}\n"
+                "Run 'notebooklm language list' to see supported codes.",
+                param_hint="config",
+            )
         return config_lang
     return DEFAULT_LANGUAGE
 
@@ -335,7 +351,11 @@ def generate():
     type=click.Choice(["short", "default", "long"]),
     default="default",
 )
-@click.option("--language", default=None, help="Output language (default: from config or 'en')")
+@click.option(
+    "--language",
+    default=None,
+    help="Output language (default: --language > NOTEBOOKLM_HL env > config > 'en')",
+)
 @click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
 @click.option("--wait/--no-wait", default=False, help="Wait for completion (default: no-wait)")
 @retry_option
@@ -433,7 +453,11 @@ def generate_audio(
     ),
     default="auto",
 )
-@click.option("--language", default=None, help="Output language (default: from config or 'en')")
+@click.option(
+    "--language",
+    default=None,
+    help="Output language (default: --language > NOTEBOOKLM_HL env > config > 'en')",
+)
 @click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
 @click.option("--wait/--no-wait", default=False, help="Wait for completion (default: no-wait)")
 @retry_option
@@ -559,7 +583,11 @@ generate.add_command(_cinematic_video_gen_cmd)
     type=click.Choice(["default", "short"]),
     default="default",
 )
-@click.option("--language", default=None, help="Output language (default: from config or 'en')")
+@click.option(
+    "--language",
+    default=None,
+    help="Output language (default: --language > NOTEBOOKLM_HL env > config > 'en')",
+)
 @click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
 @click.option("--wait/--no-wait", default=False, help="Wait for completion (default: no-wait)")
 @retry_option
@@ -861,7 +889,11 @@ def generate_flashcards(
     type=click.Choice(list(_INFOGRAPHIC_STYLE_MAP)),
     default="auto",
 )
-@click.option("--language", default=None, help="Output language (default: from config or 'en')")
+@click.option(
+    "--language",
+    default=None,
+    help="Output language (default: --language > NOTEBOOKLM_HL env > config > 'en')",
+)
 @click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
 @click.option("--wait/--no-wait", default=False, help="Wait for completion (default: no-wait)")
 @retry_option
@@ -936,7 +968,11 @@ def generate_infographic(
     default=None,
     help="Notebook ID (uses current if not set)",
 )
-@click.option("--language", default=None, help="Output language (default: from config or 'en')")
+@click.option(
+    "--language",
+    default=None,
+    help="Output language (default: --language > NOTEBOOKLM_HL env > config > 'en')",
+)
 @click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
 @click.option("--wait/--no-wait", default=False, help="Wait for completion (default: no-wait)")
 @retry_option
@@ -995,7 +1031,11 @@ def generate_data_table(
     help="Notebook ID (uses current if not set)",
 )
 @click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
-@click.option("--language", default=None, help="Output language (default: from config or 'en')")
+@click.option(
+    "--language",
+    default=None,
+    help="Output language (default: --language > NOTEBOOKLM_HL env > config > 'en')",
+)
 @click.option("--instructions", default=None, help="Custom instructions for the mind map")
 @json_option
 @with_client
@@ -1074,7 +1114,11 @@ def _output_mind_map_result(result: Any, json_output: bool) -> None:
     help="Notebook ID (uses current if not set)",
 )
 @click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
-@click.option("--language", default=None, help="Output language (default: from config or 'en')")
+@click.option(
+    "--language",
+    default=None,
+    help="Output language (default: --language > NOTEBOOKLM_HL env > config > 'en')",
+)
 @click.option(
     "--append",
     "append_instructions",

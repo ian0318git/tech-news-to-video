@@ -97,6 +97,7 @@ A persistent Chromium user data directory used during `notebooklm login`.
 | `NOTEBOOKLM_HOME` | Base directory for all files | `~/.notebooklm` |
 | `NOTEBOOKLM_PROFILE` | Active profile name | `default` |
 | `NOTEBOOKLM_AUTH_JSON` | Inline authentication JSON (for CI/CD) | - |
+| `NOTEBOOKLM_HL` | Default interface/output language code (e.g. `en`, `ja`, `zh_Hans`) | `en` |
 | `NOTEBOOKLM_LOG_LEVEL` | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR` | `WARNING` |
 | `NOTEBOOKLM_DEBUG_RPC` | Legacy: Enable RPC debug logging (use `LOG_LEVEL=DEBUG` instead) | `false` |
 
@@ -145,6 +146,26 @@ notebooklm list  # Works without any file on disk
 5. `~/.notebooklm/storage_state.json` (legacy fallback)
 
 **Note:** Cannot run `notebooklm login` when `NOTEBOOKLM_AUTH_JSON` is set.
+
+### NOTEBOOKLM_HL
+
+Sets the default interface/output language used by the client. The value is
+passed as the `hl` query parameter on every batchexecute RPC call and is the
+fallback language for the `generate audio|video|slide-deck|infographic|
+data-table|mind-map|report` commands and their `ArtifactsAPI` equivalents:
+
+```bash
+export NOTEBOOKLM_HL=ja
+notebooklm generate audio "deep dive"   # Japanese audio overview
+```
+
+Surrounding whitespace is stripped; an empty or whitespace-only value falls
+back to `en`. For the generate commands, the resolution order is:
+
+1. `--language` CLI flag
+2. `NOTEBOOKLM_HL` environment variable
+3. `language` value from the active profile's config
+4. `en` (built-in default)
 
 ## CLI Options
 

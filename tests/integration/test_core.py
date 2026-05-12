@@ -566,3 +566,29 @@ class TestCrossDomainCookiePreservation:
 
             # The redirect cookie must survive
             assert http.cookies.get("__Secure-1PSIDCC", domain=".google.com") == "from_redirect"
+
+
+class TestBuildUrlHL:
+    """_build_url() must thread NOTEBOOKLM_HL into the batchexecute URL.
+
+    This is the load-bearing site for setting the interface language on
+    every RPC call.
+    """
+
+    def test_build_url_defaults_hl_to_en(self, auth_tokens, monkeypatch):
+        monkeypatch.delenv("NOTEBOOKLM_HL", raising=False)
+        core = ClientCore(auth_tokens)
+        url = core._build_url(RPCMethod.LIST_NOTEBOOKS)
+        assert "hl=en" in url
+
+    def test_build_url_includes_hl_from_env(self, auth_tokens, monkeypatch):
+        monkeypatch.setenv("NOTEBOOKLM_HL", "ja")
+        core = ClientCore(auth_tokens)
+        url = core._build_url(RPCMethod.LIST_NOTEBOOKS)
+        assert "hl=ja" in url
+
+    def test_build_url_empty_env_falls_back_to_en(self, auth_tokens, monkeypatch):
+        monkeypatch.setenv("NOTEBOOKLM_HL", "")
+        core = ClientCore(auth_tokens)
+        url = core._build_url(RPCMethod.LIST_NOTEBOOKS)
+        assert "hl=en" in url

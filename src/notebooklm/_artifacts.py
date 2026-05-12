@@ -19,6 +19,7 @@ from urllib.parse import urlparse
 import httpx
 
 from ._core import ClientCore
+from ._env import get_default_language
 from .auth import load_httpx_cookies
 from .exceptions import ValidationError
 from .rpc import (
@@ -362,7 +363,7 @@ class ArtifactsAPI:
         self,
         notebook_id: str,
         source_ids: builtins.list[str] | None = None,
-        language: str = "en",
+        language: str | None = None,
         instructions: str | None = None,
         audio_format: AudioFormat | None = None,
         audio_length: AudioLength | None = None,
@@ -372,7 +373,8 @@ class ArtifactsAPI:
         Args:
             notebook_id: The notebook ID.
             source_ids: Source IDs to include. If None, uses all sources.
-            language: Language code (default: "en").
+            language: Language code. If None, uses the ``NOTEBOOKLM_HL``
+                environment variable, defaulting to ``"en"``.
             instructions: Custom instructions for the podcast hosts.
             audio_format: DEEP_DIVE, BRIEF, CRITIQUE, or DEBATE.
             audio_length: SHORT, DEFAULT, or LONG.
@@ -380,6 +382,8 @@ class ArtifactsAPI:
         Returns:
             GenerationStatus with task_id for polling.
         """
+        if language is None:
+            language = get_default_language()
         if source_ids is None:
             source_ids = await self._core.get_source_ids(notebook_id)
 
@@ -419,7 +423,7 @@ class ArtifactsAPI:
         self,
         notebook_id: str,
         source_ids: builtins.list[str] | None = None,
-        language: str = "en",
+        language: str | None = None,
         instructions: str | None = None,
         video_format: VideoFormat | None = None,
         video_style: VideoStyle | None = None,
@@ -429,7 +433,8 @@ class ArtifactsAPI:
         Args:
             notebook_id: The notebook ID.
             source_ids: Source IDs to include. If None, uses all sources.
-            language: Language code (default: "en").
+            language: Language code. If None, uses the ``NOTEBOOKLM_HL``
+                environment variable, defaulting to ``"en"``.
             instructions: Custom instructions for video generation.
             video_format: EXPLAINER or BRIEF.
             video_style: AUTO_SELECT, CLASSIC, WHITEBOARD, etc.
@@ -437,6 +442,8 @@ class ArtifactsAPI:
         Returns:
             GenerationStatus with task_id for polling.
         """
+        if language is None:
+            language = get_default_language()
         if source_ids is None:
             source_ids = await self._core.get_source_ids(notebook_id)
 
@@ -478,7 +485,7 @@ class ArtifactsAPI:
         self,
         notebook_id: str,
         source_ids: builtins.list[str] | None = None,
-        language: str = "en",
+        language: str | None = None,
         instructions: str | None = None,
     ) -> GenerationStatus:
         """Generate a Cinematic Video Overview.
@@ -498,12 +505,15 @@ class ArtifactsAPI:
         Args:
             notebook_id: The notebook ID.
             source_ids: Source IDs to include. If None, uses all sources.
-            language: Language code (default: "en").
+            language: Language code. If None, uses the ``NOTEBOOKLM_HL``
+                environment variable, defaulting to ``"en"``.
             instructions: Custom instructions for video generation.
 
         Returns:
             GenerationStatus with task_id for polling.
         """
+        if language is None:
+            language = get_default_language()
         if source_ids is None:
             source_ids = await self._core.get_source_ids(notebook_id)
 
@@ -542,7 +552,7 @@ class ArtifactsAPI:
         notebook_id: str,
         report_format: ReportFormat = ReportFormat.BRIEFING_DOC,
         source_ids: builtins.list[str] | None = None,
-        language: str = "en",
+        language: str | None = None,
         custom_prompt: str | None = None,
         extra_instructions: str | None = None,
     ) -> GenerationStatus:
@@ -552,7 +562,8 @@ class ArtifactsAPI:
             notebook_id: The notebook ID.
             report_format: BRIEFING_DOC, STUDY_GUIDE, BLOG_POST, or CUSTOM.
             source_ids: Source IDs to include. If None, uses all sources.
-            language: Language code (default: "en").
+            language: Language code. If None, uses the ``NOTEBOOKLM_HL``
+                environment variable, defaulting to ``"en"``.
             custom_prompt: Prompt for CUSTOM format. Falls back to a generic
                 default if None.
             extra_instructions: Additional instructions appended to the built-in
@@ -562,6 +573,8 @@ class ArtifactsAPI:
         Returns:
             GenerationStatus with task_id for polling.
         """
+        if language is None:
+            language = get_default_language()
         if source_ids is None:
             source_ids = await self._core.get_source_ids(notebook_id)
 
@@ -639,7 +652,7 @@ class ArtifactsAPI:
         self,
         notebook_id: str,
         source_ids: builtins.list[str] | None = None,
-        language: str = "en",
+        language: str | None = None,
         extra_instructions: str | None = None,
     ) -> GenerationStatus:
         """Generate a study guide report.
@@ -649,12 +662,15 @@ class ArtifactsAPI:
         Args:
             notebook_id: The notebook ID.
             source_ids: Source IDs to include. If None, uses all sources.
-            language: Language code (default: "en").
+            language: Language code. If None, uses the ``NOTEBOOKLM_HL``
+                environment variable, defaulting to ``"en"``.
             extra_instructions: Additional instructions appended to the default template.
 
         Returns:
             GenerationStatus with task_id for polling.
         """
+        if language is None:
+            language = get_default_language()
         return await self.generate_report(
             notebook_id,
             report_format=ReportFormat.STUDY_GUIDE,
@@ -780,7 +796,7 @@ class ArtifactsAPI:
         self,
         notebook_id: str,
         source_ids: builtins.list[str] | None = None,
-        language: str = "en",
+        language: str | None = None,
         instructions: str | None = None,
         orientation: InfographicOrientation | None = None,
         detail_level: InfographicDetail | None = None,
@@ -791,7 +807,8 @@ class ArtifactsAPI:
         Args:
             notebook_id: The notebook ID.
             source_ids: Source IDs to include. If None, uses all sources.
-            language: Language code (default: "en").
+            language: Language code. If None, uses the ``NOTEBOOKLM_HL``
+                environment variable, defaulting to ``"en"``.
             instructions: Custom instructions for infographic generation.
             orientation: LANDSCAPE, PORTRAIT, or SQUARE.
             detail_level: CONCISE, STANDARD, or DETAILED.
@@ -800,6 +817,8 @@ class ArtifactsAPI:
         Returns:
             GenerationStatus with task_id for polling.
         """
+        if language is None:
+            language = get_default_language()
         if source_ids is None:
             source_ids = await self._core.get_source_ids(notebook_id)
 
@@ -835,7 +854,7 @@ class ArtifactsAPI:
         self,
         notebook_id: str,
         source_ids: builtins.list[str] | None = None,
-        language: str = "en",
+        language: str | None = None,
         instructions: str | None = None,
         slide_format: SlideDeckFormat | None = None,
         slide_length: SlideDeckLength | None = None,
@@ -845,7 +864,8 @@ class ArtifactsAPI:
         Args:
             notebook_id: The notebook ID.
             source_ids: Source IDs to include. If None, uses all sources.
-            language: Language code (default: "en").
+            language: Language code. If None, uses the ``NOTEBOOKLM_HL``
+                environment variable, defaulting to ``"en"``.
             instructions: Custom instructions for slide deck generation.
             slide_format: DETAILED_DECK or PRESENTER_SLIDES.
             slide_length: DEFAULT or SHORT.
@@ -853,6 +873,8 @@ class ArtifactsAPI:
         Returns:
             GenerationStatus with task_id for polling.
         """
+        if language is None:
+            language = get_default_language()
         if source_ids is None:
             source_ids = await self._core.get_source_ids(notebook_id)
 
@@ -939,7 +961,7 @@ class ArtifactsAPI:
         self,
         notebook_id: str,
         source_ids: builtins.list[str] | None = None,
-        language: str = "en",
+        language: str | None = None,
         instructions: str | None = None,
     ) -> GenerationStatus:
         """Generate a data table.
@@ -947,12 +969,15 @@ class ArtifactsAPI:
         Args:
             notebook_id: The notebook ID.
             source_ids: Source IDs to include. If None, uses all sources.
-            language: Language code (default: "en").
+            language: Language code. If None, uses the ``NOTEBOOKLM_HL``
+                environment variable, defaulting to ``"en"``.
             instructions: Description of desired table structure.
 
         Returns:
             GenerationStatus with task_id for polling.
         """
+        if language is None:
+            language = get_default_language()
         if source_ids is None:
             source_ids = await self._core.get_source_ids(notebook_id)
 
@@ -989,7 +1014,7 @@ class ArtifactsAPI:
         self,
         notebook_id: str,
         source_ids: builtins.list[str] | None = None,
-        language: str = "en",
+        language: str | None = None,
         instructions: str | None = None,
     ) -> dict[str, Any]:
         """Generate an interactive mind map.
@@ -1000,7 +1025,8 @@ class ArtifactsAPI:
         Args:
             notebook_id: The notebook ID.
             source_ids: Source IDs to include. If None, uses all sources.
-            language: Language code (default: "en").
+            language: Language code. If None, uses the ``NOTEBOOKLM_HL``
+                environment variable, defaulting to ``"en"``.
             instructions: Custom instructions for the mind map.
 
         Returns:
@@ -1008,6 +1034,8 @@ class ArtifactsAPI:
         """
         import json as json_module
 
+        if language is None:
+            language = get_default_language()
         if source_ids is None:
             source_ids = await self._core.get_source_ids(notebook_id)
 
