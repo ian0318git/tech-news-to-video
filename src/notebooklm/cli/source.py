@@ -30,7 +30,7 @@ from .helpers import (
     display_report,
     display_research_sources,
     get_source_type_display,
-    import_with_retry,
+    import_research_sources,
     json_output_response,
     require_notebook,
     resolve_notebook_id,
@@ -557,6 +557,7 @@ def source_add_drive(ctx, file_id, title, notebook_id, mime_type, client_auth):
     help="Search mode (default: fast)",
 )
 @click.option("--import-all", is_flag=True, help="Import all found sources")
+@click.option("--cited-only", is_flag=True, help="With --import-all, import only cited sources")
 @click.option(
     "--no-wait",
     is_flag=True,
@@ -574,7 +575,16 @@ def source_add_drive(ctx, file_id, title, notebook_id, mime_type, client_auth):
 )
 @with_client
 def source_add_research(
-    ctx, query, notebook_id, search_source, mode, import_all, no_wait, timeout, client_auth
+    ctx,
+    query,
+    notebook_id,
+    search_source,
+    mode,
+    import_all,
+    cited_only,
+    no_wait,
+    timeout,
+    client_auth,
 ):
     """Search web or drive and add sources from results.
 
@@ -584,8 +594,12 @@ def source_add_research(
       source add-research "project docs" --from drive     # Search Google Drive
       source add-research "AI papers" --mode deep         # Deep search
       source add-research "tutorials" --import-all        # Auto-import all results
+      source add-research "topic" --import-all --cited-only
       source add-research "topic" --mode deep --no-wait   # Non-blocking deep search
     """
+    if cited_only and not import_all:
+        raise click.UsageError("--cited-only requires --import-all")
+
     nb_id = require_notebook(notebook_id)
 
     async def _run():
@@ -628,14 +642,16 @@ def source_add_research(
                 display_report(status.get("report", ""), json_hint=False)
 
                 if import_all and sources and task_id:
-                    imported = await import_with_retry(
+                    import_result = await import_research_sources(
                         client,
                         nb_id_resolved,
                         task_id,
                         sources,
+                        report=status.get("report", ""),
+                        cited_only=cited_only,
                         max_elapsed=timeout,
                     )
-                    console.print(f"[green]Imported {len(imported)} sources[/green]")
+                    console.print(f"[green]Imported {len(import_result.imported)} sources[/green]")
             else:
                 console.print(f"[yellow]Status: {status.get('status', 'unknown')}[/yellow]")
 

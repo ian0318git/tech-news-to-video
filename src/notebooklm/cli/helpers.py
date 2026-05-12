@@ -14,14 +14,16 @@ import json
 import logging
 import os
 import time
+from dataclasses import dataclass
 from functools import wraps
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit, urlunsplit
 
 import click
 from rich.console import Console
 from rich.table import Table
 
+from .._research import CitedSourceSelection, ResearchAPI
 from ..auth import AuthTokens, build_cookie_jar, load_auth_from_storage
 from ..exceptions import NetworkError, NotebookLimitError, RPCError, RPCTimeoutError
 from ..paths import get_context_path
@@ -38,6 +40,15 @@ logger = logging.getLogger(__name__)
 _CLI_ARTIFACT_ALIASES = {
     "flashcard": "flashcards",  # CLI uses singular, enum uses plural
 }
+
+
+@dataclass(frozen=True)
+class ResearchImportResult:
+    """Result of importing research sources from CLI commands."""
+
+    imported: list[dict[str, str]]
+    sources: list[dict]
+    cited_selection: CitedSourceSelection | None = None
 
 
 def cli_name_to_artifact_type(name: str) -> ArtifactType | None:
@@ -323,6 +334,73 @@ async def import_with_retry(
             await asyncio.sleep(sleep_for)
             delay = min(delay * backoff_factor, max_delay)
             attempt += 1
+
+
+def _select_research_sources_for_import(
+    sources: list[dict], report: str, cited_only: bool
+) -> tuple[list[dict], CitedSourceSelection | None]:
+    if not cited_only or not sources:
+        return sources, None
+
+    cited_selection = ResearchAPI.select_cited_sources(sources, report)
+    return cited_selection.sources, cited_selection
+
+
+def _display_cited_import_selection(cited_selection: CitedSourceSelection | None) -> None:
+    if cited_selection is None:
+        return
+
+    if cited_selection.used_fallback:
+        console.print("[yellow]Could not resolve cited sources; importing all sources.[/yellow]")
+        return
+
+    console.print(
+        f"[dim]Importing {cited_selection.matched_url_source_count} cited source(s)[/dim]"
+    )
+
+
+async def import_research_sources(
+    client,
+    notebook_id: str,
+    task_id: str,
+    sources: list[dict],
+    *,
+    report: str = "",
+    cited_only: bool = False,
+    max_elapsed: float = 1800,
+    json_output: bool = False,
+    status_message: str | None = None,
+) -> ResearchImportResult:
+    """Select and import research sources using shared CLI policy."""
+    sources_to_import, cited_selection = _select_research_sources_for_import(
+        sources, report, cited_only
+    )
+    if not sources_to_import:
+        return ResearchImportResult([], sources_to_import, cited_selection)
+
+    if not json_output:
+        _display_cited_import_selection(cited_selection)
+
+    retry_kwargs: dict[str, Any] = {"max_elapsed": max_elapsed}
+    if json_output:
+        retry_kwargs["json_output"] = True
+
+    async def _import_selected() -> list[dict[str, str]]:
+        return await import_with_retry(
+            client,
+            notebook_id,
+            task_id,
+            sources_to_import,
+            **retry_kwargs,
+        )
+
+    if status_message and not json_output:
+        with console.status(status_message):
+            imported = await _import_selected()
+    else:
+        imported = await _import_selected()
+
+    return ResearchImportResult(imported, sources_to_import, cited_selection)
 
 
 # =============================================================================

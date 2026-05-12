@@ -20,6 +20,7 @@ from notebooklm.types import (
 from .conftest import create_mock_client, patch_client_for_module
 
 source_module = importlib.import_module("notebooklm.cli.source")
+helpers_module = importlib.import_module("notebooklm.cli.helpers")
 
 
 @pytest.fixture
@@ -727,7 +728,9 @@ class TestSourceAddResearch:
     def test_add_research_with_import_all_uses_retry_helper(self, runner, mock_auth):
         with (
             patch_client_for_module("source") as mock_client_cls,
-            patch.object(source_module, "import_with_retry", new_callable=AsyncMock) as mock_import,
+            patch.object(
+                helpers_module, "import_with_retry", new_callable=AsyncMock
+            ) as mock_import,
         ):
             mock_client = create_mock_client()
             mock_client.research.start = AsyncMock(return_value={"task_id": "task_123"})
@@ -770,10 +773,73 @@ class TestSourceAddResearch:
             max_elapsed=1800,
         )
 
+    def test_add_research_with_import_all_cited_only(self, runner, mock_auth):
+        with (
+            patch_client_for_module("source") as mock_client_cls,
+            patch.object(
+                helpers_module, "import_with_retry", new_callable=AsyncMock
+            ) as mock_import,
+        ):
+            mock_client = create_mock_client()
+            mock_client.research.start = AsyncMock(return_value={"task_id": "task_123"})
+            mock_client.research.poll = AsyncMock(
+                return_value={
+                    "status": "completed",
+                    "task_id": "task_123",
+                    "sources": [
+                        {"title": "Cited", "url": "https://example.com/cited"},
+                        {"title": "Uncited", "url": "https://example.com/uncited"},
+                    ],
+                    "report": "Report cites https://example.com/cited",
+                }
+            )
+            mock_import.return_value = [{"id": "src_1", "title": "Cited"}]
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli,
+                    [
+                        "source",
+                        "add-research",
+                        "AI papers",
+                        "--import-all",
+                        "--cited-only",
+                        "-n",
+                        "nb_123",
+                    ],
+                )
+
+        assert result.exit_code == 0
+        assert "Imported 1 sources" in result.output
+        mock_import.assert_awaited_once_with(
+            mock_client,
+            "nb_123",
+            "task_123",
+            [{"title": "Cited", "url": "https://example.com/cited"}],
+            max_elapsed=1800,
+        )
+
+    def test_add_research_cited_only_requires_import_all(
+        self, runner, mock_auth, mock_fetch_tokens
+    ):
+        result = runner.invoke(
+            cli,
+            ["source", "add-research", "AI papers", "--cited-only", "-n", "nb_123"],
+        )
+
+        assert result.exit_code == 1
+        assert "--cited-only requires --import-all" in result.output
+
     def test_add_research_timeout_flag_threaded_to_import_with_retry(self, runner, mock_auth):
         with (
             patch_client_for_module("source") as mock_client_cls,
-            patch.object(source_module, "import_with_retry", new_callable=AsyncMock) as mock_import,
+            patch.object(
+                helpers_module, "import_with_retry", new_callable=AsyncMock
+            ) as mock_import,
         ):
             mock_client = create_mock_client()
             mock_client.research.start = AsyncMock(return_value={"task_id": "task_t1"})
