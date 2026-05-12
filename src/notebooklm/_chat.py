@@ -16,7 +16,7 @@ import httpx
 
 from ._core import ClientCore
 from .exceptions import ChatError, NetworkError, ValidationError
-from .rpc import QUERY_URL, RPCMethod
+from .rpc import RPCMethod, get_query_url
 from .types import AskResult, ChatReference, ConversationTurn
 
 logger = logging.getLogger(__name__)
@@ -141,7 +141,7 @@ class ChatAPI:
             url_params["f.sid"] = self._core.auth.session_id
 
         query_string = urlencode(url_params)
-        url = f"{QUERY_URL}?{query_string}"
+        url = f"{get_query_url()}?{query_string}"
 
         http_client = self._core.get_http_client()
         try:

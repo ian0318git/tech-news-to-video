@@ -1666,6 +1666,8 @@ class TestIsAllowedCookieDomain:
 
         assert _is_allowed_cookie_domain(".google.com") is True
         assert _is_allowed_cookie_domain("notebooklm.google.com") is True
+        assert _is_allowed_cookie_domain("notebooklm.cloud.google.com") is True
+        assert _is_allowed_cookie_domain(".notebooklm.cloud.google.com") is True
         assert _is_allowed_cookie_domain(".googleusercontent.com") is True
         assert _is_allowed_cookie_domain(".accounts.google.com") is True
 
@@ -2031,7 +2033,9 @@ class TestAuthDomainPriority:
         [
             (".google.com", 4),
             (".notebooklm.google.com", 3),
+            (".notebooklm.cloud.google.com", 3),
             ("notebooklm.google.com", 2),
+            ("notebooklm.cloud.google.com", 2),
             (".google.de", 1),
             (".google.com.sg", 1),
             (".google.co.uk", 1),

@@ -15,6 +15,8 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Optional
 
+from ._env import get_base_url
+
 # Import exceptions from centralized module (re-export for backward compatibility)
 from .exceptions import (
     ArtifactDownloadError,
@@ -1409,7 +1411,7 @@ class ShareStatus:
         view_level = ShareViewLevel.FULL_NOTEBOOK
 
         # Construct share URL if public
-        share_url = f"https://notebooklm.google.com/notebook/{notebook_id}" if is_public else None
+        share_url = f"{get_base_url()}/notebook/{notebook_id}" if is_public else None
 
         return cls(
             notebook_id=notebook_id,

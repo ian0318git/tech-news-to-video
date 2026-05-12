@@ -19,6 +19,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 import click
 import httpx
@@ -28,6 +29,7 @@ if TYPE_CHECKING:
     from playwright.sync_api import BrowserContext, Page
     from rich.console import Console
 
+from .._env import get_base_host, get_base_url
 from ..auth import (
     ALLOWED_COOKIE_DOMAINS,
     GOOGLE_REGIONAL_CCTLDS,
@@ -57,8 +59,6 @@ from .language import set_language
 logger = logging.getLogger(__name__)
 
 GOOGLE_ACCOUNTS_URL = "https://accounts.google.com/"
-NOTEBOOKLM_URL = "https://notebooklm.google.com/"
-NOTEBOOKLM_HOST = "notebooklm.google.com"
 
 # Retryable Playwright connection errors
 RETRYABLE_CONNECTION_ERRORS = ("ERR_CONNECTION_CLOSED", "ERR_CONNECTION_RESET")
@@ -78,25 +78,36 @@ BROWSER_CLOSED_HELP = (
     "  1. Run: notebooklm login --fresh\n"
     "  2. Or run: notebooklm auth logout && notebooklm login"
 )
-CONNECTION_ERROR_HELP = (
-    "[red]Failed to connect to NotebookLM after multiple retries.[/red]\n"
-    "This may be caused by:\n"
-    "  • Network connectivity issues\n"
-    "  • Firewall or VPN blocking notebooklm.google.com\n"
-    "  • Corporate proxy interfering with the connection\n"
-    "  • Google rate limiting (too many login attempts)\n\n"
-    "Try:\n"
-    "  1. Check your internet connection\n"
-    "  2. Disable VPN/proxy temporarily\n"
-    "  3. Wait a few minutes before retrying\n"
-    "  4. Check if notebooklm.google.com is accessible in your browser"
-)
+
+
+def _connection_error_help() -> str:
+    """Return login connection troubleshooting text for the configured host."""
+    base_host = get_base_host()
+    return (
+        "[red]Failed to connect to NotebookLM after multiple retries.[/red]\n"
+        "This may be caused by:\n"
+        "  • Network connectivity issues\n"
+        f"  • Firewall or VPN blocking {base_host}\n"
+        "  • Corporate proxy interfering with the connection\n"
+        "  • Google rate limiting (too many login attempts)\n\n"
+        "Try:\n"
+        "  1. Check your internet connection\n"
+        "  2. Disable VPN/proxy temporarily\n"
+        "  3. Wait a few minutes before retrying\n"
+        f"  4. Check if {base_host} is accessible in your browser"
+    )
 
 
 def _is_navigation_interrupted_error(error: str | Exception) -> bool:
     """Return True for Playwright navigation races that are safe to ignore."""
     error_str = str(error).lower()
     return any(marker in error_str for marker in _NAVIGATION_INTERRUPTED_MARKERS)
+
+
+def _url_matches_base_host(url: str) -> bool:
+    """Return True when ``url`` is on the configured NotebookLM host."""
+    current_host = (urlparse(url).hostname or "").lower()
+    return current_host == get_base_host().lower()
 
 
 # Maps user-facing browser names to rookiepy function names.
@@ -543,7 +554,7 @@ def register_session_commands(cli):
                 # Retry navigation on transient connection errors with backoff
                 for attempt in range(1, LOGIN_MAX_RETRIES + 1):
                     try:
-                        page.goto(NOTEBOOKLM_URL, timeout=30000)
+                        page.goto(f"{get_base_url()}/", timeout=30000)
                         break
                     except PlaywrightError as exc:
                         error_str = str(exc)
@@ -593,7 +604,7 @@ def register_session_commands(cli):
                                 f"Failed to connect to NotebookLM after {LOGIN_MAX_RETRIES} attempts. "
                                 f"Last error: {error_str}"
                             )
-                            console.print(CONNECTION_ERROR_HELP)
+                            console.print(_connection_error_help())
                             raise SystemExit(1) from exc
                         else:
                             # Non-retryable error - re-raise immediately
@@ -611,7 +622,7 @@ def register_session_commands(cli):
                 # .google.co.uk). Use "commit" to resolve once response headers
                 # (including Set-Cookie) are processed, before any client-side
                 # JS redirect can interrupt. See #214.
-                for url in [GOOGLE_ACCOUNTS_URL, NOTEBOOKLM_URL]:
+                for url in [GOOGLE_ACCOUNTS_URL, f"{get_base_url()}/"]:
                     try:
                         page.goto(url, wait_until="commit")
                     except PlaywrightError as exc:
@@ -632,7 +643,7 @@ def register_session_commands(cli):
                             raise
 
                 current_url = page.url
-                if NOTEBOOKLM_HOST not in current_url:
+                if not _url_matches_base_host(current_url):
                     console.print(f"[yellow]Warning: Current URL is {current_url}[/yellow]")
                     if not click.confirm("Save authentication anyway?"):
                         raise SystemExit(1)

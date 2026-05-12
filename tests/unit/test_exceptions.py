@@ -3,6 +3,7 @@
 import pytest
 
 import notebooklm
+from notebooklm._env import DEFAULT_BASE_URL
 from notebooklm.exceptions import (
     ArtifactDownloadError,
     ArtifactError,
@@ -270,6 +271,23 @@ class TestDomainExceptions:
         assert e.known_limits == (100, 500)
         assert "Known NotebookLM limits include: 100, 500" in str(e)
         assert e.to_error_response_extra()["known_limits"] == [100, 500]
+
+    def test_notebook_limit_error_tolerates_invalid_base_url_env(self, monkeypatch):
+        """NotebookLimitError should preserve quota context even if env config is invalid."""
+        monkeypatch.setenv("NOTEBOOKLM_BASE_URL", "https://evil.example.com")
+
+        e = NotebookLimitError(499, limit=500)
+
+        assert "499/500" in str(e)
+        base_url = (
+            str(e)
+            .split("Delete old notebooks at ", 1)[1]
+            .split(
+                " and try again.",
+                1,
+            )[0]
+        )
+        assert base_url == DEFAULT_BASE_URL
 
     def test_source_not_found_has_source_id(self):
         """SourceNotFoundError stores source_id."""

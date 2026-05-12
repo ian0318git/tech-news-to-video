@@ -24,7 +24,6 @@ from .auth import (
     snapshot_cookie_jar,
 )
 from .rpc import (
-    BATCHEXECUTE_URL,
     AuthError,
     ClientError,
     NetworkError,
@@ -36,6 +35,7 @@ from .rpc import (
     build_request_body,
     decode_response,
     encode_rpc_request,
+    get_batchexecute_url,
 )
 
 logger = logging.getLogger(__name__)
@@ -283,6 +283,7 @@ class ClientCore:
         effective_path = path if path is not None else self._keepalive_storage_path
         if effective_path is None:
             return
+        save_path: Path = effective_path
 
         jar_copy = httpx.Cookies(jar)
         # Computed on the loop thread off ``jar_copy`` so the worker can refresh
@@ -292,7 +293,7 @@ class ClientCore:
 
         def _save(
             s: httpx.Cookies = jar_copy,
-            p: Path = effective_path,
+            p: Path = save_path,
             lock: threading.Lock = self._save_lock,
             post: CookieSnapshot = post_save_snapshot,
             client: ClientCore = self,
@@ -458,7 +459,7 @@ class ClientCore:
             "f.sid": self.auth.session_id,
             "rt": "c",
         }
-        return f"{BATCHEXECUTE_URL}?{urlencode(params)}"
+        return f"{get_batchexecute_url()}?{urlencode(params)}"
 
     async def rpc_call(
         self,

@@ -50,6 +50,7 @@ from typing import Any, NamedTuple, TypeAlias
 
 import httpx
 
+from ._env import get_base_url
 from ._url_utils import contains_google_auth_redirect, is_google_auth_redirect
 from .paths import get_storage_path, resolve_profile
 
@@ -210,6 +211,8 @@ ALLOWED_COOKIE_DOMAINS = {
     # Playwright storage_state may preserve the leading dot for NotebookLM cookies.
     ".notebooklm.google.com",
     "notebooklm.google.com",
+    ".notebooklm.cloud.google.com",
+    "notebooklm.cloud.google.com",
     ".googleusercontent.com",
     "accounts.google.com",  # Required for token refresh redirects
     ".accounts.google.com",  # http.cookiejar may normalize Domain=accounts.google.com
@@ -577,6 +580,10 @@ def _auth_domain_priority(domain: str) -> int:
     if domain == ".notebooklm.google.com":
         return 3
     if domain == "notebooklm.google.com":
+        return 2
+    if domain == ".notebooklm.cloud.google.com":
+        return 3
+    if domain == "notebooklm.cloud.google.com":
         return 2
     if _is_google_domain(domain):
         return 1
@@ -2312,7 +2319,7 @@ async def _fetch_tokens_with_jar(
         await _poke_session(client, storage_path)
 
         response = await client.get(
-            "https://notebooklm.google.com/",
+            f"{get_base_url()}/",
             follow_redirects=True,
             timeout=30.0,
         )

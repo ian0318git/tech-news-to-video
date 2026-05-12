@@ -13,9 +13,10 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 
 from ._core import ClientCore
+from ._env import get_base_url
 from ._url_utils import is_youtube_url
 from .exceptions import NetworkError, ValidationError
-from .rpc import UPLOAD_URL, RPCError, RPCMethod
+from .rpc import RPCError, RPCMethod, get_upload_url
 from .rpc.types import SourceStatus
 from .types import (
     Source,
@@ -1109,13 +1110,14 @@ class SourcesAPI:
         """Start a resumable upload session and get the upload URL."""
         import json
 
-        url = f"{UPLOAD_URL}?authuser=0"
+        base_url = get_base_url()
+        url = f"{get_upload_url()}?authuser=0"
 
         headers = {
             "Accept": "*/*",
             "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
-            "Origin": "https://notebooklm.google.com",
-            "Referer": "https://notebooklm.google.com/",
+            "Origin": base_url,
+            "Referer": f"{base_url}/",
             "x-goog-authuser": "0",
             "x-goog-upload-command": "start",
             "x-goog-upload-header-content-length": str(file_size),
@@ -1164,11 +1166,12 @@ class SourcesAPI:
             upload_url: The resumable upload URL from _start_resumable_upload.
             file_path: Path to the file to upload.
         """
+        base_url = get_base_url()
         headers = {
             "Accept": "*/*",
             "Content-Type": "application/x-www-form-urlencoded;charset=utf-8",
-            "Origin": "https://notebooklm.google.com",
-            "Referer": "https://notebooklm.google.com/",
+            "Origin": base_url,
+            "Referer": f"{base_url}/",
             "x-goog-authuser": "0",
             "x-goog-upload-command": "upload, finalize",
             "x-goog-upload-offset": "0",

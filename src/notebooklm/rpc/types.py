@@ -2,10 +2,36 @@
 
 from enum import Enum
 
-# NotebookLM API endpoints
-BATCHEXECUTE_URL = "https://notebooklm.google.com/_/LabsTailwindUi/data/batchexecute"
-QUERY_URL = "https://notebooklm.google.com/_/LabsTailwindUi/data/google.internal.labs.tailwind.orchestration.v1.LabsTailwindOrchestrationService/GenerateFreeFormStreamed"
-UPLOAD_URL = "https://notebooklm.google.com/upload/_/"
+from .._env import DEFAULT_BASE_URL, get_base_url
+
+# Backward-compatible default-host endpoint constants. Runtime code should use
+# the lazy get_* helpers below so NOTEBOOKLM_BASE_URL is honored after import.
+BATCHEXECUTE_URL = f"{DEFAULT_BASE_URL}/_/LabsTailwindUi/data/batchexecute"
+QUERY_URL = (
+    f"{DEFAULT_BASE_URL}/_/LabsTailwindUi/data/"
+    "google.internal.labs.tailwind.orchestration.v1."
+    "LabsTailwindOrchestrationService/GenerateFreeFormStreamed"
+)
+UPLOAD_URL = f"{DEFAULT_BASE_URL}/upload/_/"
+
+
+def get_batchexecute_url() -> str:
+    """Return the NotebookLM batchexecute endpoint for the configured host."""
+    return f"{get_base_url()}/_/LabsTailwindUi/data/batchexecute"
+
+
+def get_query_url() -> str:
+    """Return the NotebookLM streamed chat endpoint for the configured host."""
+    return (
+        f"{get_base_url()}/_/LabsTailwindUi/data/"
+        "google.internal.labs.tailwind.orchestration.v1."
+        "LabsTailwindOrchestrationService/GenerateFreeFormStreamed"
+    )
+
+
+def get_upload_url() -> str:
+    """Return the NotebookLM upload endpoint for the configured host."""
+    return f"{get_base_url()}/upload/_/"
 
 
 class RPCMethod(str, Enum):

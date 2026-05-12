@@ -28,6 +28,7 @@ from pathlib import Path
 from ._artifacts import ArtifactsAPI
 from ._chat import ChatAPI
 from ._core import DEFAULT_KEEPALIVE_MIN_INTERVAL, DEFAULT_TIMEOUT, ClientCore
+from ._env import get_base_url
 from ._notebooks import NotebooksAPI
 from ._notes import NotesAPI
 from ._research import ResearchAPI
@@ -223,7 +224,7 @@ class NotebookLMClient:
             ValueError: If token extraction fails (page structure may have changed).
         """
         http_client = self._core.get_http_client()
-        response = await http_client.get("https://notebooklm.google.com/")
+        response = await http_client.get(f"{get_base_url()}/")
         response.raise_for_status()
 
         # Check for redirect to login page

@@ -8,6 +8,8 @@ from notebooklm.rpc.types import (
     RPCMethod,
     SourceStatus,
     artifact_status_to_str,
+    get_batchexecute_url,
+    get_query_url,
     source_status_to_str,
 )
 
@@ -22,6 +24,13 @@ class TestRPCConstants:
     def test_query_url(self):
         """Test query URL for streaming chat."""
         assert "GenerateFreeFormStreamed" in QUERY_URL
+
+    def test_endpoint_helpers_honor_env_after_import(self, monkeypatch):
+        """Test lazy endpoint helpers are not locked to import-time env."""
+        monkeypatch.setenv("NOTEBOOKLM_BASE_URL", "https://notebooklm.cloud.google.com")
+
+        assert get_batchexecute_url().startswith("https://notebooklm.cloud.google.com/")
+        assert get_query_url().startswith("https://notebooklm.cloud.google.com/")
 
 
 class TestRPCMethod:

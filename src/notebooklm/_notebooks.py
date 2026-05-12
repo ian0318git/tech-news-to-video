@@ -5,6 +5,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from ._core import ClientCore
+from ._env import get_base_url
 from ._settings import build_get_user_settings_params, extract_account_limits
 from .exceptions import NotebookLimitError, RPCError
 from .rpc import RPCMethod
@@ -343,7 +344,7 @@ class NotebooksAPI:
         )
 
         # Build share URL
-        base_url = f"https://notebooklm.google.com/notebook/{notebook_id}"
+        base_url = f"{get_base_url()}/notebook/{notebook_id}"
         if public and artifact_id:
             url = f"{base_url}?artifactId={artifact_id}"
         elif public:
@@ -370,7 +371,7 @@ class NotebooksAPI:
         Returns:
             The share URL string.
         """
-        base_url = f"https://notebooklm.google.com/notebook/{notebook_id}"
+        base_url = f"{get_base_url()}/notebook/{notebook_id}"
         if artifact_id:
             return f"{base_url}?artifactId={artifact_id}"
         return base_url
