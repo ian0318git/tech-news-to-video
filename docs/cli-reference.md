@@ -83,7 +83,8 @@ See [Configuration](configuration.md) for details on environment variables and C
 | Command | Description | Example |
 |---------|-------------|---------|
 | `list` | List all notebooks | `notebooklm list` |
-| `create <title>` | Create notebook | `notebooklm create "Research"` |
+| `create <title>` | Create notebook (does not change active context) | `notebooklm create "Research"` |
+| `create <title> --use` | Create notebook and make it the active context | `notebooklm create "Research" --use` |
 | `delete -n <id>` | Delete notebook (uses current notebook if `-n` omitted) | `notebooklm delete -n abc123` |
 | `rename <title>` | Rename current notebook | `notebooklm rename "New Title"` |
 | `summary` | Get AI summary | `notebooklm summary` |

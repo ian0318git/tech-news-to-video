@@ -120,7 +120,8 @@ class TestNotebookList:
 
 
 class TestNotebookCreate:
-    def test_notebook_create(self, runner, mock_auth):
+    def test_notebook_create(self, runner, mock_auth, mock_context_file):
+        """Default create stays pure — context file is not touched."""
         with patch_main_cli_client() as mock_client_cls:
             mock_client = create_mock_client()
             mock_client.notebooks.create = AsyncMock(
@@ -138,8 +139,38 @@ class TestNotebookCreate:
 
             assert result.exit_code == 0
             assert "Created notebook" in result.output
+            assert "--use" in result.output  # hint shown when flag is omitted
+            assert not mock_context_file.exists()
 
-    def test_notebook_create_json_output(self, runner, mock_auth):
+    def test_notebook_create_does_not_overwrite_existing_context(
+        self, runner, mock_auth, mock_context_file
+    ):
+        """Default create must leave a previously active context untouched."""
+        mock_context_file.write_text(
+            json.dumps({"notebook_id": "old_nb", "title": "Previously Active"})
+        )
+
+        with patch_main_cli_client() as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.notebooks.create = AsyncMock(
+                return_value=Notebook(
+                    id="new_nb_id", title="Fresh", created_at=datetime(2024, 1, 1)
+                )
+            )
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["create", "Fresh"])
+
+            assert result.exit_code == 0
+            context = json.loads(mock_context_file.read_text())
+            assert context["notebook_id"] == "old_nb"
+
+    def test_notebook_create_json_output(self, runner, mock_auth, mock_context_file):
+        """JSON mode without --use is pure — no context mutation, no hint noise."""
         with patch_main_cli_client() as mock_client_cls:
             mock_client = create_mock_client()
             mock_client.notebooks.create = AsyncMock(
@@ -158,6 +189,72 @@ class TestNotebookCreate:
             assert result.exit_code == 0
             data = json.loads(result.output)
             assert data["notebook"]["id"] == "new_nb_id"
+            assert not mock_context_file.exists()
+
+    def test_notebook_create_with_use_flag(self, runner, mock_auth, mock_context_file):
+        """`create --use` switches context (text mode)."""
+        with patch_main_cli_client() as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.notebooks.create = AsyncMock(
+                return_value=Notebook(
+                    id="new_nb_id", title="Test Notebook", created_at=datetime(2024, 1, 1)
+                )
+            )
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["create", "Test Notebook", "--use"])
+
+            assert result.exit_code == 0
+            assert "Context set to new notebook" in result.output
+            context = json.loads(mock_context_file.read_text())
+            assert context["notebook_id"] == "new_nb_id"
+            assert context["title"] == "Test Notebook"
+
+    def test_notebook_create_with_use_short_flag(self, runner, mock_auth, mock_context_file):
+        """`-u` shorthand works identically to `--use`."""
+        with patch_main_cli_client() as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.notebooks.create = AsyncMock(
+                return_value=Notebook(id="short_id", title="Short", created_at=datetime(2024, 1, 1))
+            )
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["create", "Short", "-u"])
+
+            assert result.exit_code == 0
+            context = json.loads(mock_context_file.read_text())
+            assert context["notebook_id"] == "short_id"
+
+    def test_notebook_create_with_use_json(self, runner, mock_auth, mock_context_file):
+        """`create --use --json` switches context AND emits JSON (consistent with text mode)."""
+        with patch_main_cli_client() as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.notebooks.create = AsyncMock(
+                return_value=Notebook(
+                    id="new_nb_id", title="Test Notebook", created_at=datetime(2024, 1, 1)
+                )
+            )
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["create", "Test Notebook", "--use", "--json"])
+
+            assert result.exit_code == 0
+            data = json.loads(result.output)
+            assert data["notebook"]["id"] == "new_nb_id"
+            context = json.loads(mock_context_file.read_text())
+            assert context["notebook_id"] == "new_nb_id"
 
     def test_notebook_create_json_quota_error(self, runner, mock_auth):
         """Create emits structured JSON when notebook quota is detected."""

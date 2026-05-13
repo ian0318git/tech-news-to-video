@@ -22,6 +22,7 @@ from .helpers import (
     json_output_response,
     require_notebook,
     resolve_notebook_id,
+    set_current_notebook,
     with_client,
 )
 
@@ -73,14 +74,30 @@ def register_notebook_commands(cli):
 
     @cli.command("create")
     @click.argument("title")
+    @click.option(
+        "--use",
+        "-u",
+        "switch_context",
+        is_flag=True,
+        help="Set the new notebook as the current context (like 'notebooklm use <id>').",
+    )
     @click.option("--json", "json_output", is_flag=True, help="Output as JSON")
     @with_client
-    def create_cmd(ctx, title, json_output, client_auth):
-        """Create a new notebook."""
+    def create_cmd(ctx, title, switch_context, json_output, client_auth):
+        """Create a new notebook.
+
+        By default, creates the notebook without changing the active context.
+        Pass --use (or -u) to make the new notebook the current context, so
+        subsequent commands like 'source add' target it.
+        """
 
         async def _run():
             async with NotebookLMClient(client_auth) as client:
                 nb = await client.notebooks.create(title)
+
+                if switch_context:
+                    created_str = nb.created_at.strftime("%Y-%m-%d") if nb.created_at else None
+                    set_current_notebook(nb.id, nb.title, nb.is_owner, created_str)
 
                 if json_output:
                     data = {
@@ -94,6 +111,12 @@ def register_notebook_commands(cli):
                     return
 
                 console.print(f"[green]Created notebook:[/green] {nb.id} - {nb.title}")
+                if switch_context:
+                    console.print("[dim]Context set to new notebook[/dim]")
+                else:
+                    console.print(
+                        f"[dim]Tip: pass --use next time, or run 'notebooklm use {nb.id}'.[/dim]"
+                    )
 
         return _run()
 
