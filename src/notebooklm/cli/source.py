@@ -18,6 +18,7 @@ Commands:
 import asyncio
 import re
 from pathlib import Path
+from urllib.parse import urlparse, urlunparse
 
 import click
 from rich.table import Table
@@ -38,6 +39,101 @@ from .helpers import (
     validate_id,
     with_client,
 )
+
+# Titles matching this pattern indicate the source was blocked by an anti-bot
+# gateway, CAPTCHA, or returned an HTTP error page instead of real content.
+_GATEWAY_TITLE_PATTERN = re.compile(
+    r"^\s*(access denied|403|404|forbidden|not found|502"
+    r"|just a moment|attention required|security check|captcha)",
+    re.IGNORECASE,
+)
+
+# Only sources with explicit "error" status are auto-cleaned. "unknown" is
+# excluded on purpose: it covers status codes we don't recognize yet (future
+# NotebookLM states) and missing-status responses, which must not be silently
+# deleted.
+_JUNK_STATUSES = frozenset({"error"})
+
+
+def _normalize_url_for_dedup(url: str) -> str:
+    """Return a URL with only the fragment stripped, for dedup comparison.
+
+    Scheme and host are lowercased per RFC 3986 (both are case-insensitive),
+    so ``https://Example.com/a`` and ``https://example.com/a`` are recognised
+    as the same resource. Query strings are preserved because they often
+    disambiguate distinct resources (e.g. YouTube ``?v=ID``, Google Docs
+    ``?id=ID``, arXiv versions), so collapsing them would falsely flag
+    legitimate sources as duplicates.
+    """
+    parsed = urlparse(url)
+    return urlunparse(
+        (
+            parsed.scheme.lower(),
+            parsed.netloc.lower(),
+            parsed.path,
+            parsed.params,
+            parsed.query,
+            "",
+        )
+    )
+
+
+# Sort key sentinel: sources with no created_at go to the END so a real,
+# dated copy is preferred as the "oldest" anchor during dedup.
+_UNDATED_SORT_KEY = float("inf")
+
+
+def _classify_junk_sources(sources: list) -> list[tuple[str, str, str, str]]:
+    """Identify junk sources for cleanup.
+
+    Returns a deterministically ordered list of ``(id, title, status, reason)``
+    tuples for every source that should be deleted. ``reason`` is one of
+    ``"error_status"``, ``"gateway_title"``, or ``"duplicate_of:<short-id>"``.
+    The oldest non-junk copy of each URL is kept; later duplicates are flagged.
+    """
+    sorted_sources = sorted(
+        sources,
+        key=lambda s: s.created_at.timestamp() if s.created_at else _UNDATED_SORT_KEY,
+    )
+
+    candidates: list[tuple[str, str, str, str]] = []
+    seen_urls: dict[str, str] = {}
+
+    for s in sorted_sources:
+        title = (s.title or "").strip()
+        status = source_status_to_str(s.status) if s.status else "unknown"
+
+        if status in _JUNK_STATUSES:
+            candidates.append((s.id, title, status, "error_status"))
+            continue
+
+        if _GATEWAY_TITLE_PATTERN.match(title):
+            candidates.append((s.id, title, status, "gateway_title"))
+            continue
+
+        url = s.url or ""
+        if url:
+            normalized = _normalize_url_for_dedup(url)
+            kept = seen_urls.get(normalized)
+            if kept is not None:
+                candidates.append((s.id, title, status, f"duplicate_of:{kept[:8]}"))
+                continue
+            seen_urls[normalized] = s.id
+
+    return candidates
+
+
+def _print_clean_candidates(candidates: list[tuple[str, str, str, str]]) -> None:
+    """Print a Rich table summarizing sources that will (or would) be deleted."""
+    table = Table(title=f"{len(candidates)} source(s) flagged for cleanup")
+    table.add_column("ID", style="dim", overflow="fold")
+    table.add_column("Title", overflow="fold")
+    table.add_column("Status")
+    table.add_column("Reason")
+    for sid, title, status, reason in candidates:
+        display_title = title if title else "[dim](no title)[/dim]"
+        table.add_row(sid[:8], display_title, status, reason)
+    console.print(table)
 
 
 @click.group()
@@ -952,5 +1048,78 @@ def source_wait(ctx, source_id, notebook_id, timeout, json_output, client_auth):
                     console.print(f"[yellow]⚠ Timeout waiting for source:[/yellow] {e.source_id}")
                     console.print(f"[dim]Last status: {e.last_status}[/dim]")
                 raise SystemExit(2) from None
+
+    return _run()
+
+
+@source.command("clean")
+@click.option(
+    "-n",
+    "--notebook",
+    "notebook_id",
+    default=None,
+    help="Notebook ID (uses current if not set)",
+)
+@click.option(
+    "--dry-run", is_flag=True, help="Show what would be deleted without actually deleting"
+)
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
+@with_client
+def source_clean(ctx, notebook_id, dry_run, yes, client_auth):
+    """Automatically remove duplicate, error, and access-blocked sources."""
+    nb_id = require_notebook(notebook_id)
+
+    async def _run():
+        async with NotebookLMClient(client_auth) as client:
+            nb_id_resolved = await resolve_notebook_id(client, nb_id)
+            with console.status("Fetching sources for cleanup..."):
+                sources = await client.sources.list(nb_id_resolved)
+
+            candidates = _classify_junk_sources(sources)
+
+            if not candidates:
+                console.print("[green]Notebook is already clean. No junk sources found.[/green]")
+                return
+
+            _print_clean_candidates(candidates)
+
+            if dry_run:
+                console.print(
+                    f"[yellow]Dry run: would delete {len(candidates)} source(s).[/yellow]"
+                )
+                return
+
+            if not yes and not click.confirm(f"Delete {len(candidates)} source(s)?"):
+                return
+
+            console.print(f"[dim]Cleaning {len(candidates)} source(s) (in chunks of 10)...[/dim]")
+
+            delete_list = [c[0] for c in candidates]
+            chunk_size = 10
+            deleted = 0
+            failures: list[tuple[str, str]] = []
+            for i in range(0, len(delete_list), chunk_size):
+                chunk = delete_list[i : i + chunk_size]
+                delete_tasks = [client.sources.delete(nb_id_resolved, sid) for sid in chunk]
+                results = await asyncio.gather(*delete_tasks, return_exceptions=True)
+                for sid, r in zip(chunk, results, strict=True):
+                    if isinstance(r, Exception):
+                        failures.append((sid, str(r)))
+                    else:
+                        deleted += 1
+                if i + chunk_size < len(delete_list):
+                    await asyncio.sleep(0.5)
+
+            if failures:
+                console.print(
+                    f"[yellow]Cleaned {deleted} source(s). "
+                    f"{len(failures)} deletion(s) failed.[/yellow]"
+                )
+                for sid, err in failures[:5]:
+                    console.print(f"  [red]{sid}:[/red] {err}")
+                if len(failures) > 5:
+                    console.print(f"  [dim]...and {len(failures) - 5} more[/dim]")
+            else:
+                console.print(f"[green]Successfully cleaned {deleted} source(s).[/green]")
 
     return _run()
