@@ -22,7 +22,6 @@ from .helpers import (
     json_output_response,
     require_notebook,
     resolve_notebook_id,
-    set_current_notebook,
     with_client,
 )
 
@@ -83,9 +82,6 @@ def register_notebook_commands(cli):
             async with NotebookLMClient(client_auth) as client:
                 nb = await client.notebooks.create(title)
 
-                created_str = nb.created_at.strftime("%Y-%m-%d") if nb.created_at else None
-                set_current_notebook(nb.id, nb.title, nb.is_owner, created_str)
-
                 if json_output:
                     data = {
                         "notebook": {
@@ -98,7 +94,6 @@ def register_notebook_commands(cli):
                     return
 
                 console.print(f"[green]Created notebook:[/green] {nb.id} - {nb.title}")
-                console.print("[dim]Context set to new notebook[/dim]")
 
         return _run()
 
