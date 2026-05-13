@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`notebooklm ask --timeout` CLI option** - Per-invocation HTTP request timeout for the `ask` command. Useful when long or complex prompts exceed the library's default 30 s timeout. Accepts a positive integer (seconds); omitting the flag preserves the existing library default, matching the established `source add --timeout` pattern. Supersedes #260.
 - **Source fulltext markdown format** - Retrieve source content as structured Markdown with headings, tables, links, and emphasis preserved (closes #222)
   - New `output_format` parameter on `client.sources.get_fulltext()` (`"text"` default, `"markdown"`)
   - New `-f`/`--format` CLI option on `source fulltext` command
