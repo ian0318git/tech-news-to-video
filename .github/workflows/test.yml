@@ -88,4 +88,4 @@ jobs:
         fi
 
     - name: Run tests with coverage
-      run: pytest --cov=src/notebooklm --cov-report=term-missing --cov-fail-under=70
+      run: pytest --cov=src/notebooklm --cov-report=term-missing --cov-fail-under=90

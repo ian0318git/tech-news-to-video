@@ -227,7 +227,10 @@ pre-commit install
 **Pre-commit checklist (run before every commit):**
 
 ```bash
-uv run ruff format --check . && uv run ruff check . && uv run mypy src/notebooklm --ignore-missing-imports && uv run pytest
+uv run ruff format --check . && \
+    uv run ruff check . && \
+    uv run mypy src/notebooklm --ignore-missing-imports && \
+    uv run pytest --cov=src/notebooklm --cov-report=term-missing --cov-fail-under=90
 ```
 
 **Verify:**

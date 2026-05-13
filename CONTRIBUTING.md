@@ -17,7 +17,7 @@ pre-commit install
 uv run ruff format --check . && \
     uv run ruff check . && \
     uv run mypy src/notebooklm --ignore-missing-imports && \
-    uv run pytest
+    uv run pytest --cov=src/notebooklm --cov-report=term-missing --cov-fail-under=90
 ```
 
 **No uv?** Plain pip works as a fallback (won't enforce the lockfile, so you may resolve newer dep versions than CI):
