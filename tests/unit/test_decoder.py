@@ -45,6 +45,11 @@ class TestStripAntiXSSI:
 
 
 class TestParseChunkedResponse:
+    @staticmethod
+    def _chunk_record(data):
+        chunk_json = json.dumps(data)
+        return f"{len(chunk_json.encode('utf-8'))}\n{chunk_json}"
+
     def test_parses_single_chunk(self):
         """Test parsing response with single chunk."""
         chunk_data = ["chunk", "data"]
@@ -93,7 +98,8 @@ class TestParseChunkedResponse:
 
     def test_ignores_malformed_chunks(self):
         """Test malformed chunks are ignored when below 10% threshold."""
-        # Add 10 valid chunks and 1 malformed = 9% error rate (below 10% threshold)
+        # Add 10 valid chunk records and 1 malformed record, keeping the record-based
+        # error rate below the 10% threshold.
         valid_chunks = [json.dumps([f"valid{i}"]) for i in range(10)]
         valid_parts = "\n".join([f"{len(c)}\n{c}" for c in valid_chunks])
         response = f"{valid_parts}\n99\nnot-json\n"
@@ -103,6 +109,65 @@ class TestParseChunkedResponse:
         assert len(chunks) == 10
         assert chunks[0] == ["valid0"]
         assert chunks[9] == ["valid9"]
+
+    def test_warns_but_parses_mismatched_byte_count_with_valid_json(self, caplog):
+        """Mismatched byte counts are tolerated when the payload is valid JSON."""
+        valid_parts = "\n".join(self._chunk_record([f"valid{i}"]) for i in range(10))
+        payload = json.dumps(["wrong-size"])
+        response = f"{valid_parts}\n{len(payload) + 1}\n{payload}\n"
+
+        chunks = parse_chunked_response(response)
+
+        assert chunks == [[f"valid{i}"] for i in range(10)] + [["wrong-size"]]
+        assert "declares" in caplog.text
+        assert "payload is" in caplog.text
+
+    def test_skips_byte_count_without_payload_below_threshold(self, caplog):
+        """A trailing byte-count line without a payload is malformed and skipped."""
+        valid_parts = "\n".join(self._chunk_record([f"valid{i}"]) for i in range(10))
+        response = f"{valid_parts}\n42\n"
+
+        chunks = parse_chunked_response(response)
+
+        assert chunks == [[f"valid{i}"] for i in range(10)]
+        assert "without payload" in caplog.text
+
+    def test_skips_payload_split_across_lines_below_threshold(self):
+        """A payload split across lines is treated as truncated malformed input."""
+        valid_parts = "\n".join(self._chunk_record([f"valid{i}"]) for i in range(20))
+        payload = json.dumps(["split"])
+        first_part, second_part = payload[:4], payload[4:]
+        response = f"{valid_parts}\n{len(payload)}\n{first_part}\n{second_part}\n"
+
+        chunks = parse_chunked_response(response)
+
+        assert chunks == [[f"valid{i}"] for i in range(20)]
+
+    def test_skips_extra_non_json_lines_before_and_after_valid_chunk(self):
+        """Standalone non-JSON lines are skipped while valid chunks are preserved."""
+        valid_parts = "\n".join(self._chunk_record([f"valid{i}"]) for i in range(20))
+        response = f"noise-before\n{valid_parts}\nnoise-after\n"
+
+        chunks = parse_chunked_response(response)
+
+        assert chunks == [[f"valid{i}"] for i in range(20)]
+
+    def test_error_rate_exactly_ten_percent_is_tolerated(self):
+        """The malformed-record threshold is exclusive: exactly 10% does not raise."""
+        valid_lines = "\n".join(json.dumps([f"valid{i}"]) for i in range(9))
+        response = f"{valid_lines}\nnot-json\n"
+
+        chunks = parse_chunked_response(response)
+
+        assert chunks == [[f"valid{i}"] for i in range(9)]
+
+    def test_error_rate_just_above_ten_percent_raises(self):
+        """The parser raises once malformed records exceed 10%."""
+        valid_lines = "\n".join(json.dumps([f"valid{i}"]) for i in range(8))
+        response = f"{valid_lines}\nnot-json\n"
+
+        with pytest.raises(RPCError, match="Response parsing failed"):
+            parse_chunked_response(response)
 
 
 class TestExtractRPCResult:
