@@ -93,6 +93,7 @@ See [Configuration](configuration.md) for details on environment variables and C
 | Command | Description | Example |
 |---------|-------------|---------|
 | `ask <question>` | Ask a question | `notebooklm ask "What is this about?"` |
+| `ask --prompt-file` | Ask with question from file | `notebooklm ask --prompt-file q.txt` |
 | `ask -s <id>` | Ask using specific sources | `notebooklm ask "Summarize" -s src1 -s src2` |
 | `ask --json` | Get answer with source references | `notebooklm ask "Explain X" --json` |
 | `ask --save-as-note` | Save response as a note | `notebooklm ask "Explain X" --save-as-note` |
@@ -113,7 +114,7 @@ Supported source types: URLs, YouTube videos, files (PDF, text, Markdown, Word, 
 | `list` | - | - | `source list` |
 | `add <content>` | URL/file/text | `--title`, `--type`, `--mime-type`, `--timeout`, `--json` | `source add "https://..." --timeout 90` |
 | `add-drive <id> <title>` | Drive file ID | - | `source add-drive abc123 "Doc"` |
-| `add-research <query>` | Search query | `--mode [fast|deep]`, `--from [web|drive]`, `--import-all`, `--no-wait`, `--timeout` | `source add-research "AI" --mode deep --no-wait` |
+| `add-research [query]` | Search query | `--mode [fast|deep]`, `--from [web|drive]`, `--import-all`, `--no-wait`, `--timeout`, `--prompt-file PATH` | `source add-research "AI" --mode deep --no-wait` |
 | `get <id>` | Source ID | - | `source get src123` |
 | `fulltext <id>` | Source ID | `--json`, `-o FILE`, `-f [text\|markdown]` | `source fulltext src123 -f markdown -o out.md` (`-f markdown` requires the `markdown` extra: `pip install "notebooklm-py[markdown]"`) |
 | `guide <id>` | Source ID | `--json` | `source guide src123` |
@@ -138,6 +139,7 @@ All generate commands support:
 - `--source/-s` to select specific sources (repeatable)
 - `--json` for machine-readable output (returns `task_id` and `status`)
 - `--retry N` to automatically retry on rate limits with exponential backoff
+- `--prompt-file PATH` to read the description/query from a file instead of the command line (mutually exclusive with the positional argument; useful for long prompts that exceed shell length limits)
 
 Language-aware generate commands (`audio`, `video`, `cinematic-video`, `report`, `infographic`, `slide-deck`, `data-table`, `mind-map`) also support:
 - `--language` to override output language (precedence: `--language` > `NOTEBOOKLM_HL` env > config > `'en'`)
@@ -146,17 +148,17 @@ Language-aware generate commands (`audio`, `video`, `cinematic-video`, `report`,
 
 | Command | Options | Example |
 |---------|---------|---------|
-| `audio [description]` | `--format [deep-dive\|brief\|critique\|debate]`, `--length [short\|default\|long]`, `--wait` | `generate audio "Focus on history"` |
-| `video [description]` | `--format [explainer\|brief\|cinematic]`, `--style [auto\|classic\|whiteboard\|kawaii\|anime\|watercolor\|retro-print\|heritage\|paper-craft]`, `--wait` | `generate video "Explainer for kids"` |
+| `audio [description]` | `--format [deep-dive\|brief\|critique\|debate]`, `--length [short\|default\|long]`, `--prompt-file PATH`, `--wait` | `generate audio "Focus on history"` |
+| `video [description]` | `--format [explainer\|brief\|cinematic]`, `--style [auto\|classic\|whiteboard\|kawaii\|anime\|watercolor\|retro-print\|heritage\|paper-craft]`, `--prompt-file PATH`, `--wait` | `generate video "Explainer for kids"` |
 | `cinematic-video [description]` | Alias for `video --format cinematic`; supports the same options | `generate cinematic-video "Documentary about quantum physics"` |
-| `slide-deck [description]` | `--format [detailed\|presenter]`, `--length [default\|short]`, `--wait` | `generate slide-deck` |
-| `revise-slide <description>` | `-a/--artifact <id>` (required), `--slide N` (required), `--wait` | `generate revise-slide "Move title up" --artifact <id> --slide 0` |
-| `quiz [description]` | `--difficulty [easy\|medium\|hard]`, `--quantity [fewer\|standard\|more]`, `--wait` | `generate quiz --difficulty hard` |
-| `flashcards [description]` | `--difficulty [easy\|medium\|hard]`, `--quantity [fewer\|standard\|more]`, `--wait` | `generate flashcards` |
-| `infographic [description]` | `--orientation [landscape\|portrait\|square]`, `--detail [concise\|standard\|detailed]`, `--style [auto\|sketch-note\|professional\|bento-grid\|editorial\|instructional\|bricks\|clay\|anime\|kawaii\|scientific]`, `--wait` | `generate infographic` |
-| `data-table <description>` | `--wait` | `generate data-table "compare concepts"` |
+| `slide-deck [description]` | `--format [detailed\|presenter]`, `--length [default\|short]`, `--prompt-file PATH`, `--wait` | `generate slide-deck` |
+| `revise-slide [description]` | `-a/--artifact <id>` (required), `--slide N` (required), `--prompt-file PATH`, `--wait` | `generate revise-slide "Move title up" --artifact <id> --slide 0` |
+| `quiz [description]` | `--difficulty [easy\|medium\|hard]`, `--quantity [fewer\|standard\|more]`, `--prompt-file PATH`, `--wait` | `generate quiz --difficulty hard` |
+| `flashcards [description]` | `--difficulty [easy\|medium\|hard]`, `--quantity [fewer\|standard\|more]`, `--prompt-file PATH`, `--wait` | `generate flashcards` |
+| `infographic [description]` | `--orientation [landscape\|portrait\|square]`, `--detail [concise\|standard\|detailed]`, `--style [auto\|sketch-note\|professional\|bento-grid\|editorial\|instructional\|bricks\|clay\|anime\|kawaii\|scientific]`, `--prompt-file PATH`, `--wait` | `generate infographic` |
+| `data-table [description]` | `--prompt-file PATH`, `--wait` | `generate data-table "compare concepts"` |
 | `mind-map` | *(sync, no wait needed)* | `generate mind-map` |
-| `report [description]` | `--format [briefing-doc\|study-guide\|blog-post\|custom]`, `--append "extra instructions"`, `--wait` | `generate report --format study-guide` |
+| `report [description]` | `--format [briefing-doc\|study-guide\|blog-post\|custom]`, `--append "extra instructions"`, `--prompt-file PATH`, `--wait` | `generate report --format study-guide` |
 
 ### Artifact Commands (`notebooklm artifact <cmd>`)
 
@@ -555,7 +557,7 @@ See [Troubleshooting](troubleshooting.md) for full per-OS scheduler recipes (lau
 Perform AI-powered research and add discovered sources to the notebook.
 
 ```bash
-notebooklm source add-research <query> [OPTIONS]
+notebooklm source add-research [query] [OPTIONS]
 ```
 
 **Options:**
@@ -564,6 +566,7 @@ notebooklm source add-research <query> [OPTIONS]
 - `--import-all` - Automatically import all found sources (works with blocking mode)
 - `--no-wait` - Start research and return immediately (non-blocking)
 - `--timeout SECONDS` - Retry budget for `--import-all` when the IMPORT_RESEARCH RPC times out (default: 1800). Mirrors `research wait --timeout`. Has no effect without `--import-all`.
+- `--prompt-file PATH` - Read query from a file instead of the positional argument
 
 **Examples:**
 ```bash
@@ -578,6 +581,9 @@ notebooklm source add-research "AI safety papers" --mode deep --no-wait
 
 # Bounded import-retry budget for large result sets
 notebooklm source add-research "AI papers" --mode deep --import-all --timeout 3600
+
+# Read long query from file
+notebooklm source add-research --prompt-file research_query.txt --mode deep
 ```
 
 ### Research: `status`
@@ -653,6 +659,7 @@ notebooklm generate audio [description] [OPTIONS]
 - `-s, --source ID` - Use specific source(s) (repeatable, uses all if not specified)
 - `--wait` - Wait for generation to complete
 - `--json` - Output as JSON (returns `task_id` and `status`)
+- `--prompt-file PATH` - Read description from a file (mutually exclusive with positional argument)
 
 **Examples:**
 ```bash
@@ -671,6 +678,9 @@ notebooklm generate audio -s src_abc -s src_def
 # JSON output for scripting/automation
 notebooklm generate audio --json
 # Output: {"task_id": "abc123...", "status": "pending"}
+
+# Read long instructions from a file
+notebooklm generate audio --prompt-file instructions.txt --format debate
 ```
 
 ### Generate: `video`
@@ -682,8 +692,9 @@ notebooklm generate video [description] [OPTIONS]
 ```
 
 **Options:**
-- `--format [explainer|brief]` - Video format
-- `--style [auto|classic|whiteboard|kawaii|anime|watercolor|retro|heritage|paper-craft]` - Visual style
+- `--format [explainer|brief|cinematic]` - Video format
+- `--style [auto|custom|classic|whiteboard|kawaii|anime|watercolor|retro-print|heritage|paper-craft]` - Visual style
+- `--style-prompt TEXT` - Custom visual style prompt (required when `--style custom`; rejected with `--format cinematic`)
 - `--language LANG` - Language code
 - `-s, --source ID` - Use specific source(s) (repeatable, uses all if not specified)
 - `--wait` - Wait for generation to complete
@@ -709,7 +720,7 @@ notebooklm generate video --json
 Revise an individual slide in an existing slide deck using a natural-language prompt.
 
 ```bash
-notebooklm generate revise-slide <description> --artifact <id> --slide N [OPTIONS]
+notebooklm generate revise-slide [description] --artifact <id> --slide N [OPTIONS]
 ```
 
 **Required Options:**
@@ -719,6 +730,7 @@ notebooklm generate revise-slide <description> --artifact <id> --slide N [OPTION
 **Optional:**
 - `--wait` - Wait for revision to complete
 - `--json` - Machine-readable output
+- `--prompt-file PATH` - Read description from a file (mutually exclusive with positional argument)
 
 **Examples:**
 ```bash
@@ -747,6 +759,7 @@ notebooklm generate report [description] [OPTIONS]
 - `-s, --source ID` - Use specific source(s) (repeatable, uses all if not specified)
 - `--wait` - Wait for generation to complete
 - `--json` - Output as JSON
+- `--prompt-file PATH` - Read description from a file (mutually exclusive with positional argument)
 
 **Examples:**
 ```bash
@@ -762,6 +775,9 @@ notebooklm generate report "Create a white paper analyzing the key trends"
 # Append instructions to a built-in format
 notebooklm generate report --format study-guide --append "Target audience: beginners"
 notebooklm generate report --format briefing-doc --append "Focus on AI trends, keep it under 2 pages"
+
+# Read a long custom prompt from file (auto-selects custom format)
+notebooklm generate report --prompt-file custom_report.txt
 ```
 
 ### Download: `audio`, `video`, `slide-deck`, `infographic`, `report`, `mind-map`, `data-table`

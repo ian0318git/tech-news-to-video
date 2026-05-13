@@ -80,6 +80,17 @@ def output_option(f):
     )(f)
 
 
+def prompt_file_option(f):
+    """Add --prompt-file option for reading prompt/query text from a file."""
+    return click.option(
+        "--prompt-file",
+        "prompt_file",
+        type=click.Path(exists=True, dir_okay=False),
+        default=None,
+        help="Read prompt/query text from a file instead of the positional argument",
+    )(f)
+
+
 def retry_option(f):
     """Add --retry option for rate limit retry with exponential backoff."""
     return click.option(

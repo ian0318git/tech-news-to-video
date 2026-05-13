@@ -16,6 +16,7 @@ import os
 import time
 from dataclasses import dataclass
 from functools import wraps
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -767,6 +768,54 @@ async def resolve_source_ids(
     for sid in source_ids:
         resolved.append(await resolve_source_id(client, notebook_id, sid))
     return resolved
+
+
+def resolve_prompt(
+    argument_value: str | None,
+    prompt_file: str | None,
+    param_name: str = "prompt",
+    *,
+    required: bool = False,
+) -> str:
+    """Resolve prompt text from a positional argument or ``--prompt-file``.
+
+    Exactly one source may be provided. The file is read as UTF-8 with surrounding
+    whitespace stripped. When ``required`` is True and neither source yields
+    text, a ``UsageError`` is raised; otherwise an empty string is returned.
+
+    Args:
+        argument_value: Value of the positional CLI argument (may be empty).
+        prompt_file: Path passed via ``--prompt-file`` (may be ``None``).
+        param_name: Name of the positional argument, used in error messages.
+        required: When True, raise ``UsageError`` if both sources are empty.
+
+    Raises:
+        click.UsageError: Both sources provided, or ``required`` and both empty.
+        click.ClickException: Prompt file unreadable or not valid UTF-8.
+    """
+    if argument_value and prompt_file:
+        raise click.UsageError(
+            f"Cannot use both the {param_name} argument and --prompt-file. Choose one."
+        )
+
+    if prompt_file:
+        path = Path(prompt_file)
+        if not path.is_file():
+            raise click.ClickException(f"Prompt file '{prompt_file}' is not a regular file.")
+        try:
+            text = path.read_text(encoding="utf-8").strip()
+        except OSError as e:
+            raise click.ClickException(f"Failed to read prompt file '{prompt_file}': {e}") from e
+        except UnicodeDecodeError as e:
+            raise click.ClickException(
+                f"Prompt file '{prompt_file}' is not valid UTF-8: {e}"
+            ) from e
+    else:
+        text = argument_value or ""
+
+    if required and not text:
+        raise click.UsageError(f"Provide a {param_name} argument or --prompt-file.")
+    return text
 
 
 # =============================================================================

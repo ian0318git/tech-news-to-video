@@ -20,10 +20,12 @@ from .helpers import (
     json_output_response,
     require_notebook,
     resolve_notebook_id,
+    resolve_prompt,
     resolve_source_ids,
     set_current_conversation,
     with_client,
 )
+from .options import prompt_file_option
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +83,8 @@ def register_chat_commands(cli):
     """Register chat commands on the main CLI group."""
 
     @cli.command("ask")
-    @click.argument("question")
+    @click.argument("question", default="", required=False)
+    @prompt_file_option
     @click.option(
         "-n",
         "--notebook",
@@ -115,6 +118,7 @@ def register_chat_commands(cli):
     def ask_cmd(
         ctx,
         question,
+        prompt_file,
         notebook_id,
         conversation_id,
         source_ids,
@@ -138,6 +142,7 @@ def register_chat_commands(cli):
           notebooklm ask "explain X" --json             # Get answer with source references
           notebooklm ask "explain X" --save-as-note     # Save response as a note
         """
+        question = resolve_prompt(question, prompt_file, "question", required=True)
         nb_id = require_notebook(notebook_id)
 
         client_kwargs: dict = {}

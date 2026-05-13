@@ -35,10 +35,12 @@ from .helpers import (
     json_output_response,
     require_notebook,
     resolve_notebook_id,
+    resolve_prompt,
     resolve_source_id,
     validate_id,
     with_client,
 )
+from .options import prompt_file_option
 
 # Titles matching this pattern indicate the source was blocked by an anti-bot
 # gateway, CAPTCHA, or returned an HTTP error page instead of real content.
@@ -631,7 +633,8 @@ def source_add_drive(ctx, file_id, title, notebook_id, mime_type, client_auth):
 
 
 @source.command("add-research")
-@click.argument("query")
+@click.argument("query", default="", required=False)
+@prompt_file_option
 @click.option(
     "-n",
     "--notebook",
@@ -673,6 +676,7 @@ def source_add_drive(ctx, file_id, title, notebook_id, mime_type, client_auth):
 def source_add_research(
     ctx,
     query,
+    prompt_file,
     notebook_id,
     search_source,
     mode,
@@ -692,7 +696,9 @@ def source_add_research(
       source add-research "tutorials" --import-all        # Auto-import all results
       source add-research "topic" --import-all --cited-only
       source add-research "topic" --mode deep --no-wait   # Non-blocking deep search
+      source add-research --prompt-file query.txt --mode deep   # Read query from file
     """
+    query = resolve_prompt(query, prompt_file, "query", required=True)
     if cited_only and not import_all:
         raise click.UsageError("--cited-only requires --import-all")
 
