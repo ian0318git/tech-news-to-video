@@ -1,7 +1,9 @@
 """Tests for language CLI commands (list, get, set)."""
 
+import gc
 import importlib
 import json
+import warnings
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -29,6 +31,15 @@ def mock_config_file(tmp_path):
         patch.object(language_module, "get_home_dir", return_value=home_dir),
     ):
         yield config_file
+
+
+def unawaited_coroutine_warnings(caught_warnings):
+    return [
+        warning
+        for warning in caught_warnings
+        if issubclass(warning.category, RuntimeWarning)
+        and "was never awaited" in str(warning.message)
+    ]
 
 
 # =============================================================================
@@ -258,6 +269,24 @@ class TestSyncLanguageToServer:
 
         assert result is None
 
+    def test_sync_language_to_server_closes_coroutine_when_run_async_raises(self):
+        """Test run_async failures do not leak an unawaited coroutine warning."""
+        mock_ctx = MagicMock()
+        mock_ctx.obj = {}
+
+        with (
+            patch.object(language_module, "get_auth_tokens", return_value={"SID": "test"}),
+            patch.object(language_module, "run_async", side_effect=Exception("connection error")),
+            warnings.catch_warnings(record=True) as caught_warnings,
+        ):
+            warnings.simplefilter("always", RuntimeWarning)
+
+            result = language_module._sync_language_to_server("en", mock_ctx)
+            gc.collect()
+
+        assert result is None
+        assert unawaited_coroutine_warnings(caught_warnings) == []
+
 
 class TestGetLanguageFromServer:
     def test_get_language_from_server_success(self):
@@ -296,6 +325,24 @@ class TestGetLanguageFromServer:
             result = language_module._get_language_from_server(mock_ctx)
 
         assert result is None
+
+    def test_get_language_from_server_closes_coroutine_when_run_async_raises(self):
+        """Test run_async failures do not leak an unawaited coroutine warning."""
+        mock_ctx = MagicMock()
+        mock_ctx.obj = {}
+
+        with (
+            patch.object(language_module, "get_auth_tokens", return_value={"SID": "test"}),
+            patch.object(language_module, "run_async", side_effect=Exception("rpc error")),
+            warnings.catch_warnings(record=True) as caught_warnings,
+        ):
+            warnings.simplefilter("always", RuntimeWarning)
+
+            result = language_module._get_language_from_server(mock_ctx)
+            gc.collect()
+
+        assert result is None
+        assert unawaited_coroutine_warnings(caught_warnings) == []
 
 
 # =============================================================================

@@ -141,6 +141,14 @@ def set_language(code: str) -> None:
     save_config(config)
 
 
+def _run_language_rpc(coro):
+    """Run a language RPC coroutine and close it if the sync runner does not."""
+    try:
+        return run_async(coro)
+    finally:
+        coro.close()
+
+
 def _sync_language_to_server(code: str, ctx: click.Context) -> str | None:
     """Sync language setting to server via RPC.
 
@@ -158,7 +166,7 @@ def _sync_language_to_server(code: str, ctx: click.Context) -> str | None:
             async with NotebookLMClient(auth) as client:
                 return await client.settings.set_output_language(code)
 
-        return run_async(_set())
+        return _run_language_rpc(_set())
     except Exception as e:
         logger.debug("Failed to sync language to server: %s", e)
         return None
@@ -180,7 +188,7 @@ def _get_language_from_server(ctx: click.Context) -> str | None:
             async with NotebookLMClient(auth) as client:
                 return await client.settings.get_output_language()
 
-        return run_async(_get())
+        return _run_language_rpc(_get())
     except Exception as e:
         logger.debug("Failed to get language from server: %s", e)
         return None
