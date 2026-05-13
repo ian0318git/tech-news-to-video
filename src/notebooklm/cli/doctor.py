@@ -88,6 +88,8 @@ def register_doctor_command(cli):
         if storage_path.exists():
             try:
                 data = json.loads(storage_path.read_text(encoding="utf-8"))
+                if not isinstance(data, dict):
+                    raise ValueError("storage root is not an object")
                 cookies = data.get("cookies", [])
                 if not isinstance(cookies, list):
                     raise ValueError("cookies is not a list")
@@ -95,14 +97,14 @@ def register_doctor_command(cli):
                 if "SID" in cookie_names:
                     checks["auth"] = {
                         "status": "pass",
-                        "detail": f"authenticated (SID cookie present, {len(cookie_names)} cookies)",
+                        "detail": f"local SID cookie present ({len(cookie_names)} cookies)",
                     }
                 else:
                     checks["auth"] = {
                         "status": "fail",
                         "detail": "SID cookie missing",
                     }
-            except (json.JSONDecodeError, OSError) as e:
+            except (json.JSONDecodeError, OSError, ValueError) as e:
                 checks["auth"] = {"status": "fail", "detail": f"invalid storage file: {e}"}
         else:
             checks["auth"] = {"status": "fail", "detail": "not authenticated"}
@@ -112,6 +114,8 @@ def register_doctor_command(cli):
         if config_path.exists():
             try:
                 config_data = json.loads(config_path.read_text(encoding="utf-8"))
+                if not isinstance(config_data, dict):
+                    raise ValueError("config root is not an object")
                 default_profile = config_data.get("default_profile")
                 if default_profile and isinstance(default_profile, str):
                     try:
@@ -133,7 +137,7 @@ def register_doctor_command(cli):
                         "status": "pass",
                         "detail": "valid (no default_profile set)",
                     }
-            except (json.JSONDecodeError, OSError) as e:
+            except (json.JSONDecodeError, OSError, ValueError) as e:
                 checks["config"] = {"status": "fail", "detail": f"invalid: {e}"}
         else:
             checks["config"] = {"status": "pass", "detail": "not present (using defaults)"}

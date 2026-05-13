@@ -145,6 +145,10 @@ def _read_default_profile() -> str | None:
             return _cached_default_profile  # type: ignore[return-value]
 
         data = json.loads(config_path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            _cached_default_profile = None
+            _config_mtime = mtime
+            return None
         value = data.get("default_profile")
         # Guard against non-string values (e.g., {"default_profile": 123})
         _cached_default_profile = value if isinstance(value, str) else None
