@@ -2,6 +2,9 @@
 
 import importlib
 import json
+import os
+import sys
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -9,8 +12,48 @@ from click.testing import CliRunner
 
 from notebooklm.cli.profile import _PROFILE_NAME_RE, email_to_profile_name
 from notebooklm.notebooklm_cli import cli
+from notebooklm.paths import _reset_config_cache, set_active_profile
 
 profile_module = importlib.import_module("notebooklm.cli.profile")
+
+
+@pytest.fixture(autouse=True)
+def reset_profile_state():
+    set_active_profile(None)
+    _reset_config_cache()
+    yield
+    set_active_profile(None)
+    _reset_config_cache()
+
+
+@pytest.fixture
+def runner():
+    return CliRunner()
+
+
+def notebooklm_env(home: Path, **extra: str) -> dict[str, str]:
+    env = os.environ.copy()
+    env["NOTEBOOKLM_HOME"] = str(home)
+    env.pop("NOTEBOOKLM_PROFILE", None)
+    env.update(extra)
+    return env
+
+
+def make_profile(home: Path, name: str) -> Path:
+    profile_dir = home / "profiles" / name
+    profile_dir.mkdir(parents=True)
+    return profile_dir
+
+
+def read_config(home: Path) -> dict:
+    return json.loads((home / "config.json").read_text(encoding="utf-8"))
+
+
+def profile_names(home: Path) -> list[str]:
+    profiles_dir = home / "profiles"
+    if not profiles_dir.exists():
+        return []
+    return sorted(path.name for path in profiles_dir.iterdir() if path.is_dir())
 
 
 class TestEmailToProfileName:
@@ -84,3 +127,202 @@ class TestProfileListAccountMetadata:
                 "account": "bob@gmail.com",
             }
         ]
+
+
+class TestProfileCreateCommand:
+    @pytest.mark.parametrize("name", [".", "-work", "_work", "work/team", "../work"])
+    def test_rejects_invalid_profile_names(self, runner, tmp_path, name):
+        result = runner.invoke(cli, ["profile", "create", "--", name], env=notebooklm_env(tmp_path))
+
+        assert result.exit_code == 1
+        assert "Invalid profile name" in result.output
+        assert profile_names(tmp_path) == []
+
+    def test_create_existing_profile_fails(self, runner, tmp_path):
+        make_profile(tmp_path, "work")
+
+        result = runner.invoke(cli, ["profile", "create", "work"], env=notebooklm_env(tmp_path))
+
+        assert result.exit_code == 1
+        assert "Profile 'work' already exists." in result.output
+
+
+class TestProfileSwitchCommand:
+    def test_switch_missing_profile_shows_available_profiles(self, runner, tmp_path):
+        make_profile(tmp_path, "personal")
+        make_profile(tmp_path, "work")
+
+        result = runner.invoke(
+            cli,
+            ["profile", "switch", "missing"],
+            env=notebooklm_env(tmp_path),
+        )
+
+        assert result.exit_code == 1
+        assert "Profile 'missing' not found." in result.output
+        assert "Available: personal, work" in result.output
+
+    def test_switch_writes_default_profile_with_secure_permissions(self, runner, tmp_path):
+        make_profile(tmp_path, "work")
+        (tmp_path / "config.json").write_text(json.dumps({"language": "ja"}), encoding="utf-8")
+
+        result = runner.invoke(cli, ["profile", "switch", "work"], env=notebooklm_env(tmp_path))
+
+        assert result.exit_code == 0, result.output
+        assert read_config(tmp_path) == {"language": "ja", "default_profile": "work"}
+        if sys.platform != "win32":
+            assert ((tmp_path / "config.json").stat().st_mode & 0o777) == 0o600
+            assert (tmp_path.stat().st_mode & 0o777) == 0o700
+
+    def test_switch_secures_existing_config_directory(self, runner, tmp_path):
+        make_profile(tmp_path, "work")
+        if sys.platform != "win32":
+            tmp_path.chmod(0o777)
+
+        result = runner.invoke(cli, ["profile", "switch", "work"], env=notebooklm_env(tmp_path))
+
+        assert result.exit_code == 0, result.output
+        if sys.platform != "win32":
+            assert (tmp_path.stat().st_mode & 0o777) == 0o700
+
+    def test_write_config_serializes_path_values(self, tmp_path):
+        config_path = tmp_path / "config.json"
+
+        profile_module._write_config(config_path, {"profile_path": Path("profiles/work")})
+
+        assert read_config(tmp_path) == {"profile_path": str(Path("profiles/work"))}
+
+    def test_switch_recovers_from_corrupt_config(self, runner, tmp_path):
+        make_profile(tmp_path, "work")
+        (tmp_path / "config.json").write_text("{not json", encoding="utf-8")
+
+        result = runner.invoke(cli, ["profile", "switch", "work"], env=notebooklm_env(tmp_path))
+
+        assert result.exit_code == 0, result.output
+        assert read_config(tmp_path) == {"default_profile": "work"}
+
+    def test_switch_reports_config_write_failure(self, runner, tmp_path):
+        make_profile(tmp_path, "work")
+        config_path = tmp_path / "config.json"
+
+        with patch.object(
+            profile_module, "_write_config", side_effect=OSError("permission denied")
+        ):
+            result = runner.invoke(
+                cli,
+                ["profile", "switch", "work"],
+                env=notebooklm_env(tmp_path),
+            )
+
+        assert result.exit_code == 1
+        assert "Failed to update config.json: permission denied" in result.output
+        assert not config_path.exists()
+
+
+class TestProfileDeleteCommand:
+    def test_delete_blocks_configured_default_profile(self, runner, tmp_path):
+        make_profile(tmp_path, "work")
+        (tmp_path / "config.json").write_text(
+            json.dumps({"default_profile": "work"}),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(
+            cli,
+            ["profile", "delete", "work", "--confirm"],
+            env=notebooklm_env(tmp_path),
+        )
+
+        assert result.exit_code == 1
+        assert "Cannot delete active/default profile 'work'." in result.output
+        assert (tmp_path / "profiles" / "work").exists()
+
+    def test_delete_blocks_active_profile_from_cli_flag(self, runner, tmp_path):
+        make_profile(tmp_path, "work")
+
+        result = runner.invoke(
+            cli,
+            ["--profile", "work", "profile", "delete", "work", "--confirm"],
+            env=notebooklm_env(tmp_path),
+        )
+
+        assert result.exit_code == 1
+        assert "Cannot delete active/default profile 'work'." in result.output
+        assert (tmp_path / "profiles" / "work").exists()
+
+    def test_delete_cancel_leaves_profile(self, runner, tmp_path):
+        make_profile(tmp_path, "old")
+
+        result = runner.invoke(
+            cli,
+            ["profile", "delete", "old"],
+            input="n\n",
+            env=notebooklm_env(tmp_path),
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "Cancelled." in result.output
+        assert (tmp_path / "profiles" / "old").exists()
+
+    def test_delete_confirm_removes_profile(self, runner, tmp_path):
+        make_profile(tmp_path, "old")
+
+        result = runner.invoke(
+            cli,
+            ["profile", "delete", "old", "--confirm"],
+            env=notebooklm_env(tmp_path),
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "Profile 'old' deleted." in result.output
+        assert not (tmp_path / "profiles" / "old").exists()
+
+
+class TestProfileRenameCommand:
+    def test_rename_profile_success(self, runner, tmp_path):
+        old_dir = make_profile(tmp_path, "work")
+        (old_dir / "context.json").write_text("{}", encoding="utf-8")
+
+        result = runner.invoke(
+            cli,
+            ["profile", "rename", "work", "client"],
+            env=notebooklm_env(tmp_path),
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "Profile renamed: work" in result.output
+        assert not (tmp_path / "profiles" / "work").exists()
+        assert (tmp_path / "profiles" / "client" / "context.json").exists()
+
+    def test_rename_updates_configured_default_profile(self, runner, tmp_path):
+        make_profile(tmp_path, "work")
+        (tmp_path / "config.json").write_text(
+            json.dumps({"default_profile": "work", "language": "en"}),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(
+            cli,
+            ["profile", "rename", "work", "client"],
+            env=notebooklm_env(tmp_path),
+        )
+
+        assert result.exit_code == 0, result.output
+        assert read_config(tmp_path) == {"default_profile": "client", "language": "en"}
+        if sys.platform != "win32":
+            assert ((tmp_path / "config.json").stat().st_mode & 0o777) == 0o600
+
+    def test_rename_warns_when_config_read_fails_after_profile_move(self, runner, tmp_path):
+        make_profile(tmp_path, "work")
+        (tmp_path / "config.json").write_text("{not json", encoding="utf-8")
+
+        result = runner.invoke(
+            cli,
+            ["profile", "rename", "work", "client"],
+            env=notebooklm_env(tmp_path),
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "Warning: profile renamed but config.json update failed" in result.output
+        assert not (tmp_path / "profiles" / "work").exists()
+        assert (tmp_path / "profiles" / "client").exists()
