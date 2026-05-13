@@ -87,7 +87,7 @@ auth = AuthTokens.from_storage(profile="work")
 
 **Building a storage state from existing browser cookies (`[cookies]` extra):**
 
-Install with the optional `cookies` extra to pull cookies from a locally installed browser via [rookiepy](https://pypi.org/project/rookiepy/) — useful for headless environments where you cannot run Playwright:
+Install with the optional `cookies` extra to pull cookies from a locally installed browser via [rookiepy](https://pypi.org/project/rookiepy/) — useful for headless environments where you cannot run Playwright (full extras matrix: [docs/installation.md#optional-extras-matrix](installation.md#optional-extras-matrix)):
 
 ```bash
 pip install "notebooklm-py[cookies]"

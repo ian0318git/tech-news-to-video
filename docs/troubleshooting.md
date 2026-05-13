@@ -497,7 +497,7 @@ playwright install-deps chromium
 
 This is an environment-specific Playwright install failure that has been observed with some newer Playwright builds on Linux. `notebooklm-py` only needs a working browser install for `notebooklm login`; the workaround is to install a known-good Playwright version in a clean virtual environment.
 
-**Workaround:**
+**Workaround** (intentionally uses `pip` rather than the canonical `uv sync --frozen` flow from [installation.md#e-contributor](installation.md#e-contributor) — this workaround needs to *override* the `playwright>=1.40.0` constraint to a specific older version, which `uv sync --frozen` would refuse):
 ```bash
 python -m venv .venv
 source .venv/bin/activate
@@ -511,6 +511,7 @@ pip install -e ".[all]"
 - `python -m playwright ...` ensures you use the Playwright module from the active virtual environment
 - installing the browser before `pip install -e ".[all]"` avoids picking up an older broken global `playwright` executable
 - if you already have another `playwright` on your system, verify with `which playwright` after activation
+- using `pip` here (not `uv sync --frozen`) is deliberate: this workaround needs to override the project's resolved `playwright` version with a specific older release, which the locked `uv` flow would block
 
 If you need a non-editable install from Git instead of a local checkout, replace the last step with:
 ```bash

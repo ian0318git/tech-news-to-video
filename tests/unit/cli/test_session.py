@@ -83,8 +83,13 @@ class TestLoginUrlValidation:
 
 
 class TestLoginCommand:
-    def test_login_playwright_import_error_handling(self, runner):
-        """Test that ImportError for playwright is handled gracefully."""
+    def test_login_playwright_import_error_handling(self, runner, tmp_path, monkeypatch):
+        """Test that ImportError for playwright is handled gracefully.
+
+        Hermetic: NOTEBOOKLM_HOME=tmp_path so the test doesn't write to real
+        ~/.notebooklm/ (PermissionError in sandboxes).
+        """
+        monkeypatch.setenv("NOTEBOOKLM_HOME", str(tmp_path))
         # Patch the import inside the login function to raise ImportError
         with patch.dict("sys.modules", {"playwright": None, "playwright.sync_api": None}):
             result = runner.invoke(cli, ["login"])
@@ -92,6 +97,33 @@ class TestLoginCommand:
             # Should exit with code 1 and show helpful message
             assert result.exit_code == 1
             assert "Playwright not installed" in result.output or "pip install" in result.output
+
+    def test_login_install_hint_includes_browser_extra(self, runner, tmp_path, monkeypatch):
+        """Regression: the install hint must include the literal `[browser]` extra.
+
+        Before the fix, the hint was passed through `console.print()` with
+        markup enabled, so rich interpreted `[browser]` as a (nonexistent)
+        style tag and stripped it — leaving users with `pip install
+        "notebooklm-py"` (no extras), which doesn't pull Playwright.
+
+        Hermetic: `NOTEBOOKLM_HOME=tmp_path` so the test doesn't write to the
+        real `~/.notebooklm/` (would fail with PermissionError in sandboxes).
+        """
+        monkeypatch.setenv("NOTEBOOKLM_HOME", str(tmp_path))
+        with patch.dict("sys.modules", {"playwright": None, "playwright.sync_api": None}):
+            result = runner.invoke(cli, ["login"])
+            assert result.exit_code == 1
+            assert '"notebooklm-py[browser]"' in result.output, (
+                f"Install hint must show the literal [browser] extra; got: {result.output!r}"
+            )
+
+        with patch.dict("sys.modules", {"playwright": None, "playwright.sync_api": None}):
+            result_edge = runner.invoke(cli, ["login", "--browser", "msedge"])
+            assert result_edge.exit_code == 1
+            assert '"notebooklm-py[browser]"' in result_edge.output, (
+                "Install hint must show the literal [browser] extra for msedge too; "
+                f"got: {result_edge.output!r}"
+            )
 
     def test_login_help_message(self, runner):
         """Test login command shows help information."""

@@ -104,7 +104,7 @@ jobs:
 
     - name: Install Playwright system dependencies (Linux)
       if: runner.os == 'Linux'
-      run: playwright install-deps
+      run: playwright install-deps chromium
 
     - name: Run E2E tests
       id: e2e

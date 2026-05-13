@@ -53,7 +53,8 @@ Proceed with release preparation?
   ```
 - [ ] Set up the development environment:
   ```bash
-  uv sync --all-extras
+  # `[all]` excludes the cookies extra (Python 3.13+ rookiepy issue) — see docs/installation.md#all-vs-all-extras
+  uv sync --frozen --extra browser --extra dev --extra markdown
   uv run playwright install chromium
   ```
 

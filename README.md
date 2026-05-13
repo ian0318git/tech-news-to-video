@@ -88,47 +88,57 @@ These features are available via API/CLI but not exposed in NotebookLM's web int
 
 ## Installation
 
+**For AI agents** (Claude Code, Codex — the project's primary persona):
 ```bash
-# Basic installation
-pip install notebooklm-py
-
-# With browser login support (required for first-time setup)
+# 1. Install the package + Chromium for the login flow
 pip install "notebooklm-py[browser]"
 playwright install chromium
 
-# Optional: import cookies from your existing browser instead of running Playwright
-pip install "notebooklm-py[cookies]"
+# 2. Optional [cookies] extra — rookiepy fails to BUILD on Python 3.13+, so gate explicitly
+#    rather than swallowing errors (a swallow would also hide typos / network failures):
+if python -c "import sys; sys.exit(0 if sys.version_info < (3, 13) else 1)"; then
+    pip install "notebooklm-py[cookies]"
+fi
+
+# 3. Register the skill so your agent harness discovers SKILL.md
+#    Both write to ~/.claude/skills/ and ~/.agents/skills/ — prefer the first if `notebooklm`
+#    is on PATH (it is, after step 1); use the npx form if not:
+notebooklm skill install
+# Alternative: npx skills add teng-lin/notebooklm-py
+
+# 4. Authenticate — `notebooklm login` is the primary path (opens a browser; user signs in once;
+#    cookies persist for subsequent runs). For HEADLESS agent contexts where opening a browser
+#    isn't feasible, use `--browser-cookies <browser>` to extract from an already-logged-in browser
+#    (requires `[cookies]` from step 2).
+notebooklm login                                  # primary: opens browser, user signs in to Google
+# Headless alternative: notebooklm login --browser-cookies auto
+
+# 5. Verify — agent should grep for `"status": "ok"` AND `"checks.token_fetch": true`
+notebooklm auth check --test --json
 ```
 
-If `playwright install chromium` fails with `TypeError: onExit is not a function`, see the Linux workaround in [Troubleshooting](docs/troubleshooting.md#linux).
-
-### CLI-only install (`uv tool` / `pipx`)
-
-If you only need the `notebooklm` CLI (not the Python library) and want it on your `$PATH` in an isolated environment, install with [`uv tool`](https://docs.astral.sh/uv/concepts/tools/) or [`pipx`](https://pipx.pypa.io/):
-
+**For human CLI users:**
 ```bash
-# uv (recommended on systems where uv is already the package manager)
-uv tool install notebooklm-py
-uv tool install "notebooklm-py[browser]"
-uv tool install "notebooklm-py[cookies]"
-
-# pipx equivalent
-pipx install notebooklm-py
-pipx install "notebooklm-py[browser]"
-pipx install "notebooklm-py[cookies]"
+# Install (pipx is recommended on Linux/macOS — keeps the CLI off your system Python;
+# pip works fine if you're already in a venv).
+pipx install "notebooklm-py[browser]"            # OR: pip install "notebooklm-py[browser]"
+playwright install chromium                       # ~170 MB download, no progress bar — be patient (30-90 s).
+                                                  # Login auto-installs this for chromium too,
+                                                  # but doing it up front gives you visible feedback.
+notebooklm login                                  # opens browser for Google OAuth
 ```
 
-This is the right path for shell scripts, cron jobs, and ad-hoc terminal use — the `notebooklm` command stays available regardless of which project venv is active.
-
-### Development Installation
-
-For contributors or testing unreleased features:
-
+**As a library** (embedding in your app — no Playwright, no Chromium download):
 ```bash
-pip install git+https://github.com/teng-lin/notebooklm-py@main
+pip install notebooklm-py    # core install: httpx + click + rich (~10 MB)
+# All RPC traffic uses httpx; auth is cookie-based. Ship a pre-acquired
+# `storage_state.json` (or set NOTEBOOKLM_AUTH_JSON) and you never need
+# Playwright in your app or container. See docs/installation.md#c-library-user.
 ```
 
-⚠️ The main branch may contain unstable changes. Use PyPI releases for production.
+If `playwright install chromium` fails on Linux with `TypeError: onExit is not a function`, see the [Linux workaround](docs/troubleshooting.md#linux).
+
+**Contributors:** see [CONTRIBUTING.md](CONTRIBUTING.md). **Headless servers, all extras, FastAPI/Docker patterns (follow-up issue), and platform notes:** see [docs/installation.md](docs/installation.md).
 
 ## Quick Start
 

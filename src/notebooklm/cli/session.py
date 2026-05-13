@@ -1125,11 +1125,16 @@ def register_session_commands(cli):
             from playwright.sync_api import TimeoutError as PlaywrightTimeout
             from playwright.sync_api import sync_playwright
         except ImportError:
+            # NOTE: passing markup=False so rich does not interpret `[browser]` as a style tag
+            # (which would strip it, leaving the user with `pip install "notebooklm-py"` — no extras).
             if browser in _CHANNEL_BROWSERS:
-                install_hint = "  pip install notebooklm[browser]"
+                install_hint = '  pip install "notebooklm-py[browser]"'
             else:
-                install_hint = "  pip install notebooklm[browser]\n  playwright install chromium"
-            console.print(f"[red]Playwright not installed. Run:[/red]\n{install_hint}")
+                install_hint = (
+                    '  pip install "notebooklm-py[browser]"\n  playwright install chromium'
+                )
+            console.print("[red]Playwright not installed. Run:[/red]")
+            console.print(install_hint, markup=False)
             raise SystemExit(1) from None
 
         # Pre-flight check: verify Chromium browser is installed (system Chrome

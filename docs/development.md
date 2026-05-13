@@ -105,9 +105,10 @@ src/notebooklm/
 
 ### Prerequisites
 
-1. **Install dependencies:**
+1. **Install dependencies** (canonical contributor flow — see [docs/installation.md#e-contributor](installation.md#e-contributor) for details):
    ```bash
-   uv sync --extra dev --extra browser
+   uv sync --frozen --extra browser --extra dev --extra markdown
+   uv run playwright install chromium
    uv run pre-commit install
    ```
 

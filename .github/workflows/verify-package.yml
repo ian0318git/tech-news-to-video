@@ -35,21 +35,24 @@ jobs:
     - name: Create verification venv
       run: python -m venv verify-venv
 
-    - name: Install from TestPyPI
+    - name: Install from TestPyPI (with [browser,dev] extras)
       if: inputs.source == 'testpypi'
       shell: bash
       run: |
         source verify-venv/bin/activate
+        # --extra-index-url lets pip resolve [dev] tooling (pytest, mypy, etc.) from PyPI
+        # since they're not on TestPyPI. [browser,dev] replaces the inline test-deps step
+        # below; must include `browser` because [dev] alone omits playwright.
         pip install --index-url https://test.pypi.org/simple/ \
           --extra-index-url https://pypi.org/simple/ \
-          notebooklm-py==${{ steps.version.outputs.version }}
+          "notebooklm-py[browser,dev]==${{ steps.version.outputs.version }}"
 
-    - name: Install from PyPI
+    - name: Install from PyPI (with [browser,dev] extras)
       if: inputs.source == 'pypi'
       shell: bash
       run: |
         source verify-venv/bin/activate
-        pip install notebooklm-py==${{ steps.version.outputs.version }}
+        pip install "notebooklm-py[browser,dev]==${{ steps.version.outputs.version }}"
 
     - name: Verify version
       shell: bash
@@ -77,13 +80,14 @@ jobs:
         python -c "from notebooklm import NotebookLMClient, Notebook, Source, Artifact"
         echo "Core imports verified"
 
-    - name: Install test dependencies
+    - name: Install Playwright browsers
       shell: bash
       run: |
         source verify-venv/bin/activate
-        pip install pytest pytest-asyncio pytest-httpx pytest-cov pytest-rerunfailures python-dotenv vcrpy playwright
+        # Test deps now come from the `[dev]` extra installed in the source-specific step above.
+        # Just need to provision the Chromium browser binary + Linux system libs.
         playwright install chromium
-        playwright install-deps
+        playwright install-deps chromium
 
     - name: Run unit tests
       shell: bash

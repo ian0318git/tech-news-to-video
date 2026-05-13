@@ -117,7 +117,7 @@ Supported source types: URLs, YouTube videos, files (PDF, text, Markdown, Word, 
 | `add-drive <id> <title>` | Drive file ID | - | `source add-drive abc123 "Doc"` |
 | `add-research [query]` | Search query | `--mode [fast|deep]`, `--from [web|drive]`, `--import-all`, `--no-wait`, `--timeout`, `--prompt-file PATH` | `source add-research "AI" --mode deep --no-wait` |
 | `get <id>` | Source ID | - | `source get src123` |
-| `fulltext <id>` | Source ID | `--json`, `-o FILE`, `-f [text\|markdown]` | `source fulltext src123 -f markdown -o out.md` (`-f markdown` requires the `markdown` extra: `pip install "notebooklm-py[markdown]"`) |
+| `fulltext <id>` | Source ID | `--json`, `-o FILE`, `-f [text\|markdown]` | `source fulltext src123 -f markdown -o out.md` (`-f markdown` requires the `markdown` extra: `pip install "notebooklm-py[markdown]"` — full extras matrix: [docs/installation.md#optional-extras-matrix](installation.md#optional-extras-matrix)) |
 | `guide <id>` | Source ID | `--json` | `source guide src123` |
 | `rename <id> <title>` | Source ID, new title | - | `source rename src123 "New Name"` |
 | `refresh <id>` | Source ID | - | `source refresh src123` |
@@ -284,8 +284,8 @@ By default, opens a Chromium browser with a persistent profile. Log in to your G
 
 **Options:**
 - `--storage PATH` - Where to save storage_state.json (default: `$NOTEBOOKLM_HOME/profiles/<profile>/storage_state.json`)
-- `--browser [chromium|msedge]` - Browser to use for login (default: `chromium`). Use `msedge` for Microsoft Edge.
-- `--browser-cookies <auto|chrome|edge|firefox|safari|brave|arc|...>` - Read cookies from an installed browser instead of launching Playwright. Pass an explicit browser name, or `auto` to let rookiepy auto-detect. For Firefox Multi-Account Containers, use `firefox::<container-name>` to extract from a single container, or `firefox::none` for the no-container default — unscoped `firefox` merges every container's cookies (and emits a warning when that's happening). Requires `pip install "notebooklm-py[cookies]"`.
+- `--browser [chromium|msedge]` - Browser to use for login (default: `chromium`). Use `msedge` for Microsoft Edge. **Note:** only `chromium` is auto-installed by the CLI on first login (~170 MB Chromium download); `--browser msedge` requires Microsoft Edge to be already installed on your system (download from [microsoft.com/edge](https://www.microsoft.com/edge)).
+- `--browser-cookies <auto|chrome|edge|firefox|safari|brave|arc|...>` - Read cookies from an installed browser instead of launching Playwright. Pass an explicit browser name, or `auto` to let rookiepy auto-detect. For Firefox Multi-Account Containers, use `firefox::<container-name>` to extract from a single container, or `firefox::none` for the no-container default — unscoped `firefox` merges every container's cookies (and emits a warning when that's happening). Requires `pip install "notebooklm-py[cookies]"` (full extras matrix: [docs/installation.md#optional-extras-matrix](installation.md#optional-extras-matrix)).
 - `--account EMAIL` - Pick a signed-in Google account by email when several are present in the browser. Only valid with `--browser-cookies`.
 - `--all-accounts` - Extract every Google account signed in to the browser into separate profiles named from each account email. Only valid with `--browser-cookies`.
 - `--profile-name NAME` - Name the profile created by a targeted `--account` import. Defaults to the account email's local part. Only valid with `--browser-cookies`.

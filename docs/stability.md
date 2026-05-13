@@ -101,7 +101,7 @@ AuthTokens
 # (DEFAULT_STORAGE_PATH is deprecated; use notebooklm.paths.get_storage_path())
 
 # Helpers (cookies extra) - imported from notebooklm.auth
-notebooklm.auth.convert_rookiepy_cookies_to_storage_state  # requires `pip install "notebooklm-py[cookies]"`
+notebooklm.auth.convert_rookiepy_cookies_to_storage_state  # requires `pip install "notebooklm-py[cookies]"` — see docs/installation.md#optional-extras-matrix
 ```
 
 ### Internal (May change without notice)
@@ -149,7 +149,7 @@ The following are deprecated and will be removed in **v0.5.0**:
 Version 0.4.0 is backward compatible with v0.3.x. Notable additions:
 
 - **Multi-account profiles** - Existing single-account setups continue to work as the implicit default profile. Your existing `~/.notebooklm/storage_state.json` is auto-detected — no manual migration is required. New accounts can be added via `notebooklm profile create <name>`.
-- **`[cookies]` optional extra** - To reuse cookies from your existing browser, install with `pip install "notebooklm-py[cookies]"` (requires `rookiepy`).
+- **`[cookies]` optional extra** - To reuse cookies from your existing browser, install with `pip install "notebooklm-py[cookies]"` (requires `rookiepy`; full extras matrix: [docs/installation.md#optional-extras-matrix](installation.md#optional-extras-matrix)).
 - **Deprecation removal deferred** - The deprecated attributes originally scheduled for v0.4.0 (`Source.source_type`, `Artifact.artifact_type`, `Artifact.variant`, `SourceFulltext.source_type`, `StudioContentType`, `DEFAULT_STORAGE_PATH`) will now be removed in v0.5.0. They still emit `DeprecationWarning` — please migrate before v0.5.0.
 
 ### Migrating from v0.2.x to v0.3.0

@@ -282,6 +282,15 @@ jobs:
       - name: Install notebooklm-py
         run: pip install notebooklm-py
 
+      # Pre-flight: fail fast and loud on missing/expired auth.
+      # `auth check --json` returns exit 0 even when status is "error"; --test makes the network
+      # call needed to detect expired cookies, and the `jq -e` flag converts a non-"ok" status
+      # into a non-zero exit code so the runner step actually fails.
+      - name: Verify auth (fail-fast on expired cookies)
+        env:
+          NOTEBOOKLM_AUTH_JSON: ${{ secrets.NOTEBOOKLM_AUTH_JSON }}
+        run: notebooklm auth check --test --json | jq -e '.status == "ok"'
+
       - name: List notebooks
         env:
           NOTEBOOKLM_AUTH_JSON: ${{ secrets.NOTEBOOKLM_AUTH_JSON }}
@@ -296,8 +305,8 @@ jobs:
 ### Obtaining the Secret Value
 
 1. Run `notebooklm login` locally
-2. Copy the contents of `~/.notebooklm/storage_state.json`
-3. Add as a GitHub repository secret named `NOTEBOOKLM_AUTH_JSON`
+2. Copy the contents of `~/.notebooklm/profiles/default/storage_state.json` (the canonical write location; the legacy `~/.notebooklm/storage_state.json` is only read as a fallback)
+3. Add as a GitHub repository secret named `NOTEBOOKLM_AUTH_JSON` (see [installation.md#d-headless-server-or-ci](installation.md#d-headless-server-or-ci) for trailing-newline + ephemeral-runner refresh notes)
 
 ### Alternative: File-Based Auth
 
@@ -385,13 +394,7 @@ Works out of the box. Chromium is downloaded automatically by Playwright.
 
 ### Linux
 
-```bash
-# Install Playwright dependencies
-playwright install-deps chromium
-
-# Then install Chromium
-playwright install chromium
-```
+For Playwright system dependencies and the Chromium install on Debian/Ubuntu, see [docs/installation.md#platform-notes](installation.md#platform-notes) (and [troubleshooting.md#linux](troubleshooting.md#linux) if you hit `TypeError: onExit is not a function`).
 
 ### Windows
 
@@ -416,18 +419,4 @@ Browser login opens in the Windows host browser. The storage file is saved in th
 
 **Playwright is only required for the `notebooklm login` command.** All other operations use standard HTTP requests via `httpx`.
 
-This means you can run notebooklm on headless servers, Docker containers, and CI/CD environments without Playwright—just copy a valid `storage_state.json` or use `NOTEBOOKLM_AUTH_JSON`.
-
-```bash
-# On headless machine - no Playwright needed
-pip install notebooklm-py
-
-# Copy auth from local machine, or use env var
-scp ~/.notebooklm/storage_state.json user@server:~/.notebooklm/
-# OR
-export NOTEBOOKLM_AUTH_JSON='{"cookies": [...]}'
-
-# All commands work except 'login'
-notebooklm list
-notebooklm ask "Summarize the sources"
-```
+For the install + auth-bootstrap recipe (run `notebooklm login` on a workstation, copy `storage_state.json` to the server, set `NOTEBOOKLM_AUTH_JSON`), see the canonical Persona D guide: [docs/installation.md#d-headless-server-or-ci](installation.md#d-headless-server-or-ci).

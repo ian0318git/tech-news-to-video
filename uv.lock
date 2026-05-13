@@ -525,6 +525,7 @@ all = [
     { name = "pytest-timeout" },
     { name = "python-dotenv" },
     { name = "ruff" },
+    { name = "tomli", marker = "python_full_version < '3.11'" },
     { name = "vcrpy" },
 ]
 browser = [
@@ -544,6 +545,7 @@ dev = [
     { name = "pytest-timeout" },
     { name = "python-dotenv" },
     { name = "ruff" },
+    { name = "tomli", marker = "python_full_version < '3.11'" },
     { name = "vcrpy" },
 ]
 markdown = [
@@ -569,6 +571,7 @@ requires-dist = [
     { name = "rich", specifier = ">=13.0.0" },
     { name = "rookiepy", marker = "extra == 'cookies'", specifier = ">=0.1.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.15.12" },
+    { name = "tomli", marker = "python_full_version < '3.11' and extra == 'dev'", specifier = ">=2.0.0" },
     { name = "vcrpy", marker = "extra == 'dev'", specifier = ">=6.0.0" },
 ]
 provides-extras = ["markdown", "browser", "cookies", "dev", "all"]
