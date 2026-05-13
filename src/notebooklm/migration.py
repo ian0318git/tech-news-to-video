@@ -79,12 +79,12 @@ def migrate_to_profiles() -> bool:
 
     logger.info("Migrating legacy layout to profiles/default/")
 
-    # Copy files (skip if destination already exists and is newer — avoids
-    # overwriting profile data that was updated after a partial migration)
+    # Copy files — overwrite if source is newer (e.g., login wrote fresh
+    # cookies to the legacy root path after a previous migration).
     for src in legacy_files:
         dst = default_dir / src.name
-        if dst.exists():
-            logger.debug("Skipping %s (already exists in profile)", src.name)
+        if dst.exists() and dst.stat().st_mtime >= src.stat().st_mtime:
+            logger.debug("Skipping %s (profile copy is same age or newer)", src.name)
         else:
             shutil.copy2(src, dst)
             if sys.platform != "win32":
