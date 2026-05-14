@@ -15,7 +15,9 @@ from ..exceptions import (
     RPCError,
     RPCTimeoutError,
     ServerError,
+    UnknownRPCMethodError,
 )
+from ._safe_index import safe_index
 
 # Re-export for backward compatibility (imports from notebooklm.rpc.decoder still work)
 __all__ = [
@@ -26,6 +28,7 @@ __all__ = [
     "RateLimitError",
     "ServerError",
     "ClientError",
+    "UnknownRPCMethodError",
     "RPCErrorCode",
     "get_error_message_for_code",
     "strip_anti_xssi",
@@ -33,6 +36,7 @@ __all__ = [
     "collect_rpc_ids",
     "extract_rpc_result",
     "decode_response",
+    "safe_index",
 ]
 
 logger = logging.getLogger(__name__)
@@ -485,12 +489,12 @@ def decode_response(raw_response: str, rpc_id: str, allow_null: bool = False) ->
     if result is None and not allow_null:
         if found_ids and rpc_id not in found_ids:
             # Method ID likely changed - provide actionable error
-            raise RPCError(
+            raise UnknownRPCMethodError(
                 f"No result found for RPC ID '{rpc_id}'. "
                 f"Response contains IDs: {found_ids}. "
                 f"The RPC method ID may have changed.",
                 method_id=rpc_id,
-                found_ids=found_ids,
+                found_ids=list(found_ids),
                 raw_response=response_preview,
             )
 

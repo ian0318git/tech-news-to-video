@@ -100,6 +100,7 @@ A persistent Chromium user data directory used during `notebooklm login`.
 | `NOTEBOOKLM_HL` | Default interface/output language code (e.g. `en`, `ja`, `zh_Hans`) | `en` |
 | `NOTEBOOKLM_LOG_LEVEL` | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR` | `WARNING` |
 | `NOTEBOOKLM_DEBUG_RPC` | Legacy: Enable RPC debug logging (use `LOG_LEVEL=DEBUG` instead) | `false` |
+| `NOTEBOOKLM_STRICT_DECODE` | Raise `UnknownRPCMethodError` on schema drift instead of warn-and-fallback | `0` |
 
 ### NOTEBOOKLM_HOME
 
@@ -166,6 +167,28 @@ back to `en`. For the generate commands, the resolution order is:
 2. `NOTEBOOKLM_HL` environment variable
 3. `language` value from the active profile's config
 4. `en` (built-in default)
+
+### Decoder strictness
+
+NotebookLM's batchexecute responses are obfuscated, undocumented, and reshaped
+by Google without notice. The decoder uses a shared `safe_index` helper to walk
+nested response payloads. When it can't descend (an index is out of range, or
+the value at a step isn't indexable), behavior depends on
+`NOTEBOOKLM_STRICT_DECODE`:
+
+| Value | Behavior |
+|-------|----------|
+| `0` (default) | Log a warning with the failing path, `method_id`, `source` label, and a truncated repr of the data. Return `None` so legacy callers keep working. |
+| `1` / `true` / `True` | Raise `UnknownRPCMethodError` (a subclass of `DecodingError` / `RPCError`) with structured `method_id`, `path`, `source`, and `data_at_failure` attributes. |
+
+The default of `0` is a soft-rollout safeguard for this release while
+call sites migrate to defensive indexing. A future release will flip the
+default to `1` — set `NOTEBOOKLM_STRICT_DECODE=1` in your CI/staging
+environments now to catch drift early.
+
+The same `UnknownRPCMethodError` is also raised by `decode_response()` when the
+batchexecute response contains RPC IDs but not the one the call requested
+(typically a sign that Google rotated the method ID).
 
 ## CLI Options
 

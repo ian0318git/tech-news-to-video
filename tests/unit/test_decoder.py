@@ -4,11 +4,13 @@ import json
 
 import pytest
 
+from notebooklm.exceptions import DecodingError
 from notebooklm.rpc.decoder import (
     AuthError,
     ClientError,
     RateLimitError,
     RPCError,
+    UnknownRPCMethodError,
     collect_rpc_ids,
     decode_response,
     extract_rpc_result,
@@ -719,3 +721,87 @@ class TestAuthError:
         error = AuthError("Token expired", method_id="abc123")
         assert str(error) == "Token expired"
         assert error.method_id == "abc123"
+
+
+class TestUnknownRPCMethodErrorRouting:
+    """The 'requested rpc_id missing but other IDs found' branch routes to
+    ``UnknownRPCMethodError`` (a ``DecodingError`` subclass), not plain
+    ``RPCError``. Other null-result branches must keep raising ``RPCError``.
+    """
+
+    def _build_raw_missing(self) -> tuple[str, str, list[str]]:
+        """Build a response where requested ID is missing but another is present."""
+        requested = "OldMethodId"
+        actual = "NewMethodId"
+        inner = json.dumps([])
+        chunk = json.dumps(["wrb.fr", actual, inner, None, None])
+        raw = f")]}}'\n{len(chunk)}\n{chunk}\n"
+        return raw, requested, [actual]
+
+    def test_missing_id_raises_unknown_rpc_method_error(self):
+        raw, requested, found = self._build_raw_missing()
+        with pytest.raises(UnknownRPCMethodError) as exc_info:
+            decode_response(raw, requested)
+        err = exc_info.value
+        assert err.method_id == requested
+        assert err.found_ids == found
+        # raw_response must match the legacy RPCError preview semantics.
+        assert err.raw_response is not None
+        assert isinstance(err.raw_response, str)
+        # Message text unchanged.
+        assert "may have changed" in str(err)
+        assert requested in str(err)
+
+    def test_unknown_method_error_catchable_as_rpc_error(self):
+        raw, requested, _ = self._build_raw_missing()
+        with pytest.raises(RPCError):
+            decode_response(raw, requested)
+
+    def test_unknown_method_error_catchable_as_decoding_error(self):
+        raw, requested, _ = self._build_raw_missing()
+        with pytest.raises(DecodingError):
+            decode_response(raw, requested)
+
+    def test_unknown_method_error_catchable_as_specific_type(self):
+        raw, requested, _ = self._build_raw_missing()
+        with pytest.raises(UnknownRPCMethodError):
+            decode_response(raw, requested)
+
+    def test_status_code_branch_still_plain_rpc_error(self):
+        """Negative test: status-code [13] branch must NOT reroute."""
+        rpc_id = RPCMethod.GET_NOTEBOOK.value
+        chunk = json.dumps(["wrb.fr", rpc_id, None, None, None, [13], "generic"])
+        raw = f")]}}'\n{len(chunk)}\n{chunk}\n"
+        with pytest.raises(RPCError) as exc_info:
+            decode_response(raw, rpc_id)
+        # Must be plain RPCError (or ClientError for 5/7), but NEVER UnknownRPCMethodError.
+        assert not isinstance(exc_info.value, UnknownRPCMethodError)
+
+    def test_null_result_branch_still_plain_rpc_error(self):
+        """Negative test: null-result-no-status branch must NOT reroute."""
+        rpc_id = RPCMethod.GET_NOTEBOOK.value
+        chunk = json.dumps(["wrb.fr", rpc_id, None, None, None, None])
+        raw = f")]}}'\n{len(chunk)}\n{chunk}\n"
+        with pytest.raises(RPCError) as exc_info:
+            decode_response(raw, rpc_id)
+        assert not isinstance(exc_info.value, UnknownRPCMethodError)
+
+    def test_no_rpc_data_branch_still_plain_rpc_error(self):
+        """Negative test: empty-chunks branch must NOT reroute."""
+        raw = ")]}'\n"
+        with pytest.raises(RPCError) as exc_info:
+            decode_response(raw, "AnyId")
+        assert not isinstance(exc_info.value, UnknownRPCMethodError)
+
+    def test_preserves_byte_for_byte_payload_of_legacy_branch(self):
+        """raw_response, method_id, and found_ids match legacy RPCError shape."""
+        raw, requested, found = self._build_raw_missing()
+        with pytest.raises(UnknownRPCMethodError) as exc_info:
+            decode_response(raw, requested)
+        err = exc_info.value
+        # Same fields legacy RPCError populated.
+        assert err.method_id == requested
+        assert err.found_ids == found
+        assert err.raw_response is not None
+        # raw_response preview cap (500 chars) preserved by the base RPCError contract.
+        assert len(err.raw_response) <= 500

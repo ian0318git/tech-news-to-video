@@ -16,6 +16,19 @@ ENTERPRISE_BASE_HOST = "notebooklm.cloud.google.com"
 
 _ALLOWED_BASE_HOSTS = frozenset({PERSONAL_BASE_HOST, ENTERPRISE_BASE_HOST})
 
+STRICT_DECODE_ENV = "NOTEBOOKLM_STRICT_DECODE"
+
+
+def is_strict_decode_enabled() -> bool:
+    """Return True if the strict-decode mode is enabled.
+
+    During the Tier-1 soft-rollout, schema-drift helpers (e.g. ``safe_index``)
+    fall back to warn-and-return-None by default. Setting
+    ``NOTEBOOKLM_STRICT_DECODE=1`` (or ``true``/``True``) flips them to raise
+    ``UnknownRPCMethodError`` instead, surfacing drift early.
+    """
+    return os.environ.get(STRICT_DECODE_ENV, "0") in ("1", "true", "True")
+
 
 def get_base_url() -> str:
     """Return the configured NotebookLM base URL.

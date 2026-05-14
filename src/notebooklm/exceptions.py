@@ -179,7 +179,91 @@ class UnknownRPCMethodError(DecodingError):
     """RPC response structure doesn't match expectations.
 
     This often indicates Google has changed the API. Check for library updates.
+
+    Carries structured context to help diagnose schema drift:
+
+    Attributes:
+        method_id: The RPC method ID that was requested (or that drifted).
+        path: Index path inside the decoded payload at which descent failed
+            (empty tuple for top-level drift, ``(0, 2)`` for nested, etc.).
+        source: Caller-provided label identifying which decoder/helper raised
+            this error (e.g. ``"_notebooks.list"``).
+        found_ids: When raised by the response-level decoder, the list of RPC
+            IDs actually present in the response.
+        raw_response: First 500 chars of the raw response, when available.
+        data_at_failure: Truncated repr (~200 chars) of the data the helper
+            was attempting to index into when descent failed.
     """
+
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        method_id: str | int | None = None,
+        path: tuple[int, ...] | None = None,
+        source: str | None = None,
+        found_ids: list[int | str] | None = None,
+        raw_response: Any | None = None,
+        data_at_failure: Any | None = None,
+        rpc_code: str | int | None = None,
+    ):
+        # Coerce method_id to str for the base RPCError contract while
+        # preserving the original (possibly int) value on this subclass.
+        base_method_id = str(method_id) if method_id is not None else None
+        # Normalize found_ids to list[str] for the base contract while
+        # keeping the typed list[int | str] on this subclass.
+        base_found_ids: list[str] | None = (
+            None if found_ids is None else [str(item) for item in found_ids]
+        )
+        # raw_response on RPCError is str | None; only forward when stringy.
+        base_raw_response = raw_response if isinstance(raw_response, str) else None
+        super().__init__(
+            message,
+            method_id=base_method_id,
+            raw_response=base_raw_response,
+            rpc_code=rpc_code,
+            found_ids=base_found_ids,
+        )
+        # Preserve original typed values on this subclass.
+        self.method_id = method_id  # type: ignore[assignment]
+        self.path = path
+        self.source = source
+        # Override base found_ids with the typed list (may contain ints).
+        if found_ids is not None:
+            self.found_ids = found_ids  # type: ignore[assignment]
+        # Honor RPCError's 500-char truncation contract for stringy
+        # raw_response while preserving non-string payloads (dict/list/etc)
+        # supported by this subclass's widened ``Any`` type.
+        self.raw_response = raw_response[:500] if isinstance(raw_response, str) else raw_response
+        self.data_at_failure = data_at_failure
+
+    def __str__(self) -> str:
+        base = super().__str__()
+        extras: list[str] = []
+        if self.method_id is not None:
+            extras.append(f"method_id={self.method_id!r}")
+        if self.path is not None:
+            extras.append(f"path={self.path!r}")
+        if self.source is not None:
+            extras.append(f"source={self.source!r}")
+        if self.found_ids:
+            extras.append(f"found_ids={self.found_ids!r}")
+        if self.data_at_failure is not None:
+            extras.append(f"data_at_failure={self.data_at_failure!r}")
+        if not extras:
+            return base
+        return f"{base} [{', '.join(extras)}]" if base else ", ".join(extras)
+
+    def __repr__(self) -> str:
+        return (
+            f"UnknownRPCMethodError("
+            f"message={super().__str__()!r}, "
+            f"method_id={self.method_id!r}, "
+            f"path={self.path!r}, "
+            f"source={self.source!r}, "
+            f"found_ids={self.found_ids!r}, "
+            f"data_at_failure={self.data_at_failure!r})"
+        )
 
 
 class AuthError(RPCError):

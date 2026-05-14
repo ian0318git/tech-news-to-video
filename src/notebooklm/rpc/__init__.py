@@ -9,11 +9,13 @@ from .decoder import (
     RPCErrorCode,
     RPCTimeoutError,
     ServerError,
+    UnknownRPCMethodError,
     collect_rpc_ids,
     decode_response,
     extract_rpc_result,
     get_error_message_for_code,
     parse_chunked_response,
+    safe_index,
     strip_anti_xssi,
 )
 from .encoder import build_request_body, encode_rpc_request, nest_source_ids
@@ -83,6 +85,7 @@ __all__ = [
     "extract_rpc_result",
     "collect_rpc_ids",
     "decode_response",
+    "safe_index",
     # Exceptions
     "RPCError",
     "AuthError",
@@ -91,6 +94,7 @@ __all__ = [
     "RateLimitError",
     "ServerError",
     "ClientError",
+    "UnknownRPCMethodError",
     # Error handling utilities
     "RPCErrorCode",
     "get_error_message_for_code",
