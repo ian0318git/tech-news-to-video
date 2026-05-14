@@ -187,7 +187,10 @@ def cli(ctx, storage, profile, verbose):
             raise _click.ClickException(str(e)) from None
 
     ctx.ensure_object(dict)
-    ctx.obj["storage_path"] = Path(storage) if storage else None
+    # Canonicalize once at the boundary: ``--storage ~/foo.json`` and
+    # ``--storage /Users/x/foo.json`` must map to the same sibling-context
+    # namespace (see ``cli.helpers._current_storage_override``).
+    ctx.obj["storage_path"] = Path(storage).expanduser().resolve() if storage else None
     ctx.obj["profile"] = profile
 
 

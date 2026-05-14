@@ -284,6 +284,13 @@ notebooklm login
 notebooklm --storage /path/to/storage_state.json list
 ```
 
+When `--storage <path>` is set, notebook/conversation context is isolated to a
+sibling file `<path>.context.json` next to the storage file. This means two
+`--storage` invocations against different files cannot see each other's
+selected notebook, and neither pollutes the default profile context. Run
+`notebooklm --storage <path> status --paths` to see exactly which sibling
+context file is being used.
+
 ## CI/CD Configuration
 
 ### GitHub Actions (Recommended)

@@ -274,18 +274,32 @@ def get_storage_path(profile: str | None = None) -> Path:
     return _legacy_fallback(profile_path, "storage_state.json", resolved)
 
 
-def get_context_path(profile: str | None = None) -> Path:
-    """Get context.json path for a profile.
+def get_context_path(
+    profile: str | None = None,
+    *,
+    storage_path: Path | None = None,
+) -> Path:
+    """Get context.json path for a profile or storage file.
 
-    Falls back to legacy home-root path for the "default" profile if the
-    profile-based path doesn't exist (pre-migration compatibility).
+    Precedence:
+        1. ``storage_path`` (explicit ``--storage <path>`` CLI flag) →
+           returns a sibling ``<storage_path>.context.json``. This isolates
+           context per storage file so two ``--storage`` invocations cannot
+           see each other's notebook selection.
+        2. Profile-based path (``profiles/<name>/context.json``).
+        3. Legacy home-root fallback (``~/.notebooklm/context.json`` for the
+           "default" profile when the profile path doesn't exist).
 
     Args:
         profile: Profile name. If None, uses the active profile.
+        storage_path: Explicit storage_state.json path from --storage flag.
+            When set, returns a sibling context file and skips profile lookup.
 
     Returns:
         Path to context.json.
     """
+    if storage_path is not None:
+        return storage_path.with_suffix(storage_path.suffix + ".context.json")
     resolved = resolve_profile(profile)
     profile_path = get_profile_dir(resolved) / "context.json"
     return _legacy_fallback(profile_path, "context.json", resolved)
@@ -317,13 +331,20 @@ def get_config_path() -> Path:
     return get_home_dir() / "config.json"
 
 
-def get_path_info(profile: str | None = None) -> dict[str, str]:
+def get_path_info(
+    profile: str | None = None,
+    *,
+    storage_path: Path | None = None,
+) -> dict[str, str]:
     """Get diagnostic info about resolved paths.
 
     Useful for debugging and the ``status`` / ``doctor`` commands.
 
     Args:
         profile: Profile name. If None, uses the active profile.
+        storage_path: Explicit ``--storage`` override. When set, ``storage_path``
+            and ``context_path`` in the result reflect the sibling-context
+            layout rather than the profile path.
 
     Returns:
         Dict with path information and sources.
@@ -331,8 +352,22 @@ def get_path_info(profile: str | None = None) -> dict[str, str]:
     home_from_env = os.environ.get("NOTEBOOKLM_HOME")
     resolved = resolve_profile(profile)
 
-    # Determine profile source
-    if profile:
+    # Determine profile source. When --storage is set, profile resolution is
+    # effectively bypassed for the auth + context paths — but we still resolve
+    # ``profile`` because consumers may want to know what profile *would* be
+    # active otherwise. Make the override clear in the label so ``status
+    # --paths`` doesn't claim "CLI flag (--storage)" set the profile.
+    other_profile_set = (
+        profile
+        or _active_profile
+        or os.environ.get("NOTEBOOKLM_PROFILE")
+        or _read_default_profile()
+    )
+    if storage_path is not None:
+        profile_source = (
+            "CLI flag (--storage, profile ignored)" if other_profile_set else "CLI flag (--storage)"
+        )
+    elif profile:
         profile_source = "CLI flag"
     elif _active_profile:
         profile_source = "CLI flag (--profile)"
@@ -343,14 +378,19 @@ def get_path_info(profile: str | None = None) -> dict[str, str]:
     else:
         profile_source = "default"
 
+    resolved_storage = (
+        str(storage_path) if storage_path is not None else str(get_storage_path(resolved))
+    )
+    resolved_context = str(get_context_path(resolved, storage_path=storage_path))
+
     return {
         "home_dir": str(get_home_dir()),
         "home_source": "NOTEBOOKLM_HOME" if home_from_env else "default (~/.notebooklm)",
         "profile": resolved,
         "profile_source": profile_source,
         "profile_dir": str(get_profile_dir(resolved)),
-        "storage_path": str(get_storage_path(resolved)),
-        "context_path": str(get_context_path(resolved)),
+        "storage_path": resolved_storage,
+        "context_path": resolved_context,
         "config_path": str(get_config_path()),
         "browser_profile_dir": str(get_browser_profile_dir(resolved)),
     }

@@ -528,9 +528,35 @@ def get_auth_tokens(ctx) -> AuthTokens:
 # =============================================================================
 
 
+def _current_storage_override() -> Path | None:
+    """Resolve the active ``--storage`` override from the current Click context.
+
+    Returns the explicit storage path stored in ``ctx.obj["storage_path"]`` by
+    the root CLI group (see ``notebooklm_cli.cli``), canonicalized via
+    ``expanduser().resolve()`` so two representations of the same file (e.g.,
+    ``~/foo.json`` and ``/home/user/foo.json``) share one sibling-context
+    namespace. When no Click context is active (library usage) or no override
+    was passed, returns ``None``.
+
+    ``click.get_current_context(silent=True)`` already returns ``None`` outside
+    of a Click invocation, so no try/except is needed.
+    """
+    ctx = click.get_current_context(silent=True)
+    if ctx is None or not ctx.obj:
+        return None
+    storage = ctx.obj.get("storage_path")
+    if storage is None:
+        return None
+    # Defensive normalization: ``notebooklm_cli`` already wraps strings via
+    # ``Path(storage)``, but accept either form so future callers (tests,
+    # library wrappers populating ``ctx.obj`` directly) don't get a
+    # string-vs-``Path`` mismatch crash inside ``get_context_path``.
+    return Path(storage).expanduser().resolve()
+
+
 def _get_context_value(key: str) -> str | None:
     """Read a single value from context.json."""
-    context_file = get_context_path()
+    context_file = get_context_path(storage_path=_current_storage_override())
     if not context_file.exists():
         return None
     try:
@@ -560,7 +586,7 @@ def _set_context_value(key: str, value: str | None) -> None:
     not data loss. We accept the minor inefficiency to keep the early-return
     fast path: most invocations have no context file at all.
     """
-    context_file = get_context_path()
+    context_file = get_context_path(storage_path=_current_storage_override())
     if not context_file.exists():
         return
 
@@ -602,7 +628,7 @@ def set_current_notebook(
     Uses ``atomic_update_json`` so the account-metadata preservation and the
     notebook-context overwrite happen as one lock-protected critical section.
     """
-    context_file = get_context_path()
+    context_file = get_context_path(storage_path=_current_storage_override())
 
     def _mutate(existing: dict[str, Any]) -> dict[str, Any]:
         data: dict[str, Any] = {}
@@ -637,7 +663,7 @@ def clear_context(*, clear_account: bool = False) -> bool:
 
     Returns True if a context file was changed or removed, False if none existed.
     """
-    context_file = get_context_path()
+    context_file = get_context_path(storage_path=_current_storage_override())
     if not context_file.exists():
         return False
     lock_path = context_file.with_suffix(context_file.suffix + ".lock")
@@ -945,8 +971,9 @@ def handle_auth_error(json_output: bool = False):
     """Handle authentication errors with helpful context."""
     from ..paths import get_path_info, get_storage_path
 
-    path_info = get_path_info()
-    storage_path = get_storage_path()
+    storage_override = _current_storage_override()
+    path_info = get_path_info(storage_path=storage_override)
+    storage_path = storage_override if storage_override is not None else get_storage_path()
     has_env_var = bool(os.environ.get("NOTEBOOKLM_AUTH_JSON"))
     has_home_env = bool(os.environ.get("NOTEBOOKLM_HOME"))
     storage_source = path_info["home_source"]
