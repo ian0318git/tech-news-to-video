@@ -123,7 +123,7 @@ class TestUseWritesSiblingContext:
     def test_use_writes_sibling_not_default(self, runner, tmp_path, isolated_home):
         storage_a = tmp_path / "A.json"
         # Pre-populate a fake storage file so existence checks pass; the CLI's
-        # `use` command in unverified form just persists the ID locally.
+        # `use --force` path persists the ID locally without an RPC round-trip.
         storage_a.write_text(json.dumps({"cookies": [], "origins": []}))
 
         # Place a default-profile context file so we can detect accidental writes.
@@ -133,13 +133,15 @@ class TestUseWritesSiblingContext:
         sibling_context = tmp_path / "A.json.context.json"
         assert not sibling_context.exists()
 
-        # `notebooklm use` falls through to a degraded "save-anyway" path on RPC
-        # failure (see session.py around line 1396-1414). With no auth mocked
-        # for the RPC, the fallback runs and writes context locally.
-        result = runner.invoke(cli, ["--storage", str(storage_a), "use", "nb_abc123def456"])
+        # ``use --force`` skips the existence-check RPC and writes context
+        # immediately — that's the right primitive for an isolation test that
+        # doesn't care whether the notebook exists, only WHERE the write lands.
+        # Post-T3.D, the unverified-but-saved fallback no longer exists; we
+        # use ``--force`` to express the same intent explicitly.
+        result = runner.invoke(
+            cli, ["--storage", str(storage_a), "use", "--force", "nb_abc123def456"]
+        )
 
-        # Even on auth/RPC failure, the persistence-on-failure path writes the
-        # notebook_id to the *sibling* context, not the default profile one.
         assert sibling_context.exists(), (
             f"sibling context not written: stdout={result.output} exit={result.exit_code}"
         )
@@ -210,9 +212,13 @@ class TestDefaultBehaviorUnchanged:
         profile_context.parent.mkdir(parents=True, exist_ok=True)
         profile_context.write_text(json.dumps({}))
 
-        result = runner.invoke(cli, ["use", "nb_default_path"])
-        # Best-effort: even if RPC fails, the fallback writes locally.
-        del result  # ignore exit code — focus on side effect
+        # ``--force`` keeps this test focused on *where* the write lands
+        # (default profile vs. sibling) rather than dragging in a full
+        # auth/RPC mock. Post-T3.D, ``use`` without ``--force`` fails closed
+        # on RPC errors, so the prior "best-effort fallback" wording no
+        # longer applies.
+        result = runner.invoke(cli, ["use", "--force", "nb_default_path"])
+        assert result.exit_code == 0, result.output
 
         data = json.loads(profile_context.read_text())
         assert data.get("notebook_id") == "nb_default_path"
