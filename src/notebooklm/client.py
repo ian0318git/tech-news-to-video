@@ -137,12 +137,14 @@ class NotebookLMClient:
             server_error_max_retries=server_error_max_retries,
         )
 
-        # Initialize sub-client APIs
-        # Note: notes must be initialized before artifacts (artifacts uses notes API)
+        # Initialize sub-client APIs.
+        # ArtifactsAPI and NotesAPI both consume the shared ``_mind_map``
+        # module for mind-map primitives, so their construction order is
+        # not significant (see T6.F).
         self.notebooks = NotebooksAPI(self._core)
         self.sources = SourcesAPI(self._core)
+        self.artifacts = ArtifactsAPI(self._core, storage_path=storage_path)
         self.notes = NotesAPI(self._core)
-        self.artifacts = ArtifactsAPI(self._core, notes_api=self.notes, storage_path=storage_path)
         self.chat = ChatAPI(self._core)
         self.research = ResearchAPI(self._core)
         self.settings = SettingsAPI(self._core)

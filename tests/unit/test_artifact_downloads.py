@@ -27,17 +27,18 @@ def auth_tokens():
 
 @pytest.fixture
 def mock_artifacts_api():
-    """Create an ArtifactsAPI with mocked core and notes API."""
+    """Create an ArtifactsAPI with mocked core.
+
+    After T6.F, ``ArtifactsAPI`` no longer takes a ``notes_api`` parameter;
+    mind-map persistence goes through the shared ``_mind_map`` module which
+    calls the same ``ClientCore.rpc_call``. Tests that exercise mind-map
+    creation should drive responses through ``mock_core.rpc_call`` (via
+    ``side_effect``) rather than mocking a separate notes object.
+    """
     mock_core = MagicMock()
     mock_core.rpc_call = AsyncMock()
     mock_core.get_source_ids = AsyncMock(return_value=[])
-    mock_notes = MagicMock()
-    mock_notes.list_mind_maps = AsyncMock(return_value=[])
-    # Mock create to return a Note-like object with an id
-    mock_note = MagicMock()
-    mock_note.id = "created_note_123"
-    mock_notes.create = AsyncMock(return_value=mock_note)
-    api = ArtifactsAPI(mock_core, notes_api=mock_notes)
+    api = ArtifactsAPI(mock_core)
     return api, mock_core
 
 
@@ -343,20 +344,34 @@ class TestMindMapGeneration:
         api, mock_core = mock_artifacts_api
         # Mock get_source_ids for source ID fetching
         mock_core.get_source_ids.return_value = ["src_001"]
-        # Mock the actual mind map generation RPC call
-        mock_core.rpc_call.return_value = [
-            [
-                '{"nodes": [{"id": "1", "text": "Root"}]}',  # JSON string
-                None,
-                ["note_123"],  # note info (not used anymore, note is created explicitly)
-            ]
-        ]
+
+        # ArtifactsAPI.generate_mind_map now drives the full
+        # GENERATE_MIND_MAP -> CREATE_NOTE -> UPDATE_NOTE flow itself via
+        # the shared ``_mind_map`` primitives. The mock RPC needs to react
+        # to each method name so the created note ID surfaces correctly.
+        async def fake_rpc(method, params, **_):
+            name = getattr(method, "name", str(method))
+            if name == "GENERATE_MIND_MAP":
+                return [
+                    [
+                        '{"nodes": [{"id": "1", "text": "Root"}]}',
+                        None,
+                        ["note_123"],
+                    ]
+                ]
+            if name == "CREATE_NOTE":
+                return [["created_note_123"]]
+            if name == "UPDATE_NOTE":
+                return None
+            return None
+
+        mock_core.rpc_call.side_effect = fake_rpc
 
         result = await api.generate_mind_map("nb_123")
 
         assert result is not None
         assert "mind_map" in result
-        # note_id is now from the explicitly created note
+        # note_id is from the explicit CREATE_NOTE call.
         assert result["note_id"] == "created_note_123"
 
     @pytest.mark.asyncio
@@ -365,20 +380,30 @@ class TestMindMapGeneration:
         api, mock_core = mock_artifacts_api
         # Mock get_source_ids for source ID fetching
         mock_core.get_source_ids.return_value = ["src_001"]
-        # Mock the actual mind map generation RPC call
-        mock_core.rpc_call.return_value = [
-            [
-                {"nodes": [{"id": "1"}]},  # Already a dict
-                None,
-                ["note_456"],  # note info (not used anymore)
-            ]
-        ]
+
+        async def fake_rpc(method, params, **_):
+            name = getattr(method, "name", str(method))
+            if name == "GENERATE_MIND_MAP":
+                return [
+                    [
+                        {"nodes": [{"id": "1"}]},  # Already a dict
+                        None,
+                        ["note_456"],  # note info (not used anymore)
+                    ]
+                ]
+            if name == "CREATE_NOTE":
+                return [["created_note_123"]]
+            if name == "UPDATE_NOTE":
+                return None
+            return None
+
+        mock_core.rpc_call.side_effect = fake_rpc
 
         result = await api.generate_mind_map("nb_123")
 
         assert result is not None
         assert result["mind_map"]["nodes"][0]["id"] == "1"
-        # note_id is now from the explicitly created note
+        # note_id is from the explicit CREATE_NOTE call.
         assert result["note_id"] == "created_note_123"
 
     @pytest.mark.asyncio
@@ -387,7 +412,7 @@ class TestMindMapGeneration:
         api, mock_core = mock_artifacts_api
         # Mock get_source_ids for source ID fetching
         mock_core.get_source_ids.return_value = ["src_001"]
-        # Mock the actual mind map generation with empty response
+        # GENERATE_MIND_MAP returns null/empty — no note should be created.
         mock_core.rpc_call.return_value = None
 
         result = await api.generate_mind_map("nb_123")
@@ -580,21 +605,26 @@ class TestDownloadMindMap:
         with tempfile.TemporaryDirectory() as tmpdir:
             output_path = os.path.join(tmpdir, "mindmap.json")
 
-            # Mock mind maps via notes API
+            # After T6.F, ``ArtifactsAPI.download_mind_map`` reads mind maps
+            # via the shared ``_mind_map.list_mind_maps`` primitive rather
+            # than through an injected ``NotesAPI``. Patch the primitive at
+            # its consumer-side import to drive the response.
             json_content = '{"name": "Root", "children": [{"name": "Child1"}]}'
-            api._notes.list_mind_maps = AsyncMock(
-                return_value=[
-                    [
-                        "mindmap_001",  # mm[0] = id
-                        [None, json_content],  # mm[1][1] = JSON string
-                        None,
-                        None,
-                        "Mind Map Title",  # mm[4] = title
+            with patch(
+                "notebooklm._artifacts._mind_map.list_mind_maps",
+                new=AsyncMock(
+                    return_value=[
+                        [
+                            "mindmap_001",  # mm[0] = id
+                            [None, json_content],  # mm[1][1] = JSON string
+                            None,
+                            None,
+                            "Mind Map Title",  # mm[4] = title
+                        ]
                     ]
-                ]
-            )
-
-            result = await api.download_mind_map("nb_123", output_path)
+                ),
+            ):
+                result = await api.download_mind_map("nb_123", output_path)
 
             assert result == output_path
             # Verify JSON was written correctly
@@ -609,20 +639,28 @@ class TestDownloadMindMap:
     async def test_download_mind_map_no_mind_map_found(self, mock_artifacts_api):
         """Test error when no mind map exists."""
         api, mock_core = mock_artifacts_api
-        api._notes.list_mind_maps = AsyncMock(return_value=[])
 
-        with pytest.raises(ArtifactNotReadyError):
+        with (
+            patch(
+                "notebooklm._artifacts._mind_map.list_mind_maps",
+                new=AsyncMock(return_value=[]),
+            ),
+            pytest.raises(ArtifactNotReadyError),
+        ):
             await api.download_mind_map("nb_123", "/tmp/mindmap.json")
 
     @pytest.mark.asyncio
     async def test_download_mind_map_specific_id_not_found(self, mock_artifacts_api):
         """Test error when specific mind map ID not found."""
         api, mock_core = mock_artifacts_api
-        api._notes.list_mind_maps = AsyncMock(
-            return_value=[["other_id", [None, "{}"], None, None, "Other"]]
-        )
 
-        with pytest.raises(ArtifactNotFoundError):
+        with (
+            patch(
+                "notebooklm._artifacts._mind_map.list_mind_maps",
+                new=AsyncMock(return_value=[["other_id", [None, "{}"], None, None, "Other"]]),
+            ),
+            pytest.raises(ArtifactNotFoundError),
+        ):
             await api.download_mind_map("nb_123", "/tmp/mindmap.json", artifact_id="mindmap_001")
 
 

@@ -20,6 +20,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from . import _mind_map
 from ._core import ClientCore
 from ._env import get_default_language
 from .auth import load_httpx_cookies
@@ -77,7 +78,7 @@ _MEDIA_ARTIFACT_TYPES = frozenset(
 )
 
 if TYPE_CHECKING:
-    from ._notes import NotesAPI
+    from ._notes import NotesAPI  # retained for backward-compatible type hints
 
 
 @dataclass(frozen=False)
@@ -263,18 +264,27 @@ class ArtifactsAPI:
     def __init__(
         self,
         core: ClientCore,
-        notes_api: "NotesAPI",
+        notes_api: "NotesAPI | None" = None,
         storage_path: Path | None = None,
     ):
         """Initialize the artifacts API.
 
         Args:
             core: The core client infrastructure.
-            notes_api: The notes API for accessing notes/mind maps.
+            notes_api: Deprecated. Retained as an optional, ignored
+                keyword for backward compatibility — ``ArtifactsAPI`` no
+                longer depends on :class:`NotesAPI`. Mind-map RPC
+                primitives are accessed directly through the
+                :mod:`_mind_map` module, so the construction order of
+                ``client.artifacts`` and ``client.notes`` is no longer
+                significant.
             storage_path: Path to storage state file for loading download cookies.
         """
         self._core = core
-        self._notes = notes_api
+        # ``notes_api`` is intentionally not stored — it is accepted only
+        # so that existing call sites (tests, third-party code) keep
+        # working through the deprecation cycle.
+        del notes_api
         self._storage_path = storage_path
 
     # =========================================================================
@@ -326,7 +336,7 @@ class ArtifactsAPI:
         # Fetch mind maps from notes system (if not filtering to non-mind-map type)
         if artifact_type is None or artifact_type == ArtifactType.MIND_MAP:
             try:
-                mind_maps = await self._notes.list_mind_maps(notebook_id)
+                mind_maps = await _mind_map.list_mind_maps(self._core, notebook_id)
                 for mm_data in mind_maps:
                     mind_map_artifact = Artifact.from_mind_map(mm_data)
                     if mind_map_artifact is not None:  # None means deleted (status=2)
@@ -1135,7 +1145,9 @@ class ArtifactsAPI:
 
                 # The GENERATE_MIND_MAP RPC generates content but does NOT persist it.
                 # We must explicitly create a note to save the mind map.
-                note = await self._notes.create(notebook_id, title=title, content=mind_map_json)
+                note = await _mind_map.create_note(
+                    self._core, notebook_id, title=title, content=mind_map_json
+                )
                 note_id = note.id if note else None
 
                 return {
@@ -1522,7 +1534,7 @@ class ArtifactsAPI:
         Returns:
             The output path where the file was saved.
         """
-        mind_maps = await self._notes.list_mind_maps(notebook_id)
+        mind_maps = await _mind_map.list_mind_maps(self._core, notebook_id)
         if not mind_maps:
             raise ArtifactNotReadyError("mind_map")
 
@@ -1534,8 +1546,13 @@ class ArtifactsAPI:
             mind_map = mind_maps[0]
 
         try:
-            json_string = mind_map[1][1]
-            if not isinstance(json_string, str):
+            # Use the shared extractor so legacy ``[id, content_str]`` rows
+            # work too — direct ``[1][1]`` indexing into a legacy item would
+            # string-index the content (``"…"[1] == "…"`` of length 1) and
+            # then fail downstream JSON parsing instead of returning the real
+            # payload.
+            json_string = _mind_map.extract_content(mind_map)
+            if json_string is None:
                 raise ArtifactParseError("mind_map_content", details="Invalid structure")
 
             json_data = json.loads(json_string)

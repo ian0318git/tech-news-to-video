@@ -1238,10 +1238,12 @@ class TestListMindMapErrorHandling:
         httpx_mock.add_response(content=list_response.encode())
 
         async with NotebookLMClient(auth_tokens) as client:
-            with patch.object(
-                client.artifacts._notes,
-                "list_mind_maps",
-                AsyncMock(side_effect=RPCError("mind map fetch failed")),
+            # After T6.F, ArtifactsAPI reaches mind maps through the
+            # shared ``_mind_map`` module rather than an injected
+            # NotesAPI. Patch the primitive at its consumer-side import.
+            with patch(
+                "notebooklm._artifacts._mind_map.list_mind_maps",
+                new=AsyncMock(side_effect=RPCError("mind map fetch failed")),
             ):
                 result = await client.artifacts.list("nb_123")
 
@@ -1265,10 +1267,9 @@ class TestListMindMapErrorHandling:
         httpx_mock.add_response(content=list_response.encode())
 
         async with NotebookLMClient(auth_tokens) as client:
-            with patch.object(
-                client.artifacts._notes,
-                "list_mind_maps",
-                AsyncMock(side_effect=httpx.HTTPError("connection failed")),
+            with patch(
+                "notebooklm._artifacts._mind_map.list_mind_maps",
+                new=AsyncMock(side_effect=httpx.HTTPError("connection failed")),
             ):
                 result = await client.artifacts.list("nb_123")
 
@@ -1480,14 +1481,21 @@ class TestGenerateMindMapParsing:
         httpx_mock.add_response(content=notebook_response.encode())
         httpx_mock.add_response(content=mindmap_response.encode())
 
-        mock_note = MagicMock()
-        mock_note.id = "note_created_001"
+        from notebooklm.types import Note
 
         async with NotebookLMClient(auth_tokens) as client:
-            with patch.object(
-                client.artifacts._notes,
-                "create",
-                AsyncMock(return_value=mock_note),
+            # After T6.F, mind-map persistence is driven through
+            # ``_mind_map.create_note`` rather than ``NotesAPI.create``.
+            with patch(
+                "notebooklm._artifacts._mind_map.create_note",
+                new=AsyncMock(
+                    return_value=Note(
+                        id="note_created_001",
+                        notebook_id="nb_123",
+                        title="Root Topic",
+                        content=mind_map_json_str,
+                    )
+                ),
             ):
                 result = await client.artifacts.generate_mind_map("nb_123")
 
@@ -1522,14 +1530,19 @@ class TestGenerateMindMapParsing:
         httpx_mock.add_response(content=notebook_response.encode())
         httpx_mock.add_response(content=mindmap_response.encode())
 
-        mock_note = MagicMock()
-        mock_note.id = "note_dict_001"
+        from notebooklm.types import Note
 
         async with NotebookLMClient(auth_tokens) as client:
-            with patch.object(
-                client.artifacts._notes,
-                "create",
-                AsyncMock(return_value=mock_note),
+            with patch(
+                "notebooklm._artifacts._mind_map.create_note",
+                new=AsyncMock(
+                    return_value=Note(
+                        id="note_dict_001",
+                        notebook_id="nb_123",
+                        title="Topic",
+                        content=json.dumps(mind_map_dict),
+                    )
+                ),
             ):
                 result = await client.artifacts.generate_mind_map("nb_123")
 

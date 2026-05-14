@@ -84,13 +84,18 @@ def mock_core():
 
 @pytest.fixture
 def mock_notes_api():
-    """Create a mock NotesAPI."""
-    notes = MagicMock()
-    notes.list_mind_maps = AsyncMock(return_value=[])
-    mock_note = MagicMock()
-    mock_note.id = "created_note_123"
-    notes.create = AsyncMock(return_value=mock_note)
-    return notes
+    """Placeholder for the legacy ``ArtifactsAPI(core, notes_api)`` signature.
+
+    After T6.F, ``ArtifactsAPI`` no longer reads ``notes_api`` (it consumes
+    the shared ``_mind_map`` module directly). The arg is still accepted for
+    backward compatibility and immediately discarded inside ``__init__``, so
+    this fixture intentionally returns a bare mock — no method stubs, since
+    none of the downstream code paths under test invoke any methods on it.
+    Future readers: if you find yourself adding ``AsyncMock`` setup here,
+    you probably want to drop the second positional arg from the call sites
+    instead.
+    """
+    return MagicMock()
 
 
 class TestChatSourceSelection:
@@ -578,10 +583,14 @@ class TestArtifactsSourceSelection:
         # Verify get_source_ids was called
         mock_core.get_source_ids.assert_called_once_with("nb_123")
 
-        # Verify GENERATE_MIND_MAP RPC was called with correct source encoding
-        mock_core.rpc_call.assert_called_once()
-        call_args = mock_core.rpc_call.call_args
-        params = call_args.args[1]
+        # After T6.F, ``generate_mind_map`` also drives the CREATE_NOTE +
+        # UPDATE_NOTE calls itself (previously delegated to NotesAPI), so
+        # rpc_call is invoked three times. The source-encoding assertion
+        # targets the GENERATE_MIND_MAP call specifically.
+        generate_call = next(
+            c for c in mock_core.rpc_call.call_args_list if c.args[0].name == "GENERATE_MIND_MAP"
+        )
+        params = generate_call.args[1]
 
         # Mind map uses source_ids_nested = [[[sid]] for sid]
         source_ids_nested = params[0]
@@ -605,8 +614,12 @@ class TestArtifactsSourceSelection:
             instructions="Focus on key themes",
         )
 
-        call_args = mock_core.rpc_call.call_args
-        params = call_args.args[1]
+        # Pick the GENERATE_MIND_MAP call specifically — CREATE_NOTE and
+        # UPDATE_NOTE are now invoked alongside it.
+        generate_call = next(
+            c for c in mock_core.rpc_call.call_args_list if c.args[0].name == "GENERATE_MIND_MAP"
+        )
+        params = generate_call.args[1]
 
         # params[5] should contain the mind map config with language and instructions
         mind_map_config = params[5]

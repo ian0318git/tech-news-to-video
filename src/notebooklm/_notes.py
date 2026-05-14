@@ -3,12 +3,17 @@
 Provides operations for creating, updating, listing, and deleting
 user-created notes in notebooks. Notes are distinct from artifacts -
 they are user-created content, not AI-generated.
+
+Mind-map-related RPC primitives live in :mod:`_mind_map` and are shared
+with :class:`ArtifactsAPI`. This module exposes them through the
+historical ``NotesAPI`` method surface for backward compatibility.
 """
 
 import builtins
 import logging
 from typing import Any
 
+from . import _mind_map
 from ._core import ClientCore
 from .rpc import RPCMethod
 from .types import Note
@@ -102,31 +107,7 @@ class NotesAPI:
         Returns:
             The created Note object.
         """
-        logger.debug("Creating note in notebook %s: %s", notebook_id, title)
-        params = [notebook_id, "", [1], None, "New Note"]
-        result = await self._core.rpc_call(
-            RPCMethod.CREATE_NOTE,
-            params,
-            source_path=f"/notebook/{notebook_id}",
-        )
-
-        note_id = None
-        if result and isinstance(result, list) and len(result) > 0:
-            if isinstance(result[0], list) and len(result[0]) > 0:
-                note_id = result[0][0]
-            elif isinstance(result[0], str):
-                note_id = result[0]
-
-        if note_id:
-            # Google ignores title param in CREATE_NOTE, so always update
-            await self.update(notebook_id, note_id, content, title)
-
-        return Note(
-            id=note_id or "",
-            notebook_id=notebook_id,
-            title=title,
-            content=content,
-        )
+        return await _mind_map.create_note(self._core, notebook_id, title=title, content=content)
 
     async def update(
         self,
@@ -143,18 +124,7 @@ class NotesAPI:
             content: The new content.
             title: The new title.
         """
-        logger.debug("Updating note %s in notebook %s", note_id, notebook_id)
-        params = [
-            notebook_id,
-            note_id,
-            [[[content, title, [], 0]]],
-        ]
-        await self._core.rpc_call(
-            RPCMethod.UPDATE_NOTE,
-            params,
-            source_path=f"/notebook/{notebook_id}",
-            allow_null=True,
-        )
+        await _mind_map.update_note(self._core, notebook_id, note_id, content, title)
 
     async def delete(self, notebook_id: str, note_id: str) -> bool:
         """Delete a note from the notebook.
@@ -196,19 +166,7 @@ class NotesAPI:
         Returns:
             List of raw mind map data.
         """
-        all_items = await self._get_all_notes_and_mind_maps(notebook_id)
-        mind_maps = []
-
-        for item in all_items:
-            # Skip deleted items (status=2): ['id', None, 2]
-            if self._is_deleted(item):
-                continue
-
-            content = self._extract_content(item)
-            if content and ('"children":' in content or '"nodes":' in content):
-                mind_maps.append(item)
-
-        return mind_maps
+        return await _mind_map.list_mind_maps(self._core, notebook_id)
 
     async def delete_mind_map(self, notebook_id: str, mind_map_id: str) -> bool:
         """Delete a mind map from the notebook.
@@ -235,21 +193,7 @@ class NotesAPI:
 
     async def _get_all_notes_and_mind_maps(self, notebook_id: str) -> builtins.list[Any]:
         """Fetch all notes and mind maps from the API."""
-        params = [notebook_id]
-        result = await self._core.rpc_call(
-            RPCMethod.GET_NOTES_AND_MIND_MAPS,
-            params,
-            source_path=f"/notebook/{notebook_id}",
-            allow_null=True,
-        )
-        if result and isinstance(result, list) and len(result) > 0 and isinstance(result[0], list):
-            notes_list = result[0]
-            valid_notes = []
-            for item in notes_list:
-                if isinstance(item, list) and len(item) > 0 and isinstance(item[0], str):
-                    valid_notes.append(item)
-            return valid_notes
-        return []
+        return await _mind_map.fetch_all_notes_and_mind_maps(self._core, notebook_id)
 
     def _is_deleted(self, item: builtins.list[Any]) -> bool:
         """Check if a note/mind map item is deleted (status=2).
@@ -263,20 +207,11 @@ class NotesAPI:
         Returns:
             True if the item is deleted (soft-deleted with status=2).
         """
-        if not isinstance(item, list) or len(item) < 3:
-            return False
-        return item[1] is None and item[2] == 2
+        return _mind_map.is_deleted(item)
 
     def _extract_content(self, item: builtins.list[Any]) -> str | None:
         """Extract content string from note/mind map item."""
-        if len(item) <= 1:
-            return None
-
-        if isinstance(item[1], str):
-            return item[1]
-        elif isinstance(item[1], list) and len(item[1]) > 1 and isinstance(item[1][1], str):
-            return item[1][1]
-        return None
+        return _mind_map.extract_content(item)
 
     def _parse_note(self, item: builtins.list[Any], notebook_id: str) -> Note:
         """Parse a raw note item into a Note object."""
