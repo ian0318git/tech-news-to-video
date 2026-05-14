@@ -4,7 +4,7 @@ This module provides the NotebookLMClient class, a modern async client
 for interacting with Google NotebookLM using undocumented RPC APIs.
 
 Example:
-    async with NotebookLMClient.from_storage() as client:
+    async with await NotebookLMClient.from_storage() as client:
         # List notebooks
         notebooks = await client.notebooks.list()
 
@@ -57,7 +57,7 @@ class NotebookLMClient:
 
     Usage:
         # Create from saved authentication
-        async with NotebookLMClient.from_storage() as client:
+        async with await NotebookLMClient.from_storage() as client:
             notebooks = await client.notebooks.list()
 
         # Create from AuthTokens directly

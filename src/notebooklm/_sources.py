@@ -49,7 +49,7 @@ class SourcesAPI:
     and refreshing sources in notebooks.
 
     Usage:
-        async with NotebookLMClient.from_storage() as client:
+        async with await NotebookLMClient.from_storage() as client:
             sources = await client.sources.list(notebook_id)
             new_src = await client.sources.add_url(notebook_id, "https://example.com")
             await client.sources.rename(notebook_id, new_src.id, "Better Title")
