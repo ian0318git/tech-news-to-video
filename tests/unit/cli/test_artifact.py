@@ -933,3 +933,89 @@ class TestArtifactCommandsExist:
         assert "--timeout" in result.output
         assert "--interval" in result.output
         assert "--json" in result.output
+
+
+# =============================================================================
+# POLL vs WAIT ID-KIND DOCUMENTATION SNAPSHOT (P4.T3 / C2)
+# =============================================================================
+
+
+class TestPollWaitIdKindHelp:
+    """Snapshot test that pins the canonical ID-source phrasing in help text.
+
+    `artifact poll` and `artifact wait` both accept the same underlying
+    identifier (the API returns one ID that serves as both the generation
+    task_id and the eventual artifact_id; see ``_artifacts.py``
+    ``_parse_generation_result`` docstring). The two commands diverge in:
+
+    1. **Resolution**: ``poll`` passes the raw ID through (so it works
+       *immediately* after ``generate <type>`` returns, before the artifact
+       appears in any list); ``wait`` partial-matches against
+       ``artifact list`` output via ``resolve_artifact_id``.
+    2. **Blocking**: ``poll`` is a single non-blocking check; ``wait`` blocks
+       with ``--timeout`` / ``--interval`` exponential backoff.
+
+    These tests assert the help docstrings explicitly cite where each ID
+    typically comes from so users stop confusing them. If a future docstring
+    refactor removes the canonical phrasing, these snapshots fail loudly.
+    """
+
+    # Canonical phrases — pinned here as the source of truth.
+    POLL_PHRASE_TASK_ID_FROM_GENERATE = "task_id"
+    POLL_PHRASE_GENERATE_REFERENCE = "generate"
+    WAIT_PHRASE_ARTIFACT_LIST_REFERENCE = "artifact list"
+    SHARED_PHRASE_SAME_ID = "same identifier"
+
+    def test_poll_help_cites_task_id_source(self, runner):
+        """`artifact poll --help` must explain the task_id comes from `generate`."""
+        result = runner.invoke(cli, ["artifact", "poll", "--help"])
+        assert result.exit_code == 0
+        # Must reference the task_id concept and where it comes from.
+        assert self.POLL_PHRASE_TASK_ID_FROM_GENERATE in result.output, (
+            "poll --help must reference 'task_id' as the ID kind"
+        )
+        assert self.POLL_PHRASE_GENERATE_REFERENCE in result.output, (
+            "poll --help must reference `generate` as the source of the ID"
+        )
+
+    def test_wait_help_cites_artifact_list_source(self, runner):
+        """`artifact wait --help` must explain the artifact_id comes from `artifact list`."""
+        result = runner.invoke(cli, ["artifact", "wait", "--help"])
+        assert result.exit_code == 0
+        # Must reference the artifact_id discovery path.
+        assert self.WAIT_PHRASE_ARTIFACT_LIST_REFERENCE in result.output, (
+            "wait --help must reference `artifact list` as the source of the ID"
+        )
+
+    def test_both_help_acknowledge_same_underlying_id(self, runner):
+        """Both `--help` outputs should acknowledge that the underlying ID is the same.
+
+        This prevents users from believing they need to convert between two
+        distinct ID kinds when copy-pasting between `poll` and `wait`.
+        """
+        poll_result = runner.invoke(cli, ["artifact", "poll", "--help"])
+        wait_result = runner.invoke(cli, ["artifact", "wait", "--help"])
+        assert poll_result.exit_code == 0
+        assert wait_result.exit_code == 0
+        assert self.SHARED_PHRASE_SAME_ID in poll_result.output, (
+            "poll --help must acknowledge poll/wait share the same identifier"
+        )
+        assert self.SHARED_PHRASE_SAME_ID in wait_result.output, (
+            "wait --help must acknowledge poll/wait share the same identifier"
+        )
+
+    def test_poll_help_includes_concrete_example(self, runner):
+        """poll --help should include a runnable example."""
+        result = runner.invoke(cli, ["artifact", "poll", "--help"])
+        assert result.exit_code == 0
+        assert "notebooklm artifact poll" in result.output, (
+            "poll --help must include at least one concrete example invocation"
+        )
+
+    def test_wait_help_includes_concrete_example(self, runner):
+        """wait --help should retain the existing concrete examples."""
+        result = runner.invoke(cli, ["artifact", "wait", "--help"])
+        assert result.exit_code == 0
+        assert "notebooklm artifact wait" in result.output, (
+            "wait --help must include at least one concrete example invocation"
+        )

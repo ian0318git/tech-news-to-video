@@ -173,11 +173,18 @@ Language-aware generate commands (`audio`, `video`, `cinematic-video`, `report`,
 | `rename <id> <title>` | Artifact ID, title | - | `artifact rename art123 "Title"` |
 | `delete <id>` | Artifact ID | - | `artifact delete art123` |
 | `export <id>` | Artifact ID | `--type [docs|sheets]`, `--title` | `artifact export art123 --type sheets` |
-| `poll <task_id>` | Task ID | - | `artifact poll task123` |
-| `wait <id>` | Artifact ID | `--timeout`, `--interval` | `artifact wait art123` |
+| `poll <task_id>` | Task ID (from `generate <type>`) | `--json` | `artifact poll task123` |
+| `wait <id>` | Artifact ID (from `artifact list`) | `--timeout`, `--interval`, `--json` | `artifact wait art123` |
 | `suggestions` | - | `--json` | `artifact suggestions` |
 
 > **Note:** `artifact delete` on a Mind Map clears its content rather than removing the artifact entry — Mind Maps are stored alongside notes and Google may garbage-collect cleared entries later. The CLI prints a `Cleared mind map:` message instead of `Deleted artifact:` when this happens.
+
+> **Common confusion: `poll` vs `wait` ID kind.** Both commands accept the *same identifier* — the API returns one ID that serves as both the generation `task_id` (during creation) and the `artifact_id` (once the row appears in `artifact list`). The split is operational, not semantic:
+>
+> - **`artifact poll <task_id>`** — single non-blocking status check. Pass the raw `task_id` returned by `notebooklm generate <type>` straight through. `poll` does **not** prefix-match against `artifact list`, so it works *immediately* after a `generate` call returns, before the artifact has appeared in any list response.
+> - **`artifact wait <artifact_id>`** — blocks (with exponential backoff) until the artifact is `completed`, `failed`, or `--timeout` elapses. Accepts a full UUID **or a unique prefix** that resolves against `artifact list` via the standard partial-ID resolver.
+>
+> Rule of thumb: **just generated something? use `poll`.** **Found it in `artifact list`? use `wait`.** You can pass the same string to both — the kind label is about lifecycle stage, not about a different identifier format.
 
 ### Download Commands (`notebooklm download <type>`)
 

@@ -351,7 +351,29 @@ def artifact_export(ctx, artifact_id, notebook_id, title, export_type, json_outp
 @json_option
 @with_client
 def artifact_poll(ctx, task_id, notebook_id, json_output, client_auth):
-    """Poll generation status."""
+    """Single non-blocking generation status check.
+
+    \b
+    TASK_ID is the identifier returned by `notebooklm generate <type>` (it
+    appears in the `task_id` field of the JSON payload, or after `Started:`
+    in the human-readable output). Pass it through unchanged — `poll` does
+    NOT prefix-match against `artifact list`, so a freshly-issued task_id
+    works even before the artifact appears in the list.
+
+    \b
+    Note: this is the same identifier `wait` accepts. The API uses one ID
+    that serves as both the generation task_id (during creation) and the
+    artifact_id (once listed); the difference is operational, not semantic:
+      - `poll`: one-shot check, accepts the raw task_id from `generate`.
+      - `wait`: blocks until terminal, prefix-matches against `artifact list`.
+
+    \b
+    Examples:
+      # Right after `generate audio` returns task_id "abc123def...":
+      notebooklm artifact poll abc123def
+      # JSON output for scripting:
+      notebooklm artifact poll abc123def --json
+    """
     nb_id = require_notebook(notebook_id)
 
     async def _run():
@@ -401,14 +423,26 @@ def artifact_poll(ctx, task_id, notebook_id, json_output, client_auth):
 @click.option("--json", "json_output", is_flag=True, help="Output as JSON")
 @with_client
 def artifact_wait(ctx, artifact_id, notebook_id, timeout, interval, json_output, client_auth):
-    """Wait for artifact generation to complete.
+    """Block until artifact generation finishes (or times out).
 
-    Blocks until the artifact is completed, failed, or timeout is reached.
-    Useful for scripts and LLM agents that need to wait for generation.
+    \b
+    ARTIFACT_ID is an identifier from `notebooklm artifact list` — it can be
+    a full UUID or a unique prefix (e.g., `abc` matches `abc123def...`).
+    Wait blocks until status is `completed`, `failed`, or `--timeout`
+    elapses; useful for scripts and LLM agents that need a synchronous gate.
+
+    \b
+    Note: this is the same identifier `poll` accepts. The API uses one ID
+    that serves as both the generation task_id (during creation) and the
+    artifact_id (once listed); the difference is operational, not semantic:
+      - `poll`: one-shot check, accepts the raw task_id from `generate`.
+      - `wait`: blocks until terminal, prefix-matches against `artifact list`.
 
     \b
     Examples:
+      # After `artifact list` shows id "abc123def...":
       notebooklm artifact wait abc123 -n nb_456
+      # Long-running generation with longer ceiling, JSON for scripting:
       notebooklm artifact wait abc123 --timeout 600 --json
     """
     nb_id = require_notebook(notebook_id)
