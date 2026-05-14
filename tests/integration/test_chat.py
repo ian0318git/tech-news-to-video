@@ -632,19 +632,26 @@ class TestChatAskErrorHandling:
         auth_tokens,
         httpx_mock: HTTPXMock,
     ):
-        """Test ask() raises ChatError on httpx.HTTPStatusError."""
+        """Test ask() raises ChatError on httpx.HTTPStatusError.
+
+        After T2.D, the chat path uses ``core.query_post`` which routes
+        through the shared transport pipeline. Auth-shaped statuses (400/401/
+        403) go through the refresh path before surfacing; this test uses
+        500 to exercise the plain ``HTTPStatusError → ChatError`` mapping
+        without entangling the refresh machinery.
+        """
         import re
 
         from notebooklm.exceptions import ChatError
 
         httpx_mock.add_response(
             url=re.compile(r".*GenerateFreeFormStreamed.*"),
-            status_code=403,
+            status_code=500,
             method="POST",
         )
 
         async with NotebookLMClient(auth_tokens) as client:
-            with pytest.raises(ChatError, match="403"):
+            with pytest.raises(ChatError, match="500"):
                 await client.chat.ask(
                     "nb_123",
                     "What is this?",

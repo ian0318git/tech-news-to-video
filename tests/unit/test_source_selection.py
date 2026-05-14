@@ -32,17 +32,53 @@ def auth_tokens():
 
 @pytest.fixture
 def mock_core():
-    """Create a mock ClientCore."""
+    """Create a mock ClientCore.
+
+    After Tier-2 T2.D, ``ChatAPI.ask`` goes through ``core.query_post`` and
+    ``core.next_reqid`` instead of the legacy direct ``post`` / counter
+    mutation. Tests that need to assert on URL or body now drive
+    ``query_post`` via its ``build_request`` factory rather than poking the
+    raw httpx client.
+    """
+    from notebooklm._core import _AuthSnapshot
+
     core = MagicMock()
     core.rpc_call = AsyncMock()
     core.get_source_ids = AsyncMock(return_value=[])
     core.auth = MagicMock()
     core.auth.csrf_token = "test_csrf"
     core.auth.session_id = "test_session"
+    core.auth.authuser = 0
+    core.auth.account_email = None
+    # Reqid counter is now bumped via ``await core.next_reqid()``; the
+    # ``_reqid_counter`` attribute remains for backwards-compat assertions.
     core._reqid_counter = 0
+    core.next_reqid = AsyncMock(return_value=100000)
     core.get_http_client = MagicMock()
     core.get_cached_conversation = MagicMock(return_value=[])
     core.cache_conversation_turn = MagicMock()
+
+    # Default ``query_post`` stub: invokes the caller-supplied
+    # ``build_request`` factory with a frozen snapshot (so the URL/body the
+    # test wants to assert on actually gets assembled) and returns a stock
+    # answer response. Individual tests that need to inspect the URL/body
+    # can read ``core._last_chat_request`` after calling ``ChatAPI.ask``.
+    async def _query_post_default(*, build_request, parse_label):
+        snapshot = _AuthSnapshot(
+            csrf_token=core.auth.csrf_token,
+            session_id=core.auth.session_id,
+            authuser=core.auth.authuser,
+            account_email=core.auth.account_email,
+        )
+        url, body, headers = build_request(snapshot)
+        core._last_chat_request = {"url": url, "body": body, "headers": headers}
+        resp = MagicMock()
+        inner = json.dumps([["Default answer long enough to be valid.", None, None, None, [1]]])
+        chunk = json.dumps([["wrb.fr", None, inner]])
+        resp.text = f")]}}'\n{len(chunk)}\n{chunk}\n"
+        return resp
+
+    core.query_post = AsyncMock(side_effect=_query_post_default)
     return core
 
 
@@ -65,30 +101,17 @@ class TestChatSourceSelection:
         """Test ask() with explicitly provided source_ids."""
         api = ChatAPI(mock_core)
 
-        # Mock HTTP response for ask
-        mock_response = MagicMock()
-        inner_json = json.dumps(
-            [["Answer text here that is definitely long enough.", None, None, None, [1]]]
-        )
-        chunk_json = json.dumps([["wrb.fr", None, inner_json]])
-        mock_response.text = f")]}}'\n{len(chunk_json)}\n{chunk_json}\n"
-        mock_response.raise_for_status = MagicMock()
-
-        mock_http_client = MagicMock()
-        mock_http_client.post = AsyncMock(return_value=mock_response)
-        mock_core.get_http_client.return_value = mock_http_client
-
         result = await api.ask(
             notebook_id="nb_123",
             question="Test question?",
             source_ids=["src_001", "src_002"],
         )
 
-        assert result.answer == "Answer text here that is definitely long enough."
+        assert result.answer == "Default answer long enough to be valid."
 
-        # Verify HTTP call was made with correct source encoding
-        call_args = mock_http_client.post.call_args
-        body = call_args.kwargs.get("content", call_args.args[1] if len(call_args.args) > 1 else "")
+        # query_post is the transport entry point; the request body is
+        # captured into ``_last_chat_request`` by the mock_core fixture.
+        body = mock_core._last_chat_request["body"]
 
         # The body should contain the encoded sources_array
         # sources_array = [[[sid]] for sid in source_ids]
@@ -104,26 +127,13 @@ class TestChatSourceSelection:
         # Mock get_source_ids to return source IDs
         mock_core.get_source_ids.return_value = ["src_001", "src_002", "src_003"]
 
-        # Mock HTTP response for ask
-        mock_response = MagicMock()
-        inner_json = json.dumps(
-            [["Answer from all sources with enough length.", None, None, None, [1]]]
-        )
-        chunk_json = json.dumps([["wrb.fr", None, inner_json]])
-        mock_response.text = f")]}}'\n{len(chunk_json)}\n{chunk_json}\n"
-        mock_response.raise_for_status = MagicMock()
-
-        mock_http_client = MagicMock()
-        mock_http_client.post = AsyncMock(return_value=mock_response)
-        mock_core.get_http_client.return_value = mock_http_client
-
         result = await api.ask(
             notebook_id="nb_123",
             question="Test question?",
             source_ids=None,  # Should fetch all sources
         )
 
-        assert result.answer == "Answer from all sources with enough length."
+        assert result.answer == "Default answer long enough to be valid."
 
         # Verify get_source_ids was called on core
         mock_core.get_source_ids.assert_called_once_with("nb_123")
@@ -133,31 +143,16 @@ class TestChatSourceSelection:
         """Verify the correct encoding format for source IDs in ask()."""
         api = ChatAPI(mock_core)
 
-        # Mock HTTP response
-        mock_response = MagicMock()
-        inner_json = json.dumps(
-            [["Valid answer with sufficient characters.", None, None, None, [1]]]
-        )
-        chunk_json = json.dumps([["wrb.fr", None, inner_json]])
-        mock_response.text = f")]}}'\n{len(chunk_json)}\n{chunk_json}\n"
-        mock_response.raise_for_status = MagicMock()
-
-        mock_http_client = MagicMock()
-        mock_http_client.post = AsyncMock(return_value=mock_response)
-        mock_core.get_http_client.return_value = mock_http_client
-
         await api.ask(
             notebook_id="nb_123",
             question="Test?",
             source_ids=["s1", "s2", "s3"],
         )
 
-        # Verify the post was called
-        mock_http_client.post.assert_called_once()
-
-        # Get the body and decode it
-        call_args = mock_http_client.post.call_args
-        body = call_args.kwargs.get("content", "")
+        # query_post should have been called once with a build_request factory
+        # that produces the URL-encoded body with the triple-nested sources.
+        mock_core.query_post.assert_called_once()
+        body = mock_core._last_chat_request["body"]
 
         # The body contains URL-encoded f.req parameter
         # sources_array should be [[["s1"]], [["s2"]], [["s3"]]]
@@ -167,16 +162,16 @@ class TestChatSourceSelection:
         from urllib.parse import unquote
 
         match = re.search(r"f\.req=([^&]+)", body)
-        if match:
-            f_req_encoded = match.group(1)
-            f_req_decoded = unquote(f_req_encoded)
-            f_req_data = json.loads(f_req_decoded)
-            # f_req is [None, params_json]
-            params = json.loads(f_req_data[1])
-            sources_array = params[0]
+        assert match, f"f.req= missing from body: {body!r}"
+        f_req_encoded = match.group(1)
+        f_req_decoded = unquote(f_req_encoded)
+        f_req_data = json.loads(f_req_decoded)
+        # f_req is [None, params_json]
+        params = json.loads(f_req_data[1])
+        sources_array = params[0]
 
-            # Verify the triple-nested format
-            assert sources_array == [[["s1"]], [["s2"]], [["s3"]]]
+        # Verify the triple-nested format
+        assert sources_array == [[["s1"]], [["s2"]], [["s3"]]]
 
 
 class TestArtifactsSourceSelection:
@@ -675,18 +670,6 @@ class TestEmptySourceIds:
         """Test ask with empty source_ids list."""
         api = ChatAPI(mock_core)
 
-        mock_response = MagicMock()
-        inner_json = json.dumps(
-            [["Response with empty sources, long enough.", None, None, None, [1]]]
-        )
-        chunk_json = json.dumps([["wrb.fr", None, inner_json]])
-        mock_response.text = f")]}}'\n{len(chunk_json)}\n{chunk_json}\n"
-        mock_response.raise_for_status = MagicMock()
-
-        mock_http_client = MagicMock()
-        mock_http_client.post = AsyncMock(return_value=mock_response)
-        mock_core.get_http_client.return_value = mock_http_client
-
         await api.ask(
             notebook_id="nb_123",
             question="Test?",
@@ -694,21 +677,20 @@ class TestEmptySourceIds:
         )
 
         # Verify the sources_array is empty in the request
-        call_args = mock_http_client.post.call_args
-        body = call_args.kwargs.get("content", "")
+        body = mock_core._last_chat_request["body"]
 
         import re
         from urllib.parse import unquote
 
         match = re.search(r"f\.req=([^&]+)", body)
-        if match:
-            f_req_encoded = match.group(1)
-            f_req_decoded = unquote(f_req_encoded)
-            f_req_data = json.loads(f_req_decoded)
-            params = json.loads(f_req_data[1])
-            sources_array = params[0]
+        assert match, f"f.req= missing from body: {body!r}"
+        f_req_encoded = match.group(1)
+        f_req_decoded = unquote(f_req_encoded)
+        f_req_data = json.loads(f_req_decoded)
+        params = json.loads(f_req_data[1])
+        sources_array = params[0]
 
-            assert sources_array == []
+        assert sources_array == []
 
 
 class TestGetSourceIds:

@@ -6,23 +6,20 @@ retrieving conversation history.
 
 import json
 import logging
-import os
 import re
 import uuid
 from typing import Any
 from urllib.parse import quote, urlencode
 
-import httpx
-
-from ._core import ClientCore
-from ._env import get_default_language
+from ._core import ClientCore, _AuthSnapshot
+from ._env import get_default_bl, get_default_language
+from ._logging import reset_request_id, set_request_id
+from .auth import format_authuser_value
 from .exceptions import ChatError, NetworkError, ValidationError
 from .rpc import ChatGoal, ChatResponseLength, RPCMethod, get_query_url, nest_source_ids
 from .types import AskResult, ChatMode, ChatReference, ConversationTurn
 
 logger = logging.getLogger(__name__)
-
-_DEFAULT_BL = "boq_labs-tailwind-frontend_20260301.03_p0"
 
 # UUID pattern for validating source IDs (compiled once at module level)
 _UUID_PATTERN = re.compile(
@@ -103,63 +100,45 @@ class ChatAPI:
         else:
             assert conversation_id is not None  # Type narrowing for mypy
             conversation_history = self._build_conversation_history(conversation_id)
+        # Rebind to non-Optional locals so the build_request closure below
+        # carries the narrowed types — mypy doesn't propagate flow-narrowing
+        # of ``conversation_id`` / ``source_ids`` through a nested-function
+        # capture. ``_build_chat_request`` declares both as non-Optional, so
+        # the closure capture would otherwise be a latent type error.
+        active_conversation_id: str = conversation_id
+        active_source_ids: list[str] = source_ids
 
-        sources_array = nest_source_ids(source_ids, 2)
+        # Mint the request-id under the asyncio-safe counter helper so two
+        # concurrent ``ask`` calls on the same client never collide (audit C3,
+        # synthesis §6 Tier-2 item 2). The previous direct mutation
+        # ``self._core._reqid_counter += 100000`` raced under
+        # ``asyncio.gather`` and produced duplicate ``_reqid`` URL params.
+        reqid = await self._core.next_reqid()
 
-        params: list[Any] = [
-            sources_array,
-            question,
-            conversation_history,
-            [2, None, [1], [1]],
-            conversation_id,
-            None,  # [5] - always null
-            None,  # [6] - always null
-            notebook_id,  # [7] - required for server-side conversation persistence
-            1,  # [8] - always 1
-        ]
+        def build_request(snapshot: _AuthSnapshot) -> tuple[str, str, dict[str, str]]:
+            return self._build_chat_request(
+                snapshot=snapshot,
+                notebook_id=notebook_id,
+                question=question,
+                source_ids=active_source_ids,
+                conversation_history=conversation_history,
+                conversation_id=active_conversation_id,
+                reqid=reqid,
+            )
 
-        params_json = json.dumps(params, separators=(",", ":"))
-        f_req = [None, params_json]
-        f_req_json = json.dumps(f_req, separators=(",", ":"))
-
-        encoded_req = quote(f_req_json, safe="")
-
-        body_parts = [f"f.req={encoded_req}"]
-        if self._core.auth.csrf_token:
-            encoded_at = quote(self._core.auth.csrf_token, safe="")
-            body_parts.append(f"at={encoded_at}")
-
-        body = "&".join(body_parts) + "&"
-
-        self._core._reqid_counter += 100000
-        url_params = {
-            "bl": os.environ.get("NOTEBOOKLM_BL", _DEFAULT_BL),
-            "hl": get_default_language(),
-            "_reqid": str(self._core._reqid_counter),
-            "rt": "c",
-        }
-        if self._core.auth.session_id:
-            url_params["f.sid"] = self._core.auth.session_id
-
-        query_string = urlencode(url_params)
-        url = f"{get_query_url()}?{query_string}"
-
-        http_client = self._core.get_http_client()
+        # ``query_post`` owns the retry/refresh/429 transport pipeline plus
+        # the transport→ChatError/NetworkError mapping that ``ask`` used to
+        # duplicate inline. The request-id context lives here so retries
+        # inside the helper share the same ``[req=<id>]`` log prefix as the
+        # initial attempt.
+        reqid_token = set_request_id()
         try:
-            response = await http_client.post(url, content=body)
-            response.raise_for_status()
-        except httpx.TimeoutException as e:
-            raise NetworkError(
-                f"Chat request timed out: {e}",
-                original_error=e,
-            ) from e
-        except httpx.HTTPStatusError as e:
-            raise ChatError(f"Chat request failed with HTTP {e.response.status_code}: {e}") from e
-        except httpx.RequestError as e:
-            raise NetworkError(
-                f"Chat request failed: {e}",
-                original_error=e,
-            ) from e
+            response = await self._core.query_post(
+                build_request=build_request,
+                parse_label="chat.ask",
+            )
+        finally:
+            reset_request_id(reqid_token)
 
         answer_text, references, server_conv_id = self._parse_ask_response_with_references(
             response.text
@@ -436,6 +415,90 @@ class ChatAPI:
             history.append([turn["answer"], None, 2])
             history.append([turn["query"], None, 1])
         return history
+
+    def _build_chat_request(
+        self,
+        *,
+        snapshot: _AuthSnapshot,
+        notebook_id: str,
+        question: str,
+        source_ids: list[str],
+        conversation_history: list | None,
+        conversation_id: str,
+        reqid: int,
+    ) -> tuple[str, str, dict[str, str]]:
+        """Assemble ``(url, body, extra_headers)`` for one chat HTTP attempt.
+
+        Called by ``core.query_post`` once per attempt with a fresh
+        ``_AuthSnapshot``; on retry, a new snapshot picks up the refreshed
+        CSRF / session id / account routing so the rebuilt request matches
+        the post-refresh credentials byte-for-byte.
+
+        Args:
+            snapshot: Point-in-time auth state for this attempt. The
+                ``csrf_token`` is embedded in the body's ``at=`` field; the
+                ``session_id`` and account routing fields go into URL params.
+            notebook_id: Owning notebook id (echoed at params[7] for
+                server-side conversation persistence).
+            question: User-facing question text.
+            source_ids: Sources to scope this turn against. Encoded
+                triple-nested via :func:`nest_source_ids`.
+            conversation_history: Prior turns for follow-up Q&A, or ``None``
+                when starting a new conversation.
+            conversation_id: Stable conversation identifier. Locally minted
+                UUID for new conversations, server-assigned for follow-ups.
+            reqid: Monotonic request id from :meth:`ClientCore.next_reqid`.
+
+        Returns:
+            ``(url, body, extra_headers)``. ``extra_headers`` is empty
+            because the chat endpoint inherits Content-Type from the shared
+            httpx client.
+        """
+        sources_array = nest_source_ids(source_ids, 2)
+
+        params: list[Any] = [
+            sources_array,
+            question,
+            conversation_history,
+            [2, None, [1], [1]],
+            conversation_id,
+            None,  # [5] - always null
+            None,  # [6] - always null
+            notebook_id,  # [7] - required for server-side conversation persistence
+            1,  # [8] - always 1
+        ]
+
+        params_json = json.dumps(params, separators=(",", ":"))
+        f_req_json = json.dumps([None, params_json], separators=(",", ":"))
+        encoded_req = quote(f_req_json, safe="")
+
+        body_parts = [f"f.req={encoded_req}"]
+        if snapshot.csrf_token:
+            encoded_at = quote(snapshot.csrf_token, safe="")
+            body_parts.append(f"at={encoded_at}")
+        body = "&".join(body_parts) + "&"
+
+        url_params: dict[str, str] = {
+            "bl": get_default_bl(),
+            "hl": get_default_language(),
+            "_reqid": str(reqid),
+            "rt": "c",
+        }
+        if snapshot.session_id:
+            url_params["f.sid"] = snapshot.session_id
+        # Multi-account routing: previously omitted entirely on the chat
+        # endpoint (audit C2 / M1), which silently routed requests to the
+        # default browser account when the auth tokens were minted for a
+        # non-default profile. Mirrors the batchexecute path in
+        # ``ClientCore._build_url``.
+        if snapshot.account_email or snapshot.authuser:
+            url_params["authuser"] = format_authuser_value(
+                snapshot.authuser,
+                snapshot.account_email,
+            )
+
+        url = f"{get_query_url()}?{urlencode(url_params)}"
+        return url, body, {}
 
     def _parse_ask_response_with_references(
         self, response_text: str

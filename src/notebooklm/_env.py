@@ -69,6 +69,25 @@ def get_base_host() -> str:
     return urlparse(get_base_url()).hostname or PERSONAL_BASE_HOST
 
 
+DEFAULT_BL = "boq_labs-tailwind-frontend_20260301.03_p0"
+
+
+def get_default_bl() -> str:
+    """Return the NotebookLM ``bl`` (build label) URL parameter value.
+
+    Reads the ``NOTEBOOKLM_BL`` environment variable; surrounding whitespace
+    is stripped. Unset, empty, or whitespace-only values fall back to
+    :data:`DEFAULT_BL`.
+
+    The ``bl`` parameter is sent on the chat streaming endpoint
+    (``ChatAPI.ask``) and pins the frontend build the request is associated
+    with. Override via ``NOTEBOOKLM_BL`` when chasing a regression tied to
+    a specific build snapshot.
+    """
+    raw = os.environ.get("NOTEBOOKLM_BL", "") or ""
+    return raw.strip() or DEFAULT_BL
+
+
 def get_default_language() -> str:
     """Return the user's preferred interface language.
 
