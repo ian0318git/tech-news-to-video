@@ -618,7 +618,7 @@ def source_refresh(ctx, source_id, notebook_id, client_auth):
 @with_client
 def source_add_drive(ctx, file_id, title, notebook_id, mime_type, client_auth):
     """Add a Google Drive document as a source."""
-    from ..rpc import DriveMimeType
+    from ..types import DriveMimeType
 
     nb_id = require_notebook(notebook_id)
     mime_map = {

@@ -261,7 +261,7 @@ def register_chat_commands(cli):
         nb_id = require_notebook(notebook_id)
 
         async def _run():
-            from ..rpc import ChatGoal, ChatResponseLength
+            from ..types import ChatGoal, ChatResponseLength
 
             async with NotebookLMClient(client_auth) as client:
                 nb_id_resolved = await resolve_notebook_id(client, nb_id)

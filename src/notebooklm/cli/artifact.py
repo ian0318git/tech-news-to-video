@@ -15,7 +15,7 @@ import click
 from rich.table import Table
 
 from ..client import NotebookLMClient
-from ..rpc import ExportType
+from ..types import ExportType
 from .helpers import (
     cli_name_to_artifact_type,
     console,

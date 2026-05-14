@@ -67,6 +67,91 @@ def test_research_api_reexports_cited_source_selection_for_back_compat():
 
 
 # ---------------------------------------------------------------------------
+# PR-T4.2 section: RPC enums re-exported via notebooklm.types
+#
+# CLI modules import these enums from ``notebooklm.types`` (the public surface)
+# rather than reaching into ``notebooklm.rpc`` directly. The re-exports must be
+# the exact same objects as the canonical definitions in ``notebooklm.rpc.types``
+# (identity, not just equality), so isinstance checks and equality both work
+# regardless of which import path callers use.
+#
+# The explicit list below covers every public RPC enum re-exported by
+# ``notebooklm.types`` (see ``notebooklm.types.__all__``). Keep this list in
+# sync with the re-exports so any accidental shadowing in ``types.py`` —
+# redefining instead of re-exporting — is caught immediately. ``ArtifactTypeCode``
+# is intentionally excluded because it is imported by ``types.py`` for internal
+# use but not part of the public ``__all__``.
+# ---------------------------------------------------------------------------
+
+
+_REEXPORTED_RPC_ENUMS = [
+    "ArtifactStatus",
+    "AudioFormat",
+    "AudioLength",
+    "ChatGoal",
+    "ChatResponseLength",
+    "DriveMimeType",
+    "ExportType",
+    "InfographicDetail",
+    "InfographicOrientation",
+    "InfographicStyle",
+    "QuizDifficulty",
+    "QuizQuantity",
+    "ReportFormat",
+    "ShareAccess",
+    "SharePermission",
+    "ShareViewLevel",
+    "SlideDeckFormat",
+    "SlideDeckLength",
+    "SourceStatus",
+    "VideoFormat",
+    "VideoStyle",
+]
+
+
+@pytest.mark.parametrize("enum_name", _REEXPORTED_RPC_ENUMS)
+def test_rpc_enum_reexports_are_identical(enum_name: str) -> None:
+    """notebooklm.types.<Enum> is the same object as notebooklm.rpc.types.<Enum>."""
+    import notebooklm.rpc.types as rpc_types
+    import notebooklm.types as public_types
+
+    public_enum = getattr(public_types, enum_name)
+    canonical_enum = getattr(rpc_types, enum_name)
+    assert public_enum is canonical_enum, (
+        f"notebooklm.types.{enum_name} must be the same object as "
+        f"notebooklm.rpc.types.{enum_name} (identity, not equality)"
+    )
+
+
+def test_rpc_enum_reexport_list_matches_public_all() -> None:
+    """The _REEXPORTED_RPC_ENUMS guard list must stay aligned with notebooklm.types.__all__.
+
+    If a new enum is re-exported in ``types.py``'s ``__all__`` but not added
+    here, this test fails — preventing silent gaps in the identity coverage.
+    """
+    import notebooklm.rpc.types as rpc_types
+    import notebooklm.types as public_types
+
+    # Names that appear in both __all__ and rpc.types — i.e. the actual
+    # re-exported RPC enums.
+    declared = set(public_types.__all__)
+    rpc_names = {name for name in dir(rpc_types) if not name.startswith("_")}
+    expected = declared & rpc_names
+    # Drop helper functions (not enums) from the comparison.
+    expected -= {"artifact_status_to_str", "source_status_to_str"}
+
+    listed = set(_REEXPORTED_RPC_ENUMS)
+    missing = expected - listed
+    extras = listed - expected
+    assert not missing, (
+        f"_REEXPORTED_RPC_ENUMS is missing newly re-exported enum(s): {sorted(missing)}"
+    )
+    assert not extras, (
+        f"_REEXPORTED_RPC_ENUMS contains name(s) no longer re-exported: {sorted(extras)}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # PR-D section: notebooklm.config / notebooklm.urls / notebooklm.log public shims
 # ---------------------------------------------------------------------------
 
