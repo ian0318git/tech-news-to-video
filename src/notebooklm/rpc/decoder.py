@@ -16,6 +16,7 @@ from ..exceptions import (
     RPCTimeoutError,
     ServerError,
     UnknownRPCMethodError,
+    _truncate_response_preview,
 )
 from ._safe_index import safe_index
 
@@ -232,7 +233,7 @@ def parse_chunked_response(response: str) -> list[Any]:
                     i + 1,
                     byte_count,
                     actual_byte_count,
-                    json_str[:100],
+                    _truncate_response_preview(json_str),
                 )
 
             try:
@@ -245,7 +246,7 @@ def parse_chunked_response(response: str) -> list[Any]:
                     "Skipping malformed chunk at line %d: %s. Preview: %s",
                     i + 1,
                     e,
-                    json_str[:100],
+                    _truncate_response_preview(json_str),
                 )
             i += 1
         except ValueError:
@@ -261,7 +262,7 @@ def parse_chunked_response(response: str) -> list[Any]:
                     "Skipping non-JSON line at %d: %s. Preview: %s",
                     i + 1,
                     e,
-                    line[:100],
+                    _truncate_response_preview(line),
                 )
             i += 1
 
@@ -273,7 +274,7 @@ def parse_chunked_response(response: str) -> list[Any]:
                 f"Response parsing failed: {skipped_count} of {total_records} response records "
                 f"malformed. "
                 f"This may indicate API changes or data corruption.",
-                raw_response=response[:500],
+                raw_response=response,
             )
         # Non-critical but warn user results may be incomplete
         logger.warning(
@@ -467,8 +468,13 @@ def decode_response(raw_response: str, rpc_id: str, allow_null: bool = False) ->
     chunks = parse_chunked_response(cleaned)
     logger.debug("Parsed %d chunks from response", len(chunks))
 
-    # Create response preview for error context (first 500 chars)
-    response_preview = cleaned[:500] if len(cleaned) > 500 else cleaned
+    # Pass the full cleaned body to exception constructors; ``RPCError.__init__``
+    # routes ``raw_response`` through ``_truncate_response_preview`` so the
+    # truncation contract (and ``NOTEBOOKLM_DEBUG=1`` opt-in) lives in one
+    # place. The one branch that bypasses ``__init__`` (direct attribute set
+    # on an already-constructed exception) calls the helper explicitly at the
+    # call site below.
+    response_preview = cleaned
 
     # Collect all RPC IDs for debugging
     found_ids = collect_rpc_ids(chunks)
@@ -479,11 +485,14 @@ def decode_response(raw_response: str, rpc_id: str, allow_null: bool = False) ->
     try:
         result = extract_rpc_result(chunks, rpc_id)
     except RPCError as e:
-        # Add context to errors from extract_rpc_result
+        # Add context to errors from extract_rpc_result. This branch sets
+        # ``raw_response`` directly on an already-constructed exception, so
+        # ``__init__`` does not run again — apply the helper explicitly here
+        # to honor the truncation contract.
         if not e.found_ids:
             e.found_ids = found_ids
         if not e.raw_response:
-            e.raw_response = response_preview
+            e.raw_response = _truncate_response_preview(response_preview)
         raise
 
     if result is None and not allow_null:
