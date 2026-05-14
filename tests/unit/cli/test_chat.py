@@ -449,3 +449,121 @@ class TestAskServerResumed:
         assert result.exit_code == 0, result.output
         assert "Conversation: conv-local-abc (turn 2)" in result.output
         assert "Resumed" not in result.output
+
+
+class TestAskNewFlag:
+    """Tests for `ask --new` flag (P4.T1 / I1).
+
+    The --new flag was promised in the docstring but missing from the decorator.
+    --new must skip both the local-cache and server-side conversation lookup so
+    a fresh conversation is started, and it must conflict with --conversation-id.
+    """
+
+    def test_ask_new_starts_fresh_conversation(self, runner, mock_auth, tmp_path):
+        """`ask --new` should NOT pass conversation_id to client.chat.ask."""
+        # Pre-populate context with a cached conversation that would normally resume.
+        context_file = tmp_path / "context.json"
+        context_file.write_text('{"notebook_id": "nb_123", "conversation_id": "conv-cached-abc"}')
+
+        fresh_result = AskResult(
+            answer="Fresh answer.",
+            conversation_id="conv-fresh-xyz",
+            turn_number=1,
+            is_follow_up=False,
+            references=[],
+            raw_response="",
+        )
+
+        with patch_client_for_module("chat") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.chat.ask = AsyncMock(return_value=fresh_result)
+            # Server also has a conversation, but --new should skip both lookups.
+            mock_client.chat.get_conversation_id = AsyncMock(return_value="conv-server-abc")
+            mock_client_cls.return_value = mock_client
+
+            with (
+                patch(
+                    "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+                ) as mock_fetch,
+                patch("notebooklm.cli.helpers.get_context_path", return_value=context_file),
+            ):
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["ask", "-n", "nb_123", "--new", "question"])
+
+        assert result.exit_code == 0, result.output
+        # Server lookup must be skipped when --new is set.
+        mock_client.chat.get_conversation_id.assert_not_awaited()
+        # client.chat.ask must be called with conversation_id=None to start fresh.
+        mock_client.chat.ask.assert_awaited_once()
+        call = mock_client.chat.ask.call_args
+        assert call.kwargs.get("conversation_id") is None, (
+            f"expected conversation_id=None, got {call.kwargs.get('conversation_id')!r}"
+        )
+        assert "New conversation: conv-fresh-xyz" in result.output
+
+    def test_ask_new_conflicts_with_conversation_id(self, runner, mock_auth):
+        """`ask --new --conversation-id <id>` should raise UsageError (exit 2)."""
+        with patch_client_for_module("chat") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.chat.ask = AsyncMock(return_value=make_ask_result())
+            mock_client.chat.get_conversation_id = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli,
+                    [
+                        "ask",
+                        "-n",
+                        "nb_123",
+                        "--new",
+                        "--conversation-id",
+                        "conv-explicit-abc",
+                        "question",
+                    ],
+                )
+
+            # Click UsageError exits with code 2.
+            assert result.exit_code == 2, result.output
+            assert "--new" in result.output and "--conversation-id" in result.output
+            # client.chat.ask must not have been awaited — error came before dispatch.
+            mock_client.chat.ask.assert_not_awaited()
+
+    def test_ask_new_skips_server_resume_when_no_local_cache(self, runner, mock_auth, tmp_path):
+        """`ask --new` with no cached conversation must still skip the server fetch."""
+        # Empty context (no cached conversation_id).
+        context_file = tmp_path / "context.json"
+        context_file.write_text('{"notebook_id": "nb_123"}')
+
+        fresh_result = AskResult(
+            answer="Fresh answer.",
+            conversation_id="conv-fresh-xyz",
+            turn_number=1,
+            is_follow_up=False,
+            references=[],
+            raw_response="",
+        )
+
+        with patch_client_for_module("chat") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.chat.ask = AsyncMock(return_value=fresh_result)
+            # Server has a conversation, but --new must NOT consult it.
+            mock_client.chat.get_conversation_id = AsyncMock(return_value="conv-server-abc")
+            mock_client_cls.return_value = mock_client
+
+            with (
+                patch(
+                    "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+                ) as mock_fetch,
+                patch("notebooklm.cli.helpers.get_context_path", return_value=context_file),
+            ):
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["ask", "-n", "nb_123", "--new", "question"])
+
+        assert result.exit_code == 0, result.output
+        mock_client.chat.get_conversation_id.assert_not_awaited()
+        call = mock_client.chat.ask.call_args
+        assert call.kwargs.get("conversation_id") is None

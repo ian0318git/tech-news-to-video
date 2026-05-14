@@ -88,6 +88,12 @@ def register_chat_commands(cli):
     @notebook_option
     @click.option("--conversation-id", "-c", default=None, help="Continue a specific conversation")
     @click.option(
+        "--new",
+        "new_conversation",
+        is_flag=True,
+        help="Start a fresh conversation, skipping the auto-resume of the last one.",
+    )
+    @click.option(
         "--source",
         "-s",
         "source_ids",
@@ -115,6 +121,7 @@ def register_chat_commands(cli):
         prompt_file,
         notebook_id,
         conversation_id,
+        new_conversation,
         source_ids,
         json_output,
         save_as_note,
@@ -132,10 +139,16 @@ def register_chat_commands(cli):
         Example:
           notebooklm ask "what are the main themes?"
           notebooklm ask -c <id> "continue this one"
+          notebooklm ask --new "ignore last conversation, start fresh"
           notebooklm ask -s src_001 -s src_002 "question about specific sources"
           notebooklm ask "explain X" --json             # Get answer with source references
           notebooklm ask "explain X" --save-as-note     # Save response as a note
         """
+        if new_conversation and conversation_id:
+            raise click.UsageError(
+                "--new and --conversation-id are mutually exclusive: "
+                "--new starts a fresh conversation while --conversation-id resumes a specific one."
+            )
         question = resolve_prompt(question, prompt_file, "question", required=True)
         nb_id = require_notebook(notebook_id)
 
@@ -146,15 +159,20 @@ def register_chat_commands(cli):
         async def _run():
             async with NotebookLMClient(client_auth, **client_kwargs) as client:
                 nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
-                effective_conv_id = _determine_conversation_id(
-                    explicit_conversation_id=conversation_id,
-                    explicit_notebook_id=notebook_id,
-                    resolved_notebook_id=nb_id_resolved,
-                    json_output=json_output,
-                )
+                if new_conversation:
+                    # --new: skip both the local-cache and server-side resume so the
+                    # server treats this turn as the start of a new conversation.
+                    effective_conv_id: str | None = None
+                else:
+                    effective_conv_id = _determine_conversation_id(
+                        explicit_conversation_id=conversation_id,
+                        explicit_notebook_id=notebook_id,
+                        resolved_notebook_id=nb_id_resolved,
+                        json_output=json_output,
+                    )
 
                 resumed_from_server = False
-                if not effective_conv_id:
+                if not new_conversation and not effective_conv_id:
                     # If no conversation ID yet, try to get the most recent one from server
                     effective_conv_id = await _get_latest_conversation_from_server(
                         client, nb_id_resolved, json_output
