@@ -15,6 +15,7 @@ import logging
 import shutil
 import sys
 
+from ._atomic_io import atomic_update_json
 from .paths import get_config_path, get_home_dir
 
 logger = logging.getLogger(__name__)
@@ -123,24 +124,28 @@ def migrate_to_profiles() -> bool:
 
 
 def _set_default_profile_in_config() -> None:
-    """Add default_profile to config.json if not already present."""
+    """Add default_profile to config.json if not already present.
+
+    Uses :func:`atomic_update_json` so a concurrent ``notebooklm profile
+    switch`` or ``language set`` running during migration cannot lose
+    updates by interleaving read-modify-write cycles.
+    """
     config_path = get_config_path()
-    data: dict = {}
-
-    if config_path.exists():
-        try:
-            data = json.loads(config_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError) as e:
-            logger.debug("Migration config unparseable; using empty default: %s", e)
-
-    if "default_profile" not in data:
-        data["default_profile"] = "default"
+    # Ensure parent dir has the same 0o700 permissions as the legacy code path.
+    if sys.platform == "win32":
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+    else:
         config_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        config_path.write_text(
-            json.dumps(data, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
-        config_path.chmod(0o600)
+
+    def _ensure_default(data: dict) -> dict:
+        if "default_profile" not in data:
+            data["default_profile"] = "default"
+        return data
+
+    try:
+        atomic_update_json(config_path, _ensure_default)
+    except (json.JSONDecodeError, OSError) as e:
+        logger.debug("Migration config update failed; leaving as-is: %s", e)
 
 
 def ensure_profiles_dir() -> None:

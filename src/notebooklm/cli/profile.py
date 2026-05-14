@@ -19,6 +19,7 @@ import click
 from rich.table import Table
 
 from ..auth import read_account_metadata
+from ..io import atomic_update_json
 from ..paths import (
     get_config_path,
     get_profile_dir,
@@ -88,19 +89,26 @@ def _read_config(config_path: Path, *, suppress_errors: bool = True) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def _write_config(config_path: Path, data: dict) -> None:
-    """Write global config with private permissions."""
+def _atomic_write_config(config_path: Path, mutator) -> None:
+    """Lock + read-modify-write of the global config with private permissions.
+
+    Wraps :func:`atomic_update_json` so parent dir permissions are 0o700 on
+    POSIX (matching the legacy ``_write_config``). Use this for any code path
+    that reads, mutates, and writes ``config.json`` so concurrent CLI
+    invocations cannot lose updates.
+
+    If the existing config is unparseable (corrupted on disk), the mutator
+    runs on an empty dict instead — recovery happens **inside** the lock via
+    ``recover_from_corrupt=True``. An outside-the-lock unlink-and-retry would
+    race a concurrent process that wrote a valid payload between our raise
+    and our retry, causing us to delete their good write (see PR #465).
+    """
     if sys.platform == "win32":
         config_path.parent.mkdir(parents=True, exist_ok=True)
     else:
         config_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         config_path.parent.chmod(0o700)
-    config_path.write_text(
-        json.dumps(data, indent=2, ensure_ascii=False, default=str) + "\n",
-        encoding="utf-8",
-    )
-    if sys.platform != "win32":
-        config_path.chmod(0o600)
+    atomic_update_json(config_path, mutator, recover_from_corrupt=True)
 
 
 @click.group("profile")
@@ -208,12 +216,16 @@ def switch_cmd(name):
         raise click.ClickException(f"Profile '{name}' not found.{hint}")
 
     config_path = get_config_path()
-    data = _read_config(config_path)
+    # Capture the previous value for the status message before mutating.
+    # The lock-protected mutator below is the source of truth for the write.
+    old_profile = _read_config(config_path).get("default_profile", "default")
 
-    old_profile = data.get("default_profile", "default")
-    data["default_profile"] = name
+    def _set_default(data: dict) -> dict:
+        data["default_profile"] = name
+        return data
+
     try:
-        _write_config(config_path, data)
+        _atomic_write_config(config_path, _set_default)
     except OSError as e:
         raise click.ClickException(f"Failed to update config.json: {e}") from None
 
@@ -286,21 +298,37 @@ def rename_cmd(old_name, new_name):
 
     os.rename(old_dir, new_dir)
 
-    # Update config if renamed profile was the effective default.
-    # This handles both: config.json exists with default_profile=old_name,
-    # AND config.json doesn't exist (implicit "default" fallback).
+    # Update config if renamed profile was the effective default. This is
+    # always serialized through the locked mutator — there is NO pre-read
+    # early-return optimization, because a concurrent ``profile switch``
+    # could win between any pre-read and the lock acquire, leading us to
+    # skip the write that was correct at the moment we observed it. The
+    # mutator below is the single source of truth and recovers from a
+    # corrupt config under the same lock (``recover_from_corrupt=True``
+    # inside ``_atomic_write_config``).
     config_path = get_config_path()
+    updated = False
+
+    def _retarget_default(current: dict) -> dict:
+        nonlocal updated
+        # Decide under the lock — this is the only read of
+        # ``default_profile`` that matters. Treat a missing key as the
+        # implicit "default" so a fresh install with no config.json still
+        # picks up the rename when the user renamed the default profile.
+        if (current.get("default_profile") or "default") == old_name:
+            current["default_profile"] = new_name
+            updated = True
+        return current
+
     try:
-        data = _read_config(config_path, suppress_errors=False)
-        configured_default = data.get("default_profile") or "default"
-        if configured_default == old_name:
-            data["default_profile"] = new_name
-            _write_config(config_path, data)
-            console.print(f"[dim]Updated default profile in config: {old_name} → {new_name}[/dim]")
-    except (json.JSONDecodeError, OSError) as e:
+        _atomic_write_config(config_path, _retarget_default)
+    except OSError as e:
         console.print(
             f"[yellow]Warning: profile renamed but config.json update failed: {e}[/yellow]\n"
             f"[yellow]Run 'notebooklm profile switch {new_name}' to fix.[/yellow]"
         )
+    else:
+        if updated:
+            console.print(f"[dim]Updated default profile in config: {old_name} → {new_name}[/dim]")
 
     console.print(f"[green]Profile renamed: {old_name} → {new_name}[/green]")

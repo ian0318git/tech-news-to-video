@@ -49,8 +49,9 @@ from typing import Any, NamedTuple, TypeAlias
 from urllib.parse import urlencode
 
 import httpx
+from filelock import FileLock
 
-from ._atomic_io import atomic_write_json
+from ._atomic_io import atomic_update_json, atomic_write_json
 from ._env import get_base_url
 from ._url_utils import contains_google_auth_redirect, is_google_auth_redirect
 from .exceptions import AuthExtractionError
@@ -1209,6 +1210,10 @@ def authuser_query(authuser: int = 0, account_email: str | None = None) -> str:
 def write_account_metadata(storage_path: Path, *, authuser: int, email: str | None = None) -> None:
     """Persist profile account metadata inside sibling ``context.json``.
 
+    Uses :func:`atomic_update_json` so concurrent CLI invocations (e.g., a
+    ``login`` while ``use`` is in flight) cannot lose updates by writing
+    stale snapshots of ``context.json`` over each other.
+
     Args:
         storage_path: Path to ``storage_state.json``. The sibling
             ``context.json`` is created or updated.
@@ -1217,48 +1222,56 @@ def write_account_metadata(storage_path: Path, *, authuser: int, email: str | No
         email: Optional account email to record alongside the index.
     """
     context_path = _account_context_path(storage_path)
-    data: dict[str, Any] = {}
-    if context_path.exists():
-        try:
-            existing = json.loads(context_path.read_text(encoding="utf-8"))
-            if isinstance(existing, dict):
-                data = existing
-        except (OSError, json.JSONDecodeError) as e:
-            logger.debug("Account context unreadable; using empty dict: %s", e)
-            data = {}
-
     payload: dict[str, Any] = {"authuser": authuser}
     if email:
         payload["email"] = email
-    data[_ACCOUNT_CONTEXT_KEY] = payload
 
-    context_path.parent.mkdir(parents=True, exist_ok=True)
-    context_path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    if sys.platform != "win32":
-        context_path.chmod(0o600)
+    def _set_account(data: dict[str, Any]) -> dict[str, Any]:
+        data[_ACCOUNT_CONTEXT_KEY] = payload
+        return data
+
+    # ``recover_from_corrupt=True`` keeps the empty-dict fallback **inside**
+    # the file lock. An outside-the-lock unlink-and-retry would race a
+    # concurrent process that wrote a valid payload between our raise and
+    # our retry, causing us to delete their good write (see PR #465 review).
+    # Account metadata is unrecoverable from corrupt JSON, so silent reset
+    # under the lock is the right behaviour.
+    atomic_update_json(context_path, _set_account, recover_from_corrupt=True)
 
 
 def clear_account_metadata(storage_path: Path | None) -> None:
-    """Remove account metadata from sibling ``context.json`` if present."""
+    """Remove account metadata from sibling ``context.json`` if present.
+
+    Holds the same sibling ``.lock`` file used by :func:`atomic_update_json`
+    so concurrent ``write_account_metadata`` / context-mutation calls don't
+    lose updates against our clear-and-maybe-delete.
+    """
     if storage_path is None:
         return
     context_path = _account_context_path(storage_path)
     if not context_path.exists():
         return
-    try:
-        data = json.loads(context_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as e:
-        logger.debug("account metadata clear skipped for %s: %s", context_path, e)
-        return
-    if not isinstance(data, dict) or _ACCOUNT_CONTEXT_KEY not in data:
-        return
-    del data[_ACCOUNT_CONTEXT_KEY]
-    if data:
-        context_path.write_text(
-            json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-        )
-    else:
-        context_path.unlink()
+    lock_path = context_path.with_suffix(context_path.suffix + ".lock")
+    context_path.parent.mkdir(parents=True, exist_ok=True)
+    with FileLock(str(lock_path), timeout=10.0):
+        # Re-check existence under the lock — another writer may have
+        # removed it between the early-return check and the lock acquire.
+        if not context_path.exists():
+            return
+        try:
+            data = json.loads(context_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as e:
+            logger.debug("account metadata clear skipped for %s: %s", context_path, e)
+            return
+        if not isinstance(data, dict) or _ACCOUNT_CONTEXT_KEY not in data:
+            return
+        del data[_ACCOUNT_CONTEXT_KEY]
+        if data:
+            # atomic_update_json would re-acquire the lock; use the atomic
+            # write directly since we already hold the lock here.
+            atomic_write_json(context_path, data)
+        else:
+            context_path.unlink()
 
 
 def _load_storage_state(path: Path | None = None) -> dict[str, Any]:

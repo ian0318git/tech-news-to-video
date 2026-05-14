@@ -13,6 +13,7 @@ import click
 from rich.table import Table
 
 from ..client import NotebookLMClient
+from ..io import atomic_update_json
 from ..paths import get_config_path, get_home_dir
 from .helpers import console, get_auth_tokens, json_output_response, run_async
 from .options import json_option
@@ -122,11 +123,27 @@ def get_config() -> dict:
     return {}
 
 
-def save_config(config: dict) -> None:
-    """Save config to config.json."""
+def _save_config(config: dict) -> None:
+    """Internal: write ``config.json`` via a single non-locked overwrite.
+
+    .. deprecated::
+        Prefer :func:`set_language` (or any other lock-protected helper built
+        on :func:`notebooklm.io.atomic_update_json`) for read-modify-write
+        flows. This raw overwrite has no cross-process locking and is kept
+        only as the low-level write primitive for callers that already hold
+        no shared state to merge.
+    """
     config_path = get_config_path()
     get_home_dir(create=True)  # Ensure directory exists
-    config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+    # ``json.dump`` streams directly to the file handle and avoids
+    # materializing the full serialized string in memory.
+    with config_path.open("w", encoding="utf-8") as fh:
+        json.dump(config, fh, indent=2, ensure_ascii=False)
+
+
+# Deprecated public alias retained for any external importer that latched
+# onto the legacy name. Internal call sites should use ``_save_config``.
+save_config = _save_config
 
 
 def get_language() -> str | None:
@@ -135,10 +152,22 @@ def get_language() -> str | None:
 
 
 def set_language(code: str) -> None:
-    """Set the language in config."""
-    config = get_config()
-    config["language"] = code
-    save_config(config)
+    """Set the language in config.
+
+    Uses ``atomic_update_json`` so concurrent CLI invocations cannot lose
+    other keys (e.g., ``default_profile``) via interleaved read-modify-write.
+    ``recover_from_corrupt=True`` keeps the empty-dict fallback **inside**
+    the file lock so a peer's valid concurrent write is never clobbered by
+    an out-of-lock unlink-and-retry.
+    """
+    config_path = get_config_path()
+    get_home_dir(create=True)  # Ensure directory exists
+
+    def _set_lang(current: dict) -> dict:
+        current["language"] = code
+        return current
+
+    atomic_update_json(config_path, _set_lang, recover_from_corrupt=True)
 
 
 def _run_language_rpc(coro):
