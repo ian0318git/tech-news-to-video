@@ -224,3 +224,7 @@ gh pr view <PR_NUMBER> --json state,mergeStateStatus,mergeable
 - All CI checks pass
 - All review comments are addressed
 - `mergeStateStatus` is `CLEAN`
+
+### Requesting a Claude review on a PR
+
+Automatic Claude review on every PR is disabled. To request a review, comment `@claude review` on the PR — the `.github/workflows/claude.yml` workflow will pick it up.
