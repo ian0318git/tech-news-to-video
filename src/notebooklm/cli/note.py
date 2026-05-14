@@ -35,6 +35,7 @@ def note():
       create  Create a new note
       get     Get note content
       save    Update note content
+      rename  Rename a note
       delete  Delete a note
 
     \b

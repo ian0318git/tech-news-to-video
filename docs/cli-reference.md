@@ -125,7 +125,7 @@ Supported source types: URLs, YouTube videos, files (PDF, text, Markdown, Word, 
 | `refresh <id>` | Source ID | - | `source refresh src123` |
 | `delete <id>` | Source ID | - | `source delete src123` |
 | `delete-by-title <title>` | Exact source title | - | `source delete-by-title "My Source"` |
-| `wait <id>` | Source ID | `--timeout`, `--interval` | `source wait src123` |
+| `wait <id>` | Source ID | `--timeout`, `--json` | `source wait src123` |
 
 `source delete <id>` accepts only full source IDs or unique partial-ID prefixes. To delete by exact source title, use `source delete-by-title "<title>"`.
 
@@ -174,7 +174,9 @@ Language-aware generate commands (`audio`, `video`, `cinematic-video`, `report`,
 | `export <id>` | Artifact ID | `--type [docs|sheets]`, `--title` | `artifact export art123 --type sheets` |
 | `poll <task_id>` | Task ID | - | `artifact poll task123` |
 | `wait <id>` | Artifact ID | `--timeout`, `--interval` | `artifact wait art123` |
-| `suggestions` | - | `-s/--source`, `--json` | `artifact suggestions` |
+| `suggestions` | - | `--json` | `artifact suggestions` |
+
+> **Note:** `artifact delete` on a Mind Map clears its content rather than removing the artifact entry — Mind Maps are stored alongside notes and Google may garbage-collect cleared entries later. The CLI prints a `Cleared mind map:` message instead of `Deleted artifact:` when this happens.
 
 ### Download Commands (`notebooklm download <type>`)
 

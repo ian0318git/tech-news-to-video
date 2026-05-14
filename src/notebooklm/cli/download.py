@@ -1,15 +1,16 @@
 """Download content CLI commands.
 
 Commands:
-    audio        Download audio file
-    video        Download video file
-    slide-deck   Download slide deck PDF
-    infographic  Download infographic image
-    report       Download report as markdown
-    mind-map     Download mind map as JSON
-    data-table   Download data table as CSV
-    quiz         Download quiz questions
-    flashcards   Download flashcard deck
+    audio            Download audio file
+    video            Download video file
+    cinematic-video  Download cinematic video (alias for video)
+    slide-deck       Download slide deck (PDF or PPTX)
+    infographic      Download infographic image
+    report           Download report as markdown
+    mind-map         Download mind map as JSON
+    data-table       Download data table as CSV
+    quiz             Download quiz questions
+    flashcards       Download flashcard deck
 """
 
 from collections.abc import Awaitable, Callable
@@ -80,13 +81,16 @@ def download():
 
     \b
     Types:
-      audio        Download audio file
-      video        Download video file
-      slide-deck   Download slide deck PDF
-      infographic  Download infographic image
-      report       Download report as markdown
-      mind-map     Download mind map as JSON
-      data-table   Download data table as CSV
+      audio             Download audio file
+      video             Download video file
+      cinematic-video   Download cinematic video (alias for video)
+      slide-deck        Download slide deck (PDF or PPTX)
+      infographic       Download infographic image
+      report            Download report as markdown
+      mind-map          Download mind map as JSON
+      data-table        Download data table as CSV
+      quiz              Download quiz questions
+      flashcards        Download flashcard deck
     """
     pass
 

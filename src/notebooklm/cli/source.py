@@ -1,18 +1,20 @@
 """Source management CLI commands.
 
 Commands:
-    list         List sources in a notebook
-    add          Add a source (url, text, file, youtube)
-    get          Get source details
-    fulltext     Get full indexed text content of a source
-    guide        Get AI-generated source summary and keywords
-    stale        Check if a URL/Drive source needs refresh
-    delete       Delete a source
-    delete-by-title Delete a source by exact title
-    rename       Rename a source
-    refresh      Refresh a URL/Drive source
-    add-drive    Add a Google Drive document
-    add-research Search web/drive and add sources from results
+    list             List sources in a notebook
+    add              Add a source (url, text, file, youtube)
+    add-drive        Add a Google Drive document
+    add-research     Search web/drive and add sources from results
+    get              Get source details
+    fulltext         Get full indexed text content of a source
+    guide            Get AI-generated source summary and keywords
+    stale            Check if a URL/Drive source needs refresh
+    wait             Wait for a source to finish processing
+    clean            Remove duplicate, error, and access-blocked sources
+    delete           Delete a source
+    delete-by-title  Delete a source by exact title
+    rename           Rename a source
+    refresh          Refresh a URL/Drive source
 """
 
 import asyncio
@@ -194,16 +196,20 @@ def source():
 
     \b
     Commands:
-      list         List sources in a notebook
-      add          Add a source (url, text, file, youtube)
-      get          Get source details
-      fulltext     Get full indexed text content
-      guide        Get AI-generated source summary and keywords
-      stale        Check if source needs refresh
-      delete       Delete a source
-      delete-by-title Delete a source by exact title
-      rename       Rename a source
-      refresh      Refresh a URL/Drive source
+      list             List sources in a notebook
+      add              Add a source (url, text, file, youtube)
+      add-drive        Add a Google Drive document
+      add-research     Search web/drive and add sources from results
+      get              Get source details
+      fulltext         Get full indexed text content
+      guide            Get AI-generated source summary and keywords
+      stale            Check if source needs refresh
+      wait             Wait for a source to finish processing
+      clean            Remove duplicate, error, and access-blocked sources
+      delete           Delete a source
+      delete-by-title  Delete a source by exact title
+      rename           Rename a source
+      refresh          Refresh a URL/Drive source
 
     \b
     Partial ID Support:
@@ -430,11 +436,11 @@ def source_add(
 
     \b
     Examples:
-      source add https://example.com              # URL
-      source add ./doc.md                         # File content as text
-      source add https://youtube.com/...          # YouTube video
-      source add "My notes here"                  # Inline text
-      source add "My notes" --title "Research"   # Text with custom title
+      notebooklm source add https://example.com             # URL
+      notebooklm source add ./doc.md                        # File content as text
+      notebooklm source add https://youtube.com/...         # YouTube video
+      notebooklm source add "My notes here"                 # Inline text
+      notebooklm source add "My notes" --title "Research"   # Text with custom title
     """
     nb_id = require_notebook(notebook_id)
 
@@ -764,13 +770,13 @@ def source_add_research(
 
     \b
     Examples:
-      source add-research "machine learning"              # Search web
-      source add-research "project docs" --from drive     # Search Google Drive
-      source add-research "AI papers" --mode deep         # Deep search
-      source add-research "tutorials" --import-all        # Auto-import all results
-      source add-research "topic" --import-all --cited-only
-      source add-research "topic" --mode deep --no-wait   # Non-blocking deep search
-      source add-research --prompt-file query.txt --mode deep   # Read query from file
+      notebooklm source add-research "machine learning"              # Search web
+      notebooklm source add-research "project docs" --from drive     # Search Google Drive
+      notebooklm source add-research "AI papers" --mode deep         # Deep search
+      notebooklm source add-research "tutorials" --import-all        # Auto-import all results
+      notebooklm source add-research "topic" --import-all --cited-only
+      notebooklm source add-research "topic" --mode deep --no-wait   # Non-blocking deep search
+      notebooklm source add-research --prompt-file query.txt --mode deep   # Read query from file
     """
     query = resolve_prompt(query, prompt_file, "query", required=True)
     if cited_only and not import_all:
@@ -858,9 +864,9 @@ def source_fulltext(ctx, source_id, notebook_id, json_output, output, output_for
 
     \b
     Examples:
-      source fulltext abc123                        # Show plaintext in terminal
-      source fulltext abc123 -f markdown -o out.md  # Save markdown to file
-      source fulltext abc123 --json                 # Output as JSON
+      notebooklm source fulltext abc123                        # Show plaintext in terminal
+      notebooklm source fulltext abc123 -f markdown -o out.md  # Save markdown to file
+      notebooklm source fulltext abc123 --json                 # Output as JSON
     """
     nb_id = require_notebook(notebook_id)
 
@@ -927,8 +933,8 @@ def source_guide(ctx, source_id, notebook_id, json_output, client_auth):
 
     \b
     Examples:
-      source guide abc123                    # Get guide for source
-      source guide abc123 --json             # Output as JSON
+      notebooklm source guide abc123                    # Get guide for source
+      notebooklm source guide abc123 --json             # Output as JSON
     """
     nb_id = require_notebook(notebook_id)
 
@@ -990,7 +996,7 @@ def source_stale(ctx, source_id, notebook_id, client_auth):
 
     \b
     Examples:
-      source stale abc123              # Check if stale
+      notebooklm source stale abc123              # Check if stale
     """
     nb_id = require_notebook(notebook_id)
 
@@ -1039,9 +1045,9 @@ def source_wait(ctx, source_id, notebook_id, timeout, json_output, client_auth):
 
     \b
     Examples:
-      source wait abc123                    # Wait for source to be ready
-      source wait abc123 --timeout 300      # Wait up to 5 minutes
-      source wait abc123 --json             # Output status as JSON
+      notebooklm source wait abc123                    # Wait for source to be ready
+      notebooklm source wait abc123 --timeout 300      # Wait up to 5 minutes
+      notebooklm source wait abc123 --json             # Output status as JSON
 
     \b
     Subagent pattern for long-running operations:

@@ -35,13 +35,14 @@ def artifact():
 
     \b
     Commands:
-      list      List all artifacts (or by type)
-      get       Get artifact details
-      rename    Rename an artifact
-      delete    Delete an artifact
-      export    Export to Google Docs/Sheets
-      poll      Poll generation status (single check)
-      wait      Wait for generation to complete (blocking)
+      list         List all artifacts (or by type)
+      get          Get artifact details
+      rename       Rename an artifact
+      delete       Delete an artifact
+      export       Export to Google Docs/Sheets
+      poll         Poll generation status (single check)
+      wait         Wait for generation to complete (blocking)
+      suggestions  Get AI-suggested report topics
 
     \b
     Partial ID Support:
