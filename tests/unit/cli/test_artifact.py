@@ -191,10 +191,42 @@ class TestArtifactGet:
             assert data["id"] == "art_123"
             assert data["title"] == "Test Artifact"
             assert data["found"] is True
+            # notebook_id mirrors the wrapper used by `artifact list --json`,
+            # so cached responses share one schema across the two commands.
+            assert data["notebook_id"] == "nb_123"
             # type / status / created_at keys must be present for automation
             assert "type" in data
             assert "status" in data
             assert "created_at" in data
+
+    def test_artifact_get_json_not_found(self, runner, mock_auth):
+        """`artifact get --json` emits ``{found: False}`` when the artifact is gone.
+
+        ``client.artifacts.get`` may return ``None`` after a successful partial-ID
+        resolve when the server reports the artifact has been deleted between
+        the list call and the get call.
+        """
+        with patch_client_for_module("artifact") as mock_client_cls:
+            mock_client = create_mock_client()
+            # Resolve succeeds (list contains the ID) but get() returns None
+            # (e.g., concurrent delete from another session).
+            mock_client.artifacts.list = AsyncMock(
+                return_value=[Artifact(id="art_123", title="Doomed", _artifact_type=4, status=3)]
+            )
+            mock_client.artifacts.get = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli, ["artifact", "get", "art_123", "-n", "nb_123", "--json"]
+                )
+
+            assert result.exit_code == 0
+            data = json.loads(result.output)
+            assert data == {"notebook_id": "nb_123", "id": "art_123", "found": False}
 
 
 # =============================================================================

@@ -153,9 +153,12 @@ def artifact_get(ctx, artifact_id, notebook_id, json_output, client_auth):
 
             if json_output:
                 if art is None:
-                    json_output_response({"id": resolved_id, "found": False})
+                    json_output_response(
+                        {"notebook_id": nb_id_resolved, "id": resolved_id, "found": False}
+                    )
                     return
                 data = {
+                    "notebook_id": nb_id_resolved,
                     "id": art.id,
                     "title": art.title,
                     "type": get_artifact_type_display(art).split(" ", 1)[-1],
@@ -241,9 +244,12 @@ def artifact_delete(ctx, artifact_id, notebook_id, yes, json_output, client_auth
                 client, nb_id_resolved, artifact_id, json_output=json_output
             )
 
-            if not yes and not click.confirm(f"Delete artifact {resolved_id}?"):
-                if json_output:
-                    json_output_response({"id": resolved_id, "deleted": False, "cancelled": True})
+            # ``--json`` implies ``--yes`` so a script that pipes ``--json`` but
+            # forgets ``-y`` does not hang on ``click.confirm``'s stdin read
+            # (which would also clobber JSON stdout purity). Interactive users
+            # who want a confirm prompt should omit ``--json``; scripts that
+            # explicitly want the confirm round-trip can omit ``--json``.
+            if not yes and not json_output and not click.confirm(f"Delete artifact {resolved_id}?"):
                 return
 
             # Check if this is a mind map (stored with notes)
@@ -343,15 +349,18 @@ def artifact_poll(ctx, task_id, notebook_id, json_output, client_auth):
 
             if json_output:
                 # Mirror the GenerationStatus dataclass fields so automation can
-                # introspect status / url / error without parsing prose.
+                # introspect status / url / error without parsing prose. Direct
+                # attribute access (rather than getattr) matches how
+                # ``artifact wait`` consumes the same dataclass and surfaces
+                # type drift instead of swallowing it.
                 json_output_response(
                     {
-                        "task_id": getattr(status, "task_id", task_id),
-                        "status": getattr(status, "status", None),
-                        "url": getattr(status, "url", None),
-                        "error": getattr(status, "error", None),
-                        "error_code": getattr(status, "error_code", None),
-                        "metadata": getattr(status, "metadata", None),
+                        "task_id": status.task_id,
+                        "status": status.status,
+                        "url": status.url,
+                        "error": status.error,
+                        "error_code": status.error_code,
+                        "metadata": status.metadata,
                     }
                 )
                 return
