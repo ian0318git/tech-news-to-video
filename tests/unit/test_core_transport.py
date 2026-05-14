@@ -355,6 +355,10 @@ async def test_query_post_wraps_auth_expired_as_chat_error(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_query_post_wraps_timeout_as_network_error(monkeypatch):
+    """Timeout with budget=0: ``_TransportServerError`` path must still produce a
+    ``NetworkError`` whose message preserves the ``timed out`` signal (regression
+    against PR #464 follow-up — without the timeout-specific branch, the message
+    collapses to a generic ``network error after retries``)."""
     from notebooklm.exceptions import NetworkError
 
     core = _make_core()
@@ -373,6 +377,52 @@ async def test_query_post_wraps_timeout_as_network_error(monkeypatch):
             await core.query_post(build_request=build, parse_label="chat.ask")
 
         assert isinstance(exc_info.value.original_error, httpx.ReadTimeout)
+        msg = str(exc_info.value)
+        assert "timed out" in msg
+        assert "network error after retries" not in msg
+        # Chain: NetworkError -> _TransportServerError -> ReadTimeout
+        assert isinstance(exc_info.value.__cause__, _TransportServerError)
+    finally:
+        await core.close()
+
+
+@pytest.mark.asyncio
+async def test_query_post_timeout_after_budget_keeps_timeout_message(monkeypatch):
+    """Timeout that exhausts the retry budget still surfaces ``timed out`` —
+    explicit regression for the dead-handler bug: prior to the fix, the only
+    code path that could produce a ``timed out`` message was the bare
+    ``except httpx.TimeoutException`` handler, which became unreachable once
+    ``_perform_authed_post`` started wrapping every ``httpx.RequestError``
+    into ``_TransportServerError`` (PR #464)."""
+    from notebooklm.exceptions import NetworkError
+
+    core = _make_core(server_error_max_retries=2)
+    await core.open()
+    try:
+
+        async def fake_sleep(seconds: float) -> None:
+            pass
+
+        monkeypatch.setattr("notebooklm._core.asyncio.sleep", fake_sleep)
+
+        def build(snapshot: _AuthSnapshot) -> tuple[str, str, dict[str, str]]:
+            return "https://example.test/x", "payload", {}
+
+        async def fake_post(*args, **kwargs):
+            raise httpx.ReadTimeout("read timeout")
+
+        monkeypatch.setattr(core._http_client, "post", fake_post)
+
+        with pytest.raises(NetworkError) as exc_info:
+            await core.query_post(build_request=build, parse_label="chat.ask")
+
+        msg = str(exc_info.value)
+        assert "timed out" in msg
+        assert "network error after retries" not in msg
+        assert isinstance(exc_info.value.original_error, httpx.ReadTimeout)
+        # Chain: NetworkError -> _TransportServerError -> ReadTimeout (symmetry
+        # with the budget=0 test above).
+        assert isinstance(exc_info.value.__cause__, _TransportServerError)
     finally:
         await core.close()
 

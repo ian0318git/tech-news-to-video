@@ -997,25 +997,40 @@ class ClientCore:
                     f"after retries: {exc.original}"
                 ) from exc
             # Network-layer failure (RequestError / Timeout).
-            assert isinstance(exc.original, httpx.RequestError)
+            # ``_perform_authed_post`` only wraps ``httpx.RequestError`` into
+            # ``_TransportServerError`` on the network path; this guard keeps
+            # the contract enforced under ``python -O`` (where ``assert``
+            # would be stripped) and gives a clear diagnostic if the
+            # invariant ever drifts.
+            if not isinstance(exc.original, httpx.RequestError):
+                raise TypeError(
+                    f"Unexpected _TransportServerError.original type: {type(exc.original)}"
+                ) from exc
+            # Preserve the timeout-specific message: TimeoutException is a
+            # subclass of RequestError, so without this branch read/connect
+            # timeouts would surface as a generic "network error after
+            # retries" line and lose the "timed out" signal callers rely on.
+            if isinstance(exc.original, httpx.TimeoutException):
+                raise NetworkError(
+                    f"{parse_label} timed out after retries: {exc.original}",
+                    original_error=exc.original,
+                ) from exc
             raise NetworkError(
                 f"{parse_label} network error after retries: {exc.original}",
                 original_error=exc.original,
             ) from exc
-        except httpx.TimeoutException as exc:
-            raise NetworkError(
-                f"{parse_label} timed out: {exc}",
-                original_error=exc,
-            ) from exc
         except httpx.HTTPStatusError as exc:
+            # Non-5xx / non-401 / non-429 status errors fall through
+            # ``_perform_authed_post``'s "Anything else" branch (e.g. a 404
+            # or unhandled 4xx).
             raise ChatError(
                 f"{parse_label} failed with HTTP {exc.response.status_code}: {exc}"
             ) from exc
-        except httpx.RequestError as exc:
-            raise NetworkError(
-                f"{parse_label} request failed: {exc}",
-                original_error=exc,
-            ) from exc
+        # NOTE: bare ``httpx.TimeoutException`` / ``httpx.RequestError``
+        # handlers were removed here because ``_perform_authed_post`` always
+        # either retries those errors or wraps them in
+        # ``_TransportServerError`` (handled above), so they cannot reach
+        # this scope.
 
     async def rpc_call(
         self,
@@ -1146,7 +1161,14 @@ class ClientCore:
                 )
                 self._raise_rpc_error_from_http_status(exc.original, method)
             else:
-                assert isinstance(exc.original, httpx.RequestError)
+                # ``_perform_authed_post`` only wraps ``httpx.RequestError``
+                # into ``_TransportServerError`` on the network path; this
+                # guard keeps the contract enforced under ``python -O``
+                # (where ``assert`` would be stripped).
+                if not isinstance(exc.original, httpx.RequestError):
+                    raise TypeError(
+                        f"Unexpected _TransportServerError.original type: {type(exc.original)}"
+                    ) from exc
                 logger.error(
                     "RPC %s failed after %.3fs: %s (server-error retries exhausted)",
                     method.name,
@@ -1163,10 +1185,10 @@ class ClientCore:
                 exc.response.status_code,
             )
             self._raise_rpc_error_from_http_status(exc, method)
-        except httpx.RequestError as exc:
-            elapsed = time.perf_counter() - start
-            logger.error("RPC %s failed after %.3fs: %s", method.name, elapsed, exc)
-            self._raise_rpc_error_from_request_error(exc, method)
+        # NOTE: bare ``httpx.RequestError`` handler was removed here because
+        # ``_perform_authed_post`` always either retries network-layer
+        # errors or wraps them in ``_TransportServerError`` (handled above),
+        # so they cannot reach this scope.
 
         # ---------- Decode -------------------------------------------------
         # Decode-time auth retry stays RPC-specific: Google sometimes
