@@ -5,9 +5,18 @@ This script makes minimal API calls to exercise RPC methods and verify
 that the method IDs in rpc/types.py still match what the API returns.
 
 Exit codes:
-    0 - All RPC methods OK (or transient errors only)
+    0 - All RPC methods OK (or only transient rate-limit errors)
     1 - One or more RPC methods have mismatched IDs
     2 - Authentication or infrastructure failure (not an RPC problem)
+    3 - One or more RPC methods returned a non-transient ERROR
+        (timeouts, parse failures, unexpected HTTP errors)
+
+Priority order when multiple statuses are present:
+    MISMATCH (1) > AUTH (2) > non-transient ERROR (3) > OK (0)
+
+Transient errors that still exit 0 are limited to rate-limit signals
+(HTTP 429 and gRPC ``RESOURCE_EXHAUSTED``). Everything else is treated
+as a real failure so the nightly canary can flag silent breakage.
 
 Environment variables:
     NOTEBOOKLM_AUTH_JSON - Playwright storage state JSON (required)
@@ -945,6 +954,65 @@ async def run_health_check(full_mode: bool = False) -> list[CheckResult]:
     return results
 
 
+# Substrings that mark an ERROR as a transient rate-limit signal.
+# These are the ONLY errors that count as transient — everything else
+# (timeouts, parse failures, unexpected HTTP errors) is treated as a real
+# failure so the nightly canary can flag silent breakage. Keep this list
+# narrow on purpose: broadening it would mask real RPC drift.
+TRANSIENT_ERROR_MARKERS: tuple[str, ...] = (
+    "HTTP 429",
+    "RESOURCE_EXHAUSTED",
+)
+
+
+def is_transient_error(error_message: str | None) -> bool:
+    """Return True if an ERROR result is a transient rate-limit signal.
+
+    Rate-limit responses (HTTP 429, gRPC ``RESOURCE_EXHAUSTED``) are the
+    only errors classified as transient. They are expected on throttled
+    days and should not trip the canary. Anything else — timeouts, parse
+    failures, unexpected HTTP errors — is treated as a real failure.
+    """
+    if not error_message:
+        return False
+    return any(marker in error_message for marker in TRANSIENT_ERROR_MARKERS)
+
+
+def partition_errors(
+    results: list[CheckResult],
+) -> tuple[list[CheckResult], list[CheckResult]]:
+    """Split ERROR results into (non-transient, transient) lists."""
+    non_transient: list[CheckResult] = []
+    transient: list[CheckResult] = []
+    for r in results:
+        if r.status != CheckStatus.ERROR:
+            continue
+        if is_transient_error(r.error):
+            transient.append(r)
+        else:
+            non_transient.append(r)
+    return non_transient, transient
+
+
+def compute_exit_code(
+    counts: Counter[CheckStatus],
+    non_transient_errors: list[CheckResult],
+) -> int:
+    """Compute the script exit code from result counts.
+
+    Priority order (highest wins):
+        1. MISMATCH  -> 1
+        2. AUTH      -> 2 (signaled by the caller via sys.exit, never reached here)
+        3. non-transient ERROR -> 3
+        4. OK        -> 0
+    """
+    if counts[CheckStatus.MISMATCH] > 0:
+        return 1
+    if non_transient_errors:
+        return 3
+    return 0
+
+
 def print_summary(results: list[CheckResult]) -> int:
     """Print summary and return exit code."""
     print()
@@ -956,10 +1024,17 @@ def print_summary(results: list[CheckResult]) -> int:
     total = len(results)
     tested = total - counts[CheckStatus.SKIPPED]
 
+    non_transient_errors, transient_errors = partition_errors(results)
+    non_transient_count = len(non_transient_errors)
+    transient_count = len(transient_errors)
+
     print(f"TESTED:   {tested}/{total} methods")
     print(f"OK:       {counts[CheckStatus.OK]}/{tested}")
     print(f"MISMATCH: {counts[CheckStatus.MISMATCH]}/{tested}")
-    print(f"ERROR:    {counts[CheckStatus.ERROR]}/{tested}")
+    print(
+        f"ERROR:    {counts[CheckStatus.ERROR]}/{tested} "
+        f"(non-transient: {non_transient_count}, transient: {transient_count})"
+    )
 
     # Print details for mismatches
     mismatches = [r for r in results if r.status == CheckStatus.MISMATCH]
@@ -974,26 +1049,35 @@ def print_summary(results: list[CheckResult]) -> int:
             print(f"    Action:   Update RPCMethod.{r.method.name} in src/notebooklm/rpc/types.py")
             print()
 
-    # Print details for errors
-    errors = [r for r in results if r.status == CheckStatus.ERROR]
-    if errors:
+    # Print details for errors, split into non-transient (real failures)
+    # and transient (rate-limit) buckets so the cron output is actionable.
+    if non_transient_errors or transient_errors:
         print()
         print("ERROR DETAILS:")
         print("-" * 40)
-        for r in errors:
-            print(f"  {r.method.name} ({r.expected_id}): {r.error}")
+        for r in non_transient_errors:
+            print(f"  [non-transient] {r.method.name} ({r.expected_id}): {r.error}")
+        for r in transient_errors:
+            print(f"  [transient]     {r.method.name} ({r.expected_id}): {r.error}")
         print()
 
-    # Return exit code
-    # Only fail on MISMATCH (RPC ID changed) - this is what we care about
-    # ERROR could be transient (rate limiting, network issues) - don't fail on these
-    if counts[CheckStatus.MISMATCH] > 0:
+    # Return exit code.
+    # Priority: MISMATCH (1) > non-transient ERROR (3) > OK (0).
+    # AUTH (2) is signaled earlier via sys.exit(2) and never reaches here.
+    exit_code = compute_exit_code(counts, non_transient_errors)
+
+    if exit_code == 1:
         print("RESULT: FAIL - RPC ID mismatches detected")
         return 1
-    if counts[CheckStatus.ERROR] > 0:
-        print("RESULT: WARN - Some methods had errors (may be transient)")
-        print("       Review ERROR DETAILS above for potential issues")
-        return 0  # Don't fail - could be rate limiting or network issues
+    if exit_code == 3:
+        affected = ", ".join(r.method.name for r in non_transient_errors)
+        print(f"RESULT: FAIL - non-transient ERROR detected in methods: {affected}")
+        print("       These are real failures (not rate-limit transients).")
+        return 3
+    if transient_errors:
+        print("RESULT: PASS - Only transient rate-limit errors observed")
+        print("       Review ERROR DETAILS above for affected methods.")
+        return 0
     print("RESULT: PASS - All tested RPC methods OK")
     return 0
 

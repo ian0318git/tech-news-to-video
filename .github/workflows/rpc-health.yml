@@ -73,6 +73,41 @@ jobs:
         content-filepath: health-report.txt
         labels: bug, automated
 
+    - name: Extract failing methods for ERROR issue
+      if: steps.health.outputs.exit_code == '3'
+      id: error_details
+      shell: bash
+      run: |
+        # Pull the affected-methods list out of the RESULT line emitted by the script.
+        affected=$(grep -m1 "non-transient ERROR detected in methods:" health-report.txt \
+          | sed -E 's/.*methods: //' || true)
+        if [ -z "$affected" ]; then
+          affected="(see report)"
+        fi
+        {
+          echo "## Non-transient ERROR detected"
+          echo ""
+          echo "**Affected methods:** ${affected}"
+          echo ""
+          echo "**Commit:** ${GITHUB_SHA}"
+          echo ""
+          echo "Full report attached below (rate-limit / \`RESOURCE_EXHAUSTED\` errors"
+          echo "are filtered out — anything listed here is a real failure that needs"
+          echo "investigation: timeouts, parse failures, unexpected HTTP errors)."
+          echo ""
+          echo "---"
+          echo ""
+          cat health-report.txt
+        } > error-issue-body.md
+
+    - name: Create Issue on Non-transient ERROR
+      if: steps.health.outputs.exit_code == '3'
+      uses: peter-evans/create-issue-from-file@v6
+      with:
+        title: "RPC Health Check: Non-transient ERROR detected"
+        content-filepath: error-issue-body.md
+        labels: rpc-error, bug, automated
+
     - name: Upload Report
       if: always()
       uses: actions/upload-artifact@v7
