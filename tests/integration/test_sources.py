@@ -857,10 +857,13 @@ class TestAddEpubFileSource:
         )
 
         async with NotebookLMClient(auth_tokens) as client:
+            # ``mime_type`` is deprecated for ``add_file`` (T6.E); the upload
+            # pipeline derives the MIME type from the filename extension. The
+            # legacy call site is preserved-by-omission here to avoid leaking
+            # a DeprecationWarning into the integration suite.
             source = await client.sources.add_file(
                 "nb_123",
                 test_epub,
-                mime_type="application/epub+zip",
             )
 
         assert source.id == "epub_source_123"

@@ -168,6 +168,27 @@ back to `en`. For the generate commands, the resolution order is:
 3. `language` value from the active profile's config
 4. `en` (built-in default)
 
+### NOTEBOOKLM_QUIET_DEPRECATIONS
+
+Suppresses stderr deprecation notices emitted by CLI commands when a
+deprecated flag or option is used. Useful in CI logs where the deprecation
+signal would otherwise be repeated across every invocation in a pipeline.
+
+```bash
+export NOTEBOOKLM_QUIET_DEPRECATIONS=1
+notebooklm source add ./report.pdf --type file --mime-type application/pdf
+# (no "--mime-type is unused for file sources" notice on stderr)
+```
+
+Set the value to ``1`` to suppress the notice; any other value (including
+``0`` or ``false``) leaves the deprecation notice enabled. The underlying
+behavior — that the deprecated flag remains a no-op — is unchanged; only
+the user-facing
+warning text is silenced. Library-level `DeprecationWarning`s emitted from
+the Python API (e.g. `client.sources.add_file(..., mime_type=...)`) are
+**not** affected by this variable; use standard `warnings.filterwarnings`
+to manage those programmatically.
+
 ### Decoder strictness
 
 NotebookLM's batchexecute responses are obfuscated, undocumented, and reshaped

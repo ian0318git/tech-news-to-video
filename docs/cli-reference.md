@@ -553,6 +553,32 @@ notebooklm --profile work auth refresh --quiet
 
 See [Troubleshooting](troubleshooting.md) for full per-OS scheduler recipes (launchd plist, systemd user timer, cron, Task Scheduler, k8s CronJob).
 
+### Source: `add` — `--mime-type` deprecation
+
+The `--mime-type` flag on `notebooklm source add` (file-source path) is a
+**no-op** and is deprecated. The upload pipeline never consumed it; the MIME
+type is derived server-side from the filename extension. Using the flag with
+a file source prints a deprecation notice to stderr and is scheduled for
+removal in a future minor release.
+
+```bash
+# Deprecated — stderr: "--mime-type is unused for file sources; remove the flag"
+notebooklm source add ./report.pdf --type file --mime-type application/pdf
+
+# Migrated — drop the flag
+notebooklm source add ./report.pdf --type file
+```
+
+To suppress the stderr notice (useful for CI logs where the message would
+repeat across pipeline invocations), set `NOTEBOOKLM_QUIET_DEPRECATIONS=1`
+(exactly `1` — other values like `0` or `false` keep the notice on). See
+[configuration.md#notebooklm_quiet_deprecations](configuration.md#notebooklm_quiet_deprecations).
+
+> **Note:** The same `--mime-type` flag on `notebooklm source add-drive`
+> (Google Drive sources) is **live and functional** — it selects between
+> `google-doc` / `google-slides` / `google-sheets` / `pdf` Drive document
+> types. The deprecation applies only to the file-source path.
+
 ### Source: `add-research`
 
 Perform AI-powered research and add discovered sources to the notebook.

@@ -16,6 +16,7 @@ Commands:
 """
 
 import asyncio
+import os
 import re
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
@@ -384,7 +385,19 @@ def source_list(ctx, notebook_id, json_output, client_auth):
     help="Source type (auto-detected if not specified)",
 )
 @click.option("--title", help="Custom title for text and uploaded-file sources")
-@click.option("--mime-type", help="MIME type for file sources")
+# DEPRECATION-REMOVAL: v0.X.0 — ``--mime-type`` on the file-source path is a
+# no-op (the upload pipeline ignores it; the server derives the MIME type from
+# the filename extension). A deprecation note is echoed to stderr when the flag
+# is used with a file source. The separate Drive-source ``--mime-type`` on the
+# ``add-drive`` command remains live and IS NOT affected by this deprecation.
+@click.option(
+    "--mime-type",
+    help=(
+        "[Deprecated] MIME type for file sources — unused; the server "
+        "derives MIME from the filename extension. Drive sources retain "
+        "this option (see ``source add-drive``)."
+    ),
+)
 @click.option(
     "--timeout",
     default=None,
@@ -467,6 +480,21 @@ def source_add(
         # ``--follow-symlinks`` opt-in and leak the symlink target.
         upload_path = _validate_upload_path(content, follow_symlinks)
 
+    # DEPRECATION-REMOVAL: v0.X.0 — ``--mime-type`` is a no-op on the file
+    # source path (the upload pipeline ignores it). The Drive ``--mime-type``
+    # on ``source add-drive`` is untouched. Suppressible via
+    # ``NOTEBOOKLM_QUIET_DEPRECATIONS=1`` so CI logs stay clean.
+    if (
+        mime_type is not None
+        and detected_type == "file"
+        and os.environ.get("NOTEBOOKLM_QUIET_DEPRECATIONS") != "1"
+    ):
+        click.echo(
+            "--mime-type is unused for file sources; remove the flag "
+            "(Drive sources retain this option).",
+            err=True,
+        )
+
     client_kwargs: dict = {}
     if timeout is not None:
         client_kwargs["timeout"] = timeout
@@ -488,8 +516,14 @@ def source_add(
                 assert upload_path is not None, (
                     "upload_path must be set when detected_type == 'file'"
                 )
+                # ``mime_type`` is intentionally NOT forwarded: the upload
+                # pipeline ignores it and ``add_file`` warns when a non-None
+                # value is passed. The CLI deprecation echo above already
+                # informs the user that the flag is a no-op for file sources;
+                # passing it here would also trigger the library-level
+                # ``DeprecationWarning`` and double-up the signal.
                 src = await client.sources.add_file(
-                    nb_id_resolved, str(upload_path), mime_type, title=file_title
+                    nb_id_resolved, str(upload_path), title=file_title
                 )
 
             if json_output:

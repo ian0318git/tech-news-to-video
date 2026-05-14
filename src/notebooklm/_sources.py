@@ -4,6 +4,7 @@ import asyncio
 import builtins
 import logging
 import re
+import warnings
 from dataclasses import replace
 from pathlib import Path
 from time import monotonic
@@ -578,7 +579,11 @@ class SourcesAPI:
         Args:
             notebook_id: The notebook ID.
             file_path: Path to the file to upload.
-            mime_type: MIME type of the file (not used in current implementation).
+            mime_type: Deprecated; unused. Retained as a positional argument for
+                backward compatibility. The MIME type is inferred server-side
+                from the filename extension. Passing a non-None value emits a
+                ``DeprecationWarning``. Slated for removal in a future minor
+                release (see ``# DEPRECATION-REMOVAL: v0.X.0`` below).
             title: Optional display title. When provided and different from the
                 source filename, a rename is issued after upload so the source
                 appears with this title in the UI and API responses. Leading and
@@ -615,6 +620,19 @@ class SourcesAPI:
             - Word: application/vnd.openxmlformats-officedocument.wordprocessingml.document
         """
         logger.debug("Adding file source to notebook %s: %s", notebook_id, file_path)
+        # DEPRECATION-REMOVAL: v0.X.0 — the ``mime_type`` argument is unused by
+        # the resumable-upload pipeline (the server derives the MIME type from
+        # the filename extension). Kept as a positional kwarg for backward
+        # compatibility; callers passing a non-None value get a warning. See
+        # CHANGELOG entry "Deprecated: ``SourcesAPI.add_file`` ``mime_type``
+        # parameter" under ``[Unreleased]`` for the planned removal release.
+        if mime_type is not None:
+            warnings.warn(
+                "mime_type parameter is unused and will be removed in v0.X.0; "
+                "rely on filename extension instead",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         if title is not None:
             title = title.strip()
             if not title:

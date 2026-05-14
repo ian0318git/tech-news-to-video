@@ -1,5 +1,6 @@
 """Unit tests for SourcesAPI file upload pipeline and YouTube detection."""
 
+import warnings
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -658,6 +659,73 @@ class TestAddFile:
 
         assert result.id == "src_pdf"
         sources_api.wait_until_ready.assert_awaited_once_with("nb_123", "src_pdf", timeout=45.0)
+
+    @pytest.mark.asyncio
+    async def test_add_file_mime_type_non_none_emits_deprecation_warning(
+        self, sources_api, mock_core, tmp_path
+    ):
+        """Passing a non-None ``mime_type`` to ``add_file`` emits ``DeprecationWarning``.
+
+        Tier-6 (T6.E): the argument was never wired into the resumable-upload
+        RPC payload; the server derives the MIME type from the filename
+        extension. The positional signature is preserved so this is a soft
+        deprecation rather than a removal.
+        """
+        test_file = tmp_path / "image.png"
+        test_file.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+        mock_core.rpc_call.return_value = [[[["src_png"]]]]
+
+        mock_start_response = MagicMock()
+        mock_start_response.headers = {"x-goog-upload-url": "https://upload.example.com"}
+        mock_upload_response = MagicMock()
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__.return_value = mock_client
+            mock_client.__aexit__.return_value = None
+            mock_client.post.side_effect = [mock_start_response, mock_upload_response]
+            mock_client_cls.return_value = mock_client
+
+            with pytest.warns(DeprecationWarning, match="mime_type"):
+                result = await sources_api.add_file("nb_123", str(test_file), mime_type="image/png")
+
+        # Deprecation is non-fatal: the upload still completes normally.
+        assert result.id == "src_png"
+
+    @pytest.mark.asyncio
+    async def test_add_file_mime_type_none_does_not_warn(self, sources_api, mock_core, tmp_path):
+        """``mime_type=None`` (the default) MUST NOT emit ``DeprecationWarning``.
+
+        Default-path callers — the overwhelming majority — should never see the
+        deprecation message; otherwise it becomes noise rather than a signal.
+        """
+        test_file = tmp_path / "notes.txt"
+        test_file.write_bytes(b"hello")
+
+        mock_core.rpc_call.return_value = [[[["src_default"]]]]
+
+        mock_start_response = MagicMock()
+        mock_start_response.headers = {"x-goog-upload-url": "https://upload.example.com"}
+        mock_upload_response = MagicMock()
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__.return_value = mock_client
+            mock_client.__aexit__.return_value = None
+            mock_client.post.side_effect = [mock_start_response, mock_upload_response]
+            mock_client_cls.return_value = mock_client
+
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                result = await sources_api.add_file("nb_123", str(test_file))
+
+        deprecation_warnings = [w for w in caught if issubclass(w.category, DeprecationWarning)]
+        assert not deprecation_warnings, (
+            f"Unexpected DeprecationWarning emitted for mime_type=None default path: "
+            f"{[str(w.message) for w in deprecation_warnings]}"
+        )
+        assert result.id == "src_default"
 
     @pytest.mark.asyncio
     async def test_add_file_with_custom_title_renames_after_upload(

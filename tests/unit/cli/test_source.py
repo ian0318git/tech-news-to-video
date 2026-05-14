@@ -218,6 +218,100 @@ class TestSourceAdd:
 
             assert result.exit_code == 0
 
+    def test_source_add_file_with_mime_type_emits_deprecation(self, runner, mock_auth, tmp_path):
+        """T6.E: ``--mime-type`` on the file-source path is a no-op; warn user.
+
+        The Drive path keeps ``--mime-type`` as a live, functional option, so
+        the deprecation echo MUST be gated on ``detected_type == 'file'`` and
+        must not fire on Drive sources. ``add_file`` is called WITHOUT the
+        positional ``mime_type`` so the library-level ``DeprecationWarning``
+        does not double up the signal.
+        """
+        test_file = tmp_path / "test.pdf"
+        test_file.write_bytes(b"fake pdf content")
+
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.sources.add_file = AsyncMock(
+                return_value=Source(id="src_file", title="test.pdf")
+            )
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli,
+                    [
+                        "source",
+                        "add",
+                        str(test_file),
+                        "--type",
+                        "file",
+                        "--mime-type",
+                        "application/pdf",
+                        "-n",
+                        "nb_123",
+                    ],
+                )
+
+        assert result.exit_code == 0
+        # ``click.echo(..., err=True)`` writes to stderr; Click's ``CliRunner``
+        # mixes stderr into ``result.output`` by default (``mix_stderr=True``).
+        # If the runner fixture is ever switched to ``mix_stderr=False`` this
+        # assertion would silently pass — flip to ``result.stderr`` if so.
+        assert "unused for file sources" in result.output
+        # ``add_file`` must NOT receive the unused mime_type — passing it would
+        # also trip the library-level DeprecationWarning, doubling the noise.
+        call_kwargs = mock_client.sources.add_file.call_args.kwargs
+        call_args = mock_client.sources.add_file.call_args.args
+        assert "mime_type" not in call_kwargs
+        # Positional args: (notebook_id, file_path). The third positional slot
+        # is the deprecated mime_type; the CLI must not fill it.
+        assert len(call_args) == 2
+
+    def test_source_add_file_mime_type_suppressed_by_env(
+        self, runner, mock_auth, tmp_path, monkeypatch
+    ):
+        """``NOTEBOOKLM_QUIET_DEPRECATIONS=1`` suppresses the file-source notice.
+
+        Keeps CI logs clean for projects that have already migrated off the
+        flag but cannot drop it from a shared invocation overnight.
+        """
+        test_file = tmp_path / "test.pdf"
+        test_file.write_bytes(b"fake pdf content")
+        monkeypatch.setenv("NOTEBOOKLM_QUIET_DEPRECATIONS", "1")
+
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.sources.add_file = AsyncMock(
+                return_value=Source(id="src_file", title="test.pdf")
+            )
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli,
+                    [
+                        "source",
+                        "add",
+                        str(test_file),
+                        "--type",
+                        "file",
+                        "--mime-type",
+                        "application/pdf",
+                        "-n",
+                        "nb_123",
+                    ],
+                )
+
+        assert result.exit_code == 0
+        assert "unused for file sources" not in result.output
+
     def test_source_add_json_output(self, runner, mock_auth):
         with patch_client_for_module("source") as mock_client_cls:
             mock_client = create_mock_client()
@@ -719,6 +813,47 @@ class TestSourceAddDrive:
                 )
 
             assert result.exit_code == 0
+
+    def test_source_add_drive_mime_type_no_deprecation_warning(self, runner, mock_auth):
+        """T6.E regression guard: Drive ``--mime-type`` MUST stay deprecation-free.
+
+        The Drive ``--mime-type`` flag is live — it selects the ``DriveMimeType``
+        value the API consumes (``google-doc``/``google-slides``/
+        ``google-sheets``/``pdf``). The file-source deprecation message must
+        NEVER appear on this command, regardless of which Drive MIME the user
+        picks.
+        """
+        for choice in ("google-doc", "google-slides", "google-sheets", "pdf"):
+            with patch_client_for_module("source") as mock_client_cls:
+                mock_client = create_mock_client()
+                mock_client.sources.add_drive = AsyncMock(
+                    return_value=Source(id="src_drive", title="My Drive Source")
+                )
+                mock_client_cls.return_value = mock_client
+
+                with patch(
+                    "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+                ) as mock_fetch:
+                    mock_fetch.return_value = ("csrf", "session")
+                    result = runner.invoke(
+                        cli,
+                        [
+                            "source",
+                            "add-drive",
+                            "file_id",
+                            "Drive Title",
+                            "--mime-type",
+                            choice,
+                            "-n",
+                            "nb_123",
+                        ],
+                    )
+
+            assert result.exit_code == 0, f"Drive --mime-type {choice} failed: {result.output}"
+            assert "unused for file sources" not in result.output, (
+                f"Drive --mime-type={choice} unexpectedly triggered the "
+                f"file-source deprecation notice"
+            )
 
 
 # =============================================================================
