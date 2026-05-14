@@ -14,6 +14,7 @@ Example:
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from ._env import DEFAULT_BASE_URL, get_base_url
@@ -31,6 +32,7 @@ __all__ = [
     "DecodingError",
     "UnknownRPCMethodError",
     "AuthError",
+    "AuthExtractionError",
     "RateLimitError",
     "ServerError",
     "ClientError",
@@ -274,6 +276,55 @@ class AuthError(RPCError):
     """
 
     recoverable: bool = False
+
+
+class AuthExtractionError(RPCError):
+    """Failed to extract a required field from the NotebookLM HTML response.
+
+    Raised when token extraction (e.g., ``SNlM0e``, ``FdrFJe``) cannot locate
+    the expected ``WIZ_global_data`` key. Most commonly indicates that Google
+    has changed the embedded JavaScript structure on the homepage — i.e.
+    schema drift — and the regex patterns must be updated.
+
+    Carries a sanitized preview of the HTML response so operators can diagnose
+    drift without re-running the CLI to capture the page.
+
+    Attributes:
+        key: The ``WIZ_global_data`` field name that could not be extracted
+            (e.g., ``"SNlM0e"`` or ``"FdrFJe"``).
+        payload_preview: First 200 characters of the response HTML used to
+            attempt extraction. Whitespace is collapsed for readability.
+    """
+
+    PREVIEW_LENGTH = 200
+
+    def __init__(
+        self,
+        key: str,
+        payload_preview: str,
+        *,
+        message: str | None = None,
+    ):
+        self.key = key
+        # Slice before substituting so we don't run the regex over a multi-MB
+        # response body just to throw away most of it. A 5x headroom over
+        # PREVIEW_LENGTH guarantees we still have enough non-whitespace
+        # characters left after collapsing runs of whitespace, even on heavily
+        # indented HTML where ~80% of the prefix may be indentation.
+        head = payload_preview[: self.PREVIEW_LENGTH * 5]
+        # Collapse runs of whitespace so the preview stays compact and useful
+        # even when the upstream HTML is heavily indented or contains newlines.
+        collapsed = re.sub(r"\s+", " ", head).strip()
+        self.payload_preview = collapsed[: self.PREVIEW_LENGTH]
+        # Default message is human-readable and includes both the failing key
+        # and the sanitized preview — this is the diagnostic that operators
+        # see in logs and exception traces.
+        rendered = message or (
+            f"Failed to extract {key!r} from NotebookLM HTML response. "
+            f"This usually means Google changed the page structure. "
+            f"Preview: {self.payload_preview!r}"
+        )
+        super().__init__(rendered)
 
 
 class RateLimitError(RPCError):

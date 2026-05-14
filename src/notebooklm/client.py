@@ -22,7 +22,6 @@ Example:
 import dataclasses
 import logging
 import os
-import re
 from pathlib import Path
 from types import TracebackType
 
@@ -37,7 +36,8 @@ from ._settings import SettingsAPI
 from ._sharing import SharingAPI
 from ._sources import SourcesAPI
 from ._url_utils import is_google_auth_redirect
-from .auth import AuthTokens, authuser_query
+from .auth import AuthTokens, authuser_query, extract_wiz_field
+from .exceptions import AuthExtractionError
 
 logger = logging.getLogger(__name__)
 
@@ -262,23 +262,33 @@ class NotebookLMClient:
         if is_google_auth_redirect(final_url):
             raise ValueError("Authentication expired. Run 'notebooklm login' to re-authenticate.")
 
-        # Extract SNlM0e (CSRF token) - REQUIRED
-        csrf_match = re.search(r'"SNlM0e":"([^"]+)"', response.text)
-        if not csrf_match:
+        # Extract SNlM0e (CSRF token) + FdrFJe (Session ID) via the unified
+        # extract_wiz_field helper. The helper tolerates double-quoted,
+        # single-quoted, and HTML-escaped variants, and raises
+        # AuthExtractionError with a sanitized 200-char preview on drift.
+        # AuthExtractionError is wrapped in ValueError to preserve the
+        # historical contract that refresh_auth raises ValueError on
+        # extraction failure (existing callers in keepalive paths catch
+        # ValueError specifically).
+        try:
+            csrf = extract_wiz_field(response.text, "SNlM0e", strict=True)
+            sid = extract_wiz_field(response.text, "FdrFJe", strict=True)
+        except AuthExtractionError as exc:
+            # Preserve the legacy human-readable label for each token
+            # ("CSRF token" / "session ID") so existing callers and tests
+            # that match on substring keep working, while still propagating
+            # the sanitized HTML preview from the new helper.
+            label = {"SNlM0e": "CSRF token", "FdrFJe": "session ID"}.get(exc.key, exc.key)
             raise ValueError(
-                "Failed to extract CSRF token (SNlM0e). "
-                "Page structure may have changed or authentication expired."
-            )
-        self._core.auth.csrf_token = csrf_match.group(1)
-
-        # Extract FdrFJe (Session ID) - REQUIRED
-        sid_match = re.search(r'"FdrFJe":"([^"]+)"', response.text)
-        if not sid_match:
-            raise ValueError(
-                "Failed to extract session ID (FdrFJe). "
-                "Page structure may have changed or authentication expired."
-            )
-        self._core.auth.session_id = sid_match.group(1)
+                f"Failed to extract {label} ({exc.key}). "
+                "Page structure may have changed or authentication expired. "
+                f"Preview: {exc.payload_preview!r}"
+            ) from exc
+        # ``extract_wiz_field`` returns ``Optional[str]``; with ``strict=True``
+        # it never returns None — narrow the type for mypy and tolerate the
+        # (unreachable) None branch without crashing.
+        self._core.auth.csrf_token = csrf or ""
+        self._core.auth.session_id = sid or ""
 
         # CRITICAL: Update the HTTP client headers with new auth tokens
         # Without this, the client continues using stale credentials

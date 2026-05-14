@@ -56,6 +56,7 @@ from .exceptions import (
     ArtifactParseError,
     # RPC Protocol
     AuthError,
+    AuthExtractionError,
     # Domain: Chat
     ChatError,
     ClientError,
@@ -169,6 +170,7 @@ __all__ = [
     "DecodingError",
     "UnknownRPCMethodError",
     "AuthError",
+    "AuthExtractionError",
     "NetworkError",
     "RPCTimeoutError",
     "RateLimitError",

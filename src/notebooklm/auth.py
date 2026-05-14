@@ -53,6 +53,7 @@ import httpx
 from ._atomic_io import atomic_write_json
 from ._env import get_base_url
 from ._url_utils import contains_google_auth_redirect, is_google_auth_redirect
+from .exceptions import AuthExtractionError
 from .paths import get_storage_path, resolve_profile
 
 logger = logging.getLogger(__name__)
@@ -805,6 +806,83 @@ def extract_cookies_from_storage(storage_state: dict[str, Any]) -> dict[str, str
     return cookies
 
 
+def _build_wiz_field_patterns(key: str) -> list[re.Pattern[str]]:
+    """Build the ordered list of regex patterns used to locate a Wiz field.
+
+    Patterns are tried in priority order: canonical double-quoted form first,
+    then single-quoted, then HTML-escaped. Each pattern captures the value
+    (which may be empty — empty tokens are legitimate, not a drift signal).
+
+    All three variants tolerate backslash-escaped delimiters inside the value
+    so JSON-style escapes like ``"key":"a\\"b"`` parse correctly. The inner
+    character class ``[^"\\\\]*(?:\\\\.[^"\\\\]*)*`` is the standard
+    "string with escapes" idiom: consume runs of non-quote/non-backslash
+    chars, optionally followed by an escape pair (``\\.``) and another run.
+
+    The HTML-escaped variant uses a tempered-dot lookahead so the capture
+    stops only at a literal ``&quot;`` terminator (not at any ``&`` — values
+    legitimately contain ``&amp;`` and similar entities).
+
+    Whitespace tolerance (``\\s*``) around the colon mirrors the original
+    ``extract_csrf_from_html`` regex so we don't regress.
+    """
+    escaped = re.escape(key)
+    return [
+        # 1. Canonical double-quoted: "key":"value"  (or  "key" : "value")
+        #    Captures escaped quotes: "key":"a\"b" -> a\"b
+        re.compile(rf'"{escaped}"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"'),
+        # 2. Single-quoted variant: 'key':'value' with escaped-quote support.
+        re.compile(rf"'{escaped}'\s*:\s*'([^'\\]*(?:\\.[^'\\]*)*)'"),
+        # 3. HTML-escaped: &quot;key&quot;:&quot;value&quot;
+        #    Tempered dot so the value can contain other entities like &amp;.
+        re.compile(rf"&quot;{escaped}&quot;\s*:\s*&quot;((?:(?!&quot;).)*)&quot;"),
+    ]
+
+
+def extract_wiz_field(html: str, key: str, *, strict: bool = True) -> str | None:
+    """Extract a ``WIZ_global_data[key]`` value from a NotebookLM HTML response.
+
+    NotebookLM (and other Google products) embed a JavaScript object literal
+    named ``WIZ_global_data`` in the page chrome. Tokens like ``SNlM0e``
+    (CSRF) and ``FdrFJe`` (session ID) live inside that object. This helper
+    is the single place that knows how to parse the embedding so all callers
+    benefit from the same drift tolerance and diagnostics.
+
+    Tolerated input variants, tried in priority order:
+
+    1. Canonical double-quoted ``"key":"value"`` (typical raw HTML).
+    2. Single-quoted ``'key':'value'`` (rare, observed in some debug renders).
+    3. HTML-escaped ``&quot;key&quot;:&quot;value&quot;`` (when the script
+       block is rendered inside an attribute or escaped fragment).
+
+    Empty values are passed through verbatim: ``"SNlM0e":""`` returns the
+    empty string. Some Google endpoints legitimately emit empty tokens (e.g.
+    for unauthenticated probes) and the caller — not this helper — should
+    decide whether an empty value is acceptable.
+
+    Args:
+        html: The page HTML to search.
+        key: Field name to extract from ``WIZ_global_data``.
+        strict: When True (default) and no pattern matches, raise
+            :class:`AuthExtractionError` with a sanitized preview. When False,
+            return ``None`` on drift so callers can fall back gracefully.
+
+    Returns:
+        The extracted value (possibly empty), or ``None`` when ``strict=False``
+        and no pattern matched.
+
+    Raises:
+        AuthExtractionError: ``strict=True`` and the key was not found.
+    """
+    for pattern in _build_wiz_field_patterns(key):
+        match = pattern.search(html)
+        if match is not None:
+            return match.group(1)
+    if strict:
+        raise AuthExtractionError(key, html)
+    return None
+
+
 def extract_csrf_from_html(html: str, final_url: str = "") -> str:
     """
     Extract CSRF token (SNlM0e) from NotebookLM page HTML.
@@ -820,21 +898,29 @@ def extract_csrf_from_html(html: str, final_url: str = "") -> str:
         CSRF token value (typically starts with "AF1_QpN-")
 
     Raises:
-        ValueError: If token pattern not found in HTML
+        ValueError: Preserved for backward compatibility — raised both when
+            redirected to a Google login page and when the token is missing
+            from a non-redirect response. Existing callers and tests rely on
+            the ``"CSRF token not found"`` / ``"Authentication expired"``
+            message substrings, so we intentionally keep the legacy type.
+            Internally we delegate to :func:`extract_wiz_field` so the regex
+            matrix (double-quoted / single-quoted / HTML-escaped) is shared.
     """
-    # Match "SNlM0e": "<token>" or "SNlM0e":"<token>" pattern
-    match = re.search(r'"SNlM0e"\s*:\s*"([^"]+)"', html)
-    if not match:
-        # Check if we were redirected to login page
-        if is_google_auth_redirect(final_url) or contains_google_auth_redirect(html):
-            raise ValueError(
-                "Authentication expired or invalid. Run 'notebooklm login' to re-authenticate."
-            )
+    # Tolerant extraction via the unified helper — accepts canonical,
+    # single-quoted, and HTML-escaped variants of the WIZ_global_data field.
+    token = extract_wiz_field(html, "SNlM0e", strict=False)
+    if token is not None:
+        return token
+    # Drift path: differentiate "auth expired" from "shape changed" because
+    # the remediation differs (re-login vs file a bug).
+    if is_google_auth_redirect(final_url) or contains_google_auth_redirect(html):
         raise ValueError(
-            f"CSRF token not found in HTML. Final URL: {final_url}\n"
-            "This may indicate the page structure has changed."
+            "Authentication expired or invalid. Run 'notebooklm login' to re-authenticate."
         )
-    return match.group(1)
+    raise ValueError(
+        f"CSRF token not found in HTML. Final URL: {final_url}\n"
+        "This may indicate the page structure has changed."
+    )
 
 
 def extract_session_id_from_html(html: str, final_url: str = "") -> str:
@@ -852,20 +938,22 @@ def extract_session_id_from_html(html: str, final_url: str = "") -> str:
         Session ID value
 
     Raises:
-        ValueError: If session ID pattern not found in HTML
+        ValueError: Preserved for backward compatibility — raised both when
+            redirected to a Google login page and when the session ID is
+            missing from a non-redirect response. See
+            :func:`extract_csrf_from_html` for the rationale.
     """
-    # Match "FdrFJe": "<session_id>" or "FdrFJe":"<session_id>" pattern
-    match = re.search(r'"FdrFJe"\s*:\s*"([^"]+)"', html)
-    if not match:
-        if is_google_auth_redirect(final_url) or contains_google_auth_redirect(html):
-            raise ValueError(
-                "Authentication expired or invalid. Run 'notebooklm login' to re-authenticate."
-            )
+    sid = extract_wiz_field(html, "FdrFJe", strict=False)
+    if sid is not None:
+        return sid
+    if is_google_auth_redirect(final_url) or contains_google_auth_redirect(html):
         raise ValueError(
-            f"Session ID not found in HTML. Final URL: {final_url}\n"
-            "This may indicate the page structure has changed."
+            "Authentication expired or invalid. Run 'notebooklm login' to re-authenticate."
         )
-    return match.group(1)
+    raise ValueError(
+        f"Session ID not found in HTML. Final URL: {final_url}\n"
+        "This may indicate the page structure has changed."
+    )
 
 
 @dataclass(frozen=True)
