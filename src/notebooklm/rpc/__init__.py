@@ -47,6 +47,7 @@ from .types import (
     get_batchexecute_url,
     get_query_url,
     get_upload_url,
+    resolve_rpc_id,
 )
 
 __all__ = [
@@ -57,6 +58,7 @@ __all__ = [
     "get_batchexecute_url",
     "get_query_url",
     "get_upload_url",
+    "resolve_rpc_id",
     "ArtifactTypeCode",
     "StudioContentType",  # Deprecated alias
     "ArtifactStatus",

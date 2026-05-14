@@ -278,6 +278,56 @@ If the IDs don't match, the method ID has changed. Report the new ID in a GitHub
 - Try with fewer sources selected
 - Reduce generation frequency
 
+#### RPC method ID rotated by Google — self-patch with `NOTEBOOKLM_RPC_OVERRIDES`
+
+Google rotates undocumented batchexecute method IDs without warning. When
+this happens, `notebooklm-py` raises `UnknownRPCMethodError` with the new ID
+the server now uses (see the previous section's diagnosis recipe). Rather
+than waiting for a release, you can patch the mapping for your process with
+the `NOTEBOOKLM_RPC_OVERRIDES` environment variable.
+
+**Format:** JSON object mapping `RPCMethod` member names (the Python enum
+member name, not the obfuscated value) to the override RPC ID:
+
+```bash
+export NOTEBOOKLM_RPC_OVERRIDES='{"LIST_NOTEBOOKS": "newId123", "CREATE_NOTEBOOK": "newId456"}'
+notebooklm list
+```
+
+Or in Python:
+
+```python
+import os
+os.environ["NOTEBOOKLM_RPC_OVERRIDES"] = '{"LIST_NOTEBOOKS": "newId123"}'
+
+from notebooklm import NotebookLMClient
+# Subsequent client calls send the override IDs on the wire.
+```
+
+**Behavior:**
+
+- The override is applied at BOTH the URL `rpcids=` query parameter AND the
+  request body `f.req` payload, so the wire format stays consistent.
+- The override is gated on the configured base host being a known Google
+  NotebookLM endpoint (`notebooklm.google.com` or
+  `notebooklm.cloud.google.com`). Overrides do NOT apply to non-Google
+  hosts, so this env var cannot be weaponised to leak custom RPC IDs to a
+  hostile endpoint.
+- Method names not listed in the override map continue to use the canonical
+  IDs from `notebooklm.rpc.types.RPCMethod`.
+- Malformed input (invalid JSON, top-level array, etc.) is logged at
+  `WARNING` and treated as no overrides.
+- The first time a distinct override set is applied in a process, the
+  mapping is logged at `INFO` so you can confirm the config you intended is
+  live.
+
+**Discovering the new ID:** see the `NOTEBOOKLM_DEBUG_RPC=1` recipe above —
+the `Found RPC IDs in response: [...]` line tells you what the server is
+now returning. Cross-reference against the call site that failed.
+
+Please also report the rotated IDs in a GitHub issue so the canonical
+mapping in `src/notebooklm/rpc/types.py` can be updated for everyone.
+
 #### How to get the full response preview from an RPCError
 
 `RPCError.raw_response` is truncated to **80 chars + `"..."`** by default so

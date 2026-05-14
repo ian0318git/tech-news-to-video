@@ -44,6 +44,7 @@ from .rpc import (
     decode_response,
     encode_rpc_request,
     get_batchexecute_url,
+    resolve_rpc_id,
 )
 
 logger = logging.getLogger(__name__)
@@ -698,18 +699,29 @@ class ClientCore:
             account_email=self.auth.account_email,
         )
 
-    def _build_url(self, rpc_method: RPCMethod, source_path: str = "/") -> str:
+    def _build_url(
+        self,
+        rpc_method: RPCMethod,
+        source_path: str = "/",
+        rpc_id_override: str | None = None,
+    ) -> str:
         """Build the batchexecute URL for an RPC call.
 
         Args:
             rpc_method: The RPC method to call.
             source_path: The source path parameter (usually notebook path).
+            rpc_id_override: Optional resolved RPC id string used in the
+                ``rpcids=`` query param. When provided, the SAME string must
+                also be passed to :func:`encode_rpc_request` so the URL and
+                body stay in sync. See ``resolve_rpc_id`` for the
+                ``NOTEBOOKLM_RPC_OVERRIDES`` plumbing.
 
         Returns:
             Full URL with query parameters.
         """
+        rpc_id = rpc_id_override if rpc_id_override is not None else rpc_method.value
         params: dict[str, str] = {
-            "rpcids": rpc_method.value,
+            "rpcids": rpc_id,
             "source-path": source_path,
             "f.sid": self.auth.session_id,
             "hl": get_default_language(),
@@ -1102,12 +1114,20 @@ class ClientCore:
         start = time.perf_counter()
         logger.debug("RPC %s starting", method.name)
 
+        # Resolve the RPC id ONCE per logical call. ``NOTEBOOKLM_RPC_OVERRIDES``
+        # lets users self-patch when Google rotates an obfuscated method id;
+        # the resolved value MUST flow into both the URL's ``rpcids=`` query
+        # param and the request body's ``f.req`` payload (the wire format
+        # treats a mismatch as malformed). Resolving once also means decode
+        # below uses the same id we asked the server for.
+        resolved_id = resolve_rpc_id(method.name, method.value)
+
         # ``_perform_authed_post`` calls this factory once per HTTP attempt;
         # on retry it passes a fresh snapshot so the body is rebuilt with the
         # refreshed CSRF and the URL with the refreshed session id /
         # authuser. Capturing ``self.auth.csrf_token`` here directly would
         # snapshot at outer-call time and replay a stale token on retry.
-        rpc_request = encode_rpc_request(method, params)
+        rpc_request = encode_rpc_request(method, params, rpc_id_override=resolved_id)
 
         def _build(snapshot: _AuthSnapshot) -> tuple[str, str, dict[str, str]]:
             # Deliberate divergence: the body uses the snapshot's csrf_token
@@ -1124,7 +1144,7 @@ class ClientCore:
             # refresh). The snapshot's session_id/authuser/account_email
             # fields are carried for symmetry / future-proofing but are not
             # the source of truth on this code path.
-            url = self._build_url(method, source_path)
+            url = self._build_url(method, source_path, rpc_id_override=resolved_id)
             body = build_request_body(rpc_request, snapshot.csrf_token)
             return url, body, {}
 
@@ -1207,7 +1227,11 @@ class ClientCore:
         # streaming format doesn't have this pattern, so the retry lives
         # here, not in ``_perform_authed_post``.
         try:
-            result = decode_response(response.text, method.value, allow_null=allow_null)
+            # The server echoes back whatever RPC id we sent on the wire, so
+            # decode against the resolved id (override-aware) rather than the
+            # canonical ``method.value`` — otherwise an override would parse
+            # as "RPC id not found in response".
+            result = decode_response(response.text, resolved_id, allow_null=allow_null)
             elapsed = time.perf_counter() - start
             logger.debug("RPC %s completed in %.3fs", method.name, elapsed)
             return result

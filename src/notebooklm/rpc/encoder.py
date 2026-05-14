@@ -10,7 +10,11 @@ from .types import RPCMethod
 logger = logging.getLogger(__name__)
 
 
-def encode_rpc_request(method: RPCMethod, params: list[Any]) -> list:
+def encode_rpc_request(
+    method: RPCMethod,
+    params: list[Any],
+    rpc_id_override: str | None = None,
+) -> list:
     """
     Encode an RPC request into batchexecute format.
 
@@ -20,16 +24,23 @@ def encode_rpc_request(method: RPCMethod, params: list[Any]) -> list:
     Args:
         method: The RPC method ID enum
         params: Parameters for the RPC call
+        rpc_id_override: Optional resolved RPC id string. When provided, this
+            value is embedded in the request body instead of ``method.value``.
+            Callers must pass the SAME string to the URL builder so the
+            ``rpcids=`` query param and the ``f.req`` body stay in sync —
+            mismatched IDs reach the wire as malformed requests. Used by
+            ``ClientCore`` to thread ``NOTEBOOKLM_RPC_OVERRIDES`` through.
 
     Returns:
         Triple-nested array structure for batchexecute
     """
+    rpc_id = rpc_id_override if rpc_id_override is not None else method.value
     # JSON-encode params without spaces (compact format matching Chrome)
     params_json = json.dumps(params, separators=(",", ":"))
-    logger.debug("Encoding RPC: method=%s, param_count=%d", method.value, len(params))
+    logger.debug("Encoding RPC: method=%s, param_count=%d", rpc_id, len(params))
 
     # Build inner request: [rpc_id, json_params, null, "generic"]
-    inner = [method.value, params_json, None, "generic"]
+    inner = [rpc_id, params_json, None, "generic"]
 
     # Triple-nest the request
     return [[inner]]
