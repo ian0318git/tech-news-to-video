@@ -247,7 +247,8 @@ class TestResearchWait:
     def test_wait_cited_only_requires_import_all(self, runner, mock_auth, mock_fetch_tokens):
         result = runner.invoke(cli, ["research", "wait", "-n", "nb_123", "--cited-only"])
 
-        assert result.exit_code == 1
+        # ``click.UsageError`` exits 2 — Click's standard convention.
+        assert result.exit_code == 2
         assert "--cited-only requires --import-all" in result.output
 
     def test_wait_json_output_completed(self, runner, mock_auth, mock_fetch_tokens):

@@ -25,7 +25,7 @@ from rich.console import Console
 from rich.table import Table
 
 from ..auth import AuthTokens, build_cookie_jar, load_auth_from_storage
-from ..exceptions import NetworkError, NotebookLimitError, RPCError, RPCTimeoutError
+from ..exceptions import NetworkError, RPCError, RPCTimeoutError
 from ..paths import get_context_path
 from ..research import select_cited_sources
 from ..types import ArtifactType, CitedSourceSelection
@@ -989,11 +989,20 @@ def with_client(f):
     @wraps(f)
     @click.pass_context
     def wrapper(ctx, *args, **kwargs):
+        from .error_handler import handle_errors
+
         cmd_name = f.__name__
         start = time.monotonic()
         logger.debug("CLI command starting: %s", cmd_name)
 
         json_output = kwargs.get("json_output", False)
+        # Verbose is captured on the root group via Click ``--verbose`` count.
+        # Use ``find_root`` so nested subcommand contexts still see it.
+        try:
+            verbose_count = int(ctx.find_root().params.get("verbose", 0) or 0)
+        except Exception:
+            verbose_count = 0
+        verbose = verbose_count >= 1
 
         def log_result(status: str, detail: str = "") -> float:
             elapsed = time.monotonic() - start
@@ -1003,30 +1012,27 @@ def with_client(f):
                 logger.debug("CLI command %s: %s (%.3fs)", status, cmd_name, elapsed)
             return elapsed
 
+        # Auth bootstrap: FileNotFoundError here means the storage file is
+        # missing, which has a dedicated rich UX via ``handle_auth_error``.
+        # We deliberately handle this BEFORE entering ``handle_errors`` so a
+        # FileNotFoundError raised *inside* the command body (e.g., a missing
+        # ``--source-file`` argument) is not misclassified as an auth error.
         try:
+            auth = get_auth_tokens(ctx)
+        except FileNotFoundError:
+            log_result("failed", "not authenticated")
+            handle_auth_error(json_output)
+            return  # unreachable — handle_auth_error raises SystemExit
+
+        with handle_errors(verbose=verbose, json_output=json_output):
             try:
-                auth = get_auth_tokens(ctx)
-            except FileNotFoundError:
-                log_result("failed", "not authenticated")
-                handle_auth_error(json_output)
-                return  # unreachable (handle_auth_error raises SystemExit), but keeps mypy happy
-            coro = f(ctx, *args, client_auth=auth, **kwargs)
-            result = run_async(coro)
+                coro = f(ctx, *args, client_auth=auth, **kwargs)
+                result = run_async(coro)
+            except Exception as e:
+                log_result("failed", str(e))
+                raise
             log_result("completed")
             return result
-        except Exception as e:
-            log_result("failed", str(e))
-            if json_output:
-                if isinstance(e, NotebookLimitError):
-                    json_error_response(
-                        "NOTEBOOK_LIMIT",
-                        str(e),
-                        extra=e.to_error_response_extra(),
-                    )
-                    return
-                json_error_response("ERROR", str(e))
-            else:
-                handle_error(e)
 
     return wrapper
 

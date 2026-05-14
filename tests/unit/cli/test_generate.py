@@ -209,7 +209,8 @@ class TestGenerateVideo:
             ["generate", "video", "--style", "custom", "-n", "nb_123"],
         )
 
-        assert result.exit_code == 1
+        # ``click.UsageError`` exits 2 — Click's standard convention.
+        assert result.exit_code == 2
         assert "--style custom requires --style-prompt" in result.output
 
     def test_generate_video_custom_style_rejects_blank_prompt(
@@ -229,7 +230,7 @@ class TestGenerateVideo:
             ],
         )
 
-        assert result.exit_code == 1
+        assert result.exit_code == 2
         assert "--style custom requires --style-prompt" in result.output
 
     def test_generate_video_style_prompt_requires_custom_style(
@@ -249,7 +250,7 @@ class TestGenerateVideo:
             ],
         )
 
-        assert result.exit_code == 1
+        assert result.exit_code == 2
         assert "--style-prompt requires --style custom" in result.output
 
 
@@ -337,7 +338,7 @@ class TestGenerateCinematicVideo:
             ],
         )
 
-        assert result.exit_code == 1
+        assert result.exit_code == 2
         assert "--style-prompt cannot be used with cinematic video" in result.output
 
 

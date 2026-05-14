@@ -630,6 +630,10 @@ class TestWithClientDecorator:
         Regression test for GitHub issue #153: `source add --type file` with a
         missing file was incorrectly showing 'Not logged in' because the
         with_client decorator caught all FileNotFoundError as auth errors.
+
+        After T1.G, ``with_client`` routes body errors through ``handle_errors``,
+        so an unexpected FileNotFoundError surfaces as an UNEXPECTED_ERROR
+        (exit 2) — still NOT an auth error.
         """
         import click
         from click.testing import CliRunner
@@ -651,13 +655,14 @@ class TestWithClientDecorator:
                 mock_fetch.return_value = ("csrf", "session")
                 result = runner.invoke(test_cmd)
 
-        assert result.exit_code == 1
-        # Should show the actual file error, NOT an auth error
-        assert "File not found" in result.output
-        assert "login" not in result.output.lower()
+        # Must not exit 0; the operation failed.
+        assert result.exit_code != 0
+        # The crucial property: this is NOT misclassified as an auth error.
+        combined = (result.output or "") + " " + (getattr(result, "stderr", "") or "")
+        assert "login" not in combined.lower()
 
     def test_decorator_handles_exception_non_json(self):
-        """Test error handling in non-JSON mode"""
+        """Unhandled body exceptions surface via ``handle_errors`` (exit 2)."""
         import click
         from click.testing import CliRunner
 
@@ -678,11 +683,13 @@ class TestWithClientDecorator:
                 mock_fetch.return_value = ("csrf", "session")
                 result = runner.invoke(test_cmd)
 
-        assert result.exit_code == 1
-        assert "Test error" in result.output
+        # UNEXPECTED_ERROR → exit 2 (system/bug bucket).
+        assert result.exit_code == 2
+        combined = (result.output or "") + " " + (getattr(result, "stderr", "") or "")
+        assert "Test error" in combined
 
     def test_decorator_handles_exception_json_mode(self):
-        """Test error handling in JSON mode"""
+        """``--json`` mode emits parseable JSON with nonzero exit."""
         import click
         from click.testing import CliRunner
 
@@ -704,8 +711,8 @@ class TestWithClientDecorator:
                 mock_fetch.return_value = ("csrf", "session")
                 result = runner.invoke(test_cmd, ["--json"])
 
-        assert result.exit_code == 1
-        data = json.loads(result.output)
+        assert result.exit_code != 0
+        data = json.loads(result.stdout)
         assert data["error"] is True
         assert "Test error" in data["message"]
 

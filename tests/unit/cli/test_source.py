@@ -833,7 +833,8 @@ class TestSourceAddResearch:
             ["source", "add-research", "AI papers", "--cited-only", "-n", "nb_123"],
         )
 
-        assert result.exit_code == 1
+        # ``click.UsageError`` exits 2 — Click's standard convention.
+        assert result.exit_code == 2
         assert "--cited-only requires --import-all" in result.output
 
     def test_add_research_timeout_flag_threaded_to_import_with_retry(self, runner, mock_auth):
