@@ -793,6 +793,54 @@ class TestArtifactWait:
             assert data["status"] == "completed"
             assert data["artifact_id"] == "art_123"
 
+    def test_artifact_wait_timeout_interval_forwarded(self, runner, mock_auth):
+        """`artifact wait --timeout 60 --interval 5` plumbs both into
+        wait_for_completion (P5.T1 / I6).
+
+        Pre-existing behavior — already had `--timeout` and `--interval` —
+        but pin the wiring so the shared `wait_polling_options` decorator
+        cannot silently drop one of the values during the refactor.
+        """
+        with patch_client_for_module("artifact") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.artifacts.list = AsyncMock(
+                return_value=[Artifact(id="art_123", title="Test", _artifact_type=1, status=3)]
+            )
+            mock_client.artifacts.wait_for_completion = AsyncMock(
+                return_value=MagicMock(
+                    status="completed", url="https://example.com/audio.mp3", error=None
+                )
+            )
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli,
+                    [
+                        "artifact",
+                        "wait",
+                        "art_123",
+                        "-n",
+                        "nb_123",
+                        "--timeout",
+                        "60",
+                        "--interval",
+                        "5",
+                    ],
+                )
+
+            assert result.exit_code == 0, result.output
+            mock_client.artifacts.wait_for_completion.assert_awaited_once()
+            kwargs = mock_client.artifacts.wait_for_completion.await_args.kwargs
+            assert kwargs.get("timeout") == 60.0
+            interval_value = kwargs.get("initial_interval", kwargs.get("poll_interval"))
+            assert interval_value == 5.0, (
+                f"expected --interval=5 to plumb into wait_for_completion, got kwargs={kwargs}"
+            )
+
     def test_artifact_wait_timeout_json_output(self, runner, mock_auth):
         """Test timeout with JSON output."""
         with patch_client_for_module("artifact") as mock_client_cls:

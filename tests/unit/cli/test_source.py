@@ -2001,6 +2001,55 @@ class TestSourceWait:
             assert result.exit_code == 2
             assert "timeout" in result.output.lower()
 
+    def test_source_wait_timeout_interval_forwarded(self, runner, mock_auth):
+        """`source wait <id> --timeout 60 --interval 5` plumbs both into
+        wait_until_ready (P5.T1 / I6).
+
+        The `--interval` flag is NEW for `source wait` (previously it accepted
+        only `--timeout`). After this change, `source wait` matches the
+        uniform `--timeout`/`--interval` surface shared by `artifact wait` and
+        `generate <kind> --wait`. The three-way exit policy (0 ready / 1
+        not-found-or-error / 2 timeout) is preserved by the success path here
+        — exit code stays 0 when the source becomes ready.
+        """
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.sources.list = AsyncMock(
+                return_value=[Source(id="src_123", title="Test Source")]
+            )
+            mock_client.sources.wait_until_ready = AsyncMock(
+                return_value=Source(id="src_123", title="Test Source", status=2)
+            )
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli,
+                    [
+                        "source",
+                        "wait",
+                        "src_123",
+                        "-n",
+                        "nb_123",
+                        "--timeout",
+                        "60",
+                        "--interval",
+                        "5",
+                    ],
+                )
+
+            assert result.exit_code == 0, result.output
+            mock_client.sources.wait_until_ready.assert_awaited_once()
+            kwargs = mock_client.sources.wait_until_ready.await_args.kwargs
+            assert kwargs.get("timeout") == 60.0
+            # `wait_until_ready` exposes the cadence as `initial_interval`.
+            assert kwargs.get("initial_interval") == 5.0, (
+                f"expected --interval=5 to plumb into wait_until_ready, got kwargs={kwargs}"
+            )
+
     def test_source_wait_timeout_json(self, runner, mock_auth):
         """--json on SourceTimeoutError → JSON with status 'timeout', exit 2."""
         with patch_client_for_module("source") as mock_client_cls:

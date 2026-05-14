@@ -27,7 +27,7 @@ from .helpers import (
     resolve_notebook_id,
     with_client,
 )
-from .options import json_option, notebook_option
+from .options import json_option, notebook_option, wait_polling_options
 
 
 @click.group()
@@ -408,18 +408,7 @@ def artifact_poll(ctx, task_id, notebook_id, json_output, client_auth):
 @artifact.command("wait")
 @click.argument("artifact_id")
 @notebook_option
-@click.option(
-    "--timeout",
-    default=300,
-    type=int,
-    help="Maximum seconds to wait (default: 300)",
-)
-@click.option(
-    "--interval",
-    default=2,
-    type=int,
-    help="Seconds between status checks (default: 2)",
-)
+@wait_polling_options(default_timeout=300, default_interval=2)
 @click.option("--json", "json_output", is_flag=True, help="Output as JSON")
 @with_client
 def artifact_wait(ctx, artifact_id, notebook_id, timeout, interval, json_output, client_auth):

@@ -3,6 +3,8 @@
 Provides reusable option decorators to reduce boilerplate in commands.
 """
 
+from collections.abc import Callable
+
 import click
 from click.decorators import FC
 
@@ -39,6 +41,66 @@ def wait_option(f: FC) -> FC:
         default=False,
         help="Wait for completion (default: no-wait)",
     )(f)
+
+
+def wait_polling_options(
+    default_timeout: int = 300,
+    default_interval: int = 2,
+) -> Callable[[FC], FC]:
+    """Bundle the shared ``--timeout`` / ``--interval`` polling flags.
+
+    Used by every long-running CLI command so the flag surface stays uniform
+    across ``generate <kind> --wait``, ``artifact wait``, and ``source wait``
+    (audit row I6, P5.T1). Returns a decorator so each call site can supply
+    its own historical defaults without diverging on flag name or help text.
+
+    The ``--wait`` flag is intentionally NOT bundled here. It is a *trigger*
+    flag on ``generate <kind>`` (paired with ``wait_option`` /
+    ``generate_options``) and is implicit on ``artifact wait`` /
+    ``source wait`` (those subcommands ARE the wait). Bundling ``--wait``
+    here would either force-add it to commands that don't need it, or
+    interact awkwardly with ``--wait/--no-wait``'s tri-state default on
+    ``generate``. Keeping the trigger separate makes the surface uniform
+    and honest about intent.
+
+    Args:
+        default_timeout: Default value for ``--timeout`` in seconds. Each
+            command keeps its own historical default (e.g. ``generate audio``
+            uses 300, ``source wait`` uses 120) so this PR is purely
+            additive — no command changes its existing wait ceiling.
+        default_interval: Default value for ``--interval`` in seconds. Most
+            commands use 2 to match the existing ``artifact wait`` default;
+            ``source wait`` uses 1 to match its underlying
+            ``wait_until_ready`` default.
+
+    Returns:
+        A decorator that adds ``--timeout`` and ``--interval`` Click options
+        to the wrapped command. The wrapped function gains two kwargs:
+        ``timeout`` (int) and ``interval`` (int).
+
+    Example:
+        @click.command()
+        @wait_polling_options(default_timeout=600, default_interval=2)
+        def my_long_running_cmd(timeout: int, interval: int) -> None:
+            ...
+    """
+
+    def decorator(f: FC) -> FC:
+        f = click.option(
+            "--interval",
+            default=default_interval,
+            type=int,
+            help=f"Seconds between status checks (default: {default_interval})",
+        )(f)
+        f = click.option(
+            "--timeout",
+            default=default_timeout,
+            type=int,
+            help=f"Maximum seconds to wait (default: {default_timeout})",
+        )(f)
+        return f
+
+    return decorator
 
 
 def source_option(f: FC) -> FC:

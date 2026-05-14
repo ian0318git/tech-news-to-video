@@ -48,7 +48,13 @@ from .helpers import (
     with_client,
 )
 from .language import SUPPORTED_LANGUAGES, get_language
-from .options import json_option, notebook_option, prompt_file_option, retry_option
+from .options import (
+    json_option,
+    notebook_option,
+    prompt_file_option,
+    retry_option,
+    wait_polling_options,
+)
 
 DEFAULT_LANGUAGE = "en"
 
@@ -181,6 +187,7 @@ async def handle_generation_result(
     wait: bool = False,
     json_output: bool = False,
     timeout: float = 300.0,
+    interval: float | None = None,
 ) -> GenerationStatus | None:
     """Handle generation result with optional waiting and output formatting.
 
@@ -197,6 +204,11 @@ async def handle_generation_result(
         wait: Whether to wait for completion.
         json_output: Whether to output as JSON.
         timeout: Timeout for waiting (default: 300s).
+        interval: Polling interval in seconds. ``None`` (default) lets
+            ``wait_for_completion`` use its built-in default
+            (``initial_interval=2.0``); when supplied, the value is forwarded
+            as ``initial_interval`` so callers can tighten or loosen the
+            cadence (P5.T1 / I6).
 
     Returns:
         Final GenerationStatus, or None if generation failed.
@@ -244,7 +256,10 @@ async def handle_generation_result(
     if wait and task_id:
         if not json_output:
             console.print(f"[yellow]Generating {artifact_type}...[/yellow] Task: {task_id}")
-        status = await client.artifacts.wait_for_completion(notebook_id, task_id, timeout=timeout)
+        wait_kwargs: dict[str, Any] = {"timeout": timeout}
+        if interval is not None:
+            wait_kwargs["initial_interval"] = interval
+        status = await client.artifacts.wait_for_completion(notebook_id, task_id, **wait_kwargs)
 
     # Output status
     _output_generation_status(status, artifact_type, json_output)
@@ -355,6 +370,7 @@ def generate():
 )
 @click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
 @click.option("--wait/--no-wait", default=False, help="Wait for completion (default: no-wait)")
+@wait_polling_options(default_timeout=300, default_interval=2)
 @retry_option
 @json_option
 @with_client
@@ -368,6 +384,8 @@ def generate_audio(
     language,
     source_ids,
     wait,
+    timeout,
+    interval,
     max_retries,
     json_output,
     client_auth,
@@ -416,7 +434,14 @@ def generate_audio(
 
             result = await generate_with_retry(_generate, max_retries, "audio", json_output)
             await handle_generation_result(
-                client, nb_id_resolved, result, "audio", wait, json_output
+                client,
+                nb_id_resolved,
+                result,
+                "audio",
+                wait,
+                json_output,
+                timeout=float(timeout),
+                interval=float(interval),
             )
 
     return _run()
@@ -458,6 +483,7 @@ def generate_audio(
 )
 @click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
 @click.option("--wait/--no-wait", default=False, help="Wait for completion (default: no-wait)")
+@wait_polling_options(default_timeout=600, default_interval=2)
 @retry_option
 @json_option
 @with_client
@@ -472,6 +498,8 @@ def generate_video(
     language,
     source_ids,
     wait,
+    timeout,
+    interval,
     max_retries,
     json_output,
     client_auth,
@@ -560,10 +588,23 @@ def generate_video(
                     style_prompt=normalized_style_prompt,
                 )
 
-            timeout = 1800.0 if is_cinematic else 600.0
+            # Cinematic videos default to a longer 1800s ceiling (Veo 3 takes
+            # ~30-40 min). Preserve that default *only* when the user did not
+            # pass --timeout explicitly; an explicit value always wins so
+            # `generate cinematic-video --timeout 60` honors the override.
+            timeout_value = float(timeout)
+            if is_cinematic and ctx.get_parameter_source("timeout") != ParameterSource.COMMANDLINE:
+                timeout_value = 1800.0
             result = await generate_with_retry(_generate, max_retries, "video", json_output)
             await handle_generation_result(
-                client, nb_id_resolved, result, "video", wait, json_output, timeout=timeout
+                client,
+                nb_id_resolved,
+                result,
+                "video",
+                wait,
+                json_output,
+                timeout=timeout_value,
+                interval=float(interval),
             )
 
     return _run()
@@ -612,6 +653,7 @@ generate.add_command(_cinematic_video_gen_cmd)
 )
 @click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
 @click.option("--wait/--no-wait", default=False, help="Wait for completion (default: no-wait)")
+@wait_polling_options(default_timeout=300, default_interval=2)
 @retry_option
 @json_option
 @with_client
@@ -625,6 +667,8 @@ def generate_slide_deck(
     language,
     source_ids,
     wait,
+    timeout,
+    interval,
     max_retries,
     json_output,
     client_auth,
@@ -669,7 +713,14 @@ def generate_slide_deck(
 
             result = await generate_with_retry(_generate, max_retries, "slide deck", json_output)
             await handle_generation_result(
-                client, nb_id_resolved, result, "slide deck", wait, json_output
+                client,
+                nb_id_resolved,
+                result,
+                "slide deck",
+                wait,
+                json_output,
+                timeout=float(timeout),
+                interval=float(interval),
             )
 
     return _run()
@@ -694,6 +745,7 @@ def generate_slide_deck(
     help="Zero-based index of the slide to revise (0 = first slide)",
 )
 @click.option("--wait/--no-wait", default=False, help="Wait for completion (default: no-wait)")
+@wait_polling_options(default_timeout=300, default_interval=2)
 @retry_option
 @json_option
 @with_client
@@ -705,6 +757,8 @@ def generate_revise_slide(
     artifact_id,
     slide_index,
     wait,
+    timeout,
+    interval,
     max_retries,
     json_output,
     client_auth,
@@ -738,7 +792,14 @@ def generate_revise_slide(
                 _generate, max_retries, "slide revision", json_output
             )
             await handle_generation_result(
-                client, nb_id_resolved, result, "slide revision", wait, json_output
+                client,
+                nb_id_resolved,
+                result,
+                "slide revision",
+                wait,
+                json_output,
+                timeout=float(timeout),
+                interval=float(interval),
             )
 
     return _run()
@@ -752,6 +813,7 @@ def generate_revise_slide(
 @click.option("--difficulty", type=click.Choice(["easy", "medium", "hard"]), default="medium")
 @click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
 @click.option("--wait/--no-wait", default=False, help="Wait for completion (default: no-wait)")
+@wait_polling_options(default_timeout=300, default_interval=2)
 @retry_option
 @json_option
 @with_client
@@ -764,6 +826,8 @@ def generate_quiz(
     difficulty,
     source_ids,
     wait,
+    timeout,
+    interval,
     max_retries,
     json_output,
     client_auth,
@@ -809,7 +873,14 @@ def generate_quiz(
 
             result = await generate_with_retry(_generate, max_retries, "quiz", json_output)
             await handle_generation_result(
-                client, nb_id_resolved, result, "quiz", wait, json_output
+                client,
+                nb_id_resolved,
+                result,
+                "quiz",
+                wait,
+                json_output,
+                timeout=float(timeout),
+                interval=float(interval),
             )
 
     return _run()
@@ -823,6 +894,7 @@ def generate_quiz(
 @click.option("--difficulty", type=click.Choice(["easy", "medium", "hard"]), default="medium")
 @click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
 @click.option("--wait/--no-wait", default=False, help="Wait for completion (default: no-wait)")
+@wait_polling_options(default_timeout=300, default_interval=2)
 @retry_option
 @json_option
 @with_client
@@ -835,6 +907,8 @@ def generate_flashcards(
     difficulty,
     source_ids,
     wait,
+    timeout,
+    interval,
     max_retries,
     json_output,
     client_auth,
@@ -880,7 +954,14 @@ def generate_flashcards(
 
             result = await generate_with_retry(_generate, max_retries, "flashcards", json_output)
             await handle_generation_result(
-                client, nb_id_resolved, result, "flashcards", wait, json_output
+                client,
+                nb_id_resolved,
+                result,
+                "flashcards",
+                wait,
+                json_output,
+                timeout=float(timeout),
+                interval=float(interval),
             )
 
     return _run()
@@ -912,6 +993,7 @@ def generate_flashcards(
 )
 @click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
 @click.option("--wait/--no-wait", default=False, help="Wait for completion (default: no-wait)")
+@wait_polling_options(default_timeout=300, default_interval=2)
 @retry_option
 @json_option
 @with_client
@@ -926,6 +1008,8 @@ def generate_infographic(
     language,
     source_ids,
     wait,
+    timeout,
+    interval,
     max_retries,
     json_output,
     client_auth,
@@ -973,7 +1057,14 @@ def generate_infographic(
 
             result = await generate_with_retry(_generate, max_retries, "infographic", json_output)
             await handle_generation_result(
-                client, nb_id_resolved, result, "infographic", wait, json_output
+                client,
+                nb_id_resolved,
+                result,
+                "infographic",
+                wait,
+                json_output,
+                timeout=float(timeout),
+                interval=float(interval),
             )
 
     return _run()
@@ -990,6 +1081,7 @@ def generate_infographic(
 )
 @click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
 @click.option("--wait/--no-wait", default=False, help="Wait for completion (default: no-wait)")
+@wait_polling_options(default_timeout=300, default_interval=2)
 @retry_option
 @json_option
 @with_client
@@ -1001,6 +1093,8 @@ def generate_data_table(
     language,
     source_ids,
     wait,
+    timeout,
+    interval,
     max_retries,
     json_output,
     client_auth,
@@ -1035,7 +1129,14 @@ def generate_data_table(
 
             result = await generate_with_retry(_generate, max_retries, "data table", json_output)
             await handle_generation_result(
-                client, nb_id_resolved, result, "data table", wait, json_output
+                client,
+                nb_id_resolved,
+                result,
+                "data table",
+                wait,
+                json_output,
+                timeout=float(timeout),
+                interval=float(interval),
             )
 
     return _run()
@@ -1136,6 +1237,7 @@ def _output_mind_map_result(result: Any, json_output: bool) -> None:
     help="Append extra instructions to the built-in prompt for non-custom formats. Has no effect with --format custom.",
 )
 @click.option("--wait/--no-wait", default=False, help="Wait for completion (default: no-wait)")
+@wait_polling_options(default_timeout=300, default_interval=2)
 @retry_option
 @json_option
 @with_client
@@ -1149,6 +1251,8 @@ def generate_report_cmd(
     language,
     append_instructions,
     wait,
+    timeout,
+    interval,
     max_retries,
     json_output,
     client_auth,
@@ -1221,7 +1325,14 @@ def generate_report_cmd(
 
             result = await generate_with_retry(_generate, max_retries, format_display, json_output)
             await handle_generation_result(
-                client, nb_id_resolved, result, format_display, wait, json_output
+                client,
+                nb_id_resolved,
+                result,
+                format_display,
+                wait,
+                json_output,
+                timeout=float(timeout),
+                interval=float(interval),
             )
 
     return _run()

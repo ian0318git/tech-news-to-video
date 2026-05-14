@@ -45,7 +45,7 @@ from .helpers import (
     validate_id,
     with_client,
 )
-from .options import json_option, notebook_option, prompt_file_option
+from .options import json_option, notebook_option, prompt_file_option, wait_polling_options
 
 # Titles matching this pattern indicate the source was blocked by an anti-bot
 # gateway, CAPTCHA, or returned an HTTP error page instead of real content.
@@ -1279,15 +1279,10 @@ def source_stale(ctx, source_id, notebook_id, json_output, client_auth):
 @source.command("wait")
 @click.argument("source_id")
 @notebook_option
-@click.option(
-    "--timeout",
-    default=120,
-    type=int,
-    help="Maximum seconds to wait (default: 120)",
-)
+@wait_polling_options(default_timeout=120, default_interval=1)
 @click.option("--json", "json_output", is_flag=True, help="Output as JSON")
 @with_client
-def source_wait(ctx, source_id, notebook_id, timeout, json_output, client_auth):
+def source_wait(ctx, source_id, notebook_id, timeout, interval, json_output, client_auth):
     """Wait for a source to finish processing.
 
     After adding a source, it needs to be processed before it can be used
@@ -1304,9 +1299,10 @@ def source_wait(ctx, source_id, notebook_id, timeout, json_output, client_auth):
 
     \b
     Examples:
-      notebooklm source wait abc123                    # Wait for source to be ready
-      notebooklm source wait abc123 --timeout 300      # Wait up to 5 minutes
-      notebooklm source wait abc123 --json             # Output status as JSON
+      notebooklm source wait abc123                          # Wait for source to be ready
+      notebooklm source wait abc123 --timeout 300            # Wait up to 5 minutes
+      notebooklm source wait abc123 --interval 5             # Poll every 5 seconds
+      notebooklm source wait abc123 --json                   # Output status as JSON
 
     \b
     Subagent pattern for long-running operations:
@@ -1333,6 +1329,7 @@ def source_wait(ctx, source_id, notebook_id, timeout, json_output, client_auth):
                     nb_id_resolved,
                     resolved_id,
                     timeout=float(timeout),
+                    initial_interval=float(interval),
                 )
 
                 if json_output:

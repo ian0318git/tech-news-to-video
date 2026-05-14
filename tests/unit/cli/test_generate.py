@@ -113,6 +113,97 @@ class TestGenerateAudio:
             assert result.exit_code == 0
             assert "Audio ready" in result.output or "example.com" in result.output
 
+    def test_generate_audio_with_wait_timeout_interval_forwarded(self, runner, mock_auth):
+        """`generate audio --wait --timeout 60 --interval 5` plumbs both into
+        artifacts.wait_for_completion (P5.T1 / I6).
+
+        The new `--timeout`/`--interval` flags must reach the polling call so
+        that scripts can bound the wait and the cadence — not just toggle the
+        wait on/off as the legacy `--wait` flag did. The CLI surface is
+        uniform with `artifact wait` / `source wait` after this change.
+        """
+        with patch_client_for_module("generate") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.artifacts.generate_audio = AsyncMock(
+                return_value={"artifact_id": "audio_xyz", "status": "processing"}
+            )
+            completed_status = MagicMock()
+            completed_status.is_complete = True
+            completed_status.is_failed = False
+            completed_status.url = "https://example.com/audio.mp3"
+            completed_status.task_id = "audio_xyz"
+            mock_client.artifacts.wait_for_completion = AsyncMock(return_value=completed_status)
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli,
+                    [
+                        "generate",
+                        "audio",
+                        "--wait",
+                        "--timeout",
+                        "60",
+                        "--interval",
+                        "5",
+                        "-n",
+                        "nb_123",
+                    ],
+                )
+
+            assert result.exit_code == 0, result.output
+            mock_client.artifacts.wait_for_completion.assert_awaited_once()
+            kwargs = mock_client.artifacts.wait_for_completion.await_args.kwargs
+            assert kwargs.get("timeout") == 60.0
+            # interval may be plumbed as either initial_interval (preferred new
+            # parameter name) or poll_interval (legacy compatibility shim);
+            # accept whichever the implementation chose so this test does not
+            # over-constrain the wiring choice.
+            interval_value = kwargs.get("initial_interval", kwargs.get("poll_interval"))
+            assert interval_value == 5.0, (
+                f"expected --interval=5 to plumb into wait_for_completion, got kwargs={kwargs}"
+            )
+
+    def test_generate_audio_timeout_interval_without_wait_is_no_op(self, runner, mock_auth):
+        """`generate audio --timeout 60 --interval 5` (without --wait) is
+        accepted but does not call wait_for_completion.
+
+        The polling flags only take effect when paired with --wait; supplying
+        them without --wait must NOT trigger a wait (preserves the default
+        no-wait behavior promised by the original `--wait/--no-wait` toggle).
+        """
+        with patch_client_for_module("generate") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.artifacts.generate_audio = AsyncMock(
+                return_value={"artifact_id": "audio_xyz", "status": "processing"}
+            )
+            mock_client.artifacts.wait_for_completion = AsyncMock()
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli,
+                    [
+                        "generate",
+                        "audio",
+                        "--timeout",
+                        "60",
+                        "--interval",
+                        "5",
+                        "-n",
+                        "nb_123",
+                    ],
+                )
+
+            assert result.exit_code == 0, result.output
+            mock_client.artifacts.wait_for_completion.assert_not_awaited()
+
     def test_generate_audio_failure(self, runner, mock_auth):
         with patch_client_for_module("generate") as mock_client_cls:
             mock_client = create_mock_client()
