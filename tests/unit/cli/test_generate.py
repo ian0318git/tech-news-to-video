@@ -341,6 +341,85 @@ class TestGenerateCinematicVideo:
         assert result.exit_code == 2
         assert "--style-prompt cannot be used with cinematic video" in result.output
 
+    def test_generate_cinematic_video_rejects_non_cinematic_format(
+        self, runner, mock_auth, mock_fetch_tokens
+    ):
+        """`cinematic-video --format explainer` (or any non-cinematic value) must
+        raise UsageError, not silently override the format."""
+        for bad_format in ("explainer", "brief"):
+            result = runner.invoke(
+                cli,
+                [
+                    "generate",
+                    "cinematic-video",
+                    "--format",
+                    bad_format,
+                    "-n",
+                    "nb_123",
+                ],
+            )
+
+            assert result.exit_code == 2, (
+                f"--format {bad_format} should exit 2, got {result.exit_code}: {result.output}"
+            )
+            assert "--format" in result.output
+            assert "cinematic" in result.output.lower()
+
+    def test_generate_cinematic_video_explicit_cinematic_format_ok(self, runner, mock_auth):
+        """`cinematic-video --format cinematic` is the canonical happy path."""
+        with patch_client_for_module("generate") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.artifacts.generate_cinematic_video = AsyncMock(
+                return_value={"artifact_id": "cin_123", "status": "processing"}
+            )
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli,
+                    [
+                        "generate",
+                        "cinematic-video",
+                        "--format",
+                        "cinematic",
+                        "-n",
+                        "nb_123",
+                    ],
+                )
+
+            assert result.exit_code == 0, result.output
+            mock_client.artifacts.generate_cinematic_video.assert_called_once()
+
+    def test_generate_cinematic_video_default_format_ok(self, runner, mock_auth):
+        """`cinematic-video` with no --format defaults to cinematic and works."""
+        with patch_client_for_module("generate") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.artifacts.generate_cinematic_video = AsyncMock(
+                return_value={"artifact_id": "cin_123", "status": "processing"}
+            )
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["generate", "cinematic-video", "-n", "nb_123"])
+
+            assert result.exit_code == 0, result.output
+            mock_client.artifacts.generate_cinematic_video.assert_called_once()
+
+    def test_generate_cinematic_video_help_documents_format_constraint(self, runner):
+        """`cinematic-video --help` must surface the --format constraint."""
+        result = runner.invoke(cli, ["generate", "cinematic-video", "--help"])
+        assert result.exit_code == 0
+        # The help should make it explicit that --format must be 'cinematic' for
+        # this subcommand.
+        assert "--format" in result.output
+        assert "cinematic" in result.output.lower()
+
 
 # =============================================================================
 # GENERATE QUIZ TESTS

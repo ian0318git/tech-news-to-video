@@ -19,6 +19,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 import click
+from click.core import ParameterSource
 
 from ..client import NotebookLMClient
 from ..types import (
@@ -492,8 +493,19 @@ def generate_video(
       notebooklm generate video -s src_001 "from specific source"
     """
     description = resolve_prompt(description, prompt_file, "description")
-    # Auto-select cinematic format when invoked as 'generate cinematic-video'
+    # The 'generate cinematic-video' alias hard-pins --format to 'cinematic'.
+    # If the user explicitly passed --format with any non-cinematic value, raise
+    # rather than silently overriding (mirrors the --style-prompt rejection
+    # pattern below). When --format was not passed at all, fall through to the
+    # implicit 'cinematic' coercion.
     if ctx.info_name == "cinematic-video":
+        format_source = ctx.get_parameter_source("video_format")
+        format_explicit = format_source == ParameterSource.COMMANDLINE
+        if format_explicit and video_format != "cinematic":
+            raise click.UsageError(
+                "--format must be 'cinematic' for the cinematic-video subcommand "
+                "(use 'generate video --format <other>' for other formats)"
+            )
         video_format = "cinematic"
 
     nb_id = require_notebook(notebook_id)
@@ -567,6 +579,9 @@ _cinematic_video_gen_cmd = click.Command(
         "Generate cinematic video overview (AI-generated documentary footage).\n\n"
         "Alias for 'generate video --format cinematic'. Uses Veo 3 AI to create\n"
         "documentary-style videos. Requires Google AI Ultra.\n\n"
+        "Note: --format is locked to 'cinematic' on this subcommand; passing any\n"
+        "other value (e.g. --format explainer) raises an error. Use\n"
+        "'generate video --format <other>' for non-cinematic formats.\n\n"
         "Example:\n"
         '  notebooklm generate cinematic-video "documentary about quantum physics"'
     ),
