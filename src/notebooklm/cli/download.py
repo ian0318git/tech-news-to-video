@@ -28,9 +28,10 @@ from .download_helpers import (
     resolve_partial_artifact_id,
     select_artifact,
 )
+from .error_handler import handle_errors
 from .helpers import (
     console,
-    handle_error,
+    handle_auth_error,
     json_output_response,
     require_notebook,
     resolve_notebook_id,
@@ -685,27 +686,65 @@ def _run_artifact_download(ctx, artifact_type: str, **kwargs) -> None:
     """Execute download for a specific artifact type.
 
     Handles the common pattern across all artifact download commands.
+
+    Exception path is routed through ``cli.error_handler.handle_errors`` so
+    ``--json`` is honored on errors (typed JSON envelope on stdout),
+    ``RateLimitError.retry_after`` surfaces in the JSON body, ``AuthError``
+    shows the re-authentication hint in text mode, and exit codes follow the
+    typed policy (1 = library/user error, 2 = unexpected/system error).
+    See ``error_handler.py`` for the canonical exit-code table (audit row I14).
+
+    The "returned dict with an ``error`` field" path
+    (``_download_artifacts_generic`` → ``{"error": ...}`` for empty artifact
+    lists, name-not-found, etc.) is intentionally **not** routed through the
+    typed handler — it preserves the legacy `{"error": "<msg>"}` JSON shape
+    that scripts already depend on, and exits 1 directly.
+
+    Missing storage file is routed through ``handle_auth_error`` (exit 1)
+    rather than being misclassified as ``UNEXPECTED_ERROR`` (exit 2). This
+    mirrors the canonical ``with_client`` decorator pattern in
+    ``helpers.py:1079-1084`` — a missing ``storage_state.json`` is a typed
+    auth condition, not a system bug, and deserves the rich "Run
+    'notebooklm login'" UX. The narrow ``FileNotFoundError`` catch ensures
+    a ``FileNotFoundError`` raised *inside* the download body (e.g. a
+    user-supplied path that doesn't exist — see issue #153) is NOT
+    misclassified as auth failure; it propagates through ``handle_errors``'
+    UNEXPECTED_ERROR branch instead.
     """
     config = ARTIFACT_CONFIGS[artifact_type]
     json_output = kwargs.get("json_output", False)
-
+    # ``--verbose`` is captured on the root group as a count; opt-in to the
+    # extra error context (RPC method_id, etc.) only when the user asks.
     try:
-        result = run_async(
-            _download_artifacts_generic(
-                ctx=ctx,
-                artifact_type_name=artifact_type,
-                artifact_kind=config["kind"],
-                file_extension=config["extension"],
-                default_output_dir=config["default_dir"],
-                **kwargs,
+        verbose = int(ctx.find_root().params.get("verbose", 0) or 0) >= 1
+    except Exception:
+        verbose = False
+
+    with handle_errors(verbose=verbose, json_output=json_output):
+        try:
+            result = run_async(
+                _download_artifacts_generic(
+                    ctx=ctx,
+                    artifact_type_name=artifact_type,
+                    artifact_kind=config["kind"],
+                    file_extension=config["extension"],
+                    default_output_dir=config["default_dir"],
+                    **kwargs,
+                )
             )
-        )
+        except FileNotFoundError:
+            # Auth bootstrap missing storage_state.json — surface the rich
+            # "Not logged in" UX instead of a generic UNEXPECTED_ERROR.
+            handle_auth_error(json_output)
+            return  # unreachable — handle_auth_error raises SystemExit
 
         if json_output:
             json_output_response(result)
             # Mirror the non-JSON exit-code behavior: any top-level "error"
             # field means the operation failed even though we returned a
             # parseable JSON document. Automation must see a nonzero exit.
+            # NOTE: this preserves the legacy returned-dict envelope shape
+            # (free-form ``error`` string, no typed ``code``) — see docstring.
             if "error" in result:
                 raise SystemExit(1)
             return
@@ -713,9 +752,6 @@ def _run_artifact_download(ctx, artifact_type: str, **kwargs) -> None:
         _display_download_result(result, artifact_type)
         if "error" in result:
             raise SystemExit(1)
-
-    except Exception as e:
-        handle_error(e)
 
 
 @download.command("report")

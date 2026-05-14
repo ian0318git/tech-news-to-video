@@ -1554,3 +1554,275 @@ class TestDownloadFlashcardsStandardFlags:
 
         assert result.exit_code == 0, result.output
         assert chosen_ids == ["fc_bbb222"]
+
+
+# =============================================================================
+# DOWNLOAD TYPED ERROR PATH TESTS (P3.T2 / I14)
+# =============================================================================
+#
+# These tests pin the contract that `download <type>` exception paths route
+# through `cli.error_handler` (the typed handler) rather than the legacy
+# `helpers.handle_error()` shim that always exits 1 with a text-only message
+# regardless of `--json`. The handler is invoked from
+# `_run_artifact_download` and applies to every `download` subcommand
+# (audio/video/slide-deck/...); we exercise `download audio` as a
+# representative because the dispatch is shared.
+#
+# Contract under test (audit row I14, error_handler.py):
+#   - --json honored on the exception path: emits a JSON envelope of shape
+#     {"error": true, "code": "<TYPED_CODE>", "message": "..."} on stdout.
+#   - RateLimitError surfaces `retry_after` in the JSON body and "Retry after
+#     <N>s" in text mode.
+#   - AuthError surfaces a re-authentication hint
+#     ("Run 'notebooklm login' to re-authenticate.") in text mode.
+#   - Typed exit codes from error_handler.py:64-67:
+#       1 = library/user error (RateLimit, Auth, Validation, Network, ...)
+#       2 = unexpected/system error (anything else)
+# =============================================================================
+
+
+class TestDownloadTypedErrorPath:
+    """`download <type>` exception paths route through the typed handler."""
+
+    def _list_raises(self, exc: Exception):
+        """Build a mock client whose `artifacts.list` raises ``exc``.
+
+        The exception fires at the first awaited call inside
+        ``_download_artifacts_generic``, which surfaces directly to the outer
+        ``_run_artifact_download`` exception handler — the exact site under
+        test for I14. The single-download / --all per-artifact try/except
+        blocks deliberately swallow API errors into ``{"error": ...}`` rows;
+        forcing the failure on ``list`` exercises the *typed* handler path.
+        """
+        client = create_mock_client()
+        client.artifacts.list = AsyncMock(side_effect=exc)
+        return client
+
+    # ----- RateLimitError --------------------------------------------------
+
+    def test_rate_limit_error_text_exit_code_1(self, runner, mock_auth, mock_fetch_tokens):
+        """RateLimitError surfaces as exit 1 with retry hint in text mode."""
+        from notebooklm.exceptions import RateLimitError
+
+        with patch_client_for_module("download") as mock_client_cls:
+            mock_client_cls.return_value = self._list_raises(
+                RateLimitError("Quota exceeded", retry_after=42)
+            )
+            result = runner.invoke(cli, ["download", "audio", "-n", "nb_123"])
+
+        assert result.exit_code == 1, result.output
+        # Text-mode message routes through error_handler._output_error → safe_echo
+        # to stderr, which CliRunner mixes into result.output.
+        assert "Rate limited" in result.output
+        assert "42" in result.output  # retry_after surfaced
+
+    def test_rate_limit_error_json_includes_retry_after(self, runner, mock_auth, mock_fetch_tokens):
+        """`--json` emits a typed JSON error envelope with retry_after."""
+        from notebooklm.exceptions import RateLimitError
+
+        with patch_client_for_module("download") as mock_client_cls:
+            mock_client_cls.return_value = self._list_raises(
+                RateLimitError("Quota exceeded", retry_after=42)
+            )
+            result = runner.invoke(cli, ["download", "audio", "--json", "-n", "nb_123"])
+
+        assert result.exit_code == 1, result.output
+        data = json.loads(result.output)
+        assert data["error"] is True
+        assert data["code"] == "RATE_LIMITED"
+        assert data["retry_after"] == 42
+        assert "Rate limited" in data["message"]
+
+    def test_rate_limit_error_json_no_retry_after_omits_field(
+        self, runner, mock_auth, mock_fetch_tokens
+    ):
+        """No retry_after on the exception → field absent from JSON."""
+        from notebooklm.exceptions import RateLimitError
+
+        with patch_client_for_module("download") as mock_client_cls:
+            mock_client_cls.return_value = self._list_raises(RateLimitError("Quota exceeded"))
+            result = runner.invoke(cli, ["download", "audio", "--json", "-n", "nb_123"])
+
+        assert result.exit_code == 1, result.output
+        data = json.loads(result.output)
+        assert data["code"] == "RATE_LIMITED"
+        assert "retry_after" not in data
+
+    # ----- AuthError -------------------------------------------------------
+
+    def test_auth_error_text_includes_login_hint(self, runner, mock_auth, mock_fetch_tokens):
+        """AuthError on the download path shows the typed re-auth hint."""
+        from notebooklm.exceptions import AuthError
+
+        with patch_client_for_module("download") as mock_client_cls:
+            mock_client_cls.return_value = self._list_raises(AuthError("Token expired"))
+            result = runner.invoke(cli, ["download", "audio", "-n", "nb_123"])
+
+        assert result.exit_code == 1, result.output
+        assert "Authentication error" in result.output
+        # error_handler.py ships this exact hint for AuthError.
+        assert "notebooklm login" in result.output
+
+    def test_auth_error_json_emits_typed_code(self, runner, mock_auth, mock_fetch_tokens):
+        """`--json` emits {"error": true, "code": "AUTH_ERROR", ...} for AuthError."""
+        from notebooklm.exceptions import AuthError
+
+        with patch_client_for_module("download") as mock_client_cls:
+            mock_client_cls.return_value = self._list_raises(AuthError("Token expired"))
+            result = runner.invoke(cli, ["download", "audio", "--json", "-n", "nb_123"])
+
+        assert result.exit_code == 1, result.output
+        data = json.loads(result.output)
+        assert data["error"] is True
+        assert data["code"] == "AUTH_ERROR"
+        assert "Token expired" in data["message"]
+
+    # ----- Unexpected exceptions (typed exit code 2) ------------------------
+
+    def test_unexpected_exception_exits_with_code_2(self, runner, mock_auth, mock_fetch_tokens):
+        """Unknown exceptions exit 2 per error_handler.py:64-67 policy."""
+        with patch_client_for_module("download") as mock_client_cls:
+            mock_client_cls.return_value = self._list_raises(RuntimeError("kaboom"))
+            result = runner.invoke(cli, ["download", "audio", "-n", "nb_123"])
+
+        # Legacy helpers.handle_error always exited 1; the typed handler must
+        # distinguish user errors (1) from system bugs (2).
+        assert result.exit_code == 2, result.output
+        assert "Unexpected error" in result.output
+
+    def test_unexpected_exception_json_envelope(self, runner, mock_auth, mock_fetch_tokens):
+        """`--json` emits {"code": "UNEXPECTED_ERROR"} with exit 2."""
+        with patch_client_for_module("download") as mock_client_cls:
+            mock_client_cls.return_value = self._list_raises(RuntimeError("kaboom"))
+            result = runner.invoke(cli, ["download", "audio", "--json", "-n", "nb_123"])
+
+        assert result.exit_code == 2, result.output
+        data = json.loads(result.output)
+        assert data["error"] is True
+        assert data["code"] == "UNEXPECTED_ERROR"
+        assert "kaboom" in data["message"]
+
+    # ----- ValidationError / NetworkError sanity (typed dispatch) ----------
+
+    def test_validation_error_typed_envelope(self, runner, mock_auth, mock_fetch_tokens):
+        """ValidationError reaches the typed handler with its own code."""
+        from notebooklm.exceptions import ValidationError
+
+        with patch_client_for_module("download") as mock_client_cls:
+            mock_client_cls.return_value = self._list_raises(ValidationError("bad input"))
+            result = runner.invoke(cli, ["download", "audio", "--json", "-n", "nb_123"])
+
+        assert result.exit_code == 1, result.output
+        data = json.loads(result.output)
+        assert data["code"] == "VALIDATION_ERROR"
+
+    def test_network_error_typed_envelope(self, runner, mock_auth, mock_fetch_tokens):
+        """NetworkError reaches the typed handler and surfaces its hint in text."""
+        from notebooklm.exceptions import NetworkError
+
+        with patch_client_for_module("download") as mock_client_cls:
+            mock_client_cls.return_value = self._list_raises(NetworkError("DNS down"))
+            text_result = runner.invoke(cli, ["download", "audio", "-n", "nb_123"])
+
+        assert text_result.exit_code == 1, text_result.output
+        assert "Network error" in text_result.output
+        assert "internet connection" in text_result.output  # error_handler hint
+
+    # ----- JSON happy-path preservation (must not regress P2.T4 shape) -----
+
+    def test_json_happy_path_shape_unchanged(self, runner, mock_auth, mock_fetch_tokens, tmp_path):
+        """The JSON happy-path envelope is preserved (operation/status/...)."""
+        with patch_client_for_module("download") as mock_client_cls:
+            mock_client = create_mock_client()
+            output_file = tmp_path / "audio.mp3"
+
+            async def fake_download_audio(notebook_id, output_path, artifact_id=None):
+                Path(output_path).write_bytes(b"hello")
+                return output_path
+
+            mock_client.artifacts.list = AsyncMock(
+                return_value=[make_artifact("audio_happy", "Happy Audio", 1)]
+            )
+            mock_client.artifacts.download_audio = fake_download_audio
+            mock_client_cls.return_value = mock_client
+
+            result = runner.invoke(
+                cli, ["download", "audio", str(output_file), "--json", "-n", "nb_123"]
+            )
+
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data["operation"] == "download_single"
+        assert data["status"] == "downloaded"
+        assert data["artifact"]["id"] == "audio_happy"
+        # Make sure we did NOT add an "error" envelope on the happy path.
+        assert "error" not in data
+        assert "code" not in data
+
+    def test_json_returned_error_envelope_unchanged_exit_1(
+        self, runner, mock_auth, mock_fetch_tokens
+    ):
+        """The pre-existing "no completed artifacts" → JSON {"error": "..."} + exit 1
+        path (download.py:709-710) is preserved by the typed-handler refactor.
+
+        That branch surfaces a *returned* dict-shaped error from
+        ``_download_artifacts_generic`` (not a raised exception), so it must
+        NOT be re-routed through the typed handler — exit 1 with the legacy
+        ``error: "<msg>"`` JSON shape is the documented behavior.
+        """
+        with patch_client_for_module("download") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.artifacts.list = AsyncMock(return_value=[])
+            mock_client_cls.return_value = mock_client
+
+            result = runner.invoke(cli, ["download", "audio", "--json", "-n", "nb_123"])
+
+        assert result.exit_code == 1, result.output
+        data = json.loads(result.output)
+        # Legacy returned-dict shape: free-form "error" string, no "code" envelope.
+        assert "error" in data
+        assert "No completed audio artifacts" in data["error"]
+
+    # ----- Missing-storage auth bootstrap (regression guard) ---------------
+
+    def test_missing_storage_routes_to_auth_error_exit_1(self, runner):
+        """A missing ``storage_state.json`` exits 1 via ``handle_auth_error``.
+
+        Regression guard for the integration-test failure that surfaced after
+        the typed-handler swap: ``AuthTokens.from_storage`` raises
+        ``FileNotFoundError`` when no auth file exists, and the typed handler
+        would otherwise classify it as ``UNEXPECTED_ERROR`` (exit 2). The
+        canonical ``with_client`` decorator catches this exact case and routes
+        it through ``handle_auth_error`` — ``download`` must do the same so
+        ``tests/integration/cli_vcr/test_downloads.py`` (which asserts
+        ``exit_code in (0, 1)`` for unauth invocations) keeps passing.
+        """
+        from notebooklm.auth import AuthTokens
+
+        with patch.object(AuthTokens, "from_storage", new_callable=AsyncMock) as mock_from_storage:
+            mock_from_storage.side_effect = FileNotFoundError(
+                "Storage file not found: /tmp/missing/storage_state.json"
+            )
+            result = runner.invoke(cli, ["download", "audio", "-n", "nb_123"])
+
+        assert result.exit_code == 1, result.output
+        # Rich auth UX (from handle_auth_error) — the literal "Not logged in"
+        # header plus the "notebooklm login" remediation hint.
+        assert "Not logged in" in result.output
+        assert "notebooklm login" in result.output
+
+    def test_missing_storage_json_emits_auth_required_envelope(self, runner):
+        """Missing storage in --json mode emits AUTH_REQUIRED envelope, exit 1."""
+        from notebooklm.auth import AuthTokens
+
+        with patch.object(AuthTokens, "from_storage", new_callable=AsyncMock) as mock_from_storage:
+            mock_from_storage.side_effect = FileNotFoundError("Storage file not found")
+            result = runner.invoke(cli, ["download", "audio", "--json", "-n", "nb_123"])
+
+        assert result.exit_code == 1, result.output
+        data = json.loads(result.output)
+        # `helpers.json_error_response` ships shape:
+        # {"error": True, "code": "AUTH_REQUIRED", "message": "...", ...}
+        assert data["error"] is True
+        assert data["code"] == "AUTH_REQUIRED"
+        assert "notebooklm login" in data["message"]
