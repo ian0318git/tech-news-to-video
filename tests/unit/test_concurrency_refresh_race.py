@@ -1,23 +1,30 @@
-"""Phase 1.5 P1.5.1 — snapshot-invariant for `_rpc_call_impl`.
+"""Phase 1.5 P1.5.1 — snapshot-invariant for the shared POST helper.
 
 httpx merges the cookie jar into the outgoing ``httpx.Request`` synchronously
-in ``build_request()``, before any ``await``. ``_rpc_call_impl`` reads
-``auth.csrf_token`` and ``auth.session_id`` synchronously before
-``await self._http_client.post(url, content=body)``. Therefore, the entire
-``(csrf, session_id, cookies)`` snapshot is atomic from a concurrent-coroutine
-standpoint: no other task can mutate state between read and the wire.
+in ``build_request()``, before any ``await``. ``_perform_authed_post`` reads
+the auth snapshot (via ``self._snapshot()``) and assembles ``(url, body,
+headers)`` via ``build_request(snapshot)`` synchronously before
+``await client.post(...)``. Therefore, within a single retry iteration the
+entire ``(csrf, session_id, cookies)`` snapshot is atomic from a concurrent
+coroutine standpoint: no other task can mutate state between read and the
+wire.
+
+T2.C moved the POST out of ``_rpc_call_impl`` into ``_perform_authed_post``
+so chat (T2.D) can share the same transport pipeline. The AST guard below
+follows the POST; the invariant still belongs at the shared site.
 
 This file *locks* that invariant in two ways:
 
-1. ``test_rpc_call_impl_has_no_await_before_post`` — static AST guard that
-   fails the moment someone adds an ``await`` to the currently-synchronous
-   prologue of ``_rpc_call_impl``. Conservative: any await before ``post()``
-   is rejected, even if it precedes the auth reads.
+1. ``test_perform_authed_post_has_no_await_before_post_per_iteration`` —
+   static AST guard against an ``await`` inside the retry loop of
+   ``_perform_authed_post`` that precedes the iteration's ``client.post(...)``
+   call.
 
-2. ``test_concurrent_refresh_does_not_corrupt_inflight_rpc_request`` — runtime
-   self-consistency. Drives concurrent ``refresh_auth`` against an in-flight
-   ``rpc_call`` (both orderings) and asserts the captured ``httpx.Request``
-   is never observed with mixed-generation (csrf, session_id, cookies) state.
+2. ``test_concurrent_refresh_does_not_corrupt_inflight_rpc_request`` —
+   runtime self-consistency. Drives concurrent ``refresh_auth`` against an
+   in-flight ``rpc_call`` (both orderings) and asserts the captured
+   ``httpx.Request`` is never observed with mixed-generation (csrf,
+   session_id, cookies) state.
 """
 
 from __future__ import annotations
@@ -42,19 +49,35 @@ from notebooklm.rpc import RPCMethod
 EVENT_TIMEOUT_S = 5.0
 
 
-def test_rpc_call_impl_has_no_await_before_post():
-    """``_rpc_call_impl`` must not contain any ``await`` before its ``post()``.
+def test_perform_authed_post_has_no_await_before_post_per_iteration():
+    """Within a single retry iteration of ``_perform_authed_post``, no
+    ``await`` may sit lexically before the ``client.post(...)`` call.
 
-    If anyone adds an ``await`` to the prologue of ``_rpc_call_impl``, a
+    Each retry iteration starts with a synchronous ``self._snapshot()`` and
+    a synchronous ``build_request(snapshot)`` — both are reads / assembly,
+    no awaits. The very next statement is the actual POST. If anyone
+    introduces an ``await`` between the snapshot read and the POST, a
     concurrent ``refresh_auth`` could mutate ``auth.csrf_token`` /
     ``auth.session_id`` / the cookie jar between the read and the wire,
-    producing a mismatched-generation request. The rule is conservative:
-    any earlier ``await`` is rejected, not just ones that fall between the
-    auth reads and the ``post()`` call.
+    producing a mismatched-generation request.
+
+    The check is per-iteration: awaits *between* iterations (e.g.
+    ``await self._await_refresh()`` followed by ``continue``) are fine
+    because each iteration takes a fresh snapshot.
     """
-    src = textwrap.dedent(inspect.getsource(ClientCore._rpc_call_impl))
+    src = textwrap.dedent(inspect.getsource(ClientCore._perform_authed_post))
     tree = ast.parse(src)
     func = next(n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef))
+
+    # Locate the retry loop (the outermost ``while`` in the body).
+    while_loop = next(
+        (n for n in ast.iter_child_nodes(func) if isinstance(n, ast.While)),
+        None,
+    )
+    assert while_loop is not None, (
+        "Could not locate the retry-loop ``while`` in _perform_authed_post. "
+        "If the loop was restructured, update this guard to match."
+    )
 
     def is_post_await(node):
         if not isinstance(node, ast.Await):
@@ -66,44 +89,63 @@ def test_rpc_call_impl_has_no_await_before_post():
         return isinstance(attr, ast.Attribute) and attr.attr == "post"
 
     def _walk_outer(parent):
-        """Yield nodes that belong to ``parent`` itself (skip nested defs).
+        """Yield nodes lexically inside ``parent`` itself (skip nested defs).
 
         ``ast.walk`` descends into nested ``FunctionDef`` / ``AsyncFunctionDef``
-        / ``Lambda`` bodies — that would let a future helper coroutine inside
-        ``_rpc_call_impl`` smuggle the matching ``await ...post(...)`` past
-        this guard. We only want statements lexically at the outer level.
+        / ``Lambda`` bodies — that would let a future helper coroutine
+        smuggle the matching ``await ...post(...)`` past this guard. We only
+        want statements at this lexical level. We DO descend into the loop's
+        own ``try`` / ``except`` / ``if`` blocks so awaits in retry-branch
+        bookkeeping (post-error handlers) remain visible to the guard.
         """
         boundaries = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
         for child in ast.iter_child_nodes(parent):
             if isinstance(child, boundaries):
-                continue  # don't descend into nested callables
+                continue
             yield child
             yield from _walk_outer(child)
 
-    outer_nodes = list(_walk_outer(func))
-    # ast.iter_child_nodes does not guarantee source order across all node
-    # types, so pick the earliest post-await by (lineno, col_offset). Using
-    # the tuple — not just lineno — catches same-line earlier awaits like
-    # ``await build_body(); await post(...)`` written on one line.
-    post_await_positions = [(n.lineno, n.col_offset) for n in outer_nodes if is_post_await(n)]
+    # Walk only the ``try`` block at the top of the while body — that's the
+    # critical prologue → POST window. Awaits in ``except`` handlers are by
+    # definition AFTER the POST (post-error path) and don't violate the
+    # invariant. ``self._snapshot()`` and ``build_request(snapshot)`` are
+    # synchronous assignments inside the while body before the try, so
+    # they're irrelevant to this guard.
+    try_node = next(
+        (n for n in ast.iter_child_nodes(while_loop) if isinstance(n, ast.Try)),
+        None,
+    )
+    assert try_node is not None, (
+        "Could not locate the ``try:`` block guarding the POST in "
+        "_perform_authed_post. Update this guard if the structure changed."
+    )
+    # We only walk the try body, NOT its handlers.
+    try_body_nodes: list[ast.AST] = []
+    for stmt in try_node.body:
+        try_body_nodes.append(stmt)
+        try_body_nodes.extend(_walk_outer(stmt))
+
+    post_await_positions = [(n.lineno, n.col_offset) for n in try_body_nodes if is_post_await(n)]
     post_await_position = min(post_await_positions, default=None)
     assert post_await_position is not None, (
-        "Could not locate `await ...post(...)` in _rpc_call_impl. If you "
-        "refactored the call site (e.g., to `self._http_client.request(...)`), "
-        "update this guard to match — the invariant is 'no await before the "
-        "RPC send', not specifically the `.post` attribute."
+        "Could not locate `await ...post(...)` in the try body of "
+        "_perform_authed_post. If the call site was refactored (e.g. to "
+        "``client.request(...)``), update this guard to match — the "
+        "invariant is 'no await between snapshot read and the POST per "
+        "iteration', not specifically the `.post` attribute."
     )
 
     earlier_awaits = [
         n
-        for n in outer_nodes
+        for n in try_body_nodes
         if isinstance(n, ast.Await) and (n.lineno, n.col_offset) < post_await_position
     ]
     assert not earlier_awaits, (
-        f"_rpc_call_impl gained an await before the POST at {post_await_position}: "
+        f"_perform_authed_post gained an await before the per-iteration POST "
+        f"at {post_await_position}: "
         f"{[(n.lineno, ast.dump(n)) for n in earlier_awaits]}. "
-        "This breaks the snapshot-invariant — auth state could be mutated between "
-        "the read and the actual send."
+        "This breaks the snapshot-invariant — auth state could be mutated "
+        "between the snapshot read and the actual send."
     )
 
 

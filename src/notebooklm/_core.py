@@ -8,10 +8,11 @@ import time
 import warnings
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Coroutine
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, NoReturn, cast
 from urllib.parse import urlencode
 
 import httpx
@@ -96,6 +97,73 @@ AUTH_ERROR_PATTERNS = (
     "login",
     "re-authenticate",
 )
+
+
+@dataclass(frozen=True)
+class _AuthSnapshot:
+    """Point-in-time view of auth headers used to build a single request.
+
+    Captured once per HTTP attempt by ``_perform_authed_post`` and passed
+    into the caller-supplied ``build_request`` factory so the URL/body are
+    consistent for that attempt. On retry, a *new* snapshot is taken so
+    refreshed credentials are picked up before the rebuild.
+    """
+
+    csrf_token: str
+    session_id: str
+    authuser: int
+    account_email: str | None
+
+
+class _TransportAuthExpired(Exception):
+    """Raised by ``_perform_authed_post`` when the refresh callback itself
+    failed during an auth recovery attempt.
+
+    ``original`` is the transport-layer ``httpx.HTTPStatusError`` that
+    triggered the refresh attempt — :func:`is_auth_error` only flags
+    ``HTTPStatusError`` responses, so network-level ``RequestError``s never
+    reach this path. The refresh callback's error is attached via
+    ``__cause__``.
+
+    Callers map this onto their own error domain:
+
+    - ``rpc_call`` re-raises ``original`` so legacy callers that catch
+      :class:`httpx.HTTPStatusError` keep working byte-for-byte.
+    - ``query_post`` translates this into :class:`ChatError`.
+    """
+
+    def __init__(self, message: str, *, original: Exception):
+        super().__init__(message)
+        self.original = original
+
+
+class _TransportRateLimited(Exception):
+    """Raised by ``_perform_authed_post`` when the 429 retry budget is
+    exhausted (or no retries are configured).
+
+    ``retry_after`` carries the parsed (clamped) Retry-After value when the
+    server provided one; ``response`` is the final httpx response so callers
+    can read status / reason for their own error message.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        retry_after: int | None,
+        response: httpx.Response,
+        original: httpx.HTTPStatusError,
+    ):
+        super().__init__(message)
+        self.retry_after = retry_after
+        self.response = response
+        self.original = original
+
+
+# Build-request factory: receives a fresh ``_AuthSnapshot`` and returns the
+# triple (url, body, extra_headers) for one HTTP attempt. ``_perform_authed_post``
+# invokes this once per attempt so refreshed snapshots are picked up on retry.
+_BuildRequest = Callable[[_AuthSnapshot], tuple[str, str, dict[str, str]]]
 
 
 def _resolve_keepalive_interval(keepalive: float | None, min_interval: float) -> float | None:
@@ -566,6 +634,20 @@ class ClientCore:
 
         self.auth.cookie_jar = self._http_client.cookies
 
+    def _snapshot(self) -> _AuthSnapshot:
+        """Capture the current auth headers as a frozen snapshot.
+
+        Used by ``_perform_authed_post`` to make a single HTTP attempt's
+        URL/body consistent (no mid-attempt mutation from refresh /
+        keepalive). A fresh snapshot is taken on each retry.
+        """
+        return _AuthSnapshot(
+            csrf_token=self.auth.csrf_token,
+            session_id=self.auth.session_id,
+            authuser=self.auth.authuser,
+            account_email=self.auth.account_email,
+        )
+
     def _build_url(self, rpc_method: RPCMethod, source_path: str = "/") -> str:
         """Build the batchexecute URL for an RPC call.
 
@@ -594,6 +676,235 @@ class ClientCore:
             )
         return f"{get_batchexecute_url()}?{urlencode(params)}"
 
+    async def _perform_authed_post(
+        self,
+        *,
+        build_request: _BuildRequest,
+        log_label: str,
+    ) -> httpx.Response:
+        """Run an authed POST through the shared retry/refresh pipeline.
+
+        The pipeline is the transport-level core that both ``rpc_call`` and
+        ``query_post`` share. Per-attempt behavior:
+
+        1. Take a fresh ``_AuthSnapshot`` via :meth:`_snapshot`.
+        2. Invoke ``build_request(snapshot)`` to assemble ``(url, body,
+           extra_headers)``. The factory is called *once per attempt* so that
+           retries pick up refreshed credentials instead of replaying a stale
+           pre-refresh URL/body — see synthesis §6 Tier-2 item 4.
+        3. POST via the underlying ``httpx.AsyncClient`` and call
+           ``raise_for_status()``.
+
+        Error-boundary contract (callers must wrap into their own typed
+        exceptions):
+
+        - **Auth refresh path** — when a refresh callback is configured and
+          the failure looks like an auth error (HTTP 400/401/403, see
+          :func:`is_auth_error`), the helper awaits a shared refresh task and
+          retries once with a fresh snapshot. If the refresh callback itself
+          raises, the original transport exception is wrapped in
+          :class:`_TransportAuthExpired` (refresh error chained via
+          ``__cause__``) so callers can re-raise the original unchanged
+          (``rpc_call``) or translate to their own typed error
+          (``query_post``). If the post-refresh retry's POST fails for a
+          non-auth reason, that exception propagates as-is.
+        - **Rate-limit path** — on HTTP 429 with a parseable Retry-After,
+          sleeps and retries until ``rate_limit_max_retries`` is reached;
+          after that, raises :class:`_TransportRateLimited` with the final
+          response and parsed retry-after value. With no parseable header or
+          ``rate_limit_max_retries == 0``, raises immediately.
+        - All other errors propagate as :class:`httpx.HTTPStatusError` /
+          :class:`httpx.RequestError` unchanged.
+
+        Caller responsibilities:
+
+        - Manage the ``set_request_id`` context (so retries within a single
+          logical call share one ``[req=<id>]`` tag).
+        - Decode the response (this helper does no parsing).
+        - Wrap transport exceptions into the caller's error domain:
+          ``rpc_call`` maps into :class:`RPCError`-family exceptions;
+          ``query_post`` maps into :class:`ChatError` / :class:`NetworkError`.
+
+        Args:
+            build_request: Factory invoked once per attempt with a fresh
+                ``_AuthSnapshot``. Must return ``(url, body, extra_headers)``.
+                ``extra_headers`` is merged onto the httpx client's defaults
+                for this attempt only.
+            log_label: Caller-friendly label embedded in log lines (e.g. an
+                RPC method name or ``"chat.ask"``).
+
+        Returns:
+            The raw ``httpx.Response`` from the successful attempt. The
+            caller owns decoding.
+        """
+        assert self._http_client is not None
+        client = self._http_client
+
+        refreshed_this_call = False
+        rate_limit_retries = 0
+        start = time.perf_counter()
+
+        while True:
+            snapshot = self._snapshot()
+            url, body, headers = build_request(snapshot)
+
+            try:
+                if headers:
+                    response = await client.post(url, content=body, headers=headers)
+                else:
+                    response = await client.post(url, content=body)
+                response.raise_for_status()
+            except (httpx.HTTPStatusError, httpx.RequestError) as exc:
+                # --- Auth refresh path ---------------------------------
+                if (
+                    not refreshed_this_call
+                    and self._refresh_callback is not None
+                    and is_auth_error(exc)
+                ):
+                    logger.info(
+                        "%s auth error detected, attempting token refresh",
+                        log_label,
+                    )
+                    try:
+                        await self._await_refresh()
+                    except Exception as refresh_error:
+                        logger.warning("Token refresh failed: %s", refresh_error)
+                        # Signal "refresh failed" to the caller via a typed
+                        # transport exception so the RPC mapper can re-raise
+                        # the *original* HTTPStatusError unchanged (matches
+                        # the historical ``_try_refresh_and_retry`` contract
+                        # — see ``test_no_retry_on_cookie_expiration``).
+                        raise _TransportAuthExpired(
+                            f"auth refresh failed for {log_label}",
+                            original=exc,
+                        ) from refresh_error
+                    if self._refresh_retry_delay > 0:
+                        await asyncio.sleep(self._refresh_retry_delay)
+                    logger.info("Token refresh successful, retrying %s", log_label)
+                    refreshed_this_call = True
+                    # Loop around: next iteration takes a FRESH snapshot,
+                    # rebuilds the request body with the new csrf/sid, and
+                    # re-POSTs.
+                    continue
+
+                # --- 429 rate-limit path --------------------------------
+                if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429:
+                    retry_after = _parse_retry_after(exc.response.headers.get("retry-after"))
+                    if (
+                        retry_after is not None
+                        and rate_limit_retries < self._rate_limit_max_retries
+                    ):
+                        logger.warning(
+                            "%s rate-limited (HTTP 429); sleeping %ds then retrying (%d/%d)",
+                            log_label,
+                            retry_after,
+                            rate_limit_retries + 1,
+                            self._rate_limit_max_retries,
+                        )
+                        await asyncio.sleep(retry_after)
+                        rate_limit_retries += 1
+                        continue
+                    raise _TransportRateLimited(
+                        f"{log_label} rate-limited (HTTP 429)",
+                        retry_after=retry_after,
+                        response=exc.response,
+                        original=exc,
+                    ) from exc
+
+                # --- Anything else: propagate the raw transport error ----
+                elapsed = time.perf_counter() - start
+                logger.debug(
+                    "%s transport error after %.3fs: %s",
+                    log_label,
+                    elapsed,
+                    exc,
+                )
+                raise
+
+            # Success
+            return response
+
+    async def _await_refresh(self) -> None:
+        """Run / join the shared refresh task.
+
+        Concurrent callers share one refresh task so a thundering herd of
+        401s on the same client triggers exactly one token refresh. The lock
+        protects task-creation only; the await on the task itself happens
+        outside the lock so other callers can join.
+        """
+        assert self._refresh_callback is not None
+        assert self._refresh_lock is not None
+
+        async with self._refresh_lock:
+            if self._refresh_task is not None and not self._refresh_task.done():
+                refresh_task = self._refresh_task
+                logger.debug("Joining existing refresh task")
+            else:
+                coro = cast(Coroutine[Any, Any, AuthTokens], self._refresh_callback())
+                self._refresh_task = asyncio.create_task(coro)
+                refresh_task = self._refresh_task
+
+        await refresh_task
+
+    async def query_post(
+        self,
+        *,
+        build_request: _BuildRequest,
+        parse_label: str,
+    ) -> httpx.Response:
+        """Chat-side semantic owner around :meth:`_perform_authed_post`.
+
+        Wraps the shared transport pipeline with chat-flavored exception
+        mapping: transport-layer auth failures become
+        :class:`~notebooklm.exceptions.ChatError`, and transport-layer
+        network/rate-limit failures become
+        :class:`~notebooklm.exceptions.NetworkError` /
+        :class:`~notebooklm.exceptions.ChatError` respectively. This keeps
+        ChatAPI free of HTTP-status branching and matches the historical
+        contract of ``ChatAPI.ask`` (T2.D will migrate that caller).
+
+        Args:
+            build_request: See :meth:`_perform_authed_post`.
+            parse_label: Caller-friendly label used in log lines and error
+                messages (e.g. ``"chat.ask"``).
+        """
+        # Import here to avoid a circular import: exceptions imports from
+        # this module's siblings.
+        from .exceptions import ChatError, NetworkError
+
+        try:
+            return await self._perform_authed_post(
+                build_request=build_request,
+                log_label=parse_label,
+            )
+        except _TransportAuthExpired as exc:
+            raise ChatError(
+                f"{parse_label} failed: authentication expired and refresh did not recover"
+            ) from exc
+        except _TransportRateLimited as exc:
+            raise ChatError(
+                f"{parse_label} rate-limited (HTTP 429)."
+                + (
+                    f" Retry after {exc.retry_after} seconds."
+                    if exc.retry_after is not None
+                    else ""
+                )
+            ) from exc
+        except httpx.TimeoutException as exc:
+            raise NetworkError(
+                f"{parse_label} timed out: {exc}",
+                original_error=exc,
+            ) from exc
+        except httpx.HTTPStatusError as exc:
+            raise ChatError(
+                f"{parse_label} failed with HTTP {exc.response.status_code}: {exc}"
+            ) from exc
+        except httpx.RequestError as exc:
+            raise NetworkError(
+                f"{parse_label} request failed: {exc}",
+                original_error=exc,
+            ) from exc
+
     async def rpc_call(
         self,
         method: RPCMethod,
@@ -601,7 +912,6 @@ class ClientCore:
         source_path: str = "/",
         allow_null: bool = False,
         _is_retry: bool = False,
-        _rate_limit_retries: int = 0,
     ) -> Any:
         """Make an RPC call to the NotebookLM API.
 
@@ -613,8 +923,7 @@ class ClientCore:
             params: Parameters for the RPC call (nested list structure).
             source_path: The source path parameter (usually /notebook/{id}).
             allow_null: If True, don't raise error when response is null.
-            _is_retry: Internal flag to prevent infinite retries.
-            _rate_limit_retries: Internal counter for rate limit retries.
+            _is_retry: Internal flag to prevent infinite decode-time retries.
 
         Returns:
             Decoded response data.
@@ -627,20 +936,18 @@ class ClientCore:
         if not self._http_client:
             raise RuntimeError("Client not initialized. Use 'async with' context.")
 
-        # Only the outer rpc_call mints a request id; the recursive retry path
-        # (_is_retry=True or rate limit retry) inherits the parent's id so a
-        # single failure→refresh→retry sequence appears under one [req=<id>]
-        # in the logs.
-        if _is_retry or _rate_limit_retries > 0:
-            return await self._rpc_call_impl(
-                method, params, source_path, allow_null, _is_retry, _rate_limit_retries
-            )
+        # Only the outer rpc_call mints a request id; the decode-time retry
+        # path (``_is_retry=True``) inherits the parent's id so a single
+        # decode-error → refresh → retry sequence appears under one
+        # ``[req=<id>]`` in the logs. HTTP-status retries (auth + 429) happen
+        # inside ``_perform_authed_post`` without recursion, so they don't
+        # need this guard.
+        if _is_retry:
+            return await self._rpc_call_impl(method, params, source_path, allow_null, _is_retry)
 
         _reqid_token = set_request_id()
         try:
-            return await self._rpc_call_impl(
-                method, params, source_path, allow_null, _is_retry, _rate_limit_retries
-            )
+            return await self._rpc_call_impl(method, params, source_path, allow_null, _is_retry)
         finally:
             reset_request_id(_reqid_token)
 
@@ -651,7 +958,6 @@ class ClientCore:
         source_path: str,
         allow_null: bool,
         _is_retry: bool,
-        _rate_limit_retries: int = 0,
     ) -> Any:
         # Caller (rpc_call) has already verified self._http_client is not None;
         # re-assert for mypy narrowing through this helper.
@@ -659,124 +965,80 @@ class ClientCore:
         start = time.perf_counter()
         logger.debug("RPC %s starting", method.name)
 
-        url = self._build_url(method, source_path)
+        # ``_perform_authed_post`` calls this factory once per HTTP attempt;
+        # on retry it passes a fresh snapshot so the body is rebuilt with the
+        # refreshed CSRF and the URL with the refreshed session id /
+        # authuser. Capturing ``self.auth.csrf_token`` here directly would
+        # snapshot at outer-call time and replay a stale token on retry.
         rpc_request = encode_rpc_request(method, params)
-        body = build_request_body(rpc_request, self.auth.csrf_token)
+
+        def _build(snapshot: _AuthSnapshot) -> tuple[str, str, dict[str, str]]:
+            # Deliberate divergence: the body uses the snapshot's csrf_token
+            # (a frozen point-in-time copy) while ``_build_url`` reads
+            # ``self.auth.session_id`` / ``self.auth.authuser`` /
+            # ``self.auth.account_email`` LIVE off ``self.auth``. The two
+            # stay consistent only because the no-await invariant between
+            # ``_snapshot()`` and the ``client.post(...)`` call inside
+            # ``_perform_authed_post`` guarantees no coroutine can mutate
+            # ``self.auth`` between snapshot capture and request build (see
+            # the AST guard in ``tests/unit/test_concurrency_refresh_race.py``
+            # — adding an ``await`` anywhere in this factory or in
+            # ``_build_url`` would silently desync URL from body across a
+            # refresh). The snapshot's session_id/authuser/account_email
+            # fields are carried for symmetry / future-proofing but are not
+            # the source of truth on this code path.
+            url = self._build_url(method, source_path)
+            body = build_request_body(rpc_request, snapshot.csrf_token)
+            return url, body, {}
 
         try:
-            response = await self._http_client.post(url, content=body)
-            response.raise_for_status()
-        except (httpx.HTTPStatusError, httpx.RequestError) as e:
+            response = await self._perform_authed_post(
+                build_request=_build,
+                log_label=f"RPC {method.name}",
+            )
+        except _TransportAuthExpired as exc:
+            # Refresh callback raised. Historical contract:
+            # the *original* transport exception escapes with the refresh
+            # error attached via ``__cause__`` (already chained inside
+            # ``_perform_authed_post``). No status-code mapping happens for
+            # this path — callers that catch :class:`httpx.HTTPStatusError`
+            # see exactly what they used to see pre-extraction.
+            raise exc.original from exc.__cause__
+        except _TransportRateLimited as exc:
             elapsed = time.perf_counter() - start
+            logger.error(
+                "RPC %s failed after %.3fs: HTTP 429",
+                method.name,
+                elapsed,
+            )
+            msg = f"API rate limit exceeded calling {method.name}"
+            if exc.retry_after:
+                msg += f". Retry after {exc.retry_after} seconds"
+            raise RateLimitError(
+                msg,
+                method_id=method.value,
+                retry_after=exc.retry_after,
+            ) from exc.original
+        except httpx.HTTPStatusError as exc:
+            elapsed = time.perf_counter() - start
+            logger.error(
+                "RPC %s failed after %.3fs: HTTP %s",
+                method.name,
+                elapsed,
+                exc.response.status_code,
+            )
+            self._raise_rpc_error_from_http_status(exc, method)
+        except httpx.RequestError as exc:
+            elapsed = time.perf_counter() - start
+            logger.error("RPC %s failed after %.3fs: %s", method.name, elapsed, exc)
+            self._raise_rpc_error_from_request_error(exc, method)
 
-            # Check if this is an auth error and we can retry
-            if not _is_retry and self._refresh_callback and is_auth_error(e):
-                refreshed = await self._try_refresh_and_retry(
-                    method, params, source_path, allow_null, e
-                )
-                if refreshed is not None:
-                    return refreshed
-
-            if isinstance(e, httpx.HTTPStatusError):
-                status = e.response.status_code
-                logger.error(
-                    "RPC %s failed after %.3fs: HTTP %s",
-                    method.name,
-                    elapsed,
-                    status,
-                )
-
-                # Map HTTP status codes to appropriate exception types
-                if status == 429:
-                    # Rate limiting - parse retry-after (integer or HTTP-date).
-                    retry_after = _parse_retry_after(e.response.headers.get("retry-after"))
-                    # Opt-in automatic retry: if the caller enabled the budget and
-                    # the server gave us a parseable Retry-After, sleep and retry.
-                    # _is_retry stays at its incoming value so the post-sleep call
-                    # can still escalate via the auth-refresh path on 401/403.
-                    if (
-                        retry_after is not None
-                        and _rate_limit_retries < self._rate_limit_max_retries
-                    ):
-                        logger.warning(
-                            "RPC %s rate-limited (HTTP 429); sleeping %ds then retrying (%d/%d)",
-                            method.name,
-                            retry_after,
-                            _rate_limit_retries + 1,
-                            self._rate_limit_max_retries,
-                        )
-                        await asyncio.sleep(retry_after)
-                        return await self.rpc_call(
-                            method,
-                            params,
-                            source_path,
-                            allow_null,
-                            _is_retry=_is_retry,
-                            _rate_limit_retries=_rate_limit_retries + 1,
-                        )
-                    msg = f"API rate limit exceeded calling {method.name}"
-                    if retry_after:
-                        msg += f". Retry after {retry_after} seconds"
-                    raise RateLimitError(
-                        msg, method_id=method.value, retry_after=retry_after
-                    ) from e
-
-                if 500 <= status < 600:
-                    raise ServerError(
-                        f"Server error {status} calling {method.name}: {e.response.reason_phrase}",
-                        method_id=method.value,
-                        status_code=status,
-                    ) from e
-
-                if 400 <= status < 500 and status not in (401, 403):
-                    raise ClientError(
-                        f"Client error {status} calling {method.name}: {e.response.reason_phrase}",
-                        method_id=method.value,
-                        status_code=status,
-                    ) from e
-
-                # 401/403 or other: Generic RPCError (handled by auth retry above)
-                raise RPCError(
-                    f"HTTP {status} calling {method.name}: {e.response.reason_phrase}",
-                    method_id=method.value,
-                ) from e
-
-            # Network/connection errors
-            else:
-                logger.error("RPC %s failed after %.3fs: %s", method.name, elapsed, e)
-
-                # Check ConnectTimeout first (more specific than general TimeoutException)
-                if isinstance(e, httpx.ConnectTimeout):
-                    raise NetworkError(
-                        f"Connection timed out calling {method.name}: {e}",
-                        method_id=method.value,
-                        original_error=e,
-                    ) from e
-
-                # Timeout errors (general timeouts, not connection timeouts)
-                if isinstance(e, httpx.TimeoutException):
-                    raise RPCTimeoutError(
-                        f"Request timed out calling {method.name}",
-                        method_id=method.value,
-                        timeout_seconds=self._timeout,
-                        original_error=e,
-                    ) from e
-
-                # Connection errors (DNS, network unavailable, etc., excluding ConnectTimeout)
-                if isinstance(e, httpx.ConnectError):
-                    raise NetworkError(
-                        f"Connection failed calling {method.name}: {e}",
-                        method_id=method.value,
-                        original_error=e,
-                    ) from e
-
-                # Other request errors
-                raise NetworkError(
-                    f"Request failed calling {method.name}: {e}",
-                    method_id=method.value,
-                    original_error=e,
-                ) from e
-
+        # ---------- Decode -------------------------------------------------
+        # Decode-time auth retry stays RPC-specific: Google sometimes
+        # returns a 200 with an auth-shaped RPCError payload (the body says
+        # "authentication expired" instead of a 401 status code). The chat
+        # streaming format doesn't have this pattern, so the retry lives
+        # here, not in ``_perform_authed_post``.
         try:
             result = decode_response(response.text, method.value, allow_null=allow_null)
             elapsed = time.perf_counter() - start
@@ -802,6 +1064,90 @@ class ClientCore:
                 f"Failed to decode response for {method.name}: {e}",
                 method_id=method.value,
             ) from e
+
+    def _raise_rpc_error_from_http_status(
+        self,
+        exc: httpx.HTTPStatusError,
+        method: RPCMethod,
+    ) -> NoReturn:
+        """Map an HTTP-status failure onto the RPC error hierarchy.
+
+        Centralizes the status-to-exception mapping that historically lived
+        inline in ``_rpc_call_impl``. Always raises — typed ``NoReturn`` so
+        mypy sees the caller's control flow terminates here.
+        """
+        status = exc.response.status_code
+
+        if status == 429:
+            # _perform_authed_post normally raises ``_TransportRateLimited``
+            # before reaching here. This branch covers callers that bypass
+            # the helper or a 429 surfacing after an auth retry.
+            retry_after = _parse_retry_after(exc.response.headers.get("retry-after"))
+            msg = f"API rate limit exceeded calling {method.name}"
+            if retry_after:
+                msg += f". Retry after {retry_after} seconds"
+            raise RateLimitError(msg, method_id=method.value, retry_after=retry_after) from exc
+
+        if 500 <= status < 600:
+            raise ServerError(
+                f"Server error {status} calling {method.name}: {exc.response.reason_phrase}",
+                method_id=method.value,
+                status_code=status,
+            ) from exc
+
+        if 400 <= status < 500 and status not in (401, 403):
+            raise ClientError(
+                f"Client error {status} calling {method.name}: {exc.response.reason_phrase}",
+                method_id=method.value,
+                status_code=status,
+            ) from exc
+
+        # 401/403 or other: Generic RPCError (auth retry already attempted by
+        # _perform_authed_post when a refresh callback was configured).
+        raise RPCError(
+            f"HTTP {status} calling {method.name}: {exc.response.reason_phrase}",
+            method_id=method.value,
+        ) from exc
+
+    def _raise_rpc_error_from_request_error(
+        self,
+        exc: httpx.RequestError,
+        method: RPCMethod,
+    ) -> NoReturn:
+        """Map a non-HTTPStatus transport failure onto NetworkError/RPCTimeoutError.
+
+        Always raises — typed ``NoReturn`` so mypy treats the caller's
+        control flow as terminating here, preventing an unbound-``response``
+        warning in the decode block of ``_rpc_call_impl``.
+        """
+        # Check ConnectTimeout first (more specific than general TimeoutException)
+        if isinstance(exc, httpx.ConnectTimeout):
+            raise NetworkError(
+                f"Connection timed out calling {method.name}: {exc}",
+                method_id=method.value,
+                original_error=exc,
+            ) from exc
+
+        if isinstance(exc, httpx.TimeoutException):
+            raise RPCTimeoutError(
+                f"Request timed out calling {method.name}",
+                method_id=method.value,
+                timeout_seconds=self._timeout,
+                original_error=exc,
+            ) from exc
+
+        if isinstance(exc, httpx.ConnectError):
+            raise NetworkError(
+                f"Connection failed calling {method.name}: {exc}",
+                method_id=method.value,
+                original_error=exc,
+            ) from exc
+
+        raise NetworkError(
+            f"Request failed calling {method.name}: {exc}",
+            method_id=method.value,
+            original_error=exc,
+        ) from exc
 
     async def _try_refresh_and_retry(
         self,
@@ -835,30 +1181,14 @@ class ClientCore:
             method.name,
         )
 
-        # This function is only called when _refresh_callback is set
-        assert self._refresh_callback is not None
-
-        # Use lock to coordinate refresh task creation
-        # Note: refresh_callback is expected to update auth headers internally
-        # Lock is always created when callback is set (see __init__)
-        assert self._refresh_lock is not None
-
-        # Determine which task to await (existing or new)
-        async with self._refresh_lock:
-            if self._refresh_task is not None and not self._refresh_task.done():
-                # Another refresh is in progress, wait on it
-                refresh_task = self._refresh_task
-                logger.debug("Waiting on existing refresh task for RPC %s", method.name)
-            else:
-                # Start a new refresh task
-                # Cast needed: Awaitable → Coroutine for create_task (async funcs return coroutines)
-                coro = cast(Coroutine[Any, Any, AuthTokens], self._refresh_callback())
-                self._refresh_task = asyncio.create_task(coro)
-                refresh_task = self._refresh_task
-
-        # Await refresh outside the lock so other callers can join
+        # Delegate the shared-task + lock dance to ``_await_refresh`` so this
+        # decode-time retry path stays in lockstep with the transport-time
+        # path inside ``_perform_authed_post``. On refresh failure, surface
+        # the *original* RPC decode error (not the refresh error) so callers
+        # see the symptom they originally hit — refresh failure is attached
+        # as ``__cause__``.
         try:
-            await refresh_task
+            await self._await_refresh()
         except Exception as refresh_error:
             logger.warning("Token refresh failed: %s", refresh_error)
             raise original_error from refresh_error
