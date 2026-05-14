@@ -162,6 +162,186 @@ class TestRegisterFileSource:
         with pytest.raises(SourceAddError, match="Failed to get SOURCE_ID"):
             await sources_api._register_file_source("nb_123", "test.pdf")
 
+    @pytest.mark.asyncio
+    async def test_register_file_source_handles_leading_none_shape(self, sources_api, mock_core):
+        """Shape drift (#474): the new wrb.fr result_data starts with a None
+        element, so the legacy position-0 walk lands on None. The full-tree
+        scan should still find the UUID-shaped SOURCE_ID elsewhere.
+        """
+        uuid = "dc84ca28-2629-49ac-aec3-de45f0ec93e4"
+        mock_core.rpc_call.return_value = [None, [[[uuid]]]]
+
+        result = await sources_api._register_file_source("nb_123", "report.pdf")
+        assert result == uuid
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "filename,response,expected",
+        [
+            # Filename echoed next to the SOURCE_ID (sibling).
+            (
+                "report.pdf",
+                [[[["report.pdf", ["11111111-2222-3333-4444-555555555555"]]]]],
+                "11111111-2222-3333-4444-555555555555",
+            ),
+            # Filename at the first leaf position — the legacy data[0] walker
+            # would have returned 'doc.pdf' and broken downstream upload (#474).
+            (
+                "doc.pdf",
+                [[["doc.pdf"], [["aabbccdd-eeff-1122-3344-556677889900"]]]],
+                "aabbccdd-eeff-1122-3344-556677889900",
+            ),
+        ],
+        ids=["filename-sibling-of-uuid", "filename-at-position-zero"],
+    )
+    async def test_register_file_source_prefers_uuid_over_echoed_filename(
+        self, sources_api, mock_core, filename, response, expected
+    ):
+        """The extractor must skip the echoed filename and return the UUID,
+        regardless of where the filename sits in the structure (#474).
+        """
+        mock_core.rpc_call.return_value = response
+
+        result = await sources_api._register_file_source("nb_123", filename)
+        assert result == expected
+
+    @pytest.mark.asyncio
+    async def test_register_file_source_falls_back_to_non_uuid_string(self, sources_api, mock_core):
+        """Existing tests pass non-UUID IDs like 'src_pdf' — when no UUID
+        candidate is present, the extractor falls back to the first non-
+        filename string. Preserves backward compatibility with prior shapes.
+        """
+        mock_core.rpc_call.return_value = [[[["src_pdf"]]]]
+
+        result = await sources_api._register_file_source("nb_123", "doc.pdf")
+        assert result == "src_pdf"
+
+    @pytest.mark.asyncio
+    async def test_register_file_source_error_message_includes_shape_preview(
+        self, sources_api, mock_core
+    ):
+        """Future shape drift should surface a structural preview in the error
+        so users can file actionable bug reports (#474).
+        """
+        from notebooklm.exceptions import SourceAddError
+
+        # Pure-numeric response — no string leaves → no candidates → raises.
+        mock_core.rpc_call.return_value = [[[1, 2, 3]]]
+
+        with pytest.raises(SourceAddError, match=r"Response shape:.*\[\[\[1, 2, 3\]\]\]"):
+            await sources_api._register_file_source("nb_123", "test.pdf")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status_token", ["OK", "DONE", "true", "null"])
+    async def test_register_file_source_rejects_all_alpha_status_tokens(
+        self, sources_api, mock_core, status_token
+    ):
+        """Fallback must reject all-alpha status tokens — ``OK``/``DONE``/``true``
+        in the response position would otherwise be picked up as a bogus
+        SOURCE_ID and break the downstream upload silently.
+        """
+        from notebooklm.exceptions import SourceAddError
+
+        mock_core.rpc_call.return_value = [[[status_token]]]
+
+        with pytest.raises(SourceAddError, match="Failed to get SOURCE_ID"):
+            await sources_api._register_file_source("nb_123", "test.pdf")
+
+    @pytest.mark.asyncio
+    async def test_register_file_source_wraps_rpc_error_with_status_code(
+        self, sources_api, mock_core
+    ):
+        """When the decoder raises RPCError (e.g. server returned null result
+        with a status code at wrb.fr[5] — the suspected #474 mode for account-
+        routing mismatches), wrap the rich diagnostic into SourceAddError so
+        the user sees actionable detail instead of a generic "Failed to get
+        SOURCE_ID" with no context.
+        """
+        from notebooklm.exceptions import ClientError, SourceAddError
+
+        # ClientError is what the decoder raises for status codes 5/7 (NOT_FOUND
+        # / PERMISSION_DENIED) with an account-routing hint attached — exactly
+        # the #114/#294 pattern we suspect for #474.
+        mock_core.rpc_call.side_effect = ClientError(
+            "RPC o4cbdc returned null result with status code 7 (Permission denied). "
+            "If you have multiple Google accounts signed in...",
+            method_id="o4cbdc",
+            rpc_code=7,
+        )
+
+        with pytest.raises(SourceAddError, match="Permission denied") as exc_info:
+            await sources_api._register_file_source("nb_123", "test.pdf")
+
+        # The original RPCError is preserved as the cause so debuggers can
+        # inspect the full decoder context.
+        assert isinstance(exc_info.value.cause, ClientError)
+        assert exc_info.value.cause.rpc_code == 7
+
+    @pytest.mark.asyncio
+    async def test_register_file_source_lets_auth_error_propagate(self, sources_api, mock_core):
+        """AuthError must NOT be wrapped — the core auth-refresh retry path
+        relies on the exception bubbling up unchanged.
+        """
+        from notebooklm.exceptions import AuthError
+
+        mock_core.rpc_call.side_effect = AuthError("session expired")
+
+        with pytest.raises(AuthError, match="session expired"):
+            await sources_api._register_file_source("nb_123", "test.pdf")
+
+    @pytest.mark.asyncio
+    async def test_register_file_source_lets_rate_limit_error_propagate(
+        self, sources_api, mock_core
+    ):
+        """RateLimitError must propagate so callers implementing back-off keep
+        their specific exception type (and ``retry_after``) without having to
+        unwrap ``SourceAddError.cause``.
+        """
+        from notebooklm.exceptions import RateLimitError
+
+        mock_core.rpc_call.side_effect = RateLimitError(
+            "API rate limit exceeded",
+            method_id="o4cbdc",
+            rpc_code="USER_DISPLAYABLE_ERROR",
+        )
+
+        with pytest.raises(RateLimitError, match="rate limit"):
+            await sources_api._register_file_source("nb_123", "test.pdf")
+
+    @pytest.mark.asyncio
+    async def test_register_file_source_lets_server_error_propagate(self, sources_api, mock_core):
+        """ServerError must propagate so callers handling transient 5xx
+        backend errors keep the specific exception type for retry logic.
+        """
+        from notebooklm.exceptions import ServerError
+
+        mock_core.rpc_call.side_effect = ServerError(
+            "Backend unavailable",
+            method_id="o4cbdc",
+            rpc_code=500,
+        )
+
+        with pytest.raises(ServerError, match="Backend unavailable"):
+            await sources_api._register_file_source("nb_123", "test.pdf")
+
+    @pytest.mark.asyncio
+    async def test_register_file_source_walker_has_recursion_guard(self, sources_api, mock_core):
+        """A pathological deeply-nested response must not trigger
+        RecursionError — the depth guard caps recursion at ``max_depth=50``.
+        """
+        # 200-deep nest with a UUID at the bottom. Past the depth guard the
+        # walker stops, so the UUID is unreachable and we raise — but we don't
+        # crash with RecursionError.
+        from notebooklm.exceptions import SourceAddError
+
+        deep: list = ["dc84ca28-2629-49ac-aec3-de45f0ec93e4"]
+        for _ in range(200):
+            deep = [deep]
+        mock_core.rpc_call.return_value = deep
+
+        with pytest.raises(SourceAddError, match="Failed to get SOURCE_ID"):
+            await sources_api._register_file_source("nb_123", "test.pdf")
+
 
 # =============================================================================
 # _start_resumable_upload() tests
@@ -1023,6 +1203,58 @@ class TestAddUrlWithYouTube:
         params = call_args[0][1]
         # Regular URL params have the URL at position [0][0][2] (different from YouTube's [7])
         assert params[0][0][2] == ["https://example.com/article"]
+
+    @pytest.mark.asyncio
+    async def test_add_url_wraps_rpc_error_with_status_code(self, sources_api, mock_core):
+        """When ADD_SOURCE returns null with a status code at wrb.fr[5] —
+        the #407 mode shared with #474 — the decoder raises ClientError /
+        RPCError and add_url wraps it into SourceAddError with the rich
+        diagnostic preserved as .cause. Previously allow_null=True on
+        _add_youtube_source swallowed the status code silently.
+        """
+        from notebooklm.exceptions import ClientError, SourceAddError
+
+        mock_core.rpc_call.side_effect = ClientError(
+            "RPC <id> returned null result with status code 7 (Permission denied). ...",
+            method_id="<id>",
+            rpc_code=7,
+        )
+
+        with pytest.raises(SourceAddError) as exc_info:
+            await sources_api.add_url("nb_123", "https://youtu.be/dQw4w9WgXcQ")
+
+        assert isinstance(exc_info.value.cause, ClientError)
+        assert exc_info.value.cause.rpc_code == 7
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "exc_factory",
+        [
+            lambda: __import__("notebooklm.exceptions", fromlist=["AuthError"]).AuthError(
+                "session expired"
+            ),
+            lambda: __import__("notebooklm.exceptions", fromlist=["RateLimitError"]).RateLimitError(
+                "rate limited", method_id="<id>"
+            ),
+            lambda: __import__("notebooklm.exceptions", fromlist=["ServerError"]).ServerError(
+                "backend down", method_id="<id>", rpc_code=503
+            ),
+        ],
+        ids=["auth", "rate-limit", "server"],
+    )
+    async def test_add_url_lets_transport_errors_propagate(
+        self, sources_api, mock_core, exc_factory
+    ):
+        """AuthError, RateLimitError, and ServerError must NOT be wrapped —
+        callers rely on the specific exception type for re-login / back-off
+        / transient retry. Mirrors the propagation contract on
+        _register_file_source for #474.
+        """
+        exc = exc_factory()
+        mock_core.rpc_call.side_effect = exc
+
+        with pytest.raises(type(exc)):
+            await sources_api.add_url("nb_123", "https://example.com/article")
 
 
 # =============================================================================

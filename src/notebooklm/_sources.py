@@ -16,7 +16,7 @@ from ._core import ClientCore
 from ._env import get_base_url
 from ._url_utils import is_youtube_url
 from .auth import authuser_query, format_authuser_value
-from .exceptions import NetworkError, ValidationError
+from .exceptions import AuthError, NetworkError, RateLimitError, ServerError, ValidationError
 from .rpc import RPCError, RPCMethod, get_upload_url
 from .rpc.types import SourceStatus
 from .types import (
@@ -40,6 +40,70 @@ logger = logging.getLogger(__name__)
 # status=3 as a terminal failure. New unknown types default to terminal
 # — fail fast rather than silently looping until timeout. See #391.
 _TRANSIENT_ERROR_TYPES: tuple[int | None, ...] = (10, 0, None)
+
+
+_SOURCE_ID_UUID_PATTERN = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+
+def _extract_register_file_source_id(result: Any, filename: str) -> str | None:
+    """Locate the SOURCE_ID string in an ADD_SOURCE_FILE response.
+
+    The historical shape was a strictly position-0 walk: ``[[[[id]]]]``. Issue
+    #474 surfaced cases where that walk lands on ``None`` or on the echoed
+    filename and silently fails. Walk the whole structure instead, prefer a
+    UUID-shaped leaf, and fall back to any other id-shaped string that is
+    plausibly not a status label.
+    """
+    uuid_match: str | None = None
+    fallback: str | None = None
+    # Depth guard for malformed/adversarial payloads — Google's real responses
+    # are shallow (≤5 levels), so 50 is generous without risking RecursionError.
+    max_depth = 50
+
+    def walk(node: Any, depth: int) -> None:
+        nonlocal uuid_match, fallback
+        if uuid_match is not None or depth > max_depth:
+            return
+        if isinstance(node, str):
+            candidate = node.strip()
+            if not candidate or candidate == filename:
+                return
+            if _SOURCE_ID_UUID_PATTERN.match(candidate):
+                uuid_match = candidate
+                return
+            # Fallback: reject obvious non-id strings — status labels ("OK",
+            # "DONE", "true"), mime types ("application/pdf"), free-form
+            # messages. An id-shaped string has no embedded whitespace, no
+            # slashes, is at least 4 chars, and contains at least one digit,
+            # hyphen, or underscore (excludes all-alpha status tokens).
+            if fallback is None and _looks_like_id_string(candidate):
+                fallback = candidate
+        elif isinstance(node, list):
+            for child in node:
+                if uuid_match is not None:
+                    return
+                walk(child, depth + 1)
+
+    walk(result, 0)
+    return uuid_match or fallback
+
+
+def _looks_like_id_string(candidate: str) -> bool:
+    """Heuristic for the non-UUID fallback in :func:`_extract_register_file_source_id`.
+
+    Accepts strings that look like an id (`src_pdf`, `source_id_123`) and
+    rejects short status tokens (`OK`, `DONE`, `true`) and structured fields
+    (`application/pdf`, anything with whitespace).
+    """
+    if len(candidate) < 4:
+        return False
+    if any(c in candidate for c in " \t/"):
+        return False
+    # Require at least one digit, hyphen, or underscore — blocks all-alpha
+    # status tokens while still admitting test-style ids like ``src_pdf``.
+    return any(c.isdigit() or c in "-_" for c in candidate)
 
 
 class SourcesAPI:
@@ -408,6 +472,11 @@ class SourcesAPI:
         """
         logger.debug("Adding URL source to notebook %s: %s", notebook_id, url[:80])
         video_id = self._extract_youtube_video_id(url)
+        # Preserve transport-level signals so callers can act on the specific
+        # type (AuthError → re-login, RateLimitError → back-off with retry_after,
+        # ServerError → transient-retry). Only the generic RPCError catch wraps
+        # into SourceAddError with the underlying cause attached. Mirrors the
+        # propagation contract in _register_file_source (#474, #407).
         try:
             if video_id:
                 result = await self._add_youtube_source(notebook_id, url)
@@ -421,8 +490,9 @@ class SourcesAPI:
                         url[:100],
                     )
                 result = await self._add_url_source(notebook_id, url)
+        except (AuthError, RateLimitError, ServerError):
+            raise
         except RPCError as e:
-            # Wrap RPC error with more helpful context for users
             raise SourceAddError(url, cause=e) from e
 
         if result is None:
@@ -1089,11 +1159,16 @@ class SourcesAPI:
             [2],
             [1, None, None, None, None, None, None, None, None, None, [1]],
         ]
+        # allow_null=False mirrors _register_file_source — ADD_SOURCE on
+        # success returns the new source row. A null result with a status
+        # code at wrb.fr[5] is the #407 / #474 mode; allow_null=True would
+        # swallow that diagnostic. The decoder now raises RPCError with the
+        # status code so add_url can wrap it into SourceAddError with detail.
         return await self._core.rpc_call(
             RPCMethod.ADD_SOURCE,
             params,
             source_path=f"/notebook/{notebook_id}",
-            allow_null=True,
+            allow_null=False,
         )
 
     async def _add_url_source(self, notebook_id: str, url: str) -> Any:
@@ -1121,30 +1196,52 @@ class SourcesAPI:
             [1, None, None, None, None, None, None, None, None, None, [1]],
         ]
 
-        result = await self._core.rpc_call(
-            RPCMethod.ADD_SOURCE_FILE,
-            params,
-            source_path=f"/notebook/{notebook_id}",
-            allow_null=True,
+        # allow_null=False: ADD_SOURCE_FILE should always return the source id
+        # on success. When the server quietly returns null with a status code
+        # at wrb.fr[5] — the suspected #474 mode for account-routing mismatches
+        # (issues #114, #294) — the decoder enriches the error with that code
+        # and an account-routing hint. Surface that diagnostic to the caller
+        # via SourceAddError, instead of swallowing the null with allow_null=True
+        # and raising a generic "Failed to get SOURCE_ID" with no detail.
+        #
+        # AuthError, RateLimitError, and ServerError are allowed to propagate
+        # unchanged so callers can keep using their specific exception types
+        # for auth-refresh retry, rate-limit back-off, and server-error handling
+        # without having to unwrap SourceAddError.cause.
+        try:
+            result = await self._core.rpc_call(
+                RPCMethod.ADD_SOURCE_FILE,
+                params,
+                source_path=f"/notebook/{notebook_id}",
+                allow_null=False,
+            )
+        except (AuthError, RateLimitError, ServerError):
+            raise
+        except RPCError as exc:
+            raise SourceAddError(
+                filename,
+                cause=exc,
+                message=f"Failed to register file source for {filename}: {exc}",
+            ) from exc
+
+        source_id = _extract_register_file_source_id(result, filename)
+        if source_id:
+            return source_id
+
+        # The decoder returned a non-null payload that the walker couldn't
+        # parse — a genuine shape drift, not a null-result rejection. Include
+        # a faithful preview of the actual response (repr, not json — repr
+        # surfaces types the walker rejected) so future drift produces an
+        # actionable bug report (#474).
+        preview = repr(result)
+        if len(preview) > 200:
+            preview = preview[:200] + "..."
+        raise SourceAddError(
+            filename,
+            message=(
+                f"Failed to get SOURCE_ID from registration response. Response shape: {preview}"
+            ),
         )
-
-        # Parse SOURCE_ID from response - handle various nesting formats
-        # API returns different structures: [[[[id]]]], [[[id]]], [[id]], etc.
-        if result and isinstance(result, list):
-
-            def extract_id(data):
-                """Recursively extract first string from nested lists."""
-                if isinstance(data, str):
-                    return data
-                if isinstance(data, list) and len(data) > 0:
-                    return extract_id(data[0])
-                return None
-
-            source_id = extract_id(result)
-            if source_id:
-                return source_id
-
-        raise SourceAddError(filename, message="Failed to get SOURCE_ID from registration response")
 
     async def _start_resumable_upload(
         self,
