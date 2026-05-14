@@ -114,4 +114,16 @@ jobs:
       run: ./tests/check_cassettes_clean.sh
 
     - name: Run tests with coverage
-      run: uv run pytest --cov=src/notebooklm --cov-report=term-missing --cov-fail-under=90
+      # Emit coverage.json so the per-file floor check below can read it
+      # without re-running the suite. ``term-missing`` is kept so build logs
+      # still show the missing-lines summary.
+      run: uv run pytest --cov=src/notebooklm --cov-report=term-missing --cov-report=json:coverage.json --cov-fail-under=90
+
+    - name: Assert per-file coverage floors (T6.C)
+      # Linux-only because ``coverage.json`` on Windows records backslash
+      # paths (e.g. ``src\notebooklm\cli\doctor.py``) that won't match the
+      # forward-slash keys in ``[tool.notebooklm.per_file_coverage_floors]``
+      # in pyproject.toml. macOS uses forward slashes and would also work,
+      # but a single OS is enough — the floors are platform-independent.
+      if: runner.os == 'Linux'
+      run: uv run python scripts/check_coverage_thresholds.py --coverage-json coverage.json

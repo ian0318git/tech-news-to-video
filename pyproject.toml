@@ -122,6 +122,24 @@ branch = true
 show_missing = true
 fail_under = 90
 
+# Per-file coverage floors enforced by ``scripts/check_coverage_thresholds.py
+# --coverage-json``. The coverage.py ``[tool.coverage.report]`` table only
+# supports a global ``fail_under``, so individual files that historically lag
+# the project-wide 90% are guarded here. Keys are the source paths exactly as
+# they appear in ``coverage.json`` (run ``uv run pytest --cov=src/notebooklm
+# --cov-report=json:coverage.json`` to confirm). Values are the minimum
+# acceptable percent_covered. To bump a floor: run the full suite locally,
+# read the new percentage from ``coverage.json``, and round down by ~2% so
+# transient flakes don't trip CI on unrelated PRs. To delete a file from the
+# guard: drop the line. Adding a new file requires a separate PR with a
+# rationale in the commit message.
+[tool.notebooklm.per_file_coverage_floors]
+"src/notebooklm/__main__.py" = 0
+"src/notebooklm/cli/_firefox_containers.py" = 75
+"src/notebooklm/cli/doctor.py" = 63
+"src/notebooklm/cli/profile.py" = 74
+"src/notebooklm/cli/session.py" = 83
+
 [tool.mypy]
 python_version = "3.10"
 warn_return_any = false
