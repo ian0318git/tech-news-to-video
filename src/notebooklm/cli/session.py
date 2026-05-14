@@ -1805,6 +1805,11 @@ def register_session_commands(cli):
                     "details": details,
                 }
             )
+            # When checks fail, the JSON payload reports status="error" — the
+            # process exit code must agree so callers can fail-fast on
+            # `notebooklm auth check --json`.
+            if not all_passed:
+                raise SystemExit(1)
             return
 
         # Rich output

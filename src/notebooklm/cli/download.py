@@ -661,6 +661,11 @@ def _run_artifact_download(ctx, artifact_type: str, **kwargs) -> None:
 
         if json_output:
             json_output_response(result)
+            # Mirror the non-JSON exit-code behavior: any top-level "error"
+            # field means the operation failed even though we returned a
+            # parseable JSON document. Automation must see a nonzero exit.
+            if "error" in result:
+                raise SystemExit(1)
             return
 
         _display_download_result(result, artifact_type)

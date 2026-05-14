@@ -1295,13 +1295,17 @@ class TestAuthCheckCommand:
         assert "fail" in result.output.lower() or "✗" in result.output
 
     def test_auth_check_storage_not_found_json(self, runner, mock_storage_path):
-        """Test auth check --json when storage file doesn't exist."""
+        """Test auth check --json when storage file doesn't exist.
+
+        Per T1.F: failure paths in --json mode must exit nonzero so automation
+        can fail-fast on `notebooklm auth check --json`.
+        """
         if mock_storage_path.exists():
             mock_storage_path.unlink()
 
         result = runner.invoke(cli, ["auth", "check", "--json"])
 
-        assert result.exit_code == 0
+        assert result.exit_code != 0
         output = json.loads(result.output)
         assert output["status"] == "error"
         assert output["checks"]["storage_exists"] is False
@@ -1318,12 +1322,15 @@ class TestAuthCheckCommand:
         assert "fail" in result.output.lower() or "✗" in result.output
 
     def test_auth_check_invalid_json_output(self, runner, mock_storage_path):
-        """Test auth check --json when storage contains invalid JSON."""
+        """Test auth check --json when storage contains invalid JSON.
+
+        Per T1.F: failure paths in --json mode must exit nonzero.
+        """
         mock_storage_path.write_text("not valid json at all")
 
         result = runner.invoke(cli, ["auth", "check", "--json"])
 
-        assert result.exit_code == 0
+        assert result.exit_code != 0
         output = json.loads(result.output)
         assert output["status"] == "error"
         assert output["checks"]["storage_exists"] is True
@@ -1393,9 +1400,8 @@ class TestAuthCheckCommand:
         in ``auth.py`` raise on absence, and ``auth check`` reports the raised
         ``ValueError`` so users see the new diagnostic.
 
-        Note: ``auth check`` itself returns exit code 0 regardless — that's a
-        pre-existing UX gap orthogonal to #371. We assert on the surfaced
-        error text instead, which is what users would actually see.
+        T1.F closes the previous exit-code gap: ``auth check --json`` now exits
+        nonzero whenever it reports ``status="error"``.
         """
         storage_data = {
             "cookies": [
@@ -1409,7 +1415,7 @@ class TestAuthCheckCommand:
 
         result = runner.invoke(cli, ["auth", "check", "--json"])
 
-        assert result.exit_code == 0
+        assert result.exit_code != 0
         output = json.loads(result.output)
         assert output["status"] == "error"
         assert output["checks"]["cookies_present"] is False
