@@ -1433,9 +1433,13 @@ the library:
 4. Reloads cookies from `storage_state.json`, replays token fetch once.
 
 A `ContextVar` (`_REFRESH_ATTEMPTED_CONTEXT`) gates same-task retries in
-the parent process, and `_REFRESH_LOCK` + `_REFRESH_GENERATIONS` ensure
-that a fan-out of N concurrent failing requests triggers exactly one
-refresh, not N.
+the parent process, and a per-loop / per-resolved-storage-path asyncio
+lock registry (`_get_refresh_lock`, mirroring the keepalive
+`_get_poke_lock` pattern) combined with `_REFRESH_GENERATIONS` guarded
+by `_REFRESH_STATE_LOCK` (a sync `threading.Lock`) ensure that a fan-out
+of N concurrent failing requests — even across event loops or worker
+threads sharing the same storage path — triggers exactly one refresh,
+not N.
 
 This is **orthogonal** to L1–L3:
 

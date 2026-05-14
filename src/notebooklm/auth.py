@@ -2211,8 +2211,49 @@ _REFRESH_ATTEMPTED_ENV = "_NOTEBOOKLM_REFRESH_ATTEMPTED"
 _REFRESH_ATTEMPTED_CONTEXT: ContextVar[bool] = ContextVar(
     "_REFRESH_ATTEMPTED_CONTEXT", default=False
 )
-_REFRESH_LOCK = asyncio.Lock()
+# In-process state for refresh coordination, keyed per resolved storage path.
+#
+# Two layers of protection are required:
+#
+# - ``_REFRESH_STATE_LOCK`` (sync ``threading.Lock``) makes the
+#   ``_REFRESH_GENERATIONS`` check-and-update atomic ACROSS event loops.
+#   Two loops sharing a storage path each hold their own ``asyncio.Lock``
+#   (see below), so the asyncio lock alone cannot serialize the generation
+#   bump.
+#
+# - ``_REFRESH_LOCKS_BY_LOOP`` mirrors the keepalive ``_POKE_LOCKS_BY_LOOP``
+#   pattern: ``asyncio.Lock`` is loop-bound, so a per-loop / per-resolved-
+#   storage-path registry avoids the cross-loop / cross-thread hazard of a
+#   module-global ``asyncio.Lock`` that binds to the first event loop that
+#   uses it. The outer ``WeakKeyDictionary`` is keyed on the loop object so
+#   the inner dict is reclaimed when the loop is garbage-collected.
+_REFRESH_STATE_LOCK = threading.Lock()
+_REFRESH_LOCKS_BY_LOOP: "weakref.WeakKeyDictionary[Any, dict[Path | None, asyncio.Lock]]" = (
+    weakref.WeakKeyDictionary()
+)
 _REFRESH_GENERATIONS: dict[str, int] = {}
+
+
+def _get_refresh_lock(resolved_storage_path: Path | None) -> asyncio.Lock:
+    """Return the ``asyncio.Lock`` for ``(running event loop, resolved storage path)``.
+
+    Mirrors ``_get_poke_lock``. Keyed on the RESOLVED storage path so callers
+    passing ``(None, profile="foo")`` share the lock with callers passing the
+    explicit profile-resolved path.
+    """
+    loop = asyncio.get_running_loop()
+    with _REFRESH_STATE_LOCK:
+        per_loop = _REFRESH_LOCKS_BY_LOOP.get(loop)
+        if per_loop is None:
+            per_loop = {}
+            _REFRESH_LOCKS_BY_LOOP[loop] = per_loop
+        lock = per_loop.get(resolved_storage_path)
+        if lock is None:
+            lock = asyncio.Lock()
+            per_loop[resolved_storage_path] = lock
+        return lock
+
+
 _AUTH_ERROR_SIGNALS = (
     "authentication expired",
     "redirected to",
@@ -2306,15 +2347,39 @@ async def _fetch_tokens_with_refresh(
             err,
             NOTEBOOKLM_REFRESH_CMD_ENV,
         )
-        refresh_storage_path = storage_path or get_storage_path(profile=profile)
+        # Canonicalize the storage path so different representations of the
+        # same physical file (relative vs absolute, with or without symlinks,
+        # ``~`` shorthand) hash to the same lock-registry / generation key.
+        # ``get_storage_path`` already returns a resolved path, but a
+        # caller-supplied ``storage_path`` may be relative or a symlink.
+        refresh_storage_path = (
+            (storage_path or get_storage_path(profile=profile)).expanduser().resolve()
+        )
         refresh_key = str(refresh_storage_path)
-        refresh_generation = _REFRESH_GENERATIONS.get(refresh_key, 0)
+        # Snapshot the generation BEFORE acquiring the async lock so we can
+        # detect whether a concurrent refresh (potentially on a different
+        # event loop) bumped it while we were waiting. ``_REFRESH_STATE_LOCK``
+        # makes this read atomic with the later check-and-update below.
+        with _REFRESH_STATE_LOCK:
+            refresh_generation = _REFRESH_GENERATIONS.get(refresh_key, 0)
         refresh_token = _REFRESH_ATTEMPTED_CONTEXT.set(True)
         try:
-            async with _REFRESH_LOCK:
-                if _REFRESH_GENERATIONS.get(refresh_key, 0) == refresh_generation:
+            async with _get_refresh_lock(refresh_storage_path):
+                # Re-check under the sync state lock so the check-and-update is
+                # atomic ACROSS event loops. The per-loop asyncio lock only
+                # serializes within a single loop; a second loop sharing this
+                # storage path holds its own asyncio.Lock and could otherwise
+                # race the generation bump.
+                with _REFRESH_STATE_LOCK:
+                    current_generation = _REFRESH_GENERATIONS.get(refresh_key, 0)
+                    should_run_refresh = current_generation == refresh_generation
+                    if should_run_refresh:
+                        # Claim the slot eagerly so any other loop that wakes
+                        # up while ``_run_refresh_cmd`` is in flight sees the
+                        # bump and skips its own refresh.
+                        _REFRESH_GENERATIONS[refresh_key] = refresh_generation + 1
+                if should_run_refresh:
                     await _run_refresh_cmd(refresh_storage_path, profile)
-                    _REFRESH_GENERATIONS[refresh_key] = refresh_generation + 1
                 fresh_jar = build_httpx_cookies_from_storage(refresh_storage_path)
                 _replace_cookie_jar(cookie_jar, fresh_jar)
                 # Capture the baseline NOW — after the wholesale replacement
