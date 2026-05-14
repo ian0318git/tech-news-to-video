@@ -1164,25 +1164,13 @@ class ArtifactsAPI:
         """
         artifacts_data = await self._list_raw(notebook_id)
 
-        # Filter for completed audio artifacts
-        audio_candidates = [
-            a
-            for a in artifacts_data
-            if isinstance(a, list)
-            and len(a) > 4
-            and a[2] == ArtifactTypeCode.AUDIO
-            and a[4] == ArtifactStatus.COMPLETED
-        ]
-
-        if artifact_id:
-            audio_art = next((a for a in audio_candidates if a[0] == artifact_id), None)
-            if not audio_art:
-                raise ArtifactNotReadyError("audio", artifact_id=artifact_id)
-        else:
-            audio_art = audio_candidates[0] if audio_candidates else None
-
-        if not audio_art:
-            raise ArtifactNotReadyError("audio")
+        audio_art = self._select_artifact(
+            artifacts_data,
+            artifact_id,
+            "Audio",
+            "audio",
+            type_code=ArtifactTypeCode.AUDIO,
+        )
 
         # Route through the shared extractor so readiness checks, Artifact.url,
         # GenerationStatus.url, and downloads all agree on the same URL.
@@ -1211,25 +1199,16 @@ class ArtifactsAPI:
         """
         artifacts_data = await self._list_raw(notebook_id)
 
-        # Filter for completed video artifacts
-        video_candidates = [
-            a
-            for a in artifacts_data
-            if isinstance(a, list)
-            and len(a) > 4
-            and a[2] == ArtifactTypeCode.VIDEO
-            and a[4] == ArtifactStatus.COMPLETED
-        ]
-
-        if artifact_id:
-            video_art = next((v for v in video_candidates if v[0] == artifact_id), None)
-            if not video_art:
-                raise ArtifactNotReadyError("video", artifact_id=artifact_id)
-        else:
-            video_art = video_candidates[0] if video_candidates else None
-
-        if not video_art:
-            raise ArtifactNotReadyError("video_overview")
+        # Note: distinct error keys preserved — specific-ID miss raises
+        # "video" (from type_name="Video"); empty-list raises
+        # "video_overview" (from type_name_lower).
+        video_art = self._select_artifact(
+            artifacts_data,
+            artifact_id,
+            "Video",
+            "video_overview",
+            type_code=ArtifactTypeCode.VIDEO,
+        )
 
         # Route through the shared extractor so readiness checks, Artifact.url,
         # GenerationStatus.url, and downloads all agree on the same URL.
@@ -1258,25 +1237,13 @@ class ArtifactsAPI:
         """
         artifacts_data = await self._list_raw(notebook_id)
 
-        # Filter for completed infographic artifacts
-        info_candidates = [
-            a
-            for a in artifacts_data
-            if isinstance(a, list)
-            and len(a) > 4
-            and a[2] == ArtifactTypeCode.INFOGRAPHIC
-            and a[4] == ArtifactStatus.COMPLETED
-        ]
-
-        if artifact_id:
-            info_art = next((i for i in info_candidates if i[0] == artifact_id), None)
-            if not info_art:
-                raise ArtifactNotReadyError("infographic", artifact_id=artifact_id)
-        else:
-            info_art = info_candidates[0] if info_candidates else None
-
-        if not info_art:
-            raise ArtifactNotReadyError("infographic")
+        info_art = self._select_artifact(
+            artifacts_data,
+            artifact_id,
+            "Infographic",
+            "infographic",
+            type_code=ArtifactTypeCode.INFOGRAPHIC,
+        )
 
         # Route through the shared extractor so readiness checks and downloads
         # agree on which URL to select.
@@ -1314,25 +1281,13 @@ class ArtifactsAPI:
 
         artifacts_data = await self._list_raw(notebook_id)
 
-        # Filter for completed slide deck artifacts
-        slide_candidates = [
-            a
-            for a in artifacts_data
-            if isinstance(a, list)
-            and len(a) > 4
-            and a[2] == ArtifactTypeCode.SLIDE_DECK
-            and a[4] == ArtifactStatus.COMPLETED
-        ]
-
-        if artifact_id:
-            slide_art = next((s for s in slide_candidates if s[0] == artifact_id), None)
-            if not slide_art:
-                raise ArtifactNotReadyError("slide_deck", artifact_id=artifact_id)
-        else:
-            slide_art = slide_candidates[0] if slide_candidates else None
-
-        if not slide_art:
-            raise ArtifactNotReadyError("slide_deck")
+        slide_art = self._select_artifact(
+            artifacts_data,
+            artifact_id,
+            "Slide deck",
+            "slide_deck",
+            type_code=ArtifactTypeCode.SLIDE_DECK,
+        )
 
         # Extract download URL from metadata at index 16
         # Structure: artifact[16] = [config, title, slides_list, pdf_url, pptx_url]
@@ -1520,16 +1475,13 @@ class ArtifactsAPI:
         """
         artifacts_data = await self._list_raw(notebook_id)
 
-        report_candidates = [
-            a
-            for a in artifacts_data
-            if isinstance(a, list)
-            and len(a) > 7
-            and a[2] == ArtifactTypeCode.REPORT
-            and a[4] == ArtifactStatus.COMPLETED
-        ]
-
-        report_art = self._select_artifact(report_candidates, artifact_id, "Report", "report")
+        report_art = self._select_artifact(
+            artifacts_data,
+            artifact_id,
+            "Report",
+            "report",
+            type_code=ArtifactTypeCode.REPORT,
+        )
 
         try:
             content_wrapper = report_art[7]
@@ -1616,16 +1568,17 @@ class ArtifactsAPI:
         """
         artifacts_data = await self._list_raw(notebook_id)
 
-        table_candidates = [
-            a
-            for a in artifacts_data
-            if isinstance(a, list)
-            and len(a) > 18
-            and a[2] == ArtifactTypeCode.DATA_TABLE
-            and a[4] == ArtifactStatus.COMPLETED
-        ]
-
-        table_art = self._select_artifact(table_candidates, artifact_id, "Data table", "data table")
+        table_art = self._select_artifact(
+            artifacts_data,
+            artifact_id,
+            "Data table",
+            # Unified to "data_table" so both empty-list and explicit-id-miss
+            # paths raise ArtifactNotReadyError with the same artifact_type
+            # key. The pre-refactor inline code used "data table" (space) for
+            # the empty case, which made `except` filtering inconsistent.
+            "data_table",
+            type_code=ArtifactTypeCode.DATA_TABLE,
+        )
 
         try:
             raw_data = table_art[18]
@@ -2140,41 +2093,85 @@ class ArtifactsAPI:
         candidates: builtins.list[Any],
         artifact_id: str | None,
         type_name: str,
-        type_name_lower: str,
+        no_result_error_key: str,
+        *,
+        type_code: ArtifactTypeCode,
     ) -> Any:
-        """Select an artifact from candidates by ID or return first available.
+        """Select an artifact from candidates by ID or return latest completed.
+
+        This is the single point where completed-artifact selection happens.
+        Callers pass the raw artifact list from ``_list_raw``; the helper
+        filters it down to entries matching ``type_code`` with status
+        ``COMPLETED`` before applying the explicit-ID or latest-timestamp
+        rules.
+
+        Note on the length guard: the filter only requires ``len(a) > 4`` —
+        the minimum needed to read ``a[2]`` (type) and ``a[4]`` (status). The
+        old inline filters in ``download_report`` and ``download_data_table``
+        used stricter length checks (``> 7`` / ``> 18``). A completed-but-too-
+        short artifact now passes this filter and surfaces as
+        ``ArtifactParseError`` from the downstream extractor instead of
+        ``ArtifactNotReadyError`` from the candidate filter. In practice the
+        API returns consistent structures, and downstream paths already wrap
+        ``IndexError``/``TypeError`` into ``ArtifactParseError``.
 
         Args:
-            candidates: List of candidate artifacts.
-            artifact_id: Specific artifact ID to select, or None for first.
-            type_name: Display name for error messages (e.g., "Report").
-            type_name_lower: Lowercase name for error messages (e.g., "report").
+            candidates: Raw artifact list (typically from ``_list_raw``).
+            artifact_id: Specific artifact ID to select, or None for latest.
+            type_name: Display name (e.g., "Audio", "Slide deck"). Used for
+                the explicit-id-miss error key — lowercased with spaces turned
+                into underscores (e.g., "Slide deck" -> "slide_deck").
+            no_result_error_key: Error key used when no candidate survives
+                filtering. Most callers pass ``type_name.lower()`` but some
+                (e.g. ``download_video``) intentionally pass a distinct key
+                (``"video_overview"``) to preserve historical exception keys.
+                Named ``no_result_error_key`` (rather than something like
+                ``type_name_lower``) because it is not in general the
+                lowercase of ``type_name`` — see ``download_video``.
+            type_code: ArtifactTypeCode used to filter candidates by type.
 
         Returns:
             Selected artifact data.
 
         Raises:
-            ValueError: If artifact not found or no candidates available.
+            ArtifactNotReadyError: If artifact not found or no candidates
+                available after filtering.
         """
+        # Filter by type + completed-status. Requires at least 5 elements so
+        # we can read a[2] (type) and a[4] (status); downstream parsers raise
+        # ArtifactParseError if specific deeper indices are missing.
+        filtered = [
+            a
+            for a in candidates
+            if isinstance(a, list)
+            and len(a) > 4
+            and a[2] == type_code
+            and a[4] == ArtifactStatus.COMPLETED
+        ]
+
         if artifact_id:
-            artifact = next((a for a in candidates if a[0] == artifact_id), None)
+            artifact = next((a for a in filtered if a[0] == artifact_id), None)
             if not artifact:
                 raise ArtifactNotReadyError(
                     type_name.lower().replace(" ", "_"), artifact_id=artifact_id
                 )
             return artifact
 
-        if not candidates:
-            raise ArtifactNotReadyError(type_name_lower)
+        if not filtered:
+            raise ArtifactNotReadyError(no_result_error_key)
 
         # Sort by creation timestamp (descending) to get the latest.
-        # Timestamp is at index 15, position 0.
-        candidates.sort(
-            key=lambda a: a[15][0] if len(a) > 15 and isinstance(a[15], list) and a[15] else 0,
+        # Timestamp is the raw API field at index 15, position 0. Falsy
+        # values at that position (``None``, ``0``) fall back to ``0`` so we
+        # never compare ``None`` against ``int`` during the sort.
+        filtered.sort(
+            key=lambda a: (
+                (a[15][0] or 0) if len(a) > 15 and isinstance(a[15], list) and a[15] else 0
+            ),
             reverse=True,
         )
 
-        return candidates[0]
+        return filtered[0]
 
     async def _download_urls_batch(
         self, urls_and_paths: builtins.list[tuple[str, str]]
