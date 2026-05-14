@@ -1028,6 +1028,12 @@ def with_client(f):
                 log_result("failed", "not authenticated")
                 handle_auth_error(json_output)
                 return  # unreachable — handle_auth_error raises SystemExit
+            except Exception as e:
+                # Non-FileNotFoundError bootstrap failures (AuthError, malformed
+                # storage JSON, etc.) still need the structured debug-log entry;
+                # ``handle_errors`` will translate the exception to a typed hint.
+                log_result("failed", str(e))
+                raise
             try:
                 coro = f(ctx, *args, client_auth=auth, **kwargs)
                 result = run_async(coro)

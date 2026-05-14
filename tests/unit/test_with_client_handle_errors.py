@@ -185,6 +185,44 @@ def test_auth_bootstrap_malformed_json_routes_through_handle_errors(
     assert payload["code"] == "UNEXPECTED_ERROR"
 
 
+def test_auth_bootstrap_non_filenotfound_logs_failed_result(
+    runner: CliRunner, monkeypatch, caplog
+) -> None:
+    """Bootstrap exceptions other than FileNotFoundError emit ``log_result('failed', ...)``.
+
+    Regression guard for Gemini feedback on PR #455 (helpers.py:1030): previously
+    only ``FileNotFoundError`` produced the structured debug log entry, so an
+    ``AuthError`` during bootstrap would be handled by ``handle_errors`` but the
+    timing/cmd-name pair never reached the debug log — an observability gap when
+    triaging auth failures via ``NOTEBOOKLM_DEBUG=1``.
+    """
+    import logging
+
+    monkeypatch.delenv("NOTEBOOKLM_AUTH_JSON", raising=False)
+
+    async def _never_called(_auth):
+        raise AssertionError("body should not run when auth bootstrap fails")
+
+    with (
+        caplog.at_level(logging.DEBUG, logger="notebooklm.cli"),
+        patch(
+            "notebooklm.cli.helpers.get_auth_tokens",
+            side_effect=AuthError("token refresh failed"),
+        ),
+    ):
+        cli = _build_cli(_never_called)
+        result = runner.invoke(cli, ["run"], catch_exceptions=False)
+
+    assert result.exit_code == 1, result.stderr
+    failed_records = [
+        r for r in caplog.records if "failed" in r.getMessage() and "run" in r.getMessage()
+    ]
+    assert failed_records, (
+        f"Expected at least one log_result('failed', ...) record, got: "
+        f"{[r.getMessage() for r in caplog.records]}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # JSON-mode failure paths
 # ---------------------------------------------------------------------------
