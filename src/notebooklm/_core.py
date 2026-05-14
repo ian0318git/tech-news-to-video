@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import math
+import random
 import threading
 import time
 import warnings
@@ -879,14 +880,23 @@ class ClientCore:
                 is_network_error = isinstance(exc, httpx.RequestError)
                 if is_server_error or is_network_error:
                     if server_error_retries < self._server_error_max_retries:
+                        # Exponential backoff capped at 30s. The cap blunts
+                        # thundering-herd well past the first few retries
+                        # (every retry beyond ~5 attempts waits exactly 30s),
+                        # but the early retries (1s, 2s, 4s, ...) can still
+                        # synchronize across clients that all failed on the
+                        # same transient backend blip. Add a small ±20% jitter
+                        # so concurrent retries are spread out.
                         backoff = min(2**server_error_retries, 30)
+                        backoff += random.uniform(-0.2 * backoff, 0.2 * backoff)  # noqa: S311  # nosec B311 — jitter, not crypto
+                        backoff = max(0.1, backoff)
                         status_label = (
                             f"HTTP {exc.response.status_code}"  # type: ignore[union-attr]
                             if is_server_error
                             else type(exc).__name__
                         )
                         logger.warning(
-                            "%s server/network error (%s); backing off %ds then retrying (%d/%d)",
+                            "%s server/network error (%s); backing off %.1fs then retrying (%d/%d)",
                             log_label,
                             status_label,
                             backoff,

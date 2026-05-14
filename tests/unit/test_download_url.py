@@ -190,8 +190,13 @@ class TestDownloadUrlErrorWrapping:
             ):
                 await api._download_url("https://storage.googleapis.com/file.mp4", output_path)
 
+            # ``status_code`` rides on the exception attribute, so the
+            # message text no longer repeats it. The message uses
+            # ``parsed.netloc + parsed.path`` so capability tokens in query
+            # params can't leak into log lines.
             assert exc_info.value.status_code == 500
-            assert "HTTP 500" in str(exc_info.value)
+            assert "HTTP error downloading" in str(exc_info.value)
+            assert "storage.googleapis.com/file.mp4" in str(exc_info.value)
             assert "Authentication required" not in str(exc_info.value)
 
     @pytest.mark.asyncio

@@ -2375,34 +2375,52 @@ class ArtifactsAPI:
 
                         # Only move to final location on success
                         temp_file.rename(output_file)
-                        logger.debug("Downloaded %s (%d bytes)", url[:60], total_bytes)
+                        # Log host+path only; full URLs may carry capability
+                        # tokens in query params (see _download_urls_batch for
+                        # the same redaction pattern).
+                        logger.debug(
+                            "Downloaded %s%s (%d bytes)",
+                            parsed.netloc,
+                            parsed.path,
+                            total_bytes,
+                        )
                         return output_path
             except httpx.HTTPStatusError as e:
                 # HTTP-level failure (4xx/5xx). Translate to ArtifactDownloadError
                 # so callers see a consistent exception type instead of a raw
                 # httpx subclass. 401/403 get an explicit "re-login" hint,
                 # mirroring the message style used by _download_urls_batch.
+                #
+                # Error details use ``parsed.netloc + parsed.path`` rather than
+                # ``url[:N]`` so capability tokens in query params can't leak
+                # into log lines or wrapped exception messages. ``status_code``
+                # rides on the exception attribute, so the message text doesn't
+                # repeat it.
                 if e.response.status_code in (401, 403):
                     raise ArtifactDownloadError(
                         "media",
                         details=(
-                            f"Authentication required for {url[:80]}... -- try `notebooklm login`"
+                            f"Authentication required for {parsed.netloc}{parsed.path}"
+                            " -- try `notebooklm login`"
                         ),
                         cause=e,
                         status_code=e.response.status_code,
                     ) from e
                 raise ArtifactDownloadError(
                     "media",
-                    details=f"HTTP {e.response.status_code} downloading {url[:80]}...",
+                    details=f"HTTP error downloading {parsed.netloc}{parsed.path}",
                     cause=e,
                     status_code=e.response.status_code,
                 ) from e
             except httpx.RequestError as e:
                 # Transport-level failure: timeouts, DNS, TLS, connection
                 # resets, etc. No HTTP response was received, so no status_code.
+                # ``str(e)`` for httpx errors can include the full request URL
+                # (with capability tokens in query params); rely on ``cause=e``
+                # to carry the original exception and keep the message redacted.
                 raise ArtifactDownloadError(
                     "media",
-                    details=f"Network error downloading {url[:80]}...: {e}",
+                    details=f"Network error downloading {parsed.netloc}{parsed.path}",
                     cause=e,
                 ) from e
         except BaseException:
