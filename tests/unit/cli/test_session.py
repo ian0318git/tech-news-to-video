@@ -259,9 +259,10 @@ class TestLoginCommand:
     def mock_login_browser_with_storage(self, tmp_path):
         """Mock Playwright browser for login tests that assert exit_code == 0.
 
-        Like mock_login_browser but also makes storage_state() create the file
-        so that storage_path.chmod() succeeds. The mocked page reports it is
-        already on the NotebookLM host, so the auto-detect fast-path is taken.
+        Like mock_login_browser but also makes storage_state() return a dict
+        that the login flow can write via atomic_write_json. The mocked page
+        reports it is already on the NotebookLM host, so the auto-detect
+        fast-path is taken.
         """
         storage_file = tmp_path / "storage.json"
         with (
@@ -278,8 +279,8 @@ class TestLoginCommand:
             mock_page = MagicMock()
             mock_page.url = "https://notebooklm.google.com/"
             mock_context.pages = [mock_page]
-            # Make storage_state create the file so chmod succeeds
-            mock_context.storage_state.side_effect = lambda path: Path(path).write_text("{}")
+            # storage_state() now returns a dict; atomic_write_json writes it.
+            mock_context.storage_state.return_value = {"cookies": [], "origins": []}
             mock_launch = (
                 mock_pw.return_value.__enter__.return_value.chromium.launch_persistent_context
             )
@@ -597,7 +598,7 @@ class TestLoginCommand:
             mock_page = MagicMock()
             mock_page.url = "https://notebooklm.google.com/"
             mock_context.pages = [mock_page]
-            mock_context.storage_state.side_effect = lambda path: Path(path).write_text("{}")
+            mock_context.storage_state.return_value = {"cookies": [], "origins": []}
             mock_launch = (
                 mock_pw.return_value.__enter__.return_value.chromium.launch_persistent_context
             )
@@ -632,7 +633,7 @@ class TestLoginCommand:
             mock_page = MagicMock()
             mock_page.url = "https://notebooklm.google.com/"
             mock_context.pages = [mock_page]
-            mock_context.storage_state.side_effect = lambda path: Path(path).write_text("{}")
+            mock_context.storage_state.return_value = {"cookies": [], "origins": []}
             mock_launch = (
                 mock_pw.return_value.__enter__.return_value.chromium.launch_persistent_context
             )
@@ -673,7 +674,7 @@ class TestLoginCommand:
             mock_page = MagicMock()
             mock_page.url = "https://notebooklm.google.com/"
             mock_context.pages = [mock_page]
-            mock_context.storage_state.side_effect = lambda path: Path(path).write_text("{}")
+            mock_context.storage_state.return_value = {"cookies": [], "origins": []}
             mock_launch = (
                 mock_pw.return_value.__enter__.return_value.chromium.launch_persistent_context
             )
@@ -749,7 +750,7 @@ class TestLoginCommand:
             mock_context.pages = [mock_page_stale]
             # new_page() returns a working fresh page
             mock_context.new_page.return_value = mock_page_fresh
-            mock_context.storage_state.side_effect = lambda path: Path(path).write_text("{}")
+            mock_context.storage_state.return_value = {"cookies": [], "origins": []}
 
             mock_launch = (
                 mock_pw.return_value.__enter__.return_value.chromium.launch_persistent_context
@@ -809,7 +810,7 @@ class TestLoginCommand:
             mock_page_stale.url = "https://notebooklm.google.com/"
             mock_context.pages = [mock_page_stale]
             mock_context.new_page.return_value = mock_page_fresh
-            mock_context.storage_state.side_effect = lambda path: Path(path).write_text("{}")
+            mock_context.storage_state.return_value = {"cookies": [], "origins": []}
 
             mock_launch = (
                 mock_pw.return_value.__enter__.return_value.chromium.launch_persistent_context
@@ -863,7 +864,7 @@ class TestLoginCommand:
             )
             mock_context.pages = [mock_page_stale]
             mock_context.new_page.return_value = mock_page_recovered
-            mock_context.storage_state.side_effect = lambda path: Path(path).write_text("{}")
+            mock_context.storage_state.return_value = {"cookies": [], "origins": []}
 
             mock_launch = (
                 mock_pw.return_value.__enter__.return_value.chromium.launch_persistent_context
@@ -902,7 +903,7 @@ class TestLoginCommand:
             )
             mock_context.pages = [mock_page]
             mock_context.new_page.return_value = mock_page  # new pages also fail
-            mock_context.storage_state.side_effect = lambda path: Path(path).write_text("{}")
+            mock_context.storage_state.return_value = {"cookies": [], "origins": []}
 
             mock_launch = (
                 mock_pw.return_value.__enter__.return_value.chromium.launch_persistent_context
@@ -961,7 +962,7 @@ class TestLoginCommand:
             )
             mock_context.pages = [mock_page_stale]
             mock_context.new_page.return_value = mock_page_recovered
-            mock_context.storage_state.side_effect = lambda path: Path(path).write_text("{}")
+            mock_context.storage_state.return_value = {"cookies": [], "origins": []}
 
             mock_launch = (
                 mock_pw.return_value.__enter__.return_value.chromium.launch_persistent_context

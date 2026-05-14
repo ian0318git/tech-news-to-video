@@ -720,7 +720,7 @@ class TestSaveReturnsBoolSuccess:
             return handle
 
         monkeypatch.setattr(tempfile, "NamedTemporaryFile", boom_namedtemp)
-        monkeypatch.setattr("notebooklm.auth.tempfile.NamedTemporaryFile", boom_namedtemp)
+        monkeypatch.setattr("notebooklm._atomic_io.tempfile.NamedTemporaryFile", boom_namedtemp)
 
         assert save_cookies_to_storage(jar, storage, original_snapshot=snapshot) is False
         # And the original on-disk value must still be intact.
@@ -1211,7 +1211,7 @@ class TestNoTempFileLeakOnWriteFailure:
             handle.write = lambda *a, **k: (_ for _ in ()).throw(OSError("simulated ENOSPC"))
             return handle
 
-        monkeypatch.setattr("notebooklm.auth.tempfile.NamedTemporaryFile", boom_namedtemp)
+        monkeypatch.setattr("notebooklm._atomic_io.tempfile.NamedTemporaryFile", boom_namedtemp)
 
         save_cookies_to_storage(jar, storage, original_snapshot=snapshot)
 

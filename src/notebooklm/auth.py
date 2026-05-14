@@ -37,7 +37,6 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import warnings
@@ -51,6 +50,7 @@ from urllib.parse import urlencode
 
 import httpx
 
+from ._atomic_io import atomic_write_json
 from ._env import get_base_url
 from ._url_utils import contains_google_auth_redirect, is_google_auth_redirect
 from .paths import get_storage_path, resolve_profile
@@ -1807,24 +1807,8 @@ def save_cookies_to_storage(
                 return_result=return_result,
             )
 
-        temp_path: Path | None = None
         try:
-            with tempfile.NamedTemporaryFile(
-                "w",
-                encoding="utf-8",
-                dir=path.parent,
-                prefix=f".{path.name}.",
-                suffix=".tmp",
-                delete=False,
-            ) as temp_file:
-                # Capture the temp path BEFORE the write so the cleanup-on-
-                # failure branch can still unlink it if write() raises (ENOSPC,
-                # EROFS). Without this, partial temp files leak into the
-                # storage parent dir on every save attempt.
-                temp_path = Path(temp_file.name)
-                temp_file.write(json.dumps(storage_data, indent=2, ensure_ascii=False))
-            os.chmod(temp_path, 0o600)
-            temp_path.replace(path)
+            atomic_write_json(path, storage_data)
             logger.debug("Successfully synced %d refreshed cookies to %s", updated_count, path)
             # Even on a successful disk write, if any CAS arm rejected work,
             # disk diverges from ``post`` for at least one key — caller must
@@ -1835,11 +1819,6 @@ def save_cookies_to_storage(
             )
         except Exception as e:
             logger.warning("Failed to write updated cookies to %s: %s", path, e)
-            if temp_path is not None:
-                try:
-                    temp_path.unlink(missing_ok=True)
-                except Exception as cleanup_err:
-                    logger.debug("Failed to clean up temp file %s: %s", temp_path, cleanup_err)
             return _cookie_save_return(CookieSaveResult(False), return_result=return_result)
 
 
