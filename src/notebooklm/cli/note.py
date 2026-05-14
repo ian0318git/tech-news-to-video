@@ -17,6 +17,7 @@ from rich.table import Table
 
 from ..client import NotebookLMClient
 from ..types import Note
+from .error_handler import _output_error
 from .helpers import (
     console,
     json_output_response,
@@ -186,34 +187,45 @@ def note_get(ctx, note_id, notebook_id, json_output, client_auth):
             )
             n = await client.notes.get(nb_id_resolved, resolved_id)
 
+            # C1 (Phase 3, BREAKING): not-found exits 1 with a typed error
+            # instead of the previous exit-0 ``found: false`` placeholder. The
+            # backend may return ``None`` (or any non-``Note`` sentinel) when
+            # the row was deleted between the partial-ID resolve and this
+            # ``get``; treat any non-``Note`` as missing. See
+            # ``docs/cli-exit-codes.md`` and the BREAKING entry in
+            # ``CHANGELOG.md`` (Unreleased → Changed).
+            #
+            # The trailing ``raise AssertionError`` is unreachable at runtime
+            # (``_output_error`` always raises) — it exists solely to narrow
+            # ``n`` from ``Note | None`` to ``Note`` for mypy without forcing a
+            # ``NoReturn`` annotation onto ``error_handler._output_error``
+            # (which would touch a module the C1 spec says we must not).
+            if not isinstance(n, Note):
+                _output_error(
+                    "Note not found",
+                    code="NOT_FOUND",
+                    json_output=json_output,
+                    exit_code=1,
+                    extra={"id": resolved_id, "notebook_id": nb_id_resolved},
+                )
+                raise AssertionError("unreachable")  # pragma: no cover
+
             if json_output:
-                if isinstance(n, Note):
-                    # Mirror the Note dataclass shape; ``json_output_response``
-                    # uses ``default=str`` which handles ``datetime`` fields.
-                    # Inject ``found: True`` so callers can disambiguate the
-                    # success and failure shapes by a single key (the failure
-                    # path emits ``found: False``); without it both shapes
-                    # would be falsy on ``data.get("found")``.
-                    payload = asdict(n)
-                    payload["found"] = True
-                    json_output_response(payload)
-                else:
-                    json_output_response(
-                        {
-                            "id": resolved_id,
-                            "notebook_id": nb_id_resolved,
-                            "found": False,
-                            "error": "Note not found",
-                        }
-                    )
+                # Mirror the Note dataclass shape; ``json_output_response``
+                # uses ``default=str`` which handles ``datetime`` fields.
+                # Inject ``found: True`` so callers can disambiguate the
+                # success and failure shapes by a single key (the failure
+                # path emits the typed ``{error, code, message, ...}``
+                # envelope); without it both shapes would be falsy on
+                # ``data.get("found")``.
+                payload = asdict(n)
+                payload["found"] = True
+                json_output_response(payload)
                 return
 
-            if isinstance(n, Note):
-                console.print(f"[bold cyan]ID:[/bold cyan] {n.id}")
-                console.print(f"[bold cyan]Title:[/bold cyan] {n.title or 'Untitled'}")
-                console.print(f"[bold cyan]Content:[/bold cyan]\n{n.content or ''}")
-            else:
-                console.print("[yellow]Note not found[/yellow]")
+            console.print(f"[bold cyan]ID:[/bold cyan] {n.id}")
+            console.print(f"[bold cyan]Title:[/bold cyan] {n.title or 'Untitled'}")
+            console.print(f"[bold cyan]Content:[/bold cyan]\n{n.content or ''}")
 
     return _run()
 

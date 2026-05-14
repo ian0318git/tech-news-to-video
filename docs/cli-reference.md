@@ -119,7 +119,7 @@ Supported source types: URLs, YouTube videos, files (PDF, text, Markdown, Word, 
 | `add <content>` | URL/file/text | `--title`, `--type`, `--mime-type`, `--timeout`, `--json` | `source add "https://..." --timeout 90` |
 | `add-drive <id> <title>` | Drive file ID | - | `source add-drive abc123 "Doc"` |
 | `add-research [query]` | Search query | `--mode [fast|deep]`, `--from [web|drive]`, `--import-all`, `--no-wait`, `--timeout`, `--prompt-file PATH` | `source add-research "AI" --mode deep --no-wait` |
-| `get <id>` | Source ID | - | `source get src123` |
+| `get <id>` | Source ID | `--json` | `source get src123` |
 | `fulltext <id>` | Source ID | `--json`, `-o FILE`, `-f [text\|markdown]` | `source fulltext src123 -f markdown -o out.md` (`-f markdown` requires the `markdown` extra: `pip install "notebooklm-py[markdown]"` — full extras matrix: [docs/installation.md#optional-extras-matrix](installation.md#optional-extras-matrix)) |
 | `guide <id>` | Source ID | `--json` | `source guide src123` |
 | `rename <id> <title>` | Source ID, new title | - | `source rename src123 "New Name"` |
@@ -169,7 +169,7 @@ Language-aware generate commands (`audio`, `video`, `cinematic-video`, `report`,
 | Command | Arguments | Options | Example |
 |---------|-----------|---------|---------|
 | `list` | - | `--type` | `artifact list --type audio` |
-| `get <id>` | Artifact ID | - | `artifact get art123` |
+| `get <id>` | Artifact ID | `--json` | `artifact get art123` |
 | `rename <id> <title>` | Artifact ID, title | - | `artifact rename art123 "Title"` |
 | `delete <id>` | Artifact ID | - | `artifact delete art123` |
 | `export <id>` | Artifact ID | `--type [docs|sheets]`, `--title` | `artifact export art123 --type sheets` |
@@ -200,10 +200,12 @@ Language-aware generate commands (`audio`, `video`, `cinematic-video`, `report`,
 |---------|-----------|---------|---------|
 | `list` | - | - | `note list` |
 | `create <content>` | Note content | - | `note create "My notes..."` |
-| `get <id>` | Note ID | - | `note get note123` |
+| `get <id>` | Note ID | `--json` | `note get note123` |
 | `save <id>` | Note ID | `--title`, `--content` | `note save note123 --title "Updated title"` |
 | `rename <id> <title>` | Note ID, title | - | `note rename note123 "Title"` |
 | `delete <id>` | Note ID | - | `note delete note123` |
+
+> **`source get` / `artifact get` / `note get` exit `1` on not-found (BREAKING, landed in Phase 3).** All three `get` commands now exit `1` when the requested ID does not resolve to an existing item, matching the rest of the CLI's user-error convention. Under `--json` the failure body is the standard typed error envelope (`{"error": true, "code": "NOT_FOUND", "message": "...", "id": "...", "notebook_id": "..."}`); without `--json` the message is written to stderr. The previous behavior was exit `0` with a "not found" line on stdout. The pre-existing "no partial-ID match" branch (raised by `_resolve_partial_id` as a `ClickException`) was already exit `1` and is unchanged. See [CLI Exit-Code Convention → C1](cli-exit-codes.md#c1--get-on-not-found-exits-1-was-0--landed-in-phase-3) for migration guidance.
 
 ### Metadata Command
 

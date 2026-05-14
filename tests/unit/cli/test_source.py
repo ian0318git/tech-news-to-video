@@ -435,6 +435,112 @@ class TestSourceGet:
             assert result.exit_code == 1
             assert "No source found" in result.output
 
+    # -------------------------------------------------------------------------
+    # C1 (Phase 3) — get-on-not-found now exits 1 (was 0). The new tests below
+    # cover BOTH code paths for the not-found branch:
+    #
+    #   * Path A: input ID is ≥20 chars, so ``_resolve_partial_id`` skips the
+    #     list() round-trip (helpers.py:783-785) and returns the input as-is.
+    #     The backend ``client.sources.get`` then returns ``None``.
+    #   * Path B: input ID is <20 chars, ``_resolve_partial_id`` resolves it via
+    #     a list() match (so the partial-resolve "not found" ClickException
+    #     branch is intentionally NOT exercised here — that path is unchanged
+    #     and tested by ``test_source_get_not_found`` above), but the backend
+    #     get returns ``None`` (e.g. concurrent delete from another session).
+    #
+    # Each path is exercised in text and ``--json`` mode.
+    # -------------------------------------------------------------------------
+
+    def test_source_get_not_found_pathA_long_id_text_exits_1(self, runner, mock_auth):
+        """Path A: ID ≥20 chars skips partial-resolve; backend None → exit 1."""
+        long_id = "a" * 24  # ≥20 chars triggers the skip in _resolve_partial_id
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            # list() must NOT be called on this path; assert below.
+            mock_client.sources.list = AsyncMock(return_value=[])
+            mock_client.sources.get = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["source", "get", long_id, "-n", "nb_123"])
+
+            assert result.exit_code == 1, result.output
+            assert "Source not found" in result.output
+            mock_client.sources.list.assert_not_called()
+
+    def test_source_get_not_found_pathA_long_id_json_exits_1(self, runner, mock_auth):
+        """Path A under ``--json``: typed JSON error doc + exit 1."""
+        long_id = "a" * 24
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.sources.list = AsyncMock(return_value=[])
+            mock_client.sources.get = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["source", "get", long_id, "-n", "nb_123", "--json"])
+
+            assert result.exit_code == 1, result.output
+            data = json.loads(result.output)
+            assert data["error"] is True
+            assert data["code"] == "NOT_FOUND"
+            assert "Source not found" in data["message"]
+            assert data["source_id"] == long_id
+            mock_client.sources.list.assert_not_called()
+
+    def test_source_get_not_found_pathB_resolved_then_none_text_exits_1(self, runner, mock_auth):
+        """Path B: partial-resolve succeeds, backend get() returns None → exit 1."""
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            # Resolution succeeds (list contains a matching item) but the
+            # subsequent get() returns None (race: source deleted between
+            # list and get).
+            mock_client.sources.list = AsyncMock(
+                return_value=[Source(id="src_resolved", title="Doomed")]
+            )
+            mock_client.sources.get = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["source", "get", "src_resolved", "-n", "nb_123"])
+
+            assert result.exit_code == 1, result.output
+            assert "Source not found" in result.output
+
+    def test_source_get_not_found_pathB_resolved_then_none_json_exits_1(self, runner, mock_auth):
+        """Path B under ``--json``: typed JSON error doc + exit 1."""
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.sources.list = AsyncMock(
+                return_value=[Source(id="src_resolved", title="Doomed")]
+            )
+            mock_client.sources.get = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli, ["source", "get", "src_resolved", "-n", "nb_123", "--json"]
+                )
+
+            assert result.exit_code == 1, result.output
+            data = json.loads(result.output)
+            assert data["error"] is True
+            assert data["code"] == "NOT_FOUND"
+            assert "Source not found" in data["message"]
+            assert data["source_id"] == "src_resolved"
+
 
 # =============================================================================
 # SOURCE DELETE TESTS
@@ -2060,10 +2166,12 @@ class TestSourceJsonOutput:
             assert data["source"]["url"] == "https://example.com"
             assert data["source"]["created_at"] == "2024-01-01T12:00:00"
 
-    def test_source_get_json_not_found_stays_exit_zero(self, runner, mock_auth):
-        # C1 (Phase 3) will flip get-on-not-found to exit 1. Until then this
-        # test pins the current contract: not-found exits 0 and emits a
-        # structured ``found: false`` body.
+    def test_source_get_json_not_found_exits_1_with_typed_json(self, runner, mock_auth):
+        # C1 (Phase 3) flipped this contract: ``get`` on not-found now exits 1
+        # and emits the standard typed JSON error envelope (``{error, code,
+        # message}``) instead of the previous exit-0 ``{found: false}``
+        # placeholder. See ``docs/cli-exit-codes.md`` and the BREAKING entry
+        # in ``CHANGELOG.md`` (Unreleased → Changed).
         with patch_client_for_module("source") as mock_client_cls:
             mock_client = create_mock_client()
             mock_client.sources.list = AsyncMock(
@@ -2077,10 +2185,11 @@ class TestSourceJsonOutput:
                     cli, ["source", "get", "src_resolved", "-n", "nb_123", "--json"]
                 )
 
-            assert result.exit_code == 0, result.output
+            assert result.exit_code == 1, result.output
             data = json.loads(result.output)
-            assert data["found"] is False
-            assert data["source"] is None
+            assert data["error"] is True
+            assert data["code"] == "NOT_FOUND"
+            assert "Source not found" in data["message"]
             assert data["source_id"] == "src_resolved"
 
     def test_source_delete_json(self, runner, mock_auth):

@@ -267,6 +267,72 @@ class TestNoteGet:
             assert result.exit_code == 1
             assert "No note found" in result.output
 
+    # -------------------------------------------------------------------------
+    # C1 (Phase 3) — get-on-not-found now exits 1 (was 0). Mirrors the
+    # ``test_source.py`` / ``test_artifact.py`` Path A / Path B coverage so the
+    # contract is uniform across all three ``get`` commands.
+    # -------------------------------------------------------------------------
+
+    def test_note_get_not_found_pathA_long_id_text_exits_1(self, runner, mock_auth):
+        """Path A: ID ≥20 chars skips partial-resolve; backend None → exit 1."""
+        long_id = "a" * 24
+        with patch_client_for_module("note") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.notes.list = AsyncMock(return_value=[])
+            mock_client.notes.get = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["note", "get", long_id, "-n", "nb_123"])
+
+            assert result.exit_code == 1, result.output
+            assert "Note not found" in result.output
+            mock_client.notes.list.assert_not_called()
+
+    def test_note_get_not_found_pathA_long_id_json_exits_1(self, runner, mock_auth):
+        """Path A under ``--json``: typed JSON error doc + exit 1."""
+        long_id = "a" * 24
+        with patch_client_for_module("note") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.notes.list = AsyncMock(return_value=[])
+            mock_client.notes.get = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["note", "get", long_id, "-n", "nb_123", "--json"])
+
+            assert result.exit_code == 1, result.output
+            data = json.loads(result.output)
+            assert data["error"] is True
+            assert data["code"] == "NOT_FOUND"
+            assert "Note not found" in data["message"]
+            assert data["id"] == long_id
+            assert data["notebook_id"] == "nb_123"
+            mock_client.notes.list.assert_not_called()
+
+    def test_note_get_not_found_pathB_resolved_then_none_text_exits_1(self, runner, mock_auth):
+        """Path B: partial-resolve succeeds, backend get() returns None → exit 1."""
+        with patch_client_for_module("note") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.notes.list = AsyncMock(return_value=[make_note("note_xyz", "Doomed", "")])
+            mock_client.notes.get = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["note", "get", "note_xyz", "-n", "nb_123"])
+
+            assert result.exit_code == 1, result.output
+            assert "Note not found" in result.output
+
 
 # =============================================================================
 # NOTE SAVE TESTS
@@ -558,11 +624,12 @@ class TestNoteGetJson:
             assert "created_at" in data
 
     def test_get_resolves_but_returns_none(self, runner, mock_auth):
-        """When resolve succeeds but the GET returns None, JSON reports ``found: false``.
+        """When resolve succeeds but the GET returns None, exit 1 with typed JSON.
 
-        The orchestrator pinned exit-code semantics for this edge case to Phase
-        3 (C1). For now the command stays exit 0 to preserve backward
-        compatibility with shell-script callers.
+        Phase 3 (C1) flipped this from the previous exit-0 ``{found: false}``
+        placeholder to the standard typed JSON error envelope (``{error, code,
+        message}``) + exit 1. See ``docs/cli-exit-codes.md`` and the BREAKING
+        entry in ``CHANGELOG.md`` (Unreleased → Changed).
         """
         with patch_client_for_module("note") as mock_client_cls:
             mock_client = create_mock_client()
@@ -576,10 +643,13 @@ class TestNoteGetJson:
                 mock_fetch.return_value = ("csrf", "session")
                 result = runner.invoke(cli, ["note", "get", "note_123", "-n", "nb_123", "--json"])
 
-            assert result.exit_code == 0, result.output
+            assert result.exit_code == 1, result.output
             data = json.loads(result.output)
-            assert data["found"] is False
-            assert "error" in data
+            assert data["error"] is True
+            assert data["code"] == "NOT_FOUND"
+            assert "Note not found" in data["message"]
+            assert data["id"] == "note_123"
+            assert data["notebook_id"] == "nb_123"
 
 
 class TestNoteSaveJson:

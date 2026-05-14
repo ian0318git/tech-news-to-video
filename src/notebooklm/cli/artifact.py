@@ -16,6 +16,7 @@ from rich.table import Table
 
 from ..client import NotebookLMClient
 from ..types import ExportType
+from .error_handler import _output_error
 from .helpers import (
     cli_name_to_artifact_type,
     console,
@@ -151,12 +152,28 @@ def artifact_get(ctx, artifact_id, notebook_id, json_output, client_auth):
             )
             art = await client.artifacts.get(nb_id_resolved, resolved_id)
 
+            # C1 (Phase 3, BREAKING): not-found exits 1 with a typed error
+            # instead of the previous exit-0 ``found: false`` placeholder. See
+            # the matching change in ``cli/source.py::source_get`` and the
+            # BREAKING entry in ``CHANGELOG.md`` (Unreleased → Changed).
+            #
+            # The trailing ``raise AssertionError`` is unreachable at runtime
+            # (``_output_error`` always raises) — it exists solely to narrow
+            # ``art`` from ``Artifact | None`` to ``Artifact`` for mypy without
+            # forcing a ``NoReturn`` annotation onto
+            # ``error_handler._output_error`` (which would touch a module the
+            # C1 spec says we must not).
+            if art is None:
+                _output_error(
+                    "Artifact not found",
+                    code="NOT_FOUND",
+                    json_output=json_output,
+                    exit_code=1,
+                    extra={"id": resolved_id, "notebook_id": nb_id_resolved},
+                )
+                raise AssertionError("unreachable")  # pragma: no cover
+
             if json_output:
-                if art is None:
-                    json_output_response(
-                        {"notebook_id": nb_id_resolved, "id": resolved_id, "found": False}
-                    )
-                    return
                 data = {
                     "notebook_id": nb_id_resolved,
                     "id": art.id,
@@ -171,17 +188,12 @@ def artifact_get(ctx, artifact_id, notebook_id, json_output, client_auth):
                 json_output_response(data)
                 return
 
-            if art:
-                console.print(f"[bold cyan]Artifact:[/bold cyan] {art.id}")
-                console.print(f"[bold]Title:[/bold] {art.title}")
-                console.print(f"[bold]Type:[/bold] {get_artifact_type_display(art)}")
-                console.print(f"[bold]Status:[/bold] {art.status_str}")
-                if art.created_at:
-                    console.print(
-                        f"[bold]Created:[/bold] {art.created_at.strftime('%Y-%m-%d %H:%M')}"
-                    )
-            else:
-                console.print("[yellow]Artifact not found[/yellow]")
+            console.print(f"[bold cyan]Artifact:[/bold cyan] {art.id}")
+            console.print(f"[bold]Title:[/bold] {art.title}")
+            console.print(f"[bold]Type:[/bold] {get_artifact_type_display(art)}")
+            console.print(f"[bold]Status:[/bold] {art.status_str}")
+            if art.created_at:
+                console.print(f"[bold]Created:[/bold] {art.created_at.strftime('%Y-%m-%d %H:%M')}")
 
     return _run()
 

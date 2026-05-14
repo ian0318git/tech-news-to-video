@@ -200,11 +200,14 @@ class TestArtifactGet:
             assert "created_at" in data
 
     def test_artifact_get_json_not_found(self, runner, mock_auth):
-        """`artifact get --json` emits ``{found: False}`` when the artifact is gone.
+        """`artifact get --json` emits typed JSON error + exits 1 (C1, Phase 3).
 
         ``client.artifacts.get`` may return ``None`` after a successful partial-ID
         resolve when the server reports the artifact has been deleted between
-        the list call and the get call.
+        the list call and the get call. Phase 3 (C1) flipped this from the
+        previous exit-0 ``{found: false}`` placeholder to the standard typed
+        JSON error envelope (``{error, code, message}``) + exit 1. See
+        ``docs/cli-exit-codes.md`` and the BREAKING entry in ``CHANGELOG.md``.
         """
         with patch_client_for_module("artifact") as mock_client_cls:
             mock_client = create_mock_client()
@@ -224,9 +227,81 @@ class TestArtifactGet:
                     cli, ["artifact", "get", "art_123", "-n", "nb_123", "--json"]
                 )
 
-            assert result.exit_code == 0
+            assert result.exit_code == 1, result.output
             data = json.loads(result.output)
-            assert data == {"notebook_id": "nb_123", "id": "art_123", "found": False}
+            assert data["error"] is True
+            assert data["code"] == "NOT_FOUND"
+            assert "Artifact not found" in data["message"]
+            assert data["id"] == "art_123"
+            assert data["notebook_id"] == "nb_123"
+
+    # -------------------------------------------------------------------------
+    # C1 (Phase 3) — get-on-not-found now exits 1 (was 0). Mirrors the
+    # ``test_source.py`` Path A / Path B coverage so the contract on the two
+    # ``get`` commands matches.
+    # -------------------------------------------------------------------------
+
+    def test_artifact_get_not_found_pathA_long_id_text_exits_1(self, runner, mock_auth):
+        """Path A: ID ≥20 chars skips partial-resolve; backend None → exit 1."""
+        long_id = "a" * 24
+        with patch_client_for_module("artifact") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.artifacts.list = AsyncMock(return_value=[])
+            mock_client.artifacts.get = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["artifact", "get", long_id, "-n", "nb_123"])
+
+            assert result.exit_code == 1, result.output
+            assert "Artifact not found" in result.output
+            mock_client.artifacts.list.assert_not_called()
+
+    def test_artifact_get_not_found_pathA_long_id_json_exits_1(self, runner, mock_auth):
+        """Path A under ``--json``: typed JSON error doc + exit 1."""
+        long_id = "a" * 24
+        with patch_client_for_module("artifact") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.artifacts.list = AsyncMock(return_value=[])
+            mock_client.artifacts.get = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["artifact", "get", long_id, "-n", "nb_123", "--json"])
+
+            assert result.exit_code == 1, result.output
+            data = json.loads(result.output)
+            assert data["error"] is True
+            assert data["code"] == "NOT_FOUND"
+            assert "Artifact not found" in data["message"]
+            assert data["id"] == long_id
+            assert data["notebook_id"] == "nb_123"
+            mock_client.artifacts.list.assert_not_called()
+
+    def test_artifact_get_not_found_pathB_resolved_then_none_text_exits_1(self, runner, mock_auth):
+        """Path B: partial-resolve succeeds, backend get() returns None → exit 1."""
+        with patch_client_for_module("artifact") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.artifacts.list = AsyncMock(
+                return_value=[Artifact(id="art_xyz", title="Doomed", _artifact_type=4, status=3)]
+            )
+            mock_client.artifacts.get = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["artifact", "get", "art_xyz", "-n", "nb_123"])
+
+            assert result.exit_code == 1, result.output
+            assert "Artifact not found" in result.output
 
 
 # =============================================================================

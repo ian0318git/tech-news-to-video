@@ -197,22 +197,47 @@ elif result.returncode == 130:
 
 ## Migration notes
 
-The following shifts will land in **Phase 3** of the internal
-`cli-ux-remediation` plan and are documented here so callers can prepare.
-The current behavior is described above; these notes describe the upcoming
-change.
+The following shifts have landed (or are about to land) under the internal
+`cli-ux-remediation` plan and are documented here for callers preparing for —
+or recovering from — the contract change.
 
-### C1 — `get`-on-not-found will exit `1` (currently `0`)
+### C1 — `get`-on-not-found exits `1` (was `0`) ✅ **Landed in Phase 3**
 
 `notebooklm source get`, `notebooklm artifact get`, and `notebooklm note get`
-currently print a "not found" message to stdout and exit `0` when the
-requested ID is missing. Phase 3 will change all three to exit `1` so the
-"not found" condition matches the rest of the CLI's user-error convention
-and so scripts can branch on the exit code without parsing output text.
+**now exit `1`** with the typed JSON error envelope (`{error, code:
+"NOT_FOUND", message, ...}` under `--json`; plain "X not found" on stderr
+otherwise) when the requested ID is missing. Previously they printed a "not
+found" message to stdout and exited `0`. The new contract matches the rest of
+the CLI's user-error convention and lets scripts branch on the exit code
+without parsing output text:
 
-If your script relies on the current `0`-on-not-found behavior, switch to
-inspecting the command output (or, after Phase 3 lands, branch on the exit
-code: `notebooklm source get "$SRC_ID" || handle_missing`).
+```sh
+# Idiomatic post-C1
+if ! notebooklm source get "$SRC_ID"; then
+    handle_missing "$SRC_ID"
+fi
+
+# JSON form — branch on the typed code
+notebooklm source get "$SRC_ID" --json > out.json
+case $? in
+  0) ;;                              # found; ``out.json`` mirrors the Source dataclass
+  1) jq -r .code out.json ;;         # ``NOT_FOUND`` here, but auth/network errors also land
+esac
+```
+
+This **breaks** any shell script that relied on exit-`0`-on-not-found (e.g.
+`notebooklm source get X | grep -q '<title>' && do_something`). Such scripts
+must switch to the new exit-code branch shown above. The message text is also
+no longer printed to stdout (it's on stderr now), so `grep`-on-stdout for
+"not found" likewise stops working — branch on the exit code instead.
+
+The change covers **both** code paths: input IDs ≥20 chars (which skip the
+partial-resolve list round-trip in `_resolve_partial_id`) and the rare
+race where partial-resolve succeeds but the subsequent `get` returns
+`None` because the row was deleted between the two calls.
+
+The pre-existing "no partial-ID match" branch (raised by `_resolve_partial_id`
+as a `ClickException`) was already exit `1` and is unchanged.
 
 ### I14 — `download` exception paths will route through the typed handler
 

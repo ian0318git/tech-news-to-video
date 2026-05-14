@@ -29,6 +29,7 @@ from rich.table import Table
 from ..client import NotebookLMClient
 from ..types import source_status_to_str
 from ..urls import is_youtube_url
+from .error_handler import _output_error
 from .helpers import (
     console,
     display_report,
@@ -561,46 +562,52 @@ def source_get(ctx, source_id, notebook_id, json_output, client_auth):
             )
             src = await client.sources.get(nb_id_resolved, resolved_id)
 
+            # C1 (Phase 3, BREAKING): not-found exits 1 with a typed error
+            # instead of the previous exit-0 ``found: false`` placeholder. The
+            # ``_output_error`` helper writes the message to stderr (text mode)
+            # or emits ``{error, code, message, source_id}`` to stdout (json
+            # mode) and raises ``SystemExit(1)``. See ``docs/cli-exit-codes.md``
+            # and the BREAKING entry in ``CHANGELOG.md`` (Unreleased → Changed).
+            #
+            # The trailing ``raise AssertionError`` is unreachable at runtime
+            # (``_output_error`` always raises) — it exists solely to narrow
+            # ``src`` from ``Source | None`` to ``Source`` for mypy without
+            # forcing a ``NoReturn`` annotation onto
+            # ``error_handler._output_error`` (which would touch a module the
+            # C1 spec says we must not).
+            if src is None:
+                _output_error(
+                    "Source not found",
+                    code="NOT_FOUND",
+                    json_output=json_output,
+                    exit_code=1,
+                    extra={"source_id": resolved_id, "notebook_id": nb_id_resolved},
+                )
+                raise AssertionError("unreachable")  # pragma: no cover
+
             if json_output:
-                # Phase 3 (C1) will change get-on-not-found to exit 1; for now
-                # the not-found branch still exits 0 to preserve current behavior
-                # — we just emit a structured JSON document instead of a plain
-                # "Source not found" line so automation can branch on the
-                # ``found`` field without text-scraping.
-                if src:
-                    data = {
-                        "source": {
-                            "id": src.id,
-                            "title": src.title,
-                            "type": str(src.kind),
-                            "url": src.url,
-                            "status": source_status_to_str(src.status),
-                            "status_id": src.status,
-                            "created_at": (src.created_at.isoformat() if src.created_at else None),
-                        },
-                        "found": True,
-                    }
-                else:
-                    data = {
-                        "source": None,
-                        "found": False,
-                        "source_id": resolved_id,
-                    }
+                data = {
+                    "source": {
+                        "id": src.id,
+                        "title": src.title,
+                        "type": str(src.kind),
+                        "url": src.url,
+                        "status": source_status_to_str(src.status),
+                        "status_id": src.status,
+                        "created_at": (src.created_at.isoformat() if src.created_at else None),
+                    },
+                    "found": True,
+                }
                 json_output_response(data)
                 return
 
-            if src:
-                console.print(f"[bold cyan]Source:[/bold cyan] {src.id}")
-                console.print(f"[bold]Title:[/bold] {src.title}")
-                console.print(f"[bold]Type:[/bold] {get_source_type_display(src.kind)}")
-                if src.url:
-                    console.print(f"[bold]URL:[/bold] {src.url}")
-                if src.created_at:
-                    console.print(
-                        f"[bold]Created:[/bold] {src.created_at.strftime('%Y-%m-%d %H:%M')}"
-                    )
-            else:
-                console.print("[yellow]Source not found[/yellow]")
+            console.print(f"[bold cyan]Source:[/bold cyan] {src.id}")
+            console.print(f"[bold]Title:[/bold] {src.title}")
+            console.print(f"[bold]Type:[/bold] {get_source_type_display(src.kind)}")
+            if src.url:
+                console.print(f"[bold]URL:[/bold] {src.url}")
+            if src.created_at:
+                console.print(f"[bold]Created:[/bold] {src.created_at.strftime('%Y-%m-%d %H:%M')}")
 
     return _run()
 
