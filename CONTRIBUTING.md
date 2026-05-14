@@ -80,6 +80,18 @@ pre-commit run --all-files                      # manual run on the whole tree (
 - **Accurate severity**: Claims of "critical" bugs must include evidence (stack trace, reproduction steps, affected users). Routine edge cases are not critical.
 - **Tested locally**: All PRs must include evidence of local testing. The PR template includes a checklist for this.
 
+### Dependency upper bounds
+
+Every runtime and `[project.optional-dependencies]` entry in `pyproject.toml` must have an upper bound — typically `<currentmajor + 1` (or `<currentminor + 1` for pre-1.0 packages like `httpx`). The bound protects downstream installs from a breaking new release that lands before we have time to test it.
+
+When you bump a cap (e.g. moving `pytest>=8.0,<10` to `pytest>=8.0,<11`):
+
+1. Run `uv lock --refresh` and `uv sync --frozen --extra browser --extra dev --extra markdown` locally.
+2. Run the full pre-commit one-liner above.
+3. Mention the upgrade rationale in the PR description.
+
+The `dependency-audit` workflow (`.github/workflows/dependency-audit.yml`) runs `pip-audit --strict` against the locked env on every push to `main` and nightly. It is currently in soft-launch mode (`continue-on-error: true`) and will be flipped to a hard merge gate after the first release cycle. New deps should still pass `pip-audit` cleanly when introduced.
+
 ---
 
 ## Documentation Rules for AI Agents
