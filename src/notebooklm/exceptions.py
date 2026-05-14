@@ -122,6 +122,16 @@ class NetworkError(NotebookLMError):
 class RPCError(NotebookLMError):
     """Base for RPC-specific failures after connection established.
 
+    Note:
+        A small number of domain-level exceptions also inherit from
+        :class:`RPCError` so that ``except RPCError`` keeps catching them at
+        transport-level call sites. Currently :class:`NotebookNotFoundError`
+        is one such case — the underlying RPC call succeeded but returned a
+        degenerate payload, and historic callers relied on ``except RPCError``
+        to handle it. When writing new ``except RPCError`` clauses, be aware
+        these domain errors may also flow through; catch the specific domain
+        type first if you want to handle it differently.
+
     Attributes:
         method_id: The RPC method ID (e.g., "abc123") for debugging.
         raw_response: First 500 chars of raw response for debugging.
@@ -442,16 +452,35 @@ class NotebookError(NotebookLMError):
     """Base for notebook operations."""
 
 
-class NotebookNotFoundError(NotebookError):
+class NotebookNotFoundError(RPCError, NotebookError):
     """Notebook not found.
+
+    Inherits from both :class:`RPCError` and :class:`NotebookError` so callers
+    can catch either base. The RPC base is what ``client.notebooks.get`` raises
+    when the server returns an empty / degenerate payload for a missing ID, so
+    ``except RPCError`` keeps working at call sites that handle transport-level
+    failures. ``except NotebookError`` continues to work at domain-level call
+    sites that don't care about the RPC layer.
 
     Attributes:
         notebook_id: The ID that was not found.
+        method_id: The RPC method ID (inherited from :class:`RPCError`).
+        raw_response: First 500 chars of the raw response, if any.
     """
 
-    def __init__(self, notebook_id: str):
+    def __init__(
+        self,
+        notebook_id: str,
+        *,
+        method_id: str | None = None,
+        raw_response: str | None = None,
+    ):
         self.notebook_id = notebook_id
-        super().__init__(f"Notebook not found: {notebook_id}")
+        super().__init__(
+            f"Notebook not found: {notebook_id}",
+            method_id=method_id,
+            raw_response=raw_response,
+        )
 
 
 class NotebookLimitError(NotebookError):

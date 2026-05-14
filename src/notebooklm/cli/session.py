@@ -40,6 +40,7 @@ from ..auth import (
 )
 from ..client import NotebookLMClient
 from ..config import get_base_host, get_base_url
+from ..exceptions import NotebookNotFoundError
 from ..io import atomic_write_json
 from ..paths import (
     get_browser_profile_dir,
@@ -101,6 +102,15 @@ def _connection_error_help() -> str:
         "  3. Wait a few minutes before retrying\n"
         f"  4. Check if {base_host} is accessible in your browser"
     )
+
+
+def _use_notebook_table() -> Table:
+    t = Table()
+    t.add_column("ID", style="cyan")
+    t.add_column("Title", style="green")
+    t.add_column("Owner")
+    t.add_column("Created", style="dim")
+    return t
 
 
 def _is_navigation_interrupted_error(error: str | Exception) -> bool:
@@ -1351,8 +1361,17 @@ def register_session_commands(cli):
 
     @cli.command("use")
     @click.argument("notebook_id")
+    @click.option(
+        "--force",
+        is_flag=True,
+        default=False,
+        help=(
+            "Skip the existence check and persist the notebook ID even if "
+            "verification fails. Use for offline work or debugging."
+        ),
+    )
     @click.pass_context
-    def use_notebook(ctx, notebook_id):
+    def use_notebook(ctx, notebook_id, force):
         """Set the current notebook context.
 
         Once set, all commands will use this notebook by default.
@@ -1360,60 +1379,79 @@ def register_session_commands(cli):
 
         Supports partial IDs - 'notebooklm use abc' matches 'abc123...'
 
+        By default, the notebook must exist on the server; a typo or
+        unreachable backend results in a non-zero exit and the saved
+        context is left untouched. Pass --force to bypass verification.
+
         \b
         Example:
           notebooklm use nb123
           notebooklm ask "what is this about?"   # Uses nb123
           notebooklm generate video "a fun explainer"  # Uses nb123
         """
+        # --force path: persist immediately without any RPC verification.
+        # Useful when the network is unavailable or for debugging.
+        if force:
+            set_current_notebook(notebook_id)
+            table = _use_notebook_table()
+            table.add_row(notebook_id, "(not verified — --force)", "-", "-")
+            console.print(table)
+            return
+
         try:
             auth = get_auth_tokens(ctx)
-
-            async def _get():
-                async with NotebookLMClient(auth) as client:
-                    # Resolve partial ID to full ID
-                    resolved_id = await resolve_notebook_id(client, notebook_id)
-                    nb = await client.notebooks.get(resolved_id)
-                    return nb, resolved_id
-
-            nb, resolved_id = run_async(_get())
-
-            created_str = nb.created_at.strftime("%Y-%m-%d") if nb.created_at else None
-            set_current_notebook(resolved_id, nb.title, nb.is_owner, created_str)
-
-            table = Table()
-            table.add_column("ID", style="cyan")
-            table.add_column("Title", style="green")
-            table.add_column("Owner")
-            table.add_column("Created", style="dim")
-
-            created = created_str or "-"
-            owner_status = "Owner" if nb.is_owner else "Shared"
-            table.add_row(nb.id, nb.title, owner_status, created)
-
-            console.print(table)
-
-        except FileNotFoundError:
-            set_current_notebook(notebook_id)
-            table = Table()
-            table.add_column("ID", style="cyan")
-            table.add_column("Title", style="green")
-            table.add_column("Owner")
-            table.add_column("Created", style="dim")
-            table.add_row(notebook_id, "-", "-", "-")
-            console.print(table)
+        except FileNotFoundError as exc:
+            # No auth file on disk — surface a helpful error rather than
+            # poisoning the saved context with an unverified ID.
+            raise click.ClickException(
+                "Cannot verify notebook without authentication. "
+                "Run 'notebooklm login' first, or pass --force to skip verification."
+            ) from exc
         except click.ClickException:
-            # Re-raise click exceptions (from resolve_notebook_id)
             raise
-        except Exception as e:
-            set_current_notebook(notebook_id)
-            table = Table()
-            table.add_column("ID", style="cyan")
-            table.add_column("Title", style="green")
-            table.add_column("Owner")
-            table.add_column("Created", style="dim")
-            table.add_row(notebook_id, f"Warning: {str(e)}", "-", "-")
-            console.print(table)
+
+        async def _get():
+            async with NotebookLMClient(auth) as client:
+                # Resolve partial ID to full ID
+                resolved_id = await resolve_notebook_id(client, notebook_id)
+                nb = await client.notebooks.get(resolved_id)
+                return nb, resolved_id
+
+        try:
+            nb, resolved_id = run_async(_get())
+        except click.ClickException:
+            # Re-raise click exceptions (from resolve_notebook_id — partial-id
+            # ambiguity or "no match"). These already exit non-zero with a
+            # clear message and never reach the persistence branch.
+            raise
+        except NotebookNotFoundError as exc:
+            # Server confirmed the notebook does not exist. Fail closed: do
+            # not persist anything to context.json, and exit 1 with a clear
+            # error.
+            raise click.ClickException(
+                f"Notebook {notebook_id!r} not found. "
+                "Run 'notebooklm list' to see available notebooks, "
+                "or pass --force to bypass verification."
+            ) from exc
+        except Exception as exc:
+            # All other failures (network errors, RPC errors, auth expiry,
+            # etc.) also fail closed — we cannot confirm the notebook exists,
+            # so refuse to persist. --force is the documented escape hatch.
+            raise click.ClickException(
+                f"Could not verify notebook {notebook_id!r}: {exc}. "
+                "Pass --force to persist without verification."
+            ) from exc
+
+        created_str = nb.created_at.strftime("%Y-%m-%d") if nb.created_at else None
+        set_current_notebook(resolved_id, nb.title, nb.is_owner, created_str)
+
+        table = _use_notebook_table()
+
+        created = created_str or "-"
+        owner_status = "Owner" if nb.is_owner else "Shared"
+        table.add_row(nb.id, nb.title, owner_status, created)
+
+        console.print(table)
 
     @cli.command("status")
     @click.option("--json", "json_output", is_flag=True, help="Output as JSON")

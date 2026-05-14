@@ -1042,17 +1042,41 @@ class TestUseCommand:
         # Should show resolved full ID
         assert "nb_full_id_123" in result.output or "Resolved Notebook" in result.output
 
-    def test_use_without_auth_sets_id_anyway(self, runner, mock_context_file):
-        """Test 'use' command sets ID even without auth file."""
+    def test_use_without_auth_fails_closed(self, runner, mock_context_file):
+        """'use' fails closed (exit 1) when no auth is available — fix for T3.D.
+
+        Pre-T3.D behavior persisted unverified IDs after auth failure, poisoning
+        saved state for downstream commands. The new contract: refuse to write
+        context.json and emit a clear "run notebooklm login" message.
+        """
         with patch(
             "notebooklm.cli.helpers.load_auth_from_storage",
             side_effect=FileNotFoundError("No auth"),
         ):
             result = runner.invoke(cli, ["use", "nb_noauth"])
 
-        # Should still set the context (with warning)
+        # Refuses to persist; surfaces a remediation hint.
+        assert result.exit_code == 1
+        assert not mock_context_file.exists()
+        assert (
+            "notebooklm login" in result.output.lower()
+            or "authentication" in result.output.lower()
+            or "--force" in result.output
+        )
+
+    def test_use_without_auth_force_persists(self, runner, mock_context_file):
+        """`use --force` bypasses verification, mirrors offline/debug path."""
+        with patch(
+            "notebooklm.cli.helpers.load_auth_from_storage",
+            side_effect=FileNotFoundError("No auth"),
+        ):
+            result = runner.invoke(cli, ["use", "--force", "nb_forced"])
+
         assert result.exit_code == 0
-        assert "nb_noauth" in result.output
+        assert "nb_forced" in result.output
+        assert mock_context_file.exists()
+        data = json.loads(mock_context_file.read_text())
+        assert data["notebook_id"] == "nb_forced"
 
     def test_use_shows_owner_status(self, runner, mock_auth, mock_context_file):
         """Test 'use' command displays ownership status correctly."""
@@ -1665,8 +1689,13 @@ class TestLoginLanguageSync:
 
 
 class TestSessionEdgeCases:
-    def test_use_handles_api_error_gracefully(self, runner, mock_auth, mock_context_file):
-        """Test 'use' command handles API errors gracefully."""
+    def test_use_handles_api_error_fails_closed(self, runner, mock_auth, mock_context_file):
+        """'use' fails closed when the API errors — fix for T3.D.
+
+        Pre-T3.D: an exception during ``client.notebooks.get`` was swallowed
+        and the unverified ID was persisted with a "Warning" tag, poisoning
+        downstream commands. New contract: exit 1, leave context.json untouched.
+        """
         with patch_main_cli_client() as mock_client_cls:
             mock_client = create_mock_client()
             mock_client.notebooks.get = AsyncMock(side_effect=Exception("API Error: Rate limited"))
@@ -1685,10 +1714,9 @@ class TestSessionEdgeCases:
 
                     result = runner.invoke(cli, ["use", "nb_error"])
 
-        # Should still set context with warning, not crash
-        assert result.exit_code == 0
-        # Error message should be shown
-        assert "Warning" in result.output or "Error" in result.output or "nb_error" in result.output
+        assert result.exit_code == 1
+        assert not mock_context_file.exists()
+        assert "API Error" in result.output or "Could not verify" in result.output
 
     def test_status_shows_shared_notebook_correctly(self, runner, mock_context_file):
         """Test status correctly shows shared (non-owner) notebooks."""

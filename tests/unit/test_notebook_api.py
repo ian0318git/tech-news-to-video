@@ -5,7 +5,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from notebooklm._notebooks import NotebooksAPI
-from notebooklm.exceptions import NetworkError, NotebookLimitError, RPCError
+from notebooklm.exceptions import (
+    NetworkError,
+    NotebookLimitError,
+    NotebookNotFoundError,
+    RPCError,
+)
 from notebooklm.rpc import RPCMethod
 from notebooklm.types import AccountLimits, Notebook
 
@@ -248,3 +253,91 @@ class TestCreateNotebookQuotaDetection:
             [None, [1, None, None, None, None, None, None, None, None, None, [1]]],
             source_path="/",
         )
+
+
+class TestGetNotebookFailsClosed:
+    """``NotebooksAPI.get`` raises ``NotebookNotFoundError`` on degenerate responses (T3.D).
+
+    The NotebookLM backend returns a *parseable but empty* payload for unknown
+    notebook IDs rather than a typed error. Pre-T3.D, ``get()`` happily returned
+    ``Notebook(id="", title="")`` and the CLI ``use`` command persisted that as
+    saved state. The post-fix contract: detect the degenerate shape and raise.
+    """
+
+    @pytest.mark.asyncio
+    async def test_get_returns_notebook_on_full_response(self):
+        api = _make_api()
+        # Realistic shape: [[title, ?, id, ?, ?, [None, False, ...]], ...]
+        api._core.rpc_call = AsyncMock(
+            return_value=[["My Notebook", None, "nb_real_123", None, None, [None, False]]]
+        )
+
+        notebook = await api.get("nb_real_123")
+
+        assert notebook.id == "nb_real_123"
+        assert notebook.title == "My Notebook"
+
+    @pytest.mark.asyncio
+    async def test_get_raises_on_empty_outer_list(self):
+        """Server returned ``[]`` — no notebook at all."""
+        api = _make_api()
+        api._core.rpc_call = AsyncMock(return_value=[])
+
+        with pytest.raises(NotebookNotFoundError) as exc_info:
+            await api.get("nb_missing")
+
+        assert exc_info.value.notebook_id == "nb_missing"
+        assert exc_info.value.method_id == RPCMethod.GET_NOTEBOOK.value
+
+    @pytest.mark.asyncio
+    async def test_get_raises_on_none_response(self):
+        api = _make_api()
+        api._core.rpc_call = AsyncMock(return_value=None)
+
+        with pytest.raises(NotebookNotFoundError):
+            await api.get("nb_missing")
+
+    @pytest.mark.asyncio
+    async def test_get_raises_on_degenerate_empty_inner(self):
+        """``[[]]`` — outer wrapper present but inner notebook payload empty."""
+        api = _make_api()
+        api._core.rpc_call = AsyncMock(return_value=[[]])
+
+        with pytest.raises(NotebookNotFoundError) as exc_info:
+            await api.get("nb_typo")
+
+        assert "nb_typo" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_get_raises_when_id_and_title_both_blank(self):
+        """Both id and title parsed to empty string → treat as not found."""
+        api = _make_api()
+        # Same shape as the happy path but with empty strings in both fields.
+        api._core.rpc_call = AsyncMock(return_value=[["", None, "", None, None, [None, False]]])
+
+        with pytest.raises(NotebookNotFoundError):
+            await api.get("nb_typo")
+
+    @pytest.mark.asyncio
+    async def test_get_succeeds_when_title_present_but_id_blank(self):
+        """Defensive: a present title alone is enough — not a degenerate payload.
+
+        We only treat the response as "not found" when BOTH id and title are
+        blank, so a parser-quirk that strips the id but keeps the title still
+        returns a Notebook rather than raising.
+        """
+        api = _make_api()
+        api._core.rpc_call = AsyncMock(
+            return_value=[["Title Only", None, "", None, None, [None, False]]]
+        )
+
+        notebook = await api.get("nb_partial")
+
+        assert notebook.title == "Title Only"
+
+    def test_notebook_not_found_error_is_rpc_error(self):
+        """``NotebookNotFoundError`` must be catchable as ``RPCError`` (T3.D contract)."""
+        assert issubclass(NotebookNotFoundError, RPCError)
+        err = NotebookNotFoundError("nb_x", method_id="rwIQyf")
+        assert err.notebook_id == "nb_x"
+        assert err.method_id == "rwIQyf"
