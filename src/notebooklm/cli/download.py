@@ -51,6 +51,11 @@ class ArtifactConfig(TypedDict):
     default_dir: str
 
 
+# Format → extension map for interactive artifacts (quiz, flashcards) and any
+# other download type that exposes a `--format` flag with text-based outputs.
+FORMAT_EXTENSIONS = {"json": ".json", "markdown": ".md", "html": ".html"}
+
+
 # Artifact type configurations for download commands
 ARTIFACT_CONFIGS: dict[str, ArtifactConfig] = {
     "audio": {"kind": ArtifactType.AUDIO, "extension": ".mp3", "default_dir": "./audio"},
@@ -71,6 +76,18 @@ ARTIFACT_CONFIGS: dict[str, ArtifactConfig] = {
         "kind": ArtifactType.DATA_TABLE,
         "extension": ".csv",
         "default_dir": "./data-tables",
+    },
+    # Quiz and flashcards default to JSON; --format overrides extension at runtime
+    # in _download_artifacts_generic (mirrors the slide-deck pdf/pptx pattern).
+    "quiz": {
+        "kind": ArtifactType.QUIZ,
+        "extension": ".json",
+        "default_dir": "./quizzes",
+    },
+    "flashcards": {
+        "kind": ArtifactType.FLASHCARDS,
+        "extension": ".json",
+        "default_dir": "./flashcards",
     },
 }
 
@@ -129,6 +146,7 @@ async def _download_artifacts_generic(
     force: bool,
     no_clobber: bool,
     slide_format: str = "pdf",
+    output_format: str = "json",
 ) -> dict:
     """
     Generic artifact download implementation.
@@ -183,6 +201,17 @@ async def _download_artifacts_generic(
                 err=True,
             )
 
+    # Adjust extension for quiz/flashcards based on --format (json/markdown/html).
+    # Same pattern as the slide-deck pdf/pptx override above.
+    if artifact_type_name in ("quiz", "flashcards"):
+        file_extension = FORMAT_EXTENSIONS[output_format]
+        if output_path and not output_path.endswith(file_extension):
+            click.echo(
+                f"Warning: output path '{output_path}' does not end with "
+                f"'{file_extension}' but --format {output_format} was requested.",
+                err=True,
+            )
+
     async def _download() -> dict[str, Any]:
         async with NotebookLMClient(auth) as client:
             nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
@@ -196,6 +225,8 @@ async def _download_artifacts_generic(
                 "report": client.artifacts.download_report,
                 "mind-map": client.artifacts.download_mind_map,
                 "data-table": client.artifacts.download_data_table,
+                "quiz": client.artifacts.download_quiz,
+                "flashcards": client.artifacts.download_flashcards,
             }
             download_fn: _DownloadFn | None = download_methods.get(artifact_type_name)
             if not download_fn:
@@ -204,6 +235,15 @@ async def _download_artifacts_generic(
             # For slide-deck with PPTX format, bind output_format="pptx"
             if artifact_type_name == "slide-deck" and slide_format == "pptx":
                 download_fn = partial(client.artifacts.download_slide_deck, output_format="pptx")
+
+            # For quiz/flashcards, always bind --format so the underlying API
+            # serialises the requested representation (json/markdown/html).
+            if artifact_type_name == "quiz":
+                download_fn = partial(client.artifacts.download_quiz, output_format=output_format)
+            elif artifact_type_name == "flashcards":
+                download_fn = partial(
+                    client.artifacts.download_flashcards, output_format=output_format
+                )
 
             # Fetch and filter artifacts by type and completed status
             type_artifacts = await _get_completed_artifacts_as_dicts(
@@ -641,9 +681,6 @@ def download_infographic(ctx, **kwargs):
     _run_artifact_download(ctx, "infographic", **kwargs)
 
 
-FORMAT_EXTENSIONS = {"json": ".json", "markdown": ".md", "html": ".html"}
-
-
 def _run_artifact_download(ctx, artifact_type: str, **kwargs) -> None:
     """Execute download for a specific artifact type.
 
@@ -789,111 +826,101 @@ def download_data_table(ctx, **kwargs):
     _run_artifact_download(ctx, "data-table", **kwargs)
 
 
-async def _download_interactive(
-    ctx,
-    artifact_type: str,
-    output_path: str | None,
-    notebook_id: str | None,
-    output_format: str,
-    artifact_id: str | None,
-) -> str:
-    """Download quiz or flashcard artifact.
-
-    Args:
-        ctx: Click context.
-        artifact_type: Either "quiz" or "flashcards".
-        output_path: User-specified output path.
-        notebook_id: Notebook ID (full or partial; resolved via context if None).
-        output_format: Output format - json, markdown, or html.
-        artifact_id: Specific artifact ID.
-
-    Returns:
-        Path to downloaded file.
-    """
-    nb_id = require_notebook(notebook_id)
-    storage_path = ctx.obj.get("storage_path") if ctx.obj else None
-    profile = ctx.obj.get("profile") if ctx.obj else None
-    from ..auth import AuthTokens
-
-    auth = await AuthTokens.from_storage(storage_path, profile=profile)
-
-    async with NotebookLMClient(auth) as client:
-        nb_id_resolved = await resolve_notebook_id(client, nb_id)
-        ext = FORMAT_EXTENSIONS[output_format]
-        path = output_path or f"{artifact_type}{ext}"
-
-        resolved_artifact_id = artifact_id
-        if artifact_id:
-            kind = ArtifactType.QUIZ if artifact_type == "quiz" else ArtifactType.FLASHCARDS
-            type_artifacts = await _get_completed_artifacts_as_dicts(client, nb_id_resolved, kind)
-            resolved_artifact_id = resolve_partial_artifact_id(type_artifacts, artifact_id)
-
-        if artifact_type == "quiz":
-            return await client.artifacts.download_quiz(
-                nb_id_resolved, path, artifact_id=resolved_artifact_id, output_format=output_format
-            )
-        return await client.artifacts.download_flashcards(
-            nb_id_resolved, path, artifact_id=resolved_artifact_id, output_format=output_format
-        )
-
-
 @download.command("quiz")
 @click.argument("output_path", required=False, type=click.Path())
 @notebook_option
+@click.option("--latest", is_flag=True, help="Download latest (default behavior)")
+@click.option("--earliest", is_flag=True, help="Download earliest")
+@click.option("--all", "download_all", is_flag=True, help="Download all artifacts")
+@click.option("--name", help="Filter by artifact title (fuzzy match)")
+@click.option("-a", "--artifact", "artifact_id", help="Select by artifact ID")
+@click.option("--json", "json_output", is_flag=True, help="Output JSON instead of text")
+@click.option("--dry-run", is_flag=True, help="Preview without downloading")
+@click.option("--force", is_flag=True, help="Overwrite existing files")
+@click.option("--no-clobber", is_flag=True, help="Skip if file exists")
 @click.option(
     "--format",
     "output_format",
     type=click.Choice(["json", "markdown", "html"]),
     default="json",
-    help="Output format",
+    help="Output format: json (default), markdown, or html",
 )
-@click.option("-a", "--artifact", "artifact_id", help="Select by artifact ID")
 @click.pass_context
-def download_quiz_cmd(ctx, output_path, notebook_id, output_format, artifact_id):
+def download_quiz_cmd(ctx, **kwargs):
     """Download quiz questions.
 
     \b
     Examples:
+      # Download latest quiz to default filename
+      notebooklm download quiz
+
+      # Download to specific path
       notebooklm download quiz quiz.json
+
+      # Download as markdown or html
       notebooklm download quiz --format markdown quiz.md
       notebooklm download quiz --format html quiz.html
+
+      # Download all quizzes to directory
+      notebooklm download quiz --all ./quizzes/
+
+      # Download specific artifact by name
+      notebooklm download quiz --name "chapter 3"
+
+      # Preview without downloading
+      notebooklm download quiz --all --dry-run
+
+      # Machine-readable output
+      notebooklm download quiz --json
     """
-    try:
-        result = run_async(
-            _download_interactive(ctx, "quiz", output_path, notebook_id, output_format, artifact_id)
-        )
-        console.print(f"[green]Downloaded quiz to:[/green] {result}")
-    except Exception as e:
-        handle_error(e)
+    _run_artifact_download(ctx, "quiz", **kwargs)
 
 
 @download.command("flashcards")
 @click.argument("output_path", required=False, type=click.Path())
 @notebook_option
+@click.option("--latest", is_flag=True, help="Download latest (default behavior)")
+@click.option("--earliest", is_flag=True, help="Download earliest")
+@click.option("--all", "download_all", is_flag=True, help="Download all artifacts")
+@click.option("--name", help="Filter by artifact title (fuzzy match)")
+@click.option("-a", "--artifact", "artifact_id", help="Select by artifact ID")
+@click.option("--json", "json_output", is_flag=True, help="Output JSON instead of text")
+@click.option("--dry-run", is_flag=True, help="Preview without downloading")
+@click.option("--force", is_flag=True, help="Overwrite existing files")
+@click.option("--no-clobber", is_flag=True, help="Skip if file exists")
 @click.option(
     "--format",
     "output_format",
     type=click.Choice(["json", "markdown", "html"]),
     default="json",
-    help="Output format",
+    help="Output format: json (default), markdown, or html",
 )
-@click.option("-a", "--artifact", "artifact_id", help="Select by artifact ID")
 @click.pass_context
-def download_flashcards_cmd(ctx, output_path, notebook_id, output_format, artifact_id):
+def download_flashcards_cmd(ctx, **kwargs):
     """Download flashcard deck.
 
     \b
     Examples:
+      # Download latest flashcards to default filename
+      notebooklm download flashcards
+
+      # Download to specific path
       notebooklm download flashcards cards.json
+
+      # Download as markdown or html
       notebooklm download flashcards --format markdown cards.md
       notebooklm download flashcards --format html cards.html
+
+      # Download all flashcard decks to directory
+      notebooklm download flashcards --all ./flashcards/
+
+      # Download specific artifact by name
+      notebooklm download flashcards --name "chapter 3"
+
+      # Preview without downloading
+      notebooklm download flashcards --all --dry-run
+
+      # Machine-readable output
+      notebooklm download flashcards --json
     """
-    try:
-        result = run_async(
-            _download_interactive(
-                ctx, "flashcards", output_path, notebook_id, output_format, artifact_id
-            )
-        )
-        console.print(f"[green]Downloaded flashcards to:[/green] {result}")
-    except Exception as e:
-        handle_error(e)
+    _run_artifact_download(ctx, "flashcards", **kwargs)
