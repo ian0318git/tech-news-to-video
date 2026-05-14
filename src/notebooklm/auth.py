@@ -199,51 +199,88 @@ def _validate_required_cookies(
             )
 
 
-# Cookie domains to extract from storage state.
+# Cookie domains we extract / accept by default.
 #
-# Includes:
-#   - notebooklm.google.com (the API host)
-#   - .google.com / accounts.google.com (auth + token refresh)
-#   - .googleusercontent.com (authenticated media downloads)
-#   - sibling Google products (YouTube, Drive, Docs, myaccount, mail) so future
-#     auth/rotation flows that traverse those domains have cookies available.
-#     See issue #360 for the rationale; these are not load-bearing in any
-#     current code path but make the allowlist symmetric with what a logged-in
-#     browser session actually carries.
+# Empirical justification (T5.G): traced cassettes
+# (``tests/cassettes/*.yaml``) and the live auth-refresh path. Only the
+# following domains are actually exercised during login + token refresh +
+# source-add + chat-ask flows:
+#   - ``notebooklm.google.com`` (the API host — all CLI RPCs land here)
+#   - ``.google.com`` (carries ``SID``/``HSID``/``SSID``/etc.)
+#   - ``accounts.google.com`` (token refresh + ``RotateCookies`` endpoint at
+#     :data:`KEEPALIVE_ROTATE_URL`)
+#   - ``.googleusercontent.com`` (authenticated media downloads — audio /
+#     infographic / slide assets)
+#   - ``drive.google.com`` (Drive-source ingest follows redirects through
+#     here; kept in REQUIRED for source-add safety)
 #
-# This set is also fed verbatim to ``rookiepy.load(domains=...)`` by
-# ``_login_with_browser_cookies``, so adding a domain here automatically
-# extends what we ask the browser for at login time.
-ALLOWED_COOKIE_DOMAINS = {
-    ".google.com",
-    "google.com",  # Host-only Domain=google.com cookies (rare but possible)
-    # Playwright storage_state may preserve the leading dot for NotebookLM cookies.
-    ".notebooklm.google.com",
-    "notebooklm.google.com",
-    ".notebooklm.cloud.google.com",
-    "notebooklm.cloud.google.com",
-    ".googleusercontent.com",
-    "accounts.google.com",  # Required for token refresh redirects
-    ".accounts.google.com",  # http.cookiejar may normalize Domain=accounts.google.com
-    # Sibling Google products — auth/rotation flows may traverse these.
-    # Both dotted and non-dotted variants are listed so that http.cookiejar
-    # normalization (which can add a leading dot) doesn't drop a cookie at the
-    # next extraction; same defensive pattern as accounts.google.com above.
-    ".youtube.com",
-    "youtube.com",
-    "accounts.youtube.com",
-    ".accounts.youtube.com",
-    "drive.google.com",
-    ".drive.google.com",
-    "docs.google.com",
-    ".docs.google.com",
-    "myaccount.google.com",
-    ".myaccount.google.com",
-    # Optional — not load-bearing in any current flow, but kept for symmetry
-    # with what a logged-in browser session actually holds.
-    "mail.google.com",
-    ".mail.google.com",
+# YouTube / Docs / Mail / myaccount cookies do NOT appear in any traced
+# flow. They are now :data:`OPTIONAL_COOKIE_DOMAINS` — opted in via
+# ``notebooklm login --include-domains=...``. This narrows the blast
+# radius if ``storage_state.json`` is ever leaked (synthesis K15).
+#
+# REQUIRED is also fed verbatim to ``rookiepy.load(domains=...)`` by
+# ``_login_with_browser_cookies`` (via
+# :func:`notebooklm.cli.session._build_google_cookie_domains`); adding a
+# domain here automatically extends what we ask the browser for at login.
+# This is the single load-bearing T5.G control: blast-radius reduction
+# is enforced at extraction time (what rookiepy returns), not at the
+# runtime gate, which stays permissive over the REQUIRED ∪ OPTIONAL
+# union so that ``--include-domains=...`` cookies survive downstream
+# filters (see :func:`_is_allowed_cookie_domain`).
+REQUIRED_COOKIE_DOMAINS: frozenset[str] = frozenset(
+    {
+        ".google.com",
+        "google.com",  # Host-only Domain=google.com cookies (rare but possible)
+        # Playwright storage_state may preserve the leading dot for NotebookLM cookies.
+        ".notebooklm.google.com",
+        "notebooklm.google.com",
+        ".notebooklm.cloud.google.com",
+        "notebooklm.cloud.google.com",
+        ".googleusercontent.com",
+        "accounts.google.com",  # Required for token refresh + RotateCookies
+        ".accounts.google.com",  # http.cookiejar may normalize Domain=accounts.google.com
+        # Drive-source ingest follows redirects through drive.google.com.
+        # Both dotted and non-dotted variants are listed so that
+        # http.cookiejar normalization (which can add a leading dot) doesn't
+        # drop a cookie at the next extraction; same defensive pattern as
+        # accounts.google.com above.
+        "drive.google.com",
+        ".drive.google.com",
+    }
+)
+
+# Sibling Google product domains — NOT exercised by any current code path
+# but historically extracted "for symmetry with a logged-in browser session"
+# (issue #360). Now opt-in via ``--include-domains=...`` to reduce
+# storage_state.json blast radius. The keys here (``youtube``, ``docs``,
+# ``myaccount``, ``mail``) are also the labels accepted by ``--include-domains``.
+#
+# Both dotted and non-dotted variants are listed so that http.cookiejar
+# normalization (which can add a leading dot) doesn't drop a cookie at the
+# next extraction.
+OPTIONAL_COOKIE_DOMAINS_BY_LABEL: dict[str, frozenset[str]] = {
+    "youtube": frozenset(
+        {
+            ".youtube.com",
+            "youtube.com",
+            "accounts.youtube.com",
+            ".accounts.youtube.com",
+        }
+    ),
+    "docs": frozenset({"docs.google.com", ".docs.google.com"}),
+    "myaccount": frozenset({"myaccount.google.com", ".myaccount.google.com"}),
+    "mail": frozenset({"mail.google.com", ".mail.google.com"}),
 }
+
+OPTIONAL_COOKIE_DOMAINS: frozenset[str] = frozenset().union(
+    *OPTIONAL_COOKIE_DOMAINS_BY_LABEL.values()
+)
+
+# Backward-compatible union — preserves the old constant name so external
+# imports keep working. Internal code should prefer ``REQUIRED_*`` /
+# ``OPTIONAL_*`` so the security tier is explicit at the call site.
+ALLOWED_COOKIE_DOMAINS: frozenset[str] = REQUIRED_COOKIE_DOMAINS | OPTIONAL_COOKIE_DOMAINS
 
 # Regional Google ccTLDs where Google may set auth cookies
 # Users in these regions may have SID cookies on regional domains instead of .google.com
@@ -610,8 +647,9 @@ def _is_allowed_auth_domain(domain: str) -> bool:
     and download-cookie loading (and the persistence path that filters which
     cookies get saved back) share a single allowlist policy:
 
-    1. Exact match against :data:`ALLOWED_COOKIE_DOMAINS` (covers the API host,
-       sibling Google products like YouTube/Drive/Docs/myaccount, and the
+    1. Exact match against :data:`REQUIRED_COOKIE_DOMAINS` (covers the API
+       host, ``.google.com`` / ``accounts.google.com`` /
+       ``.googleusercontent.com`` / ``drive.google.com``, and the
        leading-dot variants ``http.cookiejar`` may normalize to).
     2. Regional Google ccTLDs (``.google.com.sg``, ``.google.co.uk``,
        ``.google.de``, …) where SID cookies may be set for users in those
@@ -623,7 +661,12 @@ def _is_allowed_auth_domain(domain: str) -> bool:
     The previous strict / broad split (#334 / fea8315) created an asymmetry
     where ``save_cookies_to_storage`` would persist cookies that the next
     extraction would silently drop. Issue #360 collapsed both filters into
-    this single policy.
+    this single policy. T5.G narrows the *extraction* surface (rookiepy
+    only requests :data:`REQUIRED_COOKIE_DOMAINS` by default, so YouTube
+    cookies are never written to ``storage_state.json`` unless the user
+    opts in via ``--include-domains=youtube``); the runtime gate stays
+    permissive over the full :data:`ALLOWED_COOKIE_DOMAINS` union so that
+    opted-in cookies survive the downstream filters.
 
     Args:
         domain: Cookie domain to check (e.g., '.google.com', '.google.com.sg')
@@ -1379,17 +1422,18 @@ def load_auth_from_storage(path: Path | None = None) -> dict[str, str]:
 def _is_allowed_cookie_domain(domain: str) -> bool:
     """Canonical cookie-domain allowlist for both auth and downloads.
 
-    This is the single source of truth for "is this cookie domain one we
-    accept?". Both the auth-extraction path and the download path go through
-    here — :func:`_is_allowed_auth_domain` is a thin alias preserved for
-    call-site readability. See issue #360 for why the split was collapsed.
+    Single source of truth for "is this cookie domain one we accept at
+    runtime?". Both the auth-extraction path and the download path go
+    through here — :func:`_is_allowed_auth_domain` is a thin alias
+    preserved for call-site readability. See issue #360 for why the split
+    was collapsed.
 
     A domain is allowed if any of the following holds:
 
-    1. Exact match against :data:`ALLOWED_COOKIE_DOMAINS` (the API host,
-       sibling Google products like ``.youtube.com`` / ``drive.google.com`` /
-       ``docs.google.com`` / ``myaccount.google.com``, ``accounts.google.com``,
-       and the leading-dot variants ``http.cookiejar`` may normalize to).
+    1. Exact match against :data:`REQUIRED_COOKIE_DOMAINS` (the API host,
+       ``.google.com``, ``accounts.google.com``, ``.googleusercontent.com``,
+       ``drive.google.com``, and the leading-dot variants ``http.cookiejar``
+       may normalize to).
     2. Valid Google domain via :func:`_is_google_domain` (regional ccTLDs:
        ``.google.com.sg``, ``.google.co.uk``, ``.google.de``, …).
     3. Subdomain of ``.google.com``, ``.googleusercontent.com``, or
@@ -1399,13 +1443,27 @@ def _is_allowed_cookie_domain(domain: str) -> bool:
     The leading-dot suffix check ensures lookalikes like ``evil-google.com``
     are rejected.
 
+    Note (T5.G): the runtime gate consults the
+    :data:`ALLOWED_COOKIE_DOMAINS` union (REQUIRED ∪ OPTIONAL). The
+    blast-radius reduction is enforced at **extraction time** —
+    ``_build_google_cookie_domains`` defaults to
+    :data:`REQUIRED_COOKIE_DOMAINS` only, so rookiepy never returns
+    sibling-product cookies (e.g. ``.youtube.com``) unless the user
+    opts in via ``--include-domains=...``. The runtime gate must stay
+    permissive over the full union so that opted-in cookies survive
+    the downstream filters in :func:`convert_rookiepy_cookies_to_storage_state`,
+    :func:`extract_cookies_with_domains`, and
+    :func:`build_httpx_cookies_from_storage`.
+
     Args:
         domain: Cookie domain to check (e.g., '.google.com', 'lh3.google.com')
 
     Returns:
         True if domain is allowed for auth/download cookies.
     """
-    # Exact match against the primary allowlist
+    # Exact match against the union of REQUIRED + OPTIONAL. Anything that
+    # could have been validly opted in via ``--include-domains`` at
+    # extraction time must pass this gate at runtime (T5.G).
     if domain in ALLOWED_COOKIE_DOMAINS:
         return True
 
