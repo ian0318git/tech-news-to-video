@@ -2105,15 +2105,15 @@ class TestLoginBrowserCookies:
         with (
             patch.dict("sys.modules", {"rookiepy": mock_rookiepy}),
             patch(
-                "notebooklm._firefox_containers.find_firefox_profile_path",
+                "notebooklm.cli._firefox_containers.find_firefox_profile_path",
                 return_value=tmp_path / "ff_profile",
             ),
             patch(
-                "notebooklm._firefox_containers.resolve_container_id",
+                "notebooklm.cli._firefox_containers.resolve_container_id",
                 return_value=2,
             ),
             patch(
-                "notebooklm._firefox_containers.extract_firefox_container_cookies",
+                "notebooklm.cli._firefox_containers.extract_firefox_container_cookies",
                 return_value=mock_cookies,
             ) as mock_extract,
             patch("notebooklm.cli.session.get_storage_path", return_value=storage_file),
@@ -2162,11 +2162,11 @@ class TestLoginBrowserCookies:
         with (
             patch.dict("sys.modules", {"rookiepy": MagicMock()}),
             patch(
-                "notebooklm._firefox_containers.find_firefox_profile_path",
+                "notebooklm.cli._firefox_containers.find_firefox_profile_path",
                 return_value=tmp_path / "ff_profile",
             ),
             patch(
-                "notebooklm._firefox_containers.extract_firefox_container_cookies",
+                "notebooklm.cli._firefox_containers.extract_firefox_container_cookies",
                 return_value=mock_cookies,
             ) as mock_extract,
             patch("notebooklm.cli.session.get_storage_path", return_value=storage_file),
@@ -2190,11 +2190,11 @@ class TestLoginBrowserCookies:
         with (
             patch.dict("sys.modules", {"rookiepy": MagicMock()}),
             patch(
-                "notebooklm._firefox_containers.find_firefox_profile_path",
+                "notebooklm.cli._firefox_containers.find_firefox_profile_path",
                 return_value=tmp_path / "ff_profile",
             ),
             patch(
-                "notebooklm._firefox_containers.resolve_container_id",
+                "notebooklm.cli._firefox_containers.resolve_container_id",
                 side_effect=ValueError(
                     "Firefox container 'Nope' not found. Available containers: 'Work', 'Personal'."
                 ),
@@ -2214,7 +2214,7 @@ class TestLoginBrowserCookies:
         with (
             patch.dict("sys.modules", {"rookiepy": MagicMock()}),
             patch(
-                "notebooklm._firefox_containers.find_firefox_profile_path",
+                "notebooklm.cli._firefox_containers.find_firefox_profile_path",
                 return_value=None,
             ),
             patch(
@@ -2276,11 +2276,11 @@ class TestLoginBrowserCookies:
         with (
             patch.dict("sys.modules", {"rookiepy": mock_rookiepy}),
             patch(
-                "notebooklm._firefox_containers.find_firefox_profile_path",
+                "notebooklm.cli._firefox_containers.find_firefox_profile_path",
                 return_value=tmp_path / "ff_profile",
             ),
             patch(
-                "notebooklm._firefox_containers.has_container_cookies_in_use",
+                "notebooklm.cli._firefox_containers.has_container_cookies_in_use",
                 return_value=True,
             ),
             patch("notebooklm.cli.session.get_storage_path", return_value=storage_file),
@@ -2325,11 +2325,11 @@ class TestLoginBrowserCookies:
         with (
             patch.dict("sys.modules", {"rookiepy": mock_rookiepy}),
             patch(
-                "notebooklm._firefox_containers.find_firefox_profile_path",
+                "notebooklm.cli._firefox_containers.find_firefox_profile_path",
                 return_value=tmp_path / "ff_profile",
             ),
             patch(
-                "notebooklm._firefox_containers.has_container_cookies_in_use",
+                "notebooklm.cli._firefox_containers.has_container_cookies_in_use",
                 return_value=False,
             ),
             patch("notebooklm.cli.session.get_storage_path", return_value=storage_file),

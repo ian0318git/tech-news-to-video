@@ -519,7 +519,7 @@ def _read_firefox_container_cookies(
     Bypasses rookiepy because rookiepy 0.5.6 does not filter on
     ``originAttributes`` and silently merges every container's cookies (see
     issue #366 / #367). We talk to ``cookies.sqlite`` directly via the
-    helpers in :mod:`notebooklm._firefox_containers`.
+    helpers in :mod:`notebooklm.cli._firefox_containers`.
 
     Args:
         container_spec: The part after ``firefox::`` (e.g. ``"Work"`` or
@@ -535,7 +535,7 @@ def _read_firefox_container_cookies(
         SystemExit: With a friendly message on any failure (no Firefox
             installed, unknown container, locked DB, …).
     """
-    from .._firefox_containers import (
+    from ._firefox_containers import (
         extract_firefox_container_cookies,
         find_firefox_profile_path,
         resolve_container_id,
@@ -593,7 +593,7 @@ def _maybe_warn_firefox_containers_in_use() -> None:
 
     Any probe failure is swallowed inside ``has_container_cookies_in_use``.
     """
-    from .._firefox_containers import (
+    from ._firefox_containers import (
         find_firefox_profile_path,
         has_container_cookies_in_use,
     )

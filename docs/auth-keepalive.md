@@ -348,7 +348,7 @@ Container names match against `containers.json` adjacent to
 matches the stock `userContextPersonal.label`). The extractor bypasses
 `rookiepy` entirely and talks to `cookies.sqlite` directly via
 `sqlite3` (the DB is copied to a temp dir first, so a running Firefox
-doesn't lock us out). See `src/notebooklm/_firefox_containers.py` for
+doesn't lock us out). See `src/notebooklm/cli/_firefox_containers.py` for
 the implementation.
 
 ### 2.5 Three timers people confuse

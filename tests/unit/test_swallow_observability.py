@@ -217,8 +217,8 @@ def _file_contains_best_effort_after_except(filepath: Path, except_line: int) ->
 # (relative-to-SRC_ROOT path, except-line). Lines refer to the `except ...:`
 # statement; the helper scans the 4 lines following it for `# best-effort:`.
 _SILENT_SITES = [
-    ("_firefox_containers.py", 133),
-    ("_firefox_containers.py", 363),
+    ("cli/_firefox_containers.py", 133),
+    ("cli/_firefox_containers.py", 364),
     ("cli/helpers.py", 555),
     ("notebooklm_cli.py", 66),
 ]

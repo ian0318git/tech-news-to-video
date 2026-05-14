@@ -2,7 +2,7 @@
 
 These tests build a synthetic ``cookies.sqlite`` mirroring Firefox's
 ``moz_cookies`` schema and prove the three-branch SELECT in
-:mod:`notebooklm._firefox_containers` returns the right rows per mode
+:mod:`notebooklm.cli._firefox_containers` returns the right rows per mode
 (``firefox::<name>`` / ``firefox::none`` / unscoped fall-through).
 
 Reference for the Firefox schema:
@@ -19,7 +19,7 @@ from typing import Any
 
 import pytest
 
-from notebooklm._firefox_containers import (
+from notebooklm.cli._firefox_containers import (
     extract_firefox_container_cookies,
     find_firefox_profile_path,
     has_container_cookies_in_use,
@@ -521,7 +521,7 @@ class TestFindFirefoxProfilePath:
             "StartWithLastProfile=1\n",
         )
         monkeypatch.setattr(
-            "notebooklm._firefox_containers._firefox_root_dirs",
+            "notebooklm.cli._firefox_containers._firefox_root_dirs",
             lambda: [root],
         )
         assert find_firefox_profile_path() == profile
@@ -535,7 +535,7 @@ class TestFindFirefoxProfilePath:
             "[Profile0]\nName=default\nIsRelative=1\nPath=Profiles/xyz.default\nDefault=1\n",
         )
         monkeypatch.setattr(
-            "notebooklm._firefox_containers._firefox_root_dirs",
+            "notebooklm.cli._firefox_containers._firefox_root_dirs",
             lambda: [root],
         )
         assert find_firefox_profile_path() == profile.resolve()
@@ -551,14 +551,14 @@ class TestFindFirefoxProfilePath:
             "[Profile0]\nName=only\nIsRelative=1\nPath=Profiles/only.default\n",
         )
         monkeypatch.setattr(
-            "notebooklm._firefox_containers._firefox_root_dirs",
+            "notebooklm.cli._firefox_containers._firefox_root_dirs",
             lambda: [root],
         )
         assert find_firefox_profile_path() == profile.resolve()
 
     def test_returns_none_when_no_firefox(self, tmp_path, monkeypatch):
         monkeypatch.setattr(
-            "notebooklm._firefox_containers._firefox_root_dirs",
+            "notebooklm.cli._firefox_containers._firefox_root_dirs",
             lambda: [tmp_path / "DoesNotExist"],
         )
         assert find_firefox_profile_path() is None
@@ -568,7 +568,7 @@ class TestFindFirefoxProfilePath:
         root.mkdir()
         (root / "profiles.ini").write_text("\x00not\x00ini", encoding="utf-8")
         monkeypatch.setattr(
-            "notebooklm._firefox_containers._firefox_root_dirs",
+            "notebooklm.cli._firefox_containers._firefox_root_dirs",
             lambda: [root],
         )
         # We deliberately swallow parser errors and try the next root; with
