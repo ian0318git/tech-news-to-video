@@ -25,7 +25,7 @@ from .helpers import (
     set_current_conversation,
     with_client,
 )
-from .options import notebook_option, prompt_file_option
+from .options import json_option, notebook_option, prompt_file_option
 
 logger = logging.getLogger(__name__)
 
@@ -229,8 +229,11 @@ def register_chat_commands(cli):
         default=None,
         help="Response verbosity",
     )
+    @json_option
     @with_client
-    def configure_cmd(ctx, notebook_id, chat_mode, persona, response_length, client_auth):
+    def configure_cmd(
+        ctx, notebook_id, chat_mode, persona, response_length, json_output, client_auth
+    ):
         """Configure chat persona and response settings.
 
         \b
@@ -245,6 +248,7 @@ def register_chat_commands(cli):
           notebooklm configure --mode learning-guide
           notebooklm configure --persona "Act as a chemistry tutor"
           notebooklm configure --mode detailed --response-length longer
+          notebooklm configure --mode concise --json   # Machine-readable output
         """
         nb_id = require_notebook(notebook_id)
 
@@ -252,7 +256,7 @@ def register_chat_commands(cli):
             from ..types import ChatGoal, ChatResponseLength
 
             async with NotebookLMClient(client_auth) as client:
-                nb_id_resolved = await resolve_notebook_id(client, nb_id)
+                nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
                 if chat_mode:
                     mode_map = {
                         "default": ChatMode.DEFAULT,
@@ -261,6 +265,15 @@ def register_chat_commands(cli):
                         "detailed": ChatMode.DETAILED,
                     }
                     await client.chat.set_mode(nb_id_resolved, mode_map[chat_mode])
+                    if json_output:
+                        json_output_response(
+                            {
+                                "notebook_id": nb_id_resolved,
+                                "mode": chat_mode,
+                                "configured": True,
+                            }
+                        )
+                        return
                     console.print(f"[green]Chat mode set to: {chat_mode}[/green]")
                     return
 
@@ -277,6 +290,22 @@ def register_chat_commands(cli):
                 await client.chat.configure(
                     nb_id_resolved, goal=goal, response_length=length, custom_prompt=persona
                 )
+
+                if json_output:
+                    json_output_response(
+                        {
+                            "notebook_id": nb_id_resolved,
+                            "mode": None,
+                            # Lowercase enum name (e.g. "custom") for a stable,
+                            # human-readable JSON contract. The underlying RPC
+                            # integer is an implementation detail.
+                            "goal": goal.name.lower() if goal else None,
+                            "persona": persona,
+                            "response_length": response_length,
+                            "configured": True,
+                        }
+                    )
+                    return
 
                 parts = []
                 if persona:

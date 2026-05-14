@@ -102,6 +102,7 @@ See [Configuration](configuration.md) for details on environment variables and C
 | `ask --save-as-note` | Save response as a note | `notebooklm ask "Explain X" --save-as-note` |
 | `ask --save-as-note --note-title` | Save response with custom note title | `notebooklm ask "Explain X" --save-as-note --note-title "Title"` |
 | `configure` | Set persona/mode | `notebooklm configure --mode learning-guide` |
+| `configure --json` | Machine-readable output | `notebooklm configure --mode concise --json` |
 | `history` | View conversation history | `notebooklm history` |
 | `history --clear` | Clear local conversation cache | `notebooklm history --clear` |
 | `history --save` | Save history as a note | `notebooklm history --save` |

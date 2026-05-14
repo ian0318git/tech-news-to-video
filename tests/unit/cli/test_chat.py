@@ -286,6 +286,101 @@ class TestAskTimeout:
         assert result.exit_code == 2, result.output
 
 
+class TestConfigureJsonOutput:
+    """Smoke tests for `configure --json` (P2.T5 / I3)."""
+
+    def test_configure_mode_json(self, runner, mock_auth):
+        with patch_client_for_module("chat") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.chat.set_mode = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli,
+                    ["configure", "-n", "nb_123", "--mode", "learning-guide", "--json"],
+                )
+
+            assert result.exit_code == 0, result.output
+            import json
+
+            data = json.loads(result.output)
+            assert data["notebook_id"] == "nb_123"
+            assert data["mode"] == "learning-guide"
+            assert data["configured"] is True
+            mock_client.chat.set_mode.assert_awaited_once()
+
+    def test_configure_persona_json(self, runner, mock_auth):
+        with patch_client_for_module("chat") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.chat.configure = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli,
+                    [
+                        "configure",
+                        "-n",
+                        "nb_123",
+                        "--persona",
+                        "Act as a chemistry tutor",
+                        "--response-length",
+                        "longer",
+                        "--json",
+                    ],
+                )
+
+            assert result.exit_code == 0, result.output
+            import json
+
+            data = json.loads(result.output)
+            assert data["notebook_id"] == "nb_123"
+            assert data["mode"] is None
+            # ChatGoal.CUSTOM exposed as the lowercase enum name "custom"
+            # because persona was provided.
+            assert data["goal"] == "custom"
+            assert data["persona"] == "Act as a chemistry tutor"
+            assert data["response_length"] == "longer"
+            assert data["configured"] is True
+            mock_client.chat.configure.assert_awaited_once()
+
+    def test_configure_no_flags_json(self, runner, mock_auth):
+        """`configure --json` with no other flags should still emit valid JSON.
+
+        Mirrors the non-JSON "Chat configured (no changes)" path so callers
+        running the command in a script can still parse a result.
+        """
+        with patch_client_for_module("chat") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.chat.configure = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["configure", "-n", "nb_123", "--json"])
+
+            assert result.exit_code == 0, result.output
+            import json
+
+            data = json.loads(result.output)
+            assert data["notebook_id"] == "nb_123"
+            assert data["mode"] is None
+            assert data["goal"] is None
+            assert data["persona"] is None
+            assert data["response_length"] is None
+            assert data["configured"] is True
+            mock_client.chat.configure.assert_awaited_once()
+
+
 class TestAskServerResumed:
     def test_ask_shows_resumed_when_no_local_conv_but_server_has_one(
         self, runner, mock_auth, tmp_path
