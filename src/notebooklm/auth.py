@@ -35,6 +35,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import subprocess
 import sys
 import threading
@@ -2306,6 +2307,7 @@ def _replace_cookie_jar(target: httpx.Cookies, source: httpx.Cookies) -> None:
 
 
 NOTEBOOKLM_REFRESH_CMD_ENV = "NOTEBOOKLM_REFRESH_CMD"
+NOTEBOOKLM_REFRESH_CMD_USE_SHELL_ENV = "NOTEBOOKLM_REFRESH_CMD_USE_SHELL"
 _REFRESH_ATTEMPTED_ENV = "_NOTEBOOKLM_REFRESH_ATTEMPTED"
 # The ContextVar prevents same-task retry loops in the parent process. The env
 # flag is passed only to child refresh commands so recursive CLI calls skip refresh.
@@ -2372,11 +2374,63 @@ def _should_try_refresh(err: Exception) -> bool:
     return any(sig in msg for sig in _AUTH_ERROR_SIGNALS)
 
 
+def _split_refresh_cmd(cmd: str) -> list[str]:
+    """Parse ``NOTEBOOKLM_REFRESH_CMD`` into an argv for ``shell=False`` exec.
+
+    On POSIX systems, defers to :func:`shlex.split`. On Windows, uses
+    ``CommandLineToArgvW`` so quoted paths like
+    ``"C:\\Program Files\\Python\\python.exe"`` produce a properly unquoted
+    argv that ``subprocess.run(argv, shell=False)`` can locate. ``shlex``
+    in non-POSIX mode preserves the literal quote characters and would
+    leave the OS unable to find the executable.
+
+    Raises:
+        ValueError: If the command is malformed (e.g., unterminated quote).
+    """
+    if os.name != "nt":
+        return shlex.split(cmd)
+
+    import ctypes
+    from ctypes import wintypes
+
+    CommandLineToArgvW = ctypes.windll.shell32.CommandLineToArgvW  # type: ignore[attr-defined]
+    CommandLineToArgvW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_int)]
+    CommandLineToArgvW.restype = ctypes.POINTER(wintypes.LPWSTR)
+    LocalFree = ctypes.windll.kernel32.LocalFree  # type: ignore[attr-defined]
+    LocalFree.argtypes = [wintypes.HLOCAL]
+    LocalFree.restype = wintypes.HLOCAL
+
+    argc = ctypes.c_int(0)
+    argv_ptr = CommandLineToArgvW(cmd, ctypes.byref(argc))
+    if not argv_ptr:
+        # CommandLineToArgvW returns NULL for some empty-input edge cases.
+        # Mirror shlex.split's behavior and return an empty list; the caller
+        # surfaces this as ``RuntimeError("...parsed to empty argv")``.
+        return []
+    try:
+        # On Windows, ``CommandLineToArgvW`` is documented to return a single
+        # empty-string entry (argc=1, argv[0]="") for whitespace-only input,
+        # rather than NULL. Filter out empty entries so the caller's
+        # ``if not argv`` empty-argv guard catches this case the same way
+        # ``shlex.split("   ") == []`` does on POSIX.
+        return [argv_ptr[i] for i in range(argc.value) if argv_ptr[i]]
+    finally:
+        LocalFree(ctypes.cast(argv_ptr, wintypes.HLOCAL))
+
+
 async def _run_refresh_cmd(storage_path: Path | None = None, profile: str | None = None) -> None:
     """Run ``NOTEBOOKLM_REFRESH_CMD`` to refresh stored cookies.
 
+    By default, the command string is parsed with :func:`shlex.split` and
+    executed with ``shell=False`` to avoid shell-injection footguns when the
+    env var is sourced from CI configs or container env files. Set
+    ``NOTEBOOKLM_REFRESH_CMD_USE_SHELL=1`` to opt back into the legacy
+    ``shell=True`` behavior (e.g., when the command relies on shell features
+    like pipes, redirection, or env-var expansion).
+
     Raises:
-        RuntimeError: If the refresh command is missing, times out, or exits
+        RuntimeError: If the refresh command is missing, parses to an empty
+            argv, is malformed (unterminated quote), times out, or exits
             non-zero.
     """
     cmd = os.environ.get(NOTEBOOKLM_REFRESH_CMD_ENV)
@@ -2388,11 +2442,41 @@ async def _run_refresh_cmd(storage_path: Path | None = None, profile: str | None
     refresh_env["NOTEBOOKLM_REFRESH_STORAGE_PATH"] = str(
         storage_path or get_storage_path(profile=profile)
     )
+
+    use_shell = os.environ.get(NOTEBOOKLM_REFRESH_CMD_USE_SHELL_ENV) == "1"
+    run_target: str | list[str]
+    run_shell: bool
+    if use_shell:
+        logger.warning("Using shell-mode for %s (opt-in)", NOTEBOOKLM_REFRESH_CMD_ENV)
+        # Deliberately do NOT log a basename/preview of ``cmd`` here: in
+        # shell-mode the entire string is forwarded to ``/bin/sh -c`` and
+        # may contain pipes, redirection, ``$VAR`` expansion, or inline
+        # tokens. We can't extract a single "first token" without risking
+        # leaking the rest, so we stay silent past the opt-in warning.
+        run_target = cmd
+        run_shell = True
+    else:
+        try:
+            # POSIX → shlex.split. Windows → CommandLineToArgvW so quoted
+            # paths like ``"C:\\Program Files\\..."`` arrive unquoted.
+            argv = _split_refresh_cmd(cmd)
+        except ValueError as split_err:
+            raise RuntimeError(
+                f"{NOTEBOOKLM_REFRESH_CMD_ENV} could not be parsed: {split_err}"
+            ) from split_err
+        if not argv:
+            raise RuntimeError(f"{NOTEBOOKLM_REFRESH_CMD_ENV} parsed to empty argv")
+        # Log basename only — full argv may carry tokens and absolute paths
+        # can leak secrets-directory layouts.
+        logger.info("Running refresh command: %s ...", os.path.basename(argv[0]))
+        run_target = argv
+        run_shell = False
+
     try:
         result = await asyncio.to_thread(
             subprocess.run,
-            cmd,
-            shell=True,
+            run_target,
+            shell=run_shell,
             capture_output=True,
             text=True,
             timeout=60,
