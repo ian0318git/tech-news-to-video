@@ -25,6 +25,7 @@ from ..paths import (
     get_profile_dir,
     get_storage_path,
     list_profiles,
+    read_default_profile,
     resolve_profile,
 )
 from .helpers import console, json_output_response
@@ -251,9 +252,7 @@ def delete_cmd(name, confirm):
         raise click.ClickException(str(e)) from None
 
     # Block deletion of active or configured default profile
-    from ..paths import _read_default_profile
-
-    configured_default = _read_default_profile() or "default"
+    configured_default = read_default_profile() or "default"
     effective_active = resolve_profile()
     if name in (configured_default, effective_active):
         raise click.ClickException(

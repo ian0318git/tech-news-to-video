@@ -160,6 +160,12 @@ def _read_default_profile() -> str | None:
         return None
 
 
+# Public alias for ``_read_default_profile``. The implementation is module-
+# private (underscore prefix) but the value it reads is part of the public
+# configuration contract, so callers outside paths.py may use this name.
+read_default_profile = _read_default_profile
+
+
 def resolve_profile(profile: str | None = None) -> str:
     """Resolve the active profile name.
 
