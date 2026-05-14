@@ -58,6 +58,54 @@ _GATEWAY_TITLE_PATTERN = re.compile(
 _JUNK_STATUSES = frozenset({"error"})
 
 
+def _validate_upload_path(content: str, follow_symlinks: bool) -> Path:
+    """Validate a local-file path before uploading it as a source.
+
+    Returns the resolved ``Path`` so the caller can forward exactly the
+    artifact it validated (closing the time-of-check / time-of-use window
+    that ``add_file()`` would otherwise re-open).
+
+    Rules (default-deny):
+
+    1. If ``follow_symlinks`` is ``False`` and **any** component of the
+       path — the leaf or any parent directory — is a symlink, refuse.
+       Checking parents matters: ``dir_link/secret.pdf`` would otherwise
+       sneak past a leaf-only ``is_symlink()`` check.
+    2. The symlink check runs **before** ``exists()`` so a broken symlink
+       gets a clear "symlink" rejection instead of being treated as text
+       content via the fall-through branch.
+    3. After resolution the target must be a regular file (no
+       directories, FIFOs, devices, sockets).
+
+    Raises:
+        click.ClickException: on any of the above failures. The message
+            tells the user exactly which flag opts in.
+    """
+    raw = Path(content)
+
+    # 1) Symlink gate (leaf + every parent). Catches broken symlinks too,
+    # because ``is_symlink()`` is True for dangling links.
+    if not follow_symlinks:
+        for component in [raw, *raw.parents]:
+            if component.is_symlink():
+                raise click.ClickException(
+                    "Path is a symlink; pass --follow-symlinks to follow it "
+                    f"explicitly. Refusing to upload: {raw}"
+                )
+
+    # 2) Resolve only after the explicit --follow-symlinks opt-in (or after
+    # the no-symlink check above has passed).
+    file_path = raw.expanduser().resolve()
+
+    # 3) Reject directories, pipes, devices, sockets, and non-existent
+    # paths. Symlinks have already been handled above, so this guard now
+    # covers the non-symlink "weird filetype" cases.
+    if not file_path.is_file():
+        raise click.ClickException(f"Not a regular file: {content}")
+
+    return file_path
+
+
 def _normalize_url_for_dedup(url: str) -> str:
     """Return a URL with only the fragment stripped, for dedup comparison.
 
@@ -346,10 +394,29 @@ def source_list(ctx, notebook_id, json_output, client_auth):
         "Increase when adding slow URLs or large files that exceed the default."
     ),
 )
+@click.option(
+    "--follow-symlinks",
+    is_flag=True,
+    default=False,
+    help=(
+        "Follow symbolic links when uploading a file. By default, symlinks "
+        "are rejected so a workspace symlink cannot silently exfiltrate the "
+        "file it points at (e.g. ~/Downloads/foo.pdf -> /etc/passwd)."
+    ),
+)
 @click.option("--json", "json_output", is_flag=True, help="Output as JSON")
 @with_client
 def source_add(
-    ctx, content, notebook_id, source_type, title, mime_type, timeout, json_output, client_auth
+    ctx,
+    content,
+    notebook_id,
+    source_type,
+    title,
+    mime_type,
+    timeout,
+    follow_symlinks,
+    json_output,
+    client_auth,
 ):
     """Add a source to a notebook.
 
@@ -374,20 +441,31 @@ def source_add(
     detected_type = source_type
     file_content = None
     file_title = title
+    # Set once the path passes ``_validate_upload_path`` so the upload uses
+    # the resolved path we just validated (closes the TOCTOU window where a
+    # symlink could be retargeted between validation and ``add_file()``).
+    upload_path: Path | None = None
 
     if detected_type is None:
         if content.startswith(("http://", "https://")):
             detected_type = "youtube" if is_youtube_url(content) else "url"
-        elif Path(content).exists():
-            file_path = Path(content).resolve()  # Resolve symlinks
-            # Security: Ensure it's a regular file (not a symlink to sensitive file)
-            if not file_path.is_file():
-                raise click.ClickException(f"Not a regular file: {content}")
-            # All files use add_file() for proper type detection
+        elif Path(content).exists() or Path(content).is_symlink():
+            # ``is_symlink()`` short-circuits ``exists()`` for broken
+            # symlinks (``exists()`` follows the link and reports False),
+            # so we OR them together to make sure the symlink gate fires
+            # on dangling links instead of letting them slip into the
+            # text fall-through branch.
+            upload_path = _validate_upload_path(content, follow_symlinks)
             detected_type = "file"
         else:
             detected_type = "text"
             file_title = title or "Pasted Text"
+    elif detected_type == "file":
+        # Explicit ``--type file``: the auto-detect block above is skipped,
+        # so apply the same symlink + regular-file gate here. Without this,
+        # ``source add link.pdf --type file`` would silently bypass the
+        # ``--follow-symlinks`` opt-in and leak the symlink target.
+        upload_path = _validate_upload_path(content, follow_symlinks)
 
     client_kwargs: dict = {}
     if timeout is not None:
@@ -403,8 +481,15 @@ def source_add(
                 text_title = file_title or "Untitled"
                 src = await client.sources.add_text(nb_id_resolved, text_title, text_content)
             elif detected_type == "file":
+                # ``upload_path`` is always populated by the validation
+                # above when ``detected_type == "file"``. Pass the resolved
+                # path string so ``add_file()`` opens exactly the file we
+                # just validated (no second symlink hop).
+                assert upload_path is not None, (
+                    "upload_path must be set when detected_type == 'file'"
+                )
                 src = await client.sources.add_file(
-                    nb_id_resolved, content, mime_type, title=file_title
+                    nb_id_resolved, str(upload_path), mime_type, title=file_title
                 )
 
             if json_output:
