@@ -23,7 +23,9 @@ import sys
 from collections import Counter
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
+import httpx
 import pytest
 
 # Load scripts/check_rpc_health.py as a module. The ``scripts`` directory
@@ -45,6 +47,8 @@ compute_exit_code = check_rpc_health.compute_exit_code
 is_transient_error = check_rpc_health.is_transient_error
 partition_errors = check_rpc_health.partition_errors
 print_summary = check_rpc_health.print_summary
+setup_temp_resources = check_rpc_health.setup_temp_resources
+make_rpc_request = check_rpc_health.make_rpc_request
 
 
 def _result(
@@ -125,6 +129,132 @@ def test_partition_errors_separates_transient_from_real() -> None:
     non_transient, transient = partition_errors(results)
     assert [r.method.name for r in non_transient] == ["timeout", "parse"]
     assert [r.method.name for r in transient] == ["rate", "quota"]
+
+
+@pytest.mark.asyncio
+async def test_make_rpc_request_uses_flat_cookie_header_and_auth_route() -> None:
+    captured: dict[str, Any] = {}
+
+    class FakeClient:
+        async def post(
+            self,
+            url: str,
+            *,
+            content: str,
+            headers: dict[str, str],
+        ) -> httpx.Response:
+            captured["url"] = url
+            captured["content"] = content
+            captured["headers"] = headers
+            return httpx.Response(
+                200,
+                text=")]}'\n\n[]",
+                request=httpx.Request("POST", url),
+            )
+
+    auth = check_rpc_health.AuthTokens(
+        cookies={
+            "SID": "sid",
+            "__Secure-1PSIDTS": "ts",
+            "APISID": "apisid",
+            "SAPISID": "sapisid",
+        },
+        csrf_token="csrf",
+        session_id="session",
+        authuser=2,
+        account_email="bob@example.com",
+    )
+
+    response_text, error = await make_rpc_request(
+        FakeClient(),
+        auth,
+        check_rpc_health.RPCMethod.CREATE_NOTEBOOK,
+        ["Title"],
+        source_path="/notebook/nb_123",
+    )
+
+    assert response_text == ")]}'\n\n[]"
+    assert error is None
+    cookie_header = captured["headers"]["Cookie"]
+    assert "SID=sid" in cookie_header
+    assert "__Secure-1PSIDTS=ts" in cookie_header
+    assert "('SID'," not in cookie_header
+    query = parse_qs(urlparse(captured["url"]).query)
+    assert query["rpcids"] == [check_rpc_health.RPCMethod.CREATE_NOTEBOOK.value]
+    assert query["source-path"] == ["/notebook/nb_123"]
+    assert query["f.sid"] == ["session"]
+    assert query["hl"] == [check_rpc_health.get_default_language()]
+    assert query["rt"] == ["c"]
+    assert query["authuser"] == ["bob@example.com"]
+    assert "at=csrf" in captured["content"]
+
+    captured.clear()
+    default_auth = check_rpc_health.AuthTokens(
+        cookies={
+            "SID": "sid",
+            "__Secure-1PSIDTS": "ts",
+            "APISID": "apisid",
+            "SAPISID": "sapisid",
+        },
+        csrf_token="csrf",
+        session_id="session",
+    )
+
+    await make_rpc_request(
+        FakeClient(),
+        default_auth,
+        check_rpc_health.RPCMethod.LIST_NOTEBOOKS,
+        [],
+    )
+
+    default_query = parse_qs(urlparse(captured["url"]).query)
+    assert "authuser" not in default_query
+
+
+@pytest.mark.asyncio
+async def test_setup_temp_resources_uses_canonical_create_notebook_payload(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    captured: dict[str, Any] = {}
+
+    async def fake_test_rpc_method_with_data(
+        client: object,
+        auth: object,
+        method: Any,
+        params: list[Any],
+        source_path: str = "/",
+    ) -> tuple[CheckResult, None]:
+        captured["method"] = method
+        captured["params"] = params
+        captured["source_path"] = source_path
+        return (
+            CheckResult(
+                method=method,
+                status=CheckStatus.ERROR,
+                expected_id=method.value,
+                found_ids=[],
+                error="stop after create",
+            ),
+            None,
+        )
+
+    monkeypatch.setattr(
+        check_rpc_health,
+        "test_rpc_method_with_data",
+        fake_test_rpc_method_with_data,
+    )
+
+    results: list[CheckResult] = []
+    temp = await setup_temp_resources(object(), object(), results)
+    _ = capsys.readouterr()
+
+    assert captured["method"] is check_rpc_health.RPCMethod.CREATE_NOTEBOOK
+    assert captured["source_path"] == "/"
+    assert captured["params"][0].startswith("RPC-Health-Check-")
+    assert captured["params"][1:] == [None, None, [2], [1]]
+    assert results[0].status == CheckStatus.ERROR
+    assert temp.notebook_id is None
 
 
 # ---------------------------------------------------------------------------

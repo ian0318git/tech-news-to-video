@@ -39,19 +39,29 @@ import sys
 from collections import Counter
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import urlencode
 from uuid import uuid4
 
 import httpx
 
-from notebooklm.auth import AuthTokens, fetch_tokens, load_auth_from_storage
+from notebooklm._env import get_default_language
+from notebooklm._notebooks import build_create_notebook_params
+from notebooklm.auth import (
+    AuthTokens,
+    fetch_tokens,
+    get_account_email_for_storage,
+    get_authuser_for_storage,
+    load_auth_from_storage,
+)
+from notebooklm.paths import get_storage_path
 from notebooklm.rpc import (
-    BATCHEXECUTE_URL,
     RPCError,
     RPCMethod,
     build_request_body,
     encode_rpc_request,
+    get_batchexecute_url,
 )
 from notebooklm.rpc.decoder import (
     collect_rpc_ids,
@@ -208,6 +218,13 @@ def load_auth() -> dict[str, str]:
     return cookies
 
 
+def resolve_storage_path() -> Path | None:
+    """Return the file-based auth path, or None when NOTEBOOKLM_AUTH_JSON is used."""
+    if "NOTEBOOKLM_AUTH_JSON" in os.environ:
+        return None
+    return get_storage_path()
+
+
 async def make_rpc_request(
     client: httpx.AsyncClient,
     auth: AuthTokens,
@@ -227,14 +244,22 @@ async def make_rpc_request(
     Returns:
         Tuple of (response text or None, error message or None)
     """
-    url = f"{BATCHEXECUTE_URL}?f.sid={auth.session_id}&source-path={quote(source_path, safe='')}"
+    query_params = {
+        "rpcids": method.value,
+        "source-path": source_path,
+        "f.sid": auth.session_id,
+        "hl": get_default_language(),
+        "rt": "c",
+    }
+    if auth.account_email or auth.authuser:
+        query_params["authuser"] = auth.account_route
+    url = f"{get_batchexecute_url()}?{urlencode(query_params)}"
     rpc_request = encode_rpc_request(method, params)
     body = build_request_body(rpc_request, auth.csrf_token)
 
-    cookie_header = "; ".join(f"{k}={v}" for k, v in auth.cookies.items())
     headers = {
         "Content-Type": "application/x-www-form-urlencoded",
-        "Cookie": cookie_header,
+        "Cookie": auth.cookie_header,
     }
 
     try:
@@ -644,8 +669,12 @@ async def setup_temp_resources(
     temp = TempResources()
 
     # Test CREATE_NOTEBOOK - extract notebook_id from response[0]
+    title = f"RPC-Health-Check-{uuid4().hex[:8]}"
     result, data = await test_rpc_method_with_data(
-        client, auth, RPCMethod.CREATE_NOTEBOOK, [f"RPC-Health-Check-{uuid4().hex[:8]}"]
+        client,
+        auth,
+        RPCMethod.CREATE_NOTEBOOK,
+        build_create_notebook_params(title),
     )
     results.append(result)
     print(format_check_with_success(result, "temp notebook created"))
@@ -907,6 +936,7 @@ async def cleanup_temp_resources(
 
 async def run_health_check(full_mode: bool = False) -> list[CheckResult]:
     """Run health check on all RPC methods."""
+    storage_path = resolve_storage_path()
     cookies = load_auth()
 
     notebook_id = os.environ.get("NOTEBOOKLM_READ_ONLY_NOTEBOOK_ID") or os.environ.get(
@@ -921,14 +951,21 @@ async def run_health_check(full_mode: bool = False) -> list[CheckResult]:
 
     print("Fetching auth tokens...")
     try:
-        csrf_token, session_id = await fetch_tokens(cookies)
+        csrf_token, session_id = await fetch_tokens(cookies, storage_path=storage_path)
     except ValueError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(2)
     except httpx.HTTPError as e:
         print(f"ERROR: Network error while fetching auth tokens: {e}", file=sys.stderr)
         sys.exit(2)
-    auth = AuthTokens(cookies=cookies, csrf_token=csrf_token, session_id=session_id)
+    auth = AuthTokens(
+        cookies=cookies,
+        csrf_token=csrf_token,
+        session_id=session_id,
+        storage_path=storage_path,
+        authuser=get_authuser_for_storage(storage_path),
+        account_email=get_account_email_for_storage(storage_path),
+    )
     print(f"Auth OK (CSRF token length: {len(auth.csrf_token)})")
     print()
 

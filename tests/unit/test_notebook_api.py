@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from notebooklm._notebooks import NotebooksAPI
+from notebooklm._notebooks import NotebooksAPI, build_create_notebook_params
 from notebooklm.exceptions import (
     NetworkError,
     NotebookLimitError,
@@ -39,6 +39,10 @@ def _create_invalid_argument_error(
     )
 
 
+def test_build_create_notebook_params_matches_live_payload() -> None:
+    assert build_create_notebook_params("Daily News") == ["Daily News", None, None, [2], [1]]
+
+
 def _set_account_limit(api: NotebooksAPI, limit: int | None) -> AsyncMock:
     mock = AsyncMock(return_value=AccountLimits(notebook_limit=limit))
     api._get_account_limits = mock  # type: ignore[method-assign]
@@ -46,6 +50,26 @@ def _set_account_limit(api: NotebooksAPI, limit: int | None) -> AsyncMock:
 
 
 class TestCreateNotebookQuotaDetection:
+    @pytest.mark.asyncio
+    async def test_create_uses_canonical_payload(self):
+        api = _make_api()
+        api._core.rpc_call.return_value = [
+            "Daily News",
+            None,
+            "new_notebook_id",
+            None,
+            None,
+            [None, False, None, None, None, [1704067200, 0]],
+        ]
+
+        notebook = await api.create("Daily News")
+
+        assert notebook.id == "new_notebook_id"
+        api._core.rpc_call.assert_awaited_once_with(
+            RPCMethod.CREATE_NOTEBOOK,
+            build_create_notebook_params("Daily News"),
+        )
+
     @pytest.mark.asyncio
     async def test_create_invalid_argument_near_paid_limit_raises_limit_error(self):
         api = _make_api()

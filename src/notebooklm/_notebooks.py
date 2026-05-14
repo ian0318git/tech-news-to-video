@@ -19,6 +19,11 @@ logger = logging.getLogger(__name__)
 CREATE_NOTEBOOK_QUOTA_RPC_CODE = 3
 
 
+def build_create_notebook_params(title: str) -> list[Any]:
+    """Return the canonical CREATE_NOTEBOOK RPC payload."""
+    return [title, None, None, [2], [1]]
+
+
 class NotebooksAPI:
     """Operations on NotebookLM notebooks.
 
@@ -71,7 +76,7 @@ class NotebooksAPI:
             The created Notebook object.
         """
         logger.debug("Creating notebook: %s", title)
-        params = [title, None, None, [2], [1]]
+        params = build_create_notebook_params(title)
         try:
             result = await self._core.rpc_call(RPCMethod.CREATE_NOTEBOOK, params)
         except RPCError as exc:

@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from notebooklm._notebooks import build_create_notebook_params
 from notebooklm.rpc.encoder import build_request_body, encode_rpc_request, nest_source_ids
 from notebooklm.rpc.types import RPCMethod
 
@@ -30,13 +31,13 @@ class TestEncodeRPCRequest:
 
     def test_encode_create_notebook(self):
         """Test encoding create notebook request."""
-        params = ["Test Notebook", None, None, [2], [1]]
+        params = build_create_notebook_params("Test Notebook")
         result = encode_rpc_request(RPCMethod.CREATE_NOTEBOOK, params)
 
         inner = result[0][0]
         assert inner[0] == RPCMethod.CREATE_NOTEBOOK.value
         decoded_params = json.loads(inner[1])
-        assert decoded_params[0] == "Test Notebook"
+        assert decoded_params == ["Test Notebook", None, None, [2], [1]]
 
     def test_encode_with_nested_params(self):
         """Test encoding with deeply nested parameters."""
