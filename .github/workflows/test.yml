@@ -108,5 +108,10 @@ jobs:
           echo "::warning::Continuing so the non-browser test matrix can run."
         fi
 
+    - name: Assert cassettes are sanitized (T5.E)
+      if: runner.os != 'Windows'
+      shell: bash
+      run: ./tests/check_cassettes_clean.sh
+
     - name: Run tests with coverage
       run: uv run pytest --cov=src/notebooklm --cov-report=term-missing --cov-fail-under=90

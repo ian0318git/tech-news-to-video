@@ -84,10 +84,36 @@ SENSITIVE_PATTERNS: list[tuple[str, str]] = [
     # ==========================================================================
     # PII scrubbing for Google account holder information
     # ==========================================================================
-    # Generic email pattern for Gmail/Google accounts (safe - only in account context)
-    (r"[a-zA-Z0-9._%+-]+@gmail\.com", "SCRUBBED_EMAIL@example.com"),
+    # Broadened email scrub: common providers + idempotent on @example.com
+    # (the replacement value itself contains @example.com, so a second pass is a no-op).
+    # NOTE: we intentionally exclude @example.com from the match so SCRUBBED_EMAIL@example.com
+    #   left from a previous scrub round-trips cleanly.
+    (
+        r'"[A-Za-z0-9._%+\-]+@(?:gmail|googlemail|google|anthropic|outlook|hotmail|yahoo|icloud|protonmail)\.com"',
+        '"SCRUBBED_EMAIL@example.com"',
+    ),
+    # Unquoted-context fallback for raw email mentions (e.g. inside HTML/JS
+    # chunks, mailto: hrefs, or rendered templates). Broadened to match the
+    # same provider list as the JSON-quoted pattern above so the two stay in
+    # sync — gemini-code-assist review thread on PR #477.
+    (
+        r"[a-zA-Z0-9._%+-]+@(?:gmail|googlemail|google|anthropic|outlook|hotmail|yahoo|icloud|protonmail)\.com",
+        "SCRUBBED_EMAIL@example.com",
+    ),
     # Display name in aria-label (generic - "Google Account:" prefix is specific enough)
     (r"Google Account: [^\"<]+", "Google Account: SCRUBBED_NAME"),
+    # ----------------------------------------------------------------
+    # Structural display-name scrub — JSON-key-anchored ONLY.
+    # We do NOT use a broad ``>[A-Z][a-z]+\s[A-Z][a-z]+<`` pattern: that would
+    # also clobber legitimate two-Capitalized-word fixture content such as
+    # ``>Source Title<`` in source-rename cassettes. Anchoring on the JSON key
+    # keeps the scrubber surgical.
+    # ----------------------------------------------------------------
+    (r'"displayName"\s*:\s*"[^"]+"', '"displayName":"SCRUBBED_NAME"'),
+    (r'"givenName"\s*:\s*"[^"]+"', '"givenName":"SCRUBBED_NAME"'),
+    (r'"familyName"\s*:\s*"[^"]+"', '"familyName":"SCRUBBED_NAME"'),
+    # Legacy hard-coded patterns (kept for backward compat with existing cassettes
+    # that were sanitized before the structural patterns above were added).
     # Display name in HTML tags (user-specific - add your name if recording new cassettes)
     (r">People Conf<", ">SCRUBBED_NAME<"),
     # Display name in JSON (user-specific - add your name if recording new cassettes)
