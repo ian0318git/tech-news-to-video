@@ -1,6 +1,16 @@
 """Custom Click group with sectioned help output.
 
 Organizes CLI commands into logical sections for better discoverability.
+
+Section assignment is hardcoded in :class:`SectionedGroup` (see
+``command_sections`` and ``command_groups``). When you add a new top-level
+command, bin it explicitly — otherwise it lands in the "Other" safety-net
+bin, which exists only for commands deliberately tagged
+``category="misc"`` (set the attribute on the Click command after creation).
+
+A unit test (`tests/unit/cli/test_grouped.py`) enforces this contract: any
+unbinned, untagged top-level command will fail the suite, surfacing the
+discoverability regression at PR review time.
 """
 
 from collections import OrderedDict
@@ -12,18 +22,20 @@ class SectionedGroup(click.Group):
     """Click group that displays commands organized in sections.
 
     Instead of a flat alphabetical list, commands are grouped by function:
-    - Session: login, use, status, clear
-    - Notebooks: list, create, delete, rename, summary
+    - Session: login, use, status, clear, doctor, auth
+    - Notebooks: list, create, delete, rename, summary, metadata
     - Chat: ask, configure, history
-    - Command Groups: source, artifact, note, share, research (show subcommands)
+    - Command Groups: source, artifact, note, share, research, profile, agent,
+      skill, language (show subcommands)
     - Artifact Actions: generate, download (show types)
+    - Other: only commands explicitly tagged ``category="misc"``
     """
 
     # Regular commands - show help text
     command_sections = OrderedDict(
         [
-            ("Session", ["login", "use", "status", "clear", "doctor"]),
-            ("Notebooks", ["list", "create", "delete", "rename", "summary"]),
+            ("Session", ["login", "use", "status", "clear", "doctor", "auth"]),
+            ("Notebooks", ["list", "create", "delete", "rename", "summary", "metadata"]),
             ("Chat", ["ask", "configure", "history"]),
         ]
     )
@@ -33,7 +45,17 @@ class SectionedGroup(click.Group):
         [
             (
                 "Command Groups (use: notebooklm <group> <command>)",
-                ["source", "artifact", "note", "share", "research", "profile"],
+                [
+                    "source",
+                    "artifact",
+                    "note",
+                    "share",
+                    "research",
+                    "profile",
+                    "agent",
+                    "skill",
+                    "language",
+                ],
             ),
             ("Artifact Actions (use: notebooklm <action> <type>)", ["generate", "download"]),
         ]
@@ -68,7 +90,11 @@ class SectionedGroup(click.Group):
                 with formatter.section(section):
                     formatter.write_dl(rows)
 
-        # Safety net: show any commands not in any section
+        # Safety net: show any commands not in any section. By convention this
+        # bin is reserved for commands explicitly tagged ``category="misc"``;
+        # unbinned-and-untagged commands still appear here so the CLI never
+        # silently hides them, but the test in tests/unit/cli/test_grouped.py
+        # treats them as a regression and fails the build.
         all_listed = set(sum(self.command_sections.values(), []))
         all_listed |= set(sum(self.command_groups.values(), []))
         unlisted = [
