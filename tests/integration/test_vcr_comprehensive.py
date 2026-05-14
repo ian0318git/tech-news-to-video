@@ -86,7 +86,7 @@ class TestNotebooksAPI:
         """Get notebook summary."""
         async with vcr_client() as client:
             summary = await client.notebooks.get_summary(READONLY_NOTEBOOK_ID)
-        assert summary is not None
+        assert isinstance(summary, str)
 
     @pytest.mark.vcr
     @pytest.mark.asyncio

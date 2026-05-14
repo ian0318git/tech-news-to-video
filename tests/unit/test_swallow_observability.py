@@ -99,9 +99,17 @@ def test_qa_pairs_warns_on_unguarded_shape(caplog):
 
 
 @pytest.mark.asyncio
-async def test_summary_warns_on_indexerror_drift(caplog):
-    """_notebooks.py: summary extraction warns when result[0][0][0] raises."""
+async def test_summary_warns_on_indexerror_drift(caplog, monkeypatch):
+    """_notebooks.py: summary extraction warns when result[0][0][0] raises.
+
+    Tier-1 T1.B2 migrated this site to ``safe_index``; the warning message
+    now comes from ``notebooklm.rpc._safe_index`` and carries the call-site
+    label ``source='_notebooks.get_summary'`` instead of the notebook id.
+    """
     from notebooklm._notebooks import NotebooksAPI
+
+    # Pin soft mode so safe_index warns instead of raising.
+    monkeypatch.delenv("NOTEBOOKLM_STRICT_DECODE", raising=False)
 
     api = NotebooksAPI.__new__(NotebooksAPI)
     mock_core = MagicMock()
@@ -115,7 +123,10 @@ async def test_summary_warns_on_indexerror_drift(caplog):
         summary = await api.get_summary("nb_summary")
 
     assert summary == ""
-    assert any("schema drift" in r.message and "nb_summary" in r.message for r in caplog.records)
+    assert any(
+        "safe_index drift" in r.message and "_notebooks.get_summary" in r.message
+        for r in caplog.records
+    )
 
 
 # ---------------------------------------------------------------------------

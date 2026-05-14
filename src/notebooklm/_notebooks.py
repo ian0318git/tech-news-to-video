@@ -8,7 +8,7 @@ from ._core import ClientCore
 from ._env import get_base_url
 from ._settings import build_get_user_settings_params, extract_account_limits
 from .exceptions import NotebookLimitError, RPCError
-from .rpc import RPCMethod
+from .rpc import RPCMethod, safe_index
 from .types import AccountLimits, Notebook, NotebookDescription, SuggestedTopic
 
 if TYPE_CHECKING:
@@ -211,21 +211,15 @@ class NotebooksAPI:
             source_path=f"/notebook/{notebook_id}",
         )
         # Response structure: [[[summary_string, ...], topics, ...]]
-        # Summary is at result[0][0][0]
-        try:
-            if result and isinstance(result, list):
-                summary = result[0][0][0]
-                return str(summary) if summary else ""
-        except (IndexError, TypeError) as e:
-            # result[0][0][0] is unguarded — except IS reachable when the
-            # summary payload shape drifts.
-            logger.warning(
-                "Summary extraction failed for notebook %s (schema drift?): %s",
-                notebook_id,
-                e,
-                exc_info=True,
-            )
-        return ""
+        summary = safe_index(
+            result,
+            0,
+            0,
+            0,
+            method_id=RPCMethod.SUMMARIZE.value,
+            source="_notebooks.get_summary",
+        )
+        return str(summary) if summary else ""
 
     async def get_description(self, notebook_id: str) -> NotebookDescription:
         """Get AI-generated summary and suggested topics for a notebook.
