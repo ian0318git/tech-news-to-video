@@ -44,17 +44,24 @@ import vcr
 # Google authentication cookies and tokens
 # Uses capture groups where possible to preserve original names
 SENSITIVE_PATTERNS: list[tuple[str, str]] = [
-    # Session cookies (preserve name, scrub value)
-    (r"SID=[^;]+", "SID=SCRUBBED"),
-    (r"HSID=[^;]+", "HSID=SCRUBBED"),
-    (r"SSID=[^;]+", "SSID=SCRUBBED"),
-    (r"APISID=[^;]+", "APISID=SCRUBBED"),
-    (r"SAPISID=[^;]+", "SAPISID=SCRUBBED"),
-    (r"SIDCC=[^;]+", "SIDCC=SCRUBBED"),
-    (r"OSID=[^;]+", "OSID=SCRUBBED"),
+    # Session cookies (preserve name, scrub value).
+    # The leading negative lookbehind ``(?<![A-Za-z0-9_-])`` anchors each pattern to a
+    # cookie-name boundary so substrings like ``BSID=...`` (a legitimate non-protected
+    # cookie that contains ``SID`` as a suffix) are NOT scrubbed. Without the
+    # lookbehind the regex matches the ``SID=...`` tail of ``BSID=...`` and corrupts
+    # benign fixture data. See ``tests/unit/test_cookie_redaction.py``.
+    (r"(?<![A-Za-z0-9_-])SID=[^;]+", "SID=SCRUBBED"),
+    (r"(?<![A-Za-z0-9_-])HSID=[^;]+", "HSID=SCRUBBED"),
+    (r"(?<![A-Za-z0-9_-])SSID=[^;]+", "SSID=SCRUBBED"),
+    (r"(?<![A-Za-z0-9_-])APISID=[^;]+", "APISID=SCRUBBED"),
+    (r"(?<![A-Za-z0-9_-])SAPISID=[^;]+", "SAPISID=SCRUBBED"),
+    (r"(?<![A-Za-z0-9_-])SIDCC=[^;]+", "SIDCC=SCRUBBED"),
+    (r"(?<![A-Za-z0-9_-])OSID=[^;]+", "OSID=SCRUBBED"),
     # NID tracking cookie (Google network ID)
-    (r"NID=[^;]+", "NID=SCRUBBED"),
-    # Secure cookies - preserve original name (e.g., __Secure-1PSID=SCRUBBED)
+    (r"(?<![A-Za-z0-9_-])NID=[^;]+", "NID=SCRUBBED"),
+    # Secure cookies - preserve original name (e.g., __Secure-1PSID=SCRUBBED).
+    # The ``__Secure-`` / ``__Host-`` prefixes are already distinctive enough that no
+    # legitimate cookie shares them, so no lookbehind is needed here.
     (r"(__Secure-[^=]+)=[^;]+", r"\1=SCRUBBED"),
     (r"(__Host-[^=]+)=[^;]+", r"\1=SCRUBBED"),
     # CSRF and session tokens in HTML/JSON (WIZ_global_data format)
@@ -118,6 +125,38 @@ SENSITIVE_PATTERNS: list[tuple[str, str]] = [
     (r">People Conf<", ">SCRUBBED_NAME<"),
     # Display name in JSON (user-specific - add your name if recording new cassettes)
     (r'"People Conf"', '"SCRUBBED_NAME"'),
+    # ==========================================================================
+    # Playwright ``storage_state.json`` cookie objects (JSON form, not Cookie-header form)
+    # ==========================================================================
+    # The patterns above (e.g., ``SID=[^;]+``) only match the ``Cookie: SID=...; ...``
+    # header form. A serialized ``storage_state`` (``json.dumps`` of the dict Playwright
+    # returns) instead carries ``{"name": "SID", "value": "<secret>", ...}`` objects, so
+    # the header-form regexes never fire on a storage_state body and the secret leaks.
+    # See ``tests/unit/test_cookie_redaction.py`` for the round-trip assertion.
+    #
+    # Playwright emits ``name`` before ``value`` in each cookie object. We still register
+    # the reversed ordering defensively in case a fixture is hand-authored or a future
+    # Playwright version reorders keys.
+    #
+    # The cookie-value match uses the "string with escapes" idiom
+    # ``[^"\\]*(?:\\.[^"\\]*)*`` rather than the naive ``[^"]*``. A naive value class
+    # terminates at the first ``"``, even when that quote is JSON-escaped (``\"``),
+    # which would leave the tail of the value unredacted in the output (a sensitive
+    # cookie value containing a literal quote would be silently leaked). The escape-
+    # aware idiom consumes ``\"`` sequences correctly. Cookie names never contain
+    # quotes in practice (ASCII identifiers), so the name alternation keeps the
+    # simpler ``[^"]+`` class.
+    (
+        r'("name":\s*"(?:SID|HSID|SSID|APISID|SAPISID|SIDCC|OSID|NID|'
+        r'__Secure-[^"]+|__Host-[^"]+)"\s*,\s*"value":\s*")[^"\\]*(?:\\.[^"\\]*)*(")',
+        r"\1SCRUBBED\2",
+    ),
+    (
+        r'("value":\s*")[^"\\]*(?:\\.[^"\\]*)*'
+        r'("\s*,\s*"name":\s*"(?:SID|HSID|SSID|APISID|SAPISID|'
+        r'SIDCC|OSID|NID|__Secure-[^"]+|__Host-[^"]+)")',
+        r"\1SCRUBBED\2",
+    ),
 ]
 
 
