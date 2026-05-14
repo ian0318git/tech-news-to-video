@@ -441,6 +441,145 @@ class TestRequireNotebook:
                 require_notebook(None)
             assert exc_info.value.code == 1
 
+    def test_error_message_names_user_facing_flag_not_kwarg(self, tmp_path):
+        """When `require_notebook` raises with no notebook resolvable, the user-visible
+        error must name the actual CLI flag (`-n/--notebook`), not the internal
+        Python kwarg (`notebook_id`). Regression for I9/I11 (CLI UX audit).
+        """
+        with (
+            patch(
+                "notebooklm.cli.helpers.get_context_path",
+                return_value=tmp_path / "nonexistent.json",
+            ),
+            patch("notebooklm.cli.helpers.console") as mock_console,
+        ):
+            with pytest.raises(SystemExit):
+                require_notebook(None)
+
+            # The console must have been called once with the failure message.
+            mock_console.print.assert_called_once()
+            printed = mock_console.print.call_args[0][0]
+            # User-facing flag is named.
+            assert "-n/--notebook" in printed
+            # Internal kwarg name does NOT leak.
+            assert "notebook_id" not in printed
+            # Existing context-setup hint is preserved so the user has both options.
+            assert "notebooklm use" in printed
+
+
+# =============================================================================
+# NOTEBOOK OPTION DECORATOR CONSISTENCY TESTS
+# =============================================================================
+
+
+def _discover_notebook_commands():
+    """Walk the assembled root CLI and return all (group_label, subcommand_name,
+    Option) triples for any command exposing the `-n/--notebook` flag — including
+    top-level commands (e.g. `notebooklm ask -n ...`) and grouped subcommands
+    (e.g. `notebooklm artifact list -n ...`).
+
+    Programmatic discovery is intentional: it guarantees that any *future*
+    command picking up `-n/--notebook` is automatically subjected to the
+    canonical-decorator gate, with no extra parametrize-list maintenance.
+    """
+    from click import Group, Option
+
+    from notebooklm.notebooklm_cli import cli as root_cli
+
+    discovered: list = []
+
+    def _scan(group_label: str, cmd) -> None:
+        # Record this command if it carries -n/--notebook directly.
+        for param in cmd.params:
+            if not isinstance(param, Option):
+                continue
+            if "-n" in param.opts and "--notebook" in param.opts:
+                discovered.append((group_label, cmd.name, param))
+                break
+        # Then recurse into any nested groups; their subcommands inherit the
+        # group's name as their `group_label` (e.g. `artifact/list`).
+        if isinstance(cmd, Group):
+            for _sub_name, sub in sorted(cmd.commands.items()):
+                _scan(cmd.name, sub)
+
+    # Top-level commands live directly under the root CLI; tag them as `<root>`
+    # so the parametrize id reads `<root>/ask` etc.
+    for _sub_name, sub in sorted(root_cli.commands.items()):
+        _scan("<root>", sub)
+    return discovered
+
+
+_NOTEBOOK_COMMAND_TRIPLES = _discover_notebook_commands()
+
+
+def _canonical_notebook_help() -> str:
+    """Return the canonical help string by introspecting the actual decorator
+    in `cli/options.py`, so tests can never silently drift from the source of
+    truth. We apply `notebook_option` to a throwaway probe function and read
+    back the `help=` Click stored on the resulting Option.
+    """
+    from click import Option
+
+    from notebooklm.cli.options import notebook_option
+
+    @notebook_option
+    def _probe(notebook_id):  # pragma: no cover — never invoked
+        pass
+
+    for param in _probe.__click_params__:  # type: ignore[attr-defined]
+        if isinstance(param, Option) and "--notebook" in param.opts:
+            assert param.help is not None, (
+                "cli/options.py:notebook_option must declare a help= string"
+            )
+            return param.help
+    raise RuntimeError("Failed to introspect cli/options.py:notebook_option help text")
+
+
+_CANONICAL_NOTEBOOK_HELP = _canonical_notebook_help()
+
+
+class TestNotebookOptionConsistency:
+    """Every command exposing -n/--notebook must do so via the canonical
+    `cli/options.py:notebook_option` decorator. We assert via Click's introspection
+    that both the short/long flag pair and the canonical help text are present.
+    """
+
+    def test_some_commands_expose_notebook_flag(self):
+        """Sanity check that the discovery walk found a substantial fraction of
+        the known commands. If this falls far below the live count we silently
+        lose coverage from the parametrized test below — and an entire CLI
+        group could be dropped without tripping the gate.
+        """
+        # As of this PR, discovery finds ~65 commands across all groups + top-level.
+        # The bound is set tight enough that losing one full group (e.g. `source`,
+        # ~13 commands) trips this guard immediately.
+        assert len(_NOTEBOOK_COMMAND_TRIPLES) >= 55, (
+            f"Expected ≥55 -n/--notebook commands discovered, got "
+            f"{len(_NOTEBOOK_COMMAND_TRIPLES)} — discovery walk is broken or "
+            f"a CLI group lost its -n/--notebook surface"
+        )
+
+    @pytest.mark.parametrize(
+        ("group_label", "subcommand", "param"),
+        _NOTEBOOK_COMMAND_TRIPLES,
+        ids=[f"{g}/{s}" for g, s, _ in _NOTEBOOK_COMMAND_TRIPLES],
+    )
+    def test_subcommand_uses_canonical_notebook_option(self, group_label, subcommand, param):
+        """Every subcommand exposing -n/--notebook must use the canonical
+        decorator (asserted via canonical help text — derived live from
+        `cli/options.py` — and the `notebook_id` kwarg name).
+        """
+        assert param.name == "notebook_id", (
+            f"{group_label}/{subcommand} -n/--notebook must bind to kwarg "
+            f"'notebook_id' (the canonical decorator's kwarg name), got "
+            f"{param.name!r}"
+        )
+        assert (param.help or "") == _CANONICAL_NOTEBOOK_HELP, (
+            f"{group_label}/{subcommand} -n/--notebook help must equal the "
+            f"canonical string {_CANONICAL_NOTEBOOK_HELP!r} (from "
+            f"cli/options.py:notebook_option), got {param.help!r}"
+        )
+
 
 # =============================================================================
 # ERROR HANDLING TESTS

@@ -22,6 +22,7 @@ from .helpers import (
     resolve_notebook_id,
     with_client,
 )
+from .options import notebook_option
 
 
 @click.group()
@@ -45,13 +46,7 @@ def note():
 
 
 @note.command("list")
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set)",
-)
+@notebook_option
 @click.option("--json", "json_output", is_flag=True, help="Output as JSON")
 @with_client
 def note_list(ctx, notebook_id, json_output, client_auth):
@@ -107,13 +102,7 @@ def note_list(ctx, notebook_id, json_output, client_auth):
 
 @note.command("create")
 @click.argument("content", default="", required=False)
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set)",
-)
+@notebook_option
 @click.option("-t", "--title", default="New Note", help="Note title")
 @with_client
 def note_create(ctx, content, notebook_id, title, client_auth):
@@ -143,13 +132,7 @@ def note_create(ctx, content, notebook_id, title, client_auth):
 
 @note.command("get")
 @click.argument("note_id")
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set)",
-)
+@notebook_option
 @with_client
 def note_get(ctx, note_id, notebook_id, client_auth):
     """Get note content.
@@ -176,13 +159,7 @@ def note_get(ctx, note_id, notebook_id, client_auth):
 
 @note.command("save")
 @click.argument("note_id")
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set)",
-)
+@notebook_option
 @click.option("--title", help="New title")
 @click.option("--content", help="New content")
 @with_client
@@ -210,13 +187,7 @@ def note_save(ctx, note_id, notebook_id, title, content, client_auth):
 @note.command("rename")
 @click.argument("note_id")
 @click.argument("new_title")
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set)",
-)
+@notebook_option
 @with_client
 def note_rename(ctx, note_id, new_title, notebook_id, client_auth):
     """Rename a note.
@@ -245,13 +216,7 @@ def note_rename(ctx, note_id, new_title, notebook_id, client_auth):
 
 @note.command("delete")
 @click.argument("note_id")
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set)",
-)
+@notebook_option
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
 @with_client
 def note_delete(ctx, note_id, notebook_id, yes, client_auth):

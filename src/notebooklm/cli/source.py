@@ -42,7 +42,7 @@ from .helpers import (
     validate_id,
     with_client,
 )
-from .options import prompt_file_option
+from .options import notebook_option, prompt_file_option
 
 # Titles matching this pattern indicate the source was blocked by an anti-bot
 # gateway, CAPTCHA, or returned an HTTP error page instead of real content.
@@ -307,13 +307,7 @@ async def _resolve_source_by_exact_title(client, notebook_id: str, title: str):
 
 
 @source.command("list")
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set)",
-)
+@notebook_option
 @click.option("--json", "json_output", is_flag=True, help="Output as JSON")
 @with_client
 def source_list(ctx, notebook_id, json_output, client_auth):
@@ -370,13 +364,7 @@ def source_list(ctx, notebook_id, json_output, client_auth):
 
 @source.command("add")
 @click.argument("content")
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set)",
-)
+@notebook_option
 @click.option(
     "--type",
     "source_type",
@@ -548,13 +536,7 @@ def source_add(
 
 @source.command("get")
 @click.argument("source_id")
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set)",
-)
+@notebook_option
 @with_client
 def source_get(ctx, source_id, notebook_id, client_auth):
     """Get source details.
@@ -587,13 +569,7 @@ def source_get(ctx, source_id, notebook_id, client_auth):
 
 @source.command("delete")
 @click.argument("source_id")
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set)",
-)
+@notebook_option
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
 @with_client
 def source_delete(ctx, source_id, notebook_id, yes, client_auth):
@@ -622,13 +598,7 @@ def source_delete(ctx, source_id, notebook_id, yes, client_auth):
 
 @source.command("delete-by-title")
 @click.argument("title")
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set)",
-)
+@notebook_option
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
 @with_client
 def source_delete_by_title(ctx, title, notebook_id, yes, client_auth):
@@ -655,13 +625,7 @@ def source_delete_by_title(ctx, title, notebook_id, yes, client_auth):
 @source.command("rename")
 @click.argument("source_id")
 @click.argument("new_title")
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set)",
-)
+@notebook_option
 @with_client
 def source_rename(ctx, source_id, new_title, notebook_id, client_auth):
     """Rename a source.
@@ -684,13 +648,7 @@ def source_rename(ctx, source_id, new_title, notebook_id, client_auth):
 
 @source.command("refresh")
 @click.argument("source_id")
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set)",
-)
+@notebook_option
 @with_client
 def source_refresh(ctx, source_id, notebook_id, client_auth):
     """Refresh a URL/Drive source.
@@ -721,13 +679,7 @@ def source_refresh(ctx, source_id, notebook_id, client_auth):
 @source.command("add-drive")
 @click.argument("file_id")
 @click.argument("title")
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set)",
-)
+@notebook_option
 @click.option(
     "--mime-type",
     type=click.Choice(["google-doc", "google-slides", "google-sheets", "pdf"]),
@@ -763,13 +715,7 @@ def source_add_drive(ctx, file_id, title, notebook_id, mime_type, client_auth):
 @source.command("add-research")
 @click.argument("query", default="", required=False)
 @prompt_file_option
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set)",
-)
+@notebook_option
 @click.option(
     "--from",
     "search_source",
@@ -890,13 +836,7 @@ def source_add_research(
 
 @source.command("fulltext")
 @click.argument("source_id")
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set)",
-)
+@notebook_option
 @click.option("--json", "json_output", is_flag=True, help="Output as JSON")
 @click.option("--output", "-o", type=click.Path(), help="Write content to file")
 @click.option(
@@ -974,13 +914,7 @@ def source_fulltext(ctx, source_id, notebook_id, json_output, output, output_for
 
 @source.command("guide")
 @click.argument("source_id")
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set)",
-)
+@notebook_option
 @click.option("--json", "json_output", is_flag=True, help="Output as JSON")
 @with_client
 def source_guide(ctx, source_id, notebook_id, json_output, client_auth):
@@ -1044,13 +978,7 @@ def source_guide(ctx, source_id, notebook_id, json_output, client_auth):
 
 @source.command("stale")
 @click.argument("source_id")
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set)",
-)
+@notebook_option
 @with_client
 def source_stale(ctx, source_id, notebook_id, client_auth):
     """Check if a URL/Drive source needs refresh.
@@ -1085,13 +1013,7 @@ def source_stale(ctx, source_id, notebook_id, client_auth):
 
 @source.command("wait")
 @click.argument("source_id")
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set)",
-)
+@notebook_option
 @click.option(
     "--timeout",
     default=120,
@@ -1205,13 +1127,7 @@ def source_wait(ctx, source_id, notebook_id, timeout, json_output, client_auth):
 
 
 @source.command("clean")
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set)",
-)
+@notebook_option
 @click.option(
     "--dry-run", is_flag=True, help="Show what would be deleted without actually deleting"
 )

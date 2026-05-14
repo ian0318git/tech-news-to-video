@@ -25,7 +25,7 @@ from .helpers import (
     set_current_conversation,
     with_client,
 )
-from .options import prompt_file_option
+from .options import notebook_option, prompt_file_option
 
 logger = logging.getLogger(__name__)
 
@@ -85,13 +85,7 @@ def register_chat_commands(cli):
     @cli.command("ask")
     @click.argument("question", default="", required=False)
     @prompt_file_option
-    @click.option(
-        "-n",
-        "--notebook",
-        "notebook_id",
-        default=None,
-        help="Notebook ID (uses current if not set)",
-    )
+    @notebook_option
     @click.option("--conversation-id", "-c", default=None, help="Continue a specific conversation")
     @click.option(
         "--source",
@@ -220,13 +214,7 @@ def register_chat_commands(cli):
         return _run()
 
     @cli.command("configure")
-    @click.option(
-        "-n",
-        "--notebook",
-        "notebook_id",
-        default=None,
-        help="Notebook ID (uses current if not set)",
-    )
+    @notebook_option
     @click.option(
         "--mode",
         "chat_mode",
@@ -309,13 +297,7 @@ def register_chat_commands(cli):
         return _run()
 
     @cli.command("history")
-    @click.option(
-        "-n",
-        "--notebook",
-        "notebook_id",
-        default=None,
-        help="Notebook ID (uses current if not set)",
-    )
+    @notebook_option
     @click.option("--limit", "-l", default=100, help="Maximum number of Q&A turns to show")
     @click.option("--clear", "clear_cache", is_flag=True, help="Clear local conversation cache")
     @click.option("--save", "save_as_note", is_flag=True, help="Save history as a note")

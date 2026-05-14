@@ -47,7 +47,7 @@ from .helpers import (
     with_client,
 )
 from .language import SUPPORTED_LANGUAGES, get_language
-from .options import json_option, prompt_file_option, retry_option
+from .options import json_option, notebook_option, prompt_file_option, retry_option
 
 DEFAULT_LANGUAGE = "en"
 
@@ -334,13 +334,7 @@ def generate():
 @generate.command("audio")
 @click.argument("description", default="", required=False)
 @prompt_file_option
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set)",
-)
+@notebook_option
 @click.option(
     "--format",
     "audio_format",
@@ -430,13 +424,7 @@ def generate_audio(
 @generate.command("video")
 @click.argument("description", default="", required=False)
 @prompt_file_option
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set)",
-)
+@notebook_option
 @click.option(
     "--format",
     "video_format",
@@ -589,13 +577,7 @@ generate.add_command(_cinematic_video_gen_cmd)
 @generate.command("slide-deck")
 @click.argument("description", default="", required=False)
 @prompt_file_option
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set)",
-)
+@notebook_option
 @click.option(
     "--format",
     "deck_format",
@@ -681,13 +663,7 @@ def generate_slide_deck(
 @generate.command("revise-slide")
 @click.argument("description", default="", required=False)
 @prompt_file_option
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set)",
-)
+@notebook_option
 @click.option(
     "-a",
     "--artifact",
@@ -756,13 +732,7 @@ def generate_revise_slide(
 @generate.command("quiz")
 @click.argument("description", default="", required=False)
 @prompt_file_option
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set)",
-)
+@notebook_option
 @click.option("--quantity", type=click.Choice(["fewer", "standard", "more"]), default="standard")
 @click.option("--difficulty", type=click.Choice(["easy", "medium", "hard"]), default="medium")
 @click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
@@ -833,13 +803,7 @@ def generate_quiz(
 @generate.command("flashcards")
 @click.argument("description", default="", required=False)
 @prompt_file_option
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set)",
-)
+@notebook_option
 @click.option("--quantity", type=click.Choice(["fewer", "standard", "more"]), default="standard")
 @click.option("--difficulty", type=click.Choice(["easy", "medium", "hard"]), default="medium")
 @click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
@@ -910,13 +874,7 @@ def generate_flashcards(
 @generate.command("infographic")
 @click.argument("description", default="", required=False)
 @prompt_file_option
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set)",
-)
+@notebook_option
 @click.option(
     "--orientation",
     type=click.Choice(["landscape", "portrait", "square"]),
@@ -1009,13 +967,7 @@ def generate_infographic(
 @generate.command("data-table")
 @click.argument("description", default="", required=False)
 @prompt_file_option
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set)",
-)
+@notebook_option
 @click.option(
     "--language",
     default=None,
@@ -1075,13 +1027,7 @@ def generate_data_table(
 
 
 @generate.command("mind-map")
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set)",
-)
+@notebook_option
 @click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
 @click.option(
     "--language",
@@ -1161,13 +1107,7 @@ def _output_mind_map_result(result: Any, json_output: bool) -> None:
     default="briefing-doc",
     help="Report format (default: briefing-doc)",
 )
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set)",
-)
+@notebook_option
 @click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
 @click.option(
     "--language",

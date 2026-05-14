@@ -26,6 +26,7 @@ from .helpers import (
     resolve_notebook_id,
     with_client,
 )
+from .options import notebook_option
 
 
 @click.group()
@@ -51,13 +52,7 @@ def artifact():
 
 
 @artifact.command("list")
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set)",
-)
+@notebook_option
 @click.option(
     "--type",
     "artifact_type",
@@ -137,13 +132,7 @@ def artifact_list(ctx, notebook_id, artifact_type, json_output, client_auth):
 
 @artifact.command("get")
 @click.argument("artifact_id")
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set). Supports partial IDs.",
-)
+@notebook_option
 @with_client
 def artifact_get(ctx, artifact_id, notebook_id, client_auth):
     """Get artifact details.
@@ -175,13 +164,7 @@ def artifact_get(ctx, artifact_id, notebook_id, client_auth):
 @artifact.command("rename")
 @click.argument("artifact_id")
 @click.argument("new_title")
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set). Supports partial IDs.",
-)
+@notebook_option
 @with_client
 def artifact_rename(ctx, artifact_id, new_title, notebook_id, client_auth):
     """Rename an artifact.
@@ -212,13 +195,7 @@ def artifact_rename(ctx, artifact_id, new_title, notebook_id, client_auth):
 
 @artifact.command("delete")
 @click.argument("artifact_id")
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set). Supports partial IDs.",
-)
+@notebook_option
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
 @with_client
 def artifact_delete(ctx, artifact_id, notebook_id, yes, client_auth):
@@ -255,13 +232,7 @@ def artifact_delete(ctx, artifact_id, notebook_id, yes, client_auth):
 
 @artifact.command("export")
 @click.argument("artifact_id")
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set). Supports partial IDs.",
-)
+@notebook_option
 @click.option("--title", required=True, help="Title for exported document")
 @click.option("--type", "export_type", type=click.Choice(["docs", "sheets"]), default="docs")
 @with_client
@@ -293,13 +264,7 @@ def artifact_export(ctx, artifact_id, notebook_id, title, export_type, client_au
 
 @artifact.command("poll")
 @click.argument("task_id")
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set)",
-)
+@notebook_option
 @with_client
 def artifact_poll(ctx, task_id, notebook_id, client_auth):
     """Poll generation status."""
@@ -317,13 +282,7 @@ def artifact_poll(ctx, task_id, notebook_id, client_auth):
 
 @artifact.command("wait")
 @click.argument("artifact_id")
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set)",
-)
+@notebook_option
 @click.option(
     "--timeout",
     default=300,
@@ -409,13 +368,7 @@ def artifact_wait(ctx, artifact_id, notebook_id, timeout, interval, json_output,
 
 
 @artifact.command("suggestions")
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set)",
-)
+@notebook_option
 @click.option("--json", "json_output", is_flag=True, help="Output JSON format")
 @with_client
 def artifact_suggestions(ctx, notebook_id, json_output, client_auth):

@@ -35,6 +35,7 @@ from .helpers import (
     resolve_notebook_id,
     run_async,
 )
+from .options import notebook_option
 
 # Common signature shared by all artifact download functions.
 # Each function accepts (notebook_id, output_path, *, artifact_id=None, **kwargs).
@@ -113,7 +114,7 @@ async def _download_artifacts_generic(
     file_extension: str,
     default_output_dir: str,
     output_path: str | None,
-    notebook: str | None,
+    notebook_id: str | None,
     latest: bool,
     earliest: bool,
     download_all: bool,
@@ -138,7 +139,7 @@ async def _download_artifacts_generic(
         file_extension: File extension (".mp3", ".mp4", ".png", ".pdf")
         default_output_dir: Default output directory for --all flag
         output_path: User-specified output path
-        notebook: Notebook ID
+        notebook_id: Notebook ID (full or partial; resolved via context if None)
         latest: Download latest artifact
         earliest: Download earliest artifact
         download_all: Download all artifacts
@@ -161,7 +162,7 @@ async def _download_artifacts_generic(
         raise click.UsageError("Cannot specify both --all and --artifact")
 
     # Get notebook and auth
-    nb_id = require_notebook(notebook)
+    nb_id = require_notebook(notebook_id)
     storage_path = ctx.obj.get("storage_path") if ctx.obj else None
     profile = ctx.obj.get("profile") if ctx.obj else None
     from ..auth import AuthTokens
@@ -469,7 +470,7 @@ def _display_download_result(result: dict, artifact_type: str) -> None:
 
 @download.command("audio")
 @click.argument("output_path", required=False, type=click.Path())
-@click.option("-n", "--notebook", help="Notebook ID (uses current context if not set)")
+@notebook_option
 @click.option("--latest", is_flag=True, help="Download latest (default behavior)")
 @click.option("--earliest", is_flag=True, help="Download earliest")
 @click.option("--all", "download_all", is_flag=True, help="Download all artifacts")
@@ -505,7 +506,7 @@ def download_audio(ctx, **kwargs):
 
 @download.command("video")
 @click.argument("output_path", required=False, type=click.Path())
-@click.option("-n", "--notebook", help="Notebook ID (uses current context if not set)")
+@notebook_option
 @click.option("--latest", is_flag=True, help="Download latest (default behavior)")
 @click.option("--earliest", is_flag=True, help="Download earliest")
 @click.option("--all", "download_all", is_flag=True, help="Download all artifacts")
@@ -556,7 +557,7 @@ download.add_command(_cinematic_video_cmd)
 
 @download.command("slide-deck")
 @click.argument("output_path", required=False, type=click.Path())
-@click.option("-n", "--notebook", help="Notebook ID (uses current context if not set)")
+@notebook_option
 @click.option("--latest", is_flag=True, help="Download latest (default behavior)")
 @click.option("--earliest", is_flag=True, help="Download earliest")
 @click.option("--all", "download_all", is_flag=True, help="Download all artifacts")
@@ -602,7 +603,7 @@ def download_slide_deck(ctx, **kwargs):
 
 @download.command("infographic")
 @click.argument("output_path", required=False, type=click.Path())
-@click.option("-n", "--notebook", help="Notebook ID (uses current context if not set)")
+@notebook_option
 @click.option("--latest", is_flag=True, help="Download latest (default behavior)")
 @click.option("--earliest", is_flag=True, help="Download earliest")
 @click.option("--all", "download_all", is_flag=True, help="Download all artifacts")
@@ -678,7 +679,7 @@ def _run_artifact_download(ctx, artifact_type: str, **kwargs) -> None:
 
 @download.command("report")
 @click.argument("output_path", required=False, type=click.Path())
-@click.option("-n", "--notebook", help="Notebook ID (uses current context if not set)")
+@notebook_option
 @click.option("--latest", is_flag=True, help="Download latest (default behavior)")
 @click.option("--earliest", is_flag=True, help="Download earliest")
 @click.option("--all", "download_all", is_flag=True, help="Download all artifacts")
@@ -714,7 +715,7 @@ def download_report(ctx, **kwargs):
 
 @download.command("mind-map")
 @click.argument("output_path", required=False, type=click.Path())
-@click.option("-n", "--notebook", help="Notebook ID (uses current context if not set)")
+@notebook_option
 @click.option("--latest", is_flag=True, help="Download latest (default behavior)")
 @click.option("--earliest", is_flag=True, help="Download earliest")
 @click.option("--all", "download_all", is_flag=True, help="Download all artifacts")
@@ -750,7 +751,7 @@ def download_mind_map(ctx, **kwargs):
 
 @download.command("data-table")
 @click.argument("output_path", required=False, type=click.Path())
-@click.option("-n", "--notebook", help="Notebook ID (uses current context if not set)")
+@notebook_option
 @click.option("--latest", is_flag=True, help="Download latest (default behavior)")
 @click.option("--earliest", is_flag=True, help="Download earliest")
 @click.option("--all", "download_all", is_flag=True, help="Download all artifacts")
@@ -788,7 +789,7 @@ async def _download_interactive(
     ctx,
     artifact_type: str,
     output_path: str | None,
-    notebook: str | None,
+    notebook_id: str | None,
     output_format: str,
     artifact_id: str | None,
 ) -> str:
@@ -798,14 +799,14 @@ async def _download_interactive(
         ctx: Click context.
         artifact_type: Either "quiz" or "flashcards".
         output_path: User-specified output path.
-        notebook: Notebook ID.
+        notebook_id: Notebook ID (full or partial; resolved via context if None).
         output_format: Output format - json, markdown, or html.
         artifact_id: Specific artifact ID.
 
     Returns:
         Path to downloaded file.
     """
-    nb_id = require_notebook(notebook)
+    nb_id = require_notebook(notebook_id)
     storage_path = ctx.obj.get("storage_path") if ctx.obj else None
     profile = ctx.obj.get("profile") if ctx.obj else None
     from ..auth import AuthTokens
@@ -834,7 +835,7 @@ async def _download_interactive(
 
 @download.command("quiz")
 @click.argument("output_path", required=False, type=click.Path())
-@click.option("-n", "--notebook", help="Notebook ID (uses current context if not set)")
+@notebook_option
 @click.option(
     "--format",
     "output_format",
@@ -844,7 +845,7 @@ async def _download_interactive(
 )
 @click.option("-a", "--artifact", "artifact_id", help="Select by artifact ID")
 @click.pass_context
-def download_quiz_cmd(ctx, output_path, notebook, output_format, artifact_id):
+def download_quiz_cmd(ctx, output_path, notebook_id, output_format, artifact_id):
     """Download quiz questions.
 
     \b
@@ -855,7 +856,7 @@ def download_quiz_cmd(ctx, output_path, notebook, output_format, artifact_id):
     """
     try:
         result = run_async(
-            _download_interactive(ctx, "quiz", output_path, notebook, output_format, artifact_id)
+            _download_interactive(ctx, "quiz", output_path, notebook_id, output_format, artifact_id)
         )
         console.print(f"[green]Downloaded quiz to:[/green] {result}")
     except Exception as e:
@@ -864,7 +865,7 @@ def download_quiz_cmd(ctx, output_path, notebook, output_format, artifact_id):
 
 @download.command("flashcards")
 @click.argument("output_path", required=False, type=click.Path())
-@click.option("-n", "--notebook", help="Notebook ID (uses current context if not set)")
+@notebook_option
 @click.option(
     "--format",
     "output_format",
@@ -874,7 +875,7 @@ def download_quiz_cmd(ctx, output_path, notebook, output_format, artifact_id):
 )
 @click.option("-a", "--artifact", "artifact_id", help="Select by artifact ID")
 @click.pass_context
-def download_flashcards_cmd(ctx, output_path, notebook, output_format, artifact_id):
+def download_flashcards_cmd(ctx, output_path, notebook_id, output_format, artifact_id):
     """Download flashcard deck.
 
     \b
@@ -886,7 +887,7 @@ def download_flashcards_cmd(ctx, output_path, notebook, output_format, artifact_
     try:
         result = run_async(
             _download_interactive(
-                ctx, "flashcards", output_path, notebook, output_format, artifact_id
+                ctx, "flashcards", output_path, notebook_id, output_format, artifact_id
             )
         )
         console.print(f"[green]Downloaded flashcards to:[/green] {result}")

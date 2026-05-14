@@ -745,7 +745,7 @@ def require_notebook(notebook_id: str | None) -> str:
     if current:
         return validate_id(current, "Notebook")
     console.print(
-        "[red]No notebook specified. Use 'notebooklm use <id>' to set context or provide notebook_id.[/red]"
+        "[red]No notebook specified. Use 'notebooklm use <id>' to set context or pass -n/--notebook.[/red]"
     )
     raise SystemExit(1)
 

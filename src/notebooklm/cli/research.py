@@ -20,6 +20,7 @@ from .helpers import (
     resolve_notebook_id,
     with_client,
 )
+from .options import notebook_option
 
 # UI-only cap for the research summary preview shown in `research status` /
 # `research wait`. Unlike RPC error previews (see
@@ -53,13 +54,7 @@ def research():
 
 
 @research.command("status")
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set)",
-)
+@notebook_option
 @click.option("--json", "json_output", is_flag=True, help="Output as JSON")
 @with_client
 def research_status(ctx, notebook_id, json_output, client_auth):
@@ -111,13 +106,7 @@ def research_status(ctx, notebook_id, json_output, client_auth):
 
 
 @research.command("wait")
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set)",
-)
+@notebook_option
 @click.option(
     "--timeout",
     default=300,

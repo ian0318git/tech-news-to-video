@@ -21,6 +21,7 @@ from .helpers import (
     resolve_notebook_id,
     with_client,
 )
+from .options import notebook_option
 
 
 def _permission_name(perm: SharePermission) -> str:
@@ -70,13 +71,7 @@ def share():
 
 
 @share.command("status")
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set). Supports partial IDs.",
-)
+@notebook_option
 @click.option("--json", "json_output", is_flag=True, help="Output as JSON")
 @with_client
 def share_status(ctx, notebook_id, json_output, client_auth):
@@ -146,13 +141,7 @@ def share_status(ctx, notebook_id, json_output, client_auth):
 
 
 @share.command("public")
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set). Supports partial IDs.",
-)
+@notebook_option
 @click.option("--enable/--disable", default=True, help="Enable or disable public sharing")
 @click.option("--json", "json_output", is_flag=True, help="Output as JSON")
 @with_client
@@ -196,13 +185,7 @@ def share_public(ctx, notebook_id, enable, json_output, client_auth):
 
 @share.command("view-level")
 @click.argument("level", type=click.Choice(["full", "chat"], case_sensitive=False))
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set). Supports partial IDs.",
-)
+@notebook_option
 @click.option("--json", "json_output", is_flag=True, help="Output as JSON")
 @with_client
 def share_view_level(ctx, level, notebook_id, json_output, client_auth):
@@ -245,13 +228,7 @@ def share_view_level(ctx, level, notebook_id, json_output, client_auth):
 
 @share.command("add")
 @click.argument("email")
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set). Supports partial IDs.",
-)
+@notebook_option
 @click.option(
     "--permission",
     "-p",
@@ -309,13 +286,7 @@ def share_add(ctx, email, notebook_id, permission, no_notify, message, json_outp
 
 @share.command("update")
 @click.argument("email")
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set). Supports partial IDs.",
-)
+@notebook_option
 @click.option(
     "--permission",
     "-p",
@@ -359,13 +330,7 @@ def share_update(ctx, email, notebook_id, permission, json_output, client_auth):
 
 @share.command("remove")
 @click.argument("email")
-@click.option(
-    "-n",
-    "--notebook",
-    "notebook_id",
-    default=None,
-    help="Notebook ID (uses current if not set). Supports partial IDs.",
-)
+@notebook_option
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
 @click.option("--json", "json_output", is_flag=True, help="Output as JSON")
 @with_client

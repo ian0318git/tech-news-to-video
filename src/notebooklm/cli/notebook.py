@@ -25,6 +25,7 @@ from .helpers import (
     set_current_notebook,
     with_client,
 )
+from .options import notebook_option
 
 
 def register_notebook_commands(cli):
@@ -121,13 +122,7 @@ def register_notebook_commands(cli):
         return _run()
 
     @cli.command("delete")
-    @click.option(
-        "-n",
-        "--notebook",
-        "notebook_id",
-        default=None,
-        help="Notebook ID (uses current if not set). Supports partial IDs.",
-    )
+    @notebook_option
     @click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
     @with_client
     def delete_cmd(ctx, notebook_id, yes, client_auth):
@@ -160,13 +155,7 @@ def register_notebook_commands(cli):
 
     @cli.command("rename")
     @click.argument("new_title")
-    @click.option(
-        "-n",
-        "--notebook",
-        "notebook_id",
-        default=None,
-        help="Notebook ID (uses current if not set). Supports partial IDs.",
-    )
+    @notebook_option
     @with_client
     def rename_cmd(ctx, new_title, notebook_id, client_auth):
         """Rename a notebook.
@@ -185,13 +174,7 @@ def register_notebook_commands(cli):
         return _run()
 
     @cli.command("summary")
-    @click.option(
-        "-n",
-        "--notebook",
-        "notebook_id",
-        default=None,
-        help="Notebook ID (uses current if not set). Supports partial IDs.",
-    )
+    @notebook_option
     @click.option("--topics", is_flag=True, help="Include suggested topics")
     @with_client
     def summary_cmd(ctx, notebook_id, topics, client_auth):
@@ -224,13 +207,7 @@ def register_notebook_commands(cli):
         return _run()
 
     @cli.command("metadata")
-    @click.option(
-        "-n",
-        "--notebook",
-        "notebook_id",
-        default=None,
-        help="Notebook ID (uses current if not set). Supports partial IDs.",
-    )
+    @notebook_option
     @click.option(
         "--json",
         "json_output",
