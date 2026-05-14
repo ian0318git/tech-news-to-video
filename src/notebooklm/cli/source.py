@@ -44,7 +44,7 @@ from .helpers import (
     validate_id,
     with_client,
 )
-from .options import notebook_option, prompt_file_option
+from .options import json_option, notebook_option, prompt_file_option
 
 # Titles matching this pattern indicate the source was blocked by an anti-bot
 # gateway, CAPTCHA, or returned an HTTP error page instead of real content.
@@ -543,8 +543,9 @@ def source_add(
 @source.command("get")
 @click.argument("source_id")
 @notebook_option
+@json_option
 @with_client
-def source_get(ctx, source_id, notebook_id, client_auth):
+def source_get(ctx, source_id, notebook_id, json_output, client_auth):
     """Get source details.
 
     SOURCE_ID can be a full UUID or a partial prefix (e.g., 'abc' matches 'abc123...').
@@ -553,10 +554,41 @@ def source_get(ctx, source_id, notebook_id, client_auth):
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            nb_id_resolved = await resolve_notebook_id(client, nb_id)
+            nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
             # Resolve partial ID to full ID
-            resolved_id = await resolve_source_id(client, nb_id_resolved, source_id)
+            resolved_id = await resolve_source_id(
+                client, nb_id_resolved, source_id, json_output=json_output
+            )
             src = await client.sources.get(nb_id_resolved, resolved_id)
+
+            if json_output:
+                # Phase 3 (C1) will change get-on-not-found to exit 1; for now
+                # the not-found branch still exits 0 to preserve current behavior
+                # — we just emit a structured JSON document instead of a plain
+                # "Source not found" line so automation can branch on the
+                # ``found`` field without text-scraping.
+                if src:
+                    data = {
+                        "source": {
+                            "id": src.id,
+                            "title": src.title,
+                            "type": str(src.kind),
+                            "url": src.url,
+                            "status": source_status_to_str(src.status),
+                            "status_id": src.status,
+                            "created_at": (src.created_at.isoformat() if src.created_at else None),
+                        },
+                        "found": True,
+                    }
+                else:
+                    data = {
+                        "source": None,
+                        "found": False,
+                        "source_id": resolved_id,
+                    }
+                json_output_response(data)
+                return
+
             if src:
                 console.print(f"[bold cyan]Source:[/bold cyan] {src.id}")
                 console.print(f"[bold]Title:[/bold] {src.title}")
@@ -577,8 +609,9 @@ def source_get(ctx, source_id, notebook_id, client_auth):
 @click.argument("source_id")
 @notebook_option
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
+@json_option
 @with_client
-def source_delete(ctx, source_id, notebook_id, yes, client_auth):
+def source_delete(ctx, source_id, notebook_id, yes, json_output, client_auth):
     """Delete a source.
 
     SOURCE_ID can be a full UUID or a partial prefix (e.g., 'abc' matches 'abc123...').
@@ -587,13 +620,37 @@ def source_delete(ctx, source_id, notebook_id, yes, client_auth):
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            nb_id_resolved = await resolve_notebook_id(client, nb_id)
-            resolved_id = await _resolve_source_for_delete(client, nb_id_resolved, source_id)
+            nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
+            resolved_id = await _resolve_source_for_delete(
+                client, nb_id_resolved, source_id, json_output=json_output
+            )
 
             if not yes and not click.confirm(f"Delete source {resolved_id}?"):
+                if json_output:
+                    json_output_response(
+                        {
+                            "action": "delete",
+                            "source_id": resolved_id,
+                            "notebook_id": nb_id_resolved,
+                            "status": "cancelled",
+                        }
+                    )
                 return
 
             success = await client.sources.delete(nb_id_resolved, resolved_id)
+
+            if json_output:
+                json_output_response(
+                    {
+                        "action": "delete",
+                        "source_id": resolved_id,
+                        "notebook_id": nb_id_resolved,
+                        "success": bool(success),
+                        "status": "deleted" if success else "unknown",
+                    }
+                )
+                return
+
             if success:
                 console.print(f"[green]Deleted source:[/green] {resolved_id}")
             else:
@@ -606,20 +663,45 @@ def source_delete(ctx, source_id, notebook_id, yes, client_auth):
 @click.argument("title")
 @notebook_option
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
+@json_option
 @with_client
-def source_delete_by_title(ctx, title, notebook_id, yes, client_auth):
+def source_delete_by_title(ctx, title, notebook_id, yes, json_output, client_auth):
     """Delete a source by exact title."""
     nb_id = require_notebook(notebook_id)
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            nb_id_resolved = await resolve_notebook_id(client, nb_id)
+            nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
             source = await _resolve_source_by_exact_title(client, nb_id_resolved, title)
 
             if not yes and not click.confirm(f"Delete source '{source.title}' ({source.id})?"):
+                if json_output:
+                    json_output_response(
+                        {
+                            "action": "delete-by-title",
+                            "source_id": source.id,
+                            "title": source.title,
+                            "notebook_id": nb_id_resolved,
+                            "status": "cancelled",
+                        }
+                    )
                 return
 
             success = await client.sources.delete(nb_id_resolved, source.id)
+
+            if json_output:
+                json_output_response(
+                    {
+                        "action": "delete-by-title",
+                        "source_id": source.id,
+                        "title": source.title,
+                        "notebook_id": nb_id_resolved,
+                        "success": bool(success),
+                        "status": "deleted" if success else "unknown",
+                    }
+                )
+                return
+
             if success:
                 console.print(f"[green]Deleted source:[/green] {source.id}")
             else:
@@ -632,8 +714,9 @@ def source_delete_by_title(ctx, title, notebook_id, yes, client_auth):
 @click.argument("source_id")
 @click.argument("new_title")
 @notebook_option
+@json_option
 @with_client
-def source_rename(ctx, source_id, new_title, notebook_id, client_auth):
+def source_rename(ctx, source_id, new_title, notebook_id, json_output, client_auth):
     """Rename a source.
 
     SOURCE_ID can be a full UUID or a partial prefix (e.g., 'abc' matches 'abc123...').
@@ -642,10 +725,25 @@ def source_rename(ctx, source_id, new_title, notebook_id, client_auth):
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            nb_id_resolved = await resolve_notebook_id(client, nb_id)
+            nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
             # Resolve partial ID to full ID
-            resolved_id = await resolve_source_id(client, nb_id_resolved, source_id)
+            resolved_id = await resolve_source_id(
+                client, nb_id_resolved, source_id, json_output=json_output
+            )
             src = await client.sources.rename(nb_id_resolved, resolved_id, new_title)
+
+            if json_output:
+                json_output_response(
+                    {
+                        "action": "rename",
+                        "source_id": src.id,
+                        "notebook_id": nb_id_resolved,
+                        "title": src.title,
+                        "status": "renamed",
+                    }
+                )
+                return
+
             console.print(f"[green]Renamed source:[/green] {src.id}")
             console.print(f"[bold]New title:[/bold] {src.title}")
 
@@ -655,8 +753,9 @@ def source_rename(ctx, source_id, new_title, notebook_id, client_auth):
 @source.command("refresh")
 @click.argument("source_id")
 @notebook_option
+@json_option
 @with_client
-def source_refresh(ctx, source_id, notebook_id, client_auth):
+def source_refresh(ctx, source_id, notebook_id, json_output, client_auth):
     """Refresh a URL/Drive source.
 
     SOURCE_ID can be a full UUID or a partial prefix (e.g., 'abc' matches 'abc123...').
@@ -665,11 +764,46 @@ def source_refresh(ctx, source_id, notebook_id, client_auth):
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            nb_id_resolved = await resolve_notebook_id(client, nb_id)
+            nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
             # Resolve partial ID to full ID
-            resolved_id = await resolve_source_id(client, nb_id_resolved, source_id)
-            with console.status("Refreshing source..."):
+            resolved_id = await resolve_source_id(
+                client, nb_id_resolved, source_id, json_output=json_output
+            )
+
+            if json_output:
                 src = await client.sources.refresh(nb_id_resolved, resolved_id)
+            else:
+                with console.status("Refreshing source..."):
+                    src = await client.sources.refresh(nb_id_resolved, resolved_id)
+
+            if json_output:
+                # ``refresh`` may return a Source dataclass, ``True``, or
+                # falsy/None. Surface the same three states in JSON so
+                # automation can branch on ``status`` without scraping text.
+                if src and src is not True:
+                    data = {
+                        "action": "refresh",
+                        "source_id": src.id,
+                        "notebook_id": nb_id_resolved,
+                        "title": src.title,
+                        "status": "refreshed",
+                    }
+                elif src is True:
+                    data = {
+                        "action": "refresh",
+                        "source_id": resolved_id,
+                        "notebook_id": nb_id_resolved,
+                        "status": "refreshed",
+                    }
+                else:
+                    data = {
+                        "action": "refresh",
+                        "source_id": resolved_id,
+                        "notebook_id": nb_id_resolved,
+                        "status": "no_result",
+                    }
+                json_output_response(data)
+                return
 
             if src and src is not True:
                 console.print(f"[green]Source refreshed:[/green] {src.id}")
@@ -692,8 +826,9 @@ def source_refresh(ctx, source_id, notebook_id, client_auth):
     default="google-doc",
     help="Document type (default: google-doc)",
 )
+@json_option
 @with_client
-def source_add_drive(ctx, file_id, title, notebook_id, mime_type, client_auth):
+def source_add_drive(ctx, file_id, title, notebook_id, mime_type, json_output, client_auth):
     """Add a Google Drive document as a source."""
     from ..types import DriveMimeType
 
@@ -708,9 +843,30 @@ def source_add_drive(ctx, file_id, title, notebook_id, mime_type, client_auth):
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            nb_id_resolved = await resolve_notebook_id(client, nb_id)
-            with console.status("Adding Drive source..."):
+            nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
+
+            if json_output:
                 src = await client.sources.add_drive(nb_id_resolved, file_id, title, mime)
+            else:
+                with console.status("Adding Drive source..."):
+                    src = await client.sources.add_drive(nb_id_resolved, file_id, title, mime)
+
+            if json_output:
+                json_output_response(
+                    {
+                        "action": "add-drive",
+                        "source": {
+                            "id": src.id,
+                            "title": src.title,
+                            "type": str(src.kind),
+                            "url": src.url,
+                            "drive_file_id": file_id,
+                            "mime_type": mime_type,
+                        },
+                        "notebook_id": nb_id_resolved,
+                    }
+                )
+                return
 
             console.print(f"[green]Added Drive source:[/green] {src.id}")
             console.print(f"[bold]Title:[/bold] {src.title}")
@@ -985,26 +1141,52 @@ def source_guide(ctx, source_id, notebook_id, json_output, client_auth):
 @source.command("stale")
 @click.argument("source_id")
 @notebook_option
+@json_option
 @with_client
-def source_stale(ctx, source_id, notebook_id, client_auth):
+def source_stale(ctx, source_id, notebook_id, json_output, client_auth):
     """Check if a URL/Drive source needs refresh.
 
     Returns exit code 0 if stale (needs refresh), 1 if fresh.
     This enables shell scripting: if notebooklm source stale ID; then refresh; fi
+
+    The inverted exit-code semantics are intentional and apply to ``--json``
+    too — see docs/cli-exit-codes.md. Branch on the JSON ``stale`` field
+    when the predicate-style exit code is awkward.
 
     SOURCE_ID can be a full UUID or a partial prefix (e.g., 'abc' matches 'abc123...').
 
     \b
     Examples:
       notebooklm source stale abc123              # Check if stale
+      notebooklm source stale abc123 --json       # Same exit codes; JSON body
     """
     nb_id = require_notebook(notebook_id)
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            nb_id_resolved = await resolve_notebook_id(client, nb_id)
-            resolved_id = await resolve_source_id(client, nb_id_resolved, source_id)
+            nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
+            resolved_id = await resolve_source_id(
+                client, nb_id_resolved, source_id, json_output=json_output
+            )
             is_fresh = await client.sources.check_freshness(nb_id_resolved, resolved_id)
+            stale = not is_fresh
+
+            if json_output:
+                # PRESERVE INVERTED EXIT-CODE SEMANTICS: ``source stale`` is the
+                # only command that exits 0 on a "true predicate" and 1 on a
+                # "false predicate". The JSON body carries the boolean
+                # explicitly so callers who would prefer to branch on a field
+                # rather than the exit code can do so.
+                json_output_response(
+                    {
+                        "source_id": resolved_id,
+                        "notebook_id": nb_id_resolved,
+                        "stale": stale,
+                        "fresh": is_fresh,
+                    }
+                )
+                # Exit codes remain inverted by design — see docs/cli-exit-codes.md.
+                raise SystemExit(0 if stale else 1)
 
             if is_fresh:
                 console.print("[green]✓ Source is fresh[/green]")
@@ -1138,35 +1320,86 @@ def source_wait(ctx, source_id, notebook_id, timeout, json_output, client_auth):
     "--dry-run", is_flag=True, help="Show what would be deleted without actually deleting"
 )
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
+@json_option
 @with_client
-def source_clean(ctx, notebook_id, dry_run, yes, client_auth):
+def source_clean(ctx, notebook_id, dry_run, yes, json_output, client_auth):
     """Automatically remove duplicate, error, and access-blocked sources."""
     nb_id = require_notebook(notebook_id)
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            nb_id_resolved = await resolve_notebook_id(client, nb_id)
-            with console.status("Fetching sources for cleanup..."):
+            nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
+            if json_output:
                 sources = await client.sources.list(nb_id_resolved)
+            else:
+                with console.status("Fetching sources for cleanup..."):
+                    sources = await client.sources.list(nb_id_resolved)
 
             candidates = _classify_junk_sources(sources)
 
+            def _candidates_payload() -> list[dict]:
+                return [
+                    {"id": sid, "title": title, "status": status, "reason": reason}
+                    for sid, title, status, reason in candidates
+                ]
+
             if not candidates:
+                if json_output:
+                    json_output_response(
+                        {
+                            "action": "clean",
+                            "notebook_id": nb_id_resolved,
+                            "status": "already_clean",
+                            "candidates": [],
+                            "deleted_count": 0,
+                            "failure_count": 0,
+                        }
+                    )
+                    return
                 console.print("[green]Notebook is already clean. No junk sources found.[/green]")
                 return
 
-            _print_clean_candidates(candidates)
+            if not json_output:
+                _print_clean_candidates(candidates)
 
             if dry_run:
+                if json_output:
+                    json_output_response(
+                        {
+                            "action": "clean",
+                            "notebook_id": nb_id_resolved,
+                            "status": "dry_run",
+                            "candidates": _candidates_payload(),
+                            "candidate_count": len(candidates),
+                            "deleted_count": 0,
+                            "failure_count": 0,
+                        }
+                    )
+                    return
                 console.print(
                     f"[yellow]Dry run: would delete {len(candidates)} source(s).[/yellow]"
                 )
                 return
 
             if not yes and not click.confirm(f"Delete {len(candidates)} source(s)?"):
+                if json_output:
+                    json_output_response(
+                        {
+                            "action": "clean",
+                            "notebook_id": nb_id_resolved,
+                            "status": "cancelled",
+                            "candidates": _candidates_payload(),
+                            "candidate_count": len(candidates),
+                            "deleted_count": 0,
+                            "failure_count": 0,
+                        }
+                    )
                 return
 
-            console.print(f"[dim]Cleaning {len(candidates)} source(s) (in chunks of 10)...[/dim]")
+            if not json_output:
+                console.print(
+                    f"[dim]Cleaning {len(candidates)} source(s) (in chunks of 10)...[/dim]"
+                )
 
             delete_list = [c[0] for c in candidates]
             chunk_size = 10
@@ -1183,6 +1416,21 @@ def source_clean(ctx, notebook_id, dry_run, yes, client_auth):
                         deleted += 1
                 if i + chunk_size < len(delete_list):
                     await asyncio.sleep(0.5)
+
+            if json_output:
+                json_output_response(
+                    {
+                        "action": "clean",
+                        "notebook_id": nb_id_resolved,
+                        "status": "completed",
+                        "candidates": _candidates_payload(),
+                        "candidate_count": len(candidates),
+                        "deleted_count": deleted,
+                        "failure_count": len(failures),
+                        "failures": [{"id": sid, "error": err} for sid, err in failures],
+                    }
+                )
+                return
 
             if failures:
                 console.print(

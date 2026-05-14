@@ -2005,3 +2005,335 @@ class _CleanPatch:
 
     def __exit__(self, *exc):
         return self._exit_stack.__exit__(*exc)
+
+
+# =============================================================================
+# JSON OUTPUT SMOKE TESTS (P2.T3 / I3)
+# =============================================================================
+
+
+class TestSourceJsonOutput:
+    """Smoke coverage for ``--json`` on the eight source subcommands shipped in
+    P2.T3: delete, rename, refresh, clean, get, delete-by-title, add-drive,
+    stale.
+
+    These tests exercise the JSON branch end-to-end through Click and assert:
+
+    1. Stdout is parseable JSON (no Rich color codes leaking onto stdout).
+    2. The shape exposes the fields automation needs (``source_id``,
+       ``status``, etc.).
+    3. ``source stale --json`` PRESERVES the inverted exit-code semantics
+       documented in ``docs/cli-exit-codes.md`` (stale=0, fresh=1).
+    """
+
+    def _patch_fetch_tokens(self):
+        return patch(
+            "notebooklm.auth.fetch_tokens_with_domains",
+            new_callable=AsyncMock,
+            return_value=("csrf", "session"),
+        )
+
+    def test_source_get_json(self, runner, mock_auth):
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.sources.list = AsyncMock(
+                return_value=[Source(id="src_123", title="My Source")]
+            )
+            mock_client.sources.get = AsyncMock(
+                return_value=Source(
+                    id="src_123",
+                    title="My Source",
+                    url="https://example.com",
+                    created_at=datetime(2024, 1, 1, 12, 0),
+                )
+            )
+            mock_client_cls.return_value = mock_client
+
+            with self._patch_fetch_tokens():
+                result = runner.invoke(cli, ["source", "get", "src_123", "-n", "nb_123", "--json"])
+
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            assert data["found"] is True
+            assert data["source"]["id"] == "src_123"
+            assert data["source"]["title"] == "My Source"
+            assert data["source"]["url"] == "https://example.com"
+            assert data["source"]["created_at"] == "2024-01-01T12:00:00"
+
+    def test_source_get_json_not_found_stays_exit_zero(self, runner, mock_auth):
+        # C1 (Phase 3) will flip get-on-not-found to exit 1. Until then this
+        # test pins the current contract: not-found exits 0 and emits a
+        # structured ``found: false`` body.
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.sources.list = AsyncMock(
+                return_value=[Source(id="src_resolved", title="Existing")]
+            )
+            mock_client.sources.get = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            with self._patch_fetch_tokens():
+                result = runner.invoke(
+                    cli, ["source", "get", "src_resolved", "-n", "nb_123", "--json"]
+                )
+
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            assert data["found"] is False
+            assert data["source"] is None
+            assert data["source_id"] == "src_resolved"
+
+    def test_source_delete_json(self, runner, mock_auth):
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.sources.list = AsyncMock(
+                return_value=[Source(id="src_123", title="My Source")]
+            )
+            mock_client.sources.delete = AsyncMock(return_value=True)
+            mock_client_cls.return_value = mock_client
+
+            with self._patch_fetch_tokens():
+                result = runner.invoke(
+                    cli, ["source", "delete", "src_123", "-n", "nb_123", "-y", "--json"]
+                )
+
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            assert data["action"] == "delete"
+            assert data["source_id"] == "src_123"
+            assert data["notebook_id"] == "nb_123"
+            assert data["success"] is True
+            assert data["status"] == "deleted"
+
+    def test_source_delete_by_title_json(self, runner, mock_auth):
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.sources.list = AsyncMock(
+                return_value=[Source(id="src_999", title="Doomed")]
+            )
+            mock_client.sources.delete = AsyncMock(return_value=True)
+            mock_client_cls.return_value = mock_client
+
+            with self._patch_fetch_tokens():
+                result = runner.invoke(
+                    cli,
+                    [
+                        "source",
+                        "delete-by-title",
+                        "Doomed",
+                        "-n",
+                        "nb_123",
+                        "-y",
+                        "--json",
+                    ],
+                )
+
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            assert data["action"] == "delete-by-title"
+            assert data["source_id"] == "src_999"
+            assert data["title"] == "Doomed"
+            assert data["success"] is True
+            assert data["status"] == "deleted"
+
+    def test_source_rename_json(self, runner, mock_auth):
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.sources.list = AsyncMock(return_value=[Source(id="src_123", title="Old")])
+            mock_client.sources.rename = AsyncMock(return_value=Source(id="src_123", title="New"))
+            mock_client_cls.return_value = mock_client
+
+            with self._patch_fetch_tokens():
+                result = runner.invoke(
+                    cli,
+                    ["source", "rename", "src_123", "New", "-n", "nb_123", "--json"],
+                )
+
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            assert data["action"] == "rename"
+            assert data["source_id"] == "src_123"
+            assert data["title"] == "New"
+            assert data["status"] == "renamed"
+
+    def test_source_refresh_json(self, runner, mock_auth):
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.sources.list = AsyncMock(
+                return_value=[Source(id="src_123", title="Original")]
+            )
+            mock_client.sources.refresh = AsyncMock(
+                return_value=Source(id="src_123", title="Refreshed")
+            )
+            mock_client_cls.return_value = mock_client
+
+            with self._patch_fetch_tokens():
+                result = runner.invoke(
+                    cli, ["source", "refresh", "src_123", "-n", "nb_123", "--json"]
+                )
+
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            assert data["action"] == "refresh"
+            assert data["source_id"] == "src_123"
+            assert data["title"] == "Refreshed"
+            assert data["status"] == "refreshed"
+
+    def test_source_refresh_json_no_result(self, runner, mock_auth):
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.sources.list = AsyncMock(
+                return_value=[Source(id="src_123", title="Original")]
+            )
+            mock_client.sources.refresh = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            with self._patch_fetch_tokens():
+                result = runner.invoke(
+                    cli, ["source", "refresh", "src_123", "-n", "nb_123", "--json"]
+                )
+
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            assert data["action"] == "refresh"
+            assert data["source_id"] == "src_123"
+            assert data["status"] == "no_result"
+
+    def test_source_add_drive_json(self, runner, mock_auth):
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.sources.add_drive = AsyncMock(
+                return_value=Source(id="src_drive", title="My Drive Doc")
+            )
+            mock_client_cls.return_value = mock_client
+
+            with self._patch_fetch_tokens():
+                result = runner.invoke(
+                    cli,
+                    [
+                        "source",
+                        "add-drive",
+                        "drive_file_xyz",
+                        "My Drive Doc",
+                        "--mime-type",
+                        "pdf",
+                        "-n",
+                        "nb_123",
+                        "--json",
+                    ],
+                )
+
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            assert data["action"] == "add-drive"
+            assert data["source"]["id"] == "src_drive"
+            assert data["source"]["title"] == "My Drive Doc"
+            assert data["source"]["drive_file_id"] == "drive_file_xyz"
+            assert data["source"]["mime_type"] == "pdf"
+            assert data["notebook_id"] == "nb_123"
+
+    def test_source_stale_json_is_stale_exits_zero(self, runner, mock_auth):
+        """``source stale --json`` PRESERVES the inverted exit-code semantics:
+        exit 0 when stale (predicate true), so the shell idiom
+        ``if notebooklm source stale ID; then refresh; fi`` still works in
+        JSON mode. See docs/cli-exit-codes.md.
+        """
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.sources.list = AsyncMock(return_value=[Source(id="src_123", title="Stale")])
+            mock_client.sources.check_freshness = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            with self._patch_fetch_tokens():
+                result = runner.invoke(
+                    cli, ["source", "stale", "src_123", "-n", "nb_123", "--json"]
+                )
+
+            # Inverted exit code preserved in JSON mode.
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            assert data["stale"] is True
+            assert data["fresh"] is False
+            assert data["source_id"] == "src_123"
+
+    def test_source_stale_json_is_fresh_exits_one(self, runner, mock_auth):
+        """Inverted exit-code semantics, fresh branch: exit 1 (predicate false)."""
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.sources.list = AsyncMock(return_value=[Source(id="src_123", title="Fresh")])
+            mock_client.sources.check_freshness = AsyncMock(return_value=True)
+            mock_client_cls.return_value = mock_client
+
+            with self._patch_fetch_tokens():
+                result = runner.invoke(
+                    cli, ["source", "stale", "src_123", "-n", "nb_123", "--json"]
+                )
+
+            # Inverted exit code preserved in JSON mode.
+            assert result.exit_code == 1, result.output
+            data = json.loads(result.output)
+            assert data["stale"] is False
+            assert data["fresh"] is True
+            assert data["source_id"] == "src_123"
+
+    def test_source_clean_json_already_clean(self, runner, mock_auth):
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.sources.list = AsyncMock(
+                return_value=[_src("src_1", title="Page", url="https://ex.com/a")]
+            )
+            mock_client.sources.delete = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            with self._patch_fetch_tokens():
+                result = runner.invoke(cli, ["source", "clean", "-n", "nb_123", "-y", "--json"])
+
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            assert data["action"] == "clean"
+            assert data["status"] == "already_clean"
+            assert data["candidates"] == []
+            assert data["deleted_count"] == 0
+
+    def test_source_clean_json_dry_run(self, runner, mock_auth):
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.sources.list = AsyncMock(
+                return_value=[_src("src_err", title="oops", status=SourceStatus.ERROR)]
+            )
+            mock_client.sources.delete = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            with self._patch_fetch_tokens():
+                result = runner.invoke(
+                    cli, ["source", "clean", "-n", "nb_123", "--dry-run", "--json"]
+                )
+
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            assert data["status"] == "dry_run"
+            assert data["candidate_count"] == 1
+            assert data["candidates"][0]["id"] == "src_err"
+            assert data["candidates"][0]["reason"] == "error_status"
+            assert data["deleted_count"] == 0
+            mock_client.sources.delete.assert_not_called()
+
+    def test_source_clean_json_completed(self, runner, mock_auth):
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.sources.list = AsyncMock(
+                return_value=[_src("src_err", title="oops", status=SourceStatus.ERROR)]
+            )
+            mock_client.sources.delete = AsyncMock(return_value=True)
+            mock_client_cls.return_value = mock_client
+
+            with self._patch_fetch_tokens():
+                result = runner.invoke(cli, ["source", "clean", "-n", "nb_123", "-y", "--json"])
+
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            assert data["status"] == "completed"
+            assert data["deleted_count"] == 1
+            assert data["failure_count"] == 0
+            assert data["failures"] == []
+            mock_client.sources.delete.assert_awaited_once_with("nb_123", "src_err")
