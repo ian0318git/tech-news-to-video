@@ -2283,7 +2283,14 @@ class ArtifactsAPI:
             The output path on success.
 
         Raises:
-            ArtifactDownloadError: If download fails or authentication expired.
+            ArtifactDownloadError: On any HTTP or network failure. For 401/403
+                responses the message indicates that re-authentication is
+                needed (``try `notebooklm login```), and the exception's
+                ``status_code`` attribute carries the HTTP status. For other
+                HTTP errors ``status_code`` is set to the response code; for
+                transport failures (timeouts, DNS, connection resets) the
+                ``status_code`` is ``None``. Callers no longer see raw
+                ``httpx.HTTPError`` subclasses from this method.
         """
         # Validate URL scheme and domain before sending auth cookies.
         # httpx sends cookies to every request made by the client regardless of
@@ -2312,60 +2319,92 @@ class ArtifactsAPI:
         timeout = httpx.Timeout(connect=10.0, read=30.0, write=30.0, pool=30.0)
 
         try:
-            # Nested context managers required: client.stream() returns an async
-            # context manager that must run within the client's scope
-            async with httpx.AsyncClient(  # noqa: SIM117
-                cookies=cookies,
-                follow_redirects=True,
-                timeout=timeout,
-            ) as client:
-                async with client.stream("GET", url) as response:
-                    response.raise_for_status()
+            try:
+                # Nested context managers required: client.stream() returns an
+                # async context manager that must run within the client's scope
+                async with httpx.AsyncClient(  # noqa: SIM117
+                    cookies=cookies,
+                    follow_redirects=True,
+                    timeout=timeout,
+                ) as client:
+                    async with client.stream("GET", url) as response:
+                        response.raise_for_status()
 
-                    content_type = response.headers.get("content-type", "")
-                    if "text/html" in content_type:
-                        raise ArtifactDownloadError(
-                            "media",
-                            details="Download failed: received HTML instead of media file. "
-                            "Authentication may have expired. Run 'notebooklm login'.",
-                        )
+                        content_type = response.headers.get("content-type", "")
+                        if "text/html" in content_type:
+                            raise ArtifactDownloadError(
+                                "media",
+                                details="Download failed: received HTML instead of media file. "
+                                "Authentication may have expired. Run 'notebooklm login'.",
+                            )
 
-                    # Stream to file in chunks to handle large files efficiently.
-                    # Each per-chunk write is dispatched to a worker thread so the
-                    # event loop isn't blocked on disk I/O; the loop body awaits
-                    # each write before reading the next chunk so the shared file
-                    # handle is never accessed concurrently in normal execution.
-                    #
-                    # Cancellation: ``asyncio.shield`` keeps the in-flight write
-                    # alive across a CancelledError; the except block awaits the
-                    # shielded task to completion BEFORE letting the with-block
-                    # close the file. Without this, the worker thread could touch
-                    # ``f`` after the with-block has started closing it.
-                    total_bytes = 0
-                    with open(temp_file, "wb") as f:
-                        async for chunk in response.aiter_bytes(chunk_size=65536):
-                            write_task = asyncio.create_task(asyncio.to_thread(f.write, chunk))
-                            try:
-                                await asyncio.shield(write_task)
-                            except asyncio.CancelledError:
-                                # Narrow to (CancelledError, Exception) so genuine
-                                # process-level signals (KeyboardInterrupt, SystemExit)
-                                # still propagate during cleanup.
-                                with contextlib.suppress(asyncio.CancelledError, Exception):
-                                    await write_task
-                                raise
-                            total_bytes += len(chunk)
+                        # Stream to file in chunks to handle large files efficiently.
+                        # Each per-chunk write is dispatched to a worker thread so the
+                        # event loop isn't blocked on disk I/O; the loop body awaits
+                        # each write before reading the next chunk so the shared file
+                        # handle is never accessed concurrently in normal execution.
+                        #
+                        # Cancellation: ``asyncio.shield`` keeps the in-flight write
+                        # alive across a CancelledError; the except block awaits the
+                        # shielded task to completion BEFORE letting the with-block
+                        # close the file. Without this, the worker thread could touch
+                        # ``f`` after the with-block has started closing it.
+                        total_bytes = 0
+                        with open(temp_file, "wb") as f:
+                            async for chunk in response.aiter_bytes(chunk_size=65536):
+                                write_task = asyncio.create_task(asyncio.to_thread(f.write, chunk))
+                                try:
+                                    await asyncio.shield(write_task)
+                                except asyncio.CancelledError:
+                                    # Narrow to (CancelledError, Exception) so genuine
+                                    # process-level signals (KeyboardInterrupt, SystemExit)
+                                    # still propagate during cleanup.
+                                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                                        await write_task
+                                    raise
+                                total_bytes += len(chunk)
 
-                    if total_bytes == 0:
-                        raise ArtifactDownloadError(
-                            "media",
-                            details="Download produced 0 bytes -- the remote file may be missing or empty",
-                        )
+                        if total_bytes == 0:
+                            raise ArtifactDownloadError(
+                                "media",
+                                details=(
+                                    "Download produced 0 bytes -- the remote file may "
+                                    "be missing or empty"
+                                ),
+                            )
 
-                    # Only move to final location on success
-                    temp_file.rename(output_file)
-                    logger.debug("Downloaded %s (%d bytes)", url[:60], total_bytes)
-                    return output_path
+                        # Only move to final location on success
+                        temp_file.rename(output_file)
+                        logger.debug("Downloaded %s (%d bytes)", url[:60], total_bytes)
+                        return output_path
+            except httpx.HTTPStatusError as e:
+                # HTTP-level failure (4xx/5xx). Translate to ArtifactDownloadError
+                # so callers see a consistent exception type instead of a raw
+                # httpx subclass. 401/403 get an explicit "re-login" hint,
+                # mirroring the message style used by _download_urls_batch.
+                if e.response.status_code in (401, 403):
+                    raise ArtifactDownloadError(
+                        "media",
+                        details=(
+                            f"Authentication required for {url[:80]}... -- try `notebooklm login`"
+                        ),
+                        cause=e,
+                        status_code=e.response.status_code,
+                    ) from e
+                raise ArtifactDownloadError(
+                    "media",
+                    details=f"HTTP {e.response.status_code} downloading {url[:80]}...",
+                    cause=e,
+                    status_code=e.response.status_code,
+                ) from e
+            except httpx.RequestError as e:
+                # Transport-level failure: timeouts, DNS, TLS, connection
+                # resets, etc. No HTTP response was received, so no status_code.
+                raise ArtifactDownloadError(
+                    "media",
+                    details=f"Network error downloading {url[:80]}...: {e}",
+                    cause=e,
+                ) from e
         except BaseException:
             # Clean up partial temp file on any failure, including asyncio.CancelledError
             # (which is a BaseException, not an Exception, in Python 3.8+).

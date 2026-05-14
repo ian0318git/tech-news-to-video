@@ -644,6 +644,10 @@ class ArtifactDownloadError(ArtifactError):
         artifact_id: The ID (if known).
         details: Additional error details.
         cause: The underlying exception.
+        status_code: HTTP status code from the failed response, when the
+            failure was an HTTP-level error (e.g. 401, 403, 500). ``None`` for
+            transport-level failures (timeouts, DNS, connection resets) where
+            no response was received.
     """
 
     def __init__(
@@ -652,11 +656,13 @@ class ArtifactDownloadError(ArtifactError):
         details: str | None = None,
         artifact_id: str | None = None,
         cause: Exception | None = None,
+        status_code: int | None = None,
     ):
         self.artifact_type = artifact_type
         self.artifact_id = artifact_id
         self.details = details
         self.cause = cause
+        self.status_code = status_code
         msg = f"Failed to download {artifact_type} artifact"
         if artifact_id:
             msg += f" {artifact_id}"
