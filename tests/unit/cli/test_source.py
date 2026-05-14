@@ -1464,6 +1464,170 @@ class TestSourceAddAutoDetect:
 
 
 # =============================================================================
+# SOURCE ADD PATH-SHAPED MISSING-FILE WARNING (P4.T4 / I8)
+# =============================================================================
+#
+# Audit row I8: ``notebooklm source add ./missing.md`` currently silently
+# falls through to inline-text ingestion. Users (and AI agents) reading the
+# CLI back-channel cannot distinguish "I sent the literal string ``./missing.md``
+# as note content" from "the file uploaded successfully" — the success line
+# looks identical. The remediation here is a stderr warning when the input
+# *looks like* a path (contains ``/`` OR ends in a known file extension)
+# AND the path does not exist; the source is still added as text so the
+# inferred-text behavior is preserved (no breaking exit-code change). Explicit
+# ``--type text`` suppresses the warning because the user has stated intent
+# unambiguously.
+
+
+class TestSourceAddPathShapedMissing:
+    """P4.T4 / I8: warn when path-shaped arg doesn't exist on disk."""
+
+    def test_path_shaped_missing_emits_stderr_warning(self, runner, mock_auth):
+        """``./missing.md`` (slash + known ext, doesn't exist) -> stderr warn.
+
+        Source is still added as text — warning is advisory, not fatal.
+        """
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.sources.add_text = AsyncMock(
+                return_value=Source(id="src_text", title="Pasted Text")
+            )
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["source", "add", "./missing.md", "-n", "nb_123"])
+
+        # Source must still be added (advisory warn, not fatal).
+        assert result.exit_code == 0
+        mock_client.sources.add_text.assert_called_once()
+        # Click's CliRunner mixes stderr into ``result.output`` by default;
+        # both the path-shape phrasing and the original argument should
+        # surface so a user can see what triggered the heuristic. Assert
+        # the full phrase (not an OR) so a future edit that drops "looks
+        # like a path" or "does not exist" individually still trips this.
+        assert "looks like a path but does not exist" in result.output
+        assert "./missing.md" in result.output
+
+    def test_path_shaped_missing_with_extension_only_warns(self, runner, mock_auth):
+        """No slash but a known extension still triggers the heuristic.
+
+        ``missing.md`` (no slash, has ``.md``) is path-shaped: ``./missing.md``
+        without the leading dot-slash is a common shell mistake.
+        """
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.sources.add_text = AsyncMock(
+                return_value=Source(id="src_text", title="Pasted Text")
+            )
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["source", "add", "missing.md", "-n", "nb_123"])
+
+        assert result.exit_code == 0
+        mock_client.sources.add_text.assert_called_once()
+        # Tight full-phrase match — see the slash-case test above for rationale.
+        assert "looks like a path but does not exist" in result.output
+        assert "missing.md" in result.output
+
+    def test_explicit_type_text_suppresses_warning(self, runner, mock_auth):
+        """``--type text`` is an explicit user override — no warning.
+
+        The user has stated intent: "treat this as text, not a path." The
+        heuristic must respect that and stay silent.
+        """
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.sources.add_text = AsyncMock(
+                return_value=Source(id="src_text", title="Pasted Text")
+            )
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli,
+                    [
+                        "source",
+                        "add",
+                        "./missing.md",
+                        "--type",
+                        "text",
+                        "-n",
+                        "nb_123",
+                    ],
+                )
+
+        assert result.exit_code == 0
+        mock_client.sources.add_text.assert_called_once()
+        assert "looks like a path" not in result.output
+        assert "does not exist" not in result.output
+
+    def test_pure_text_no_path_shape_no_warning(self, runner, mock_auth):
+        """Plain prose with no slash and no known extension -> no warning.
+
+        Regression guard: the heuristic must not fire on legitimate inline
+        text content like ``"My notes here"``.
+        """
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.sources.add_text = AsyncMock(
+                return_value=Source(id="src_text", title="Pasted Text")
+            )
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli,
+                    ["source", "add", "This is just some plain prose content", "-n", "nb_123"],
+                )
+
+        assert result.exit_code == 0
+        mock_client.sources.add_text.assert_called_once()
+        assert "looks like a path" not in result.output
+        assert "does not exist" not in result.output
+
+    def test_existing_path_no_warning_uploads_as_file(self, runner, mock_auth, tmp_path):
+        """Existing path-shaped arg uploads as ``file`` — no warning emitted.
+
+        The warning fires only when the path-shape heuristic matches AND
+        the file does not exist; an existing file follows the file-upload
+        branch as before.
+        """
+        test_file = tmp_path / "real.md"
+        test_file.write_text("# real content\n")
+
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.sources.add_file = AsyncMock(
+                return_value=Source(id="src_file", title="real.md")
+            )
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["source", "add", str(test_file), "-n", "nb_123"])
+
+        assert result.exit_code == 0
+        mock_client.sources.add_file.assert_called_once()
+        assert "looks like a path" not in result.output
+        assert "does not exist" not in result.output
+
+
+# =============================================================================
 # SOURCE FULLTEXT TESTS
 # =============================================================================
 

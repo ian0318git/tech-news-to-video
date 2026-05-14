@@ -55,6 +55,51 @@ _GATEWAY_TITLE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# P4.T4 / I8: path-shape heuristic for ``source add``. When the user passes a
+# string that *looks like* a path (contains ``/`` OR ends in a recognized
+# document extension) but the path does not exist on disk, the CLI silently
+# falls through to inline-text ingestion. That's a common typo footgun
+# (``./missin.md`` -> "Added source: src_xxx" is indistinguishable from a
+# successful upload). The remediation is a stderr advisory warning; the source
+# is still added as text so the established inferred-text behavior is preserved.
+# Explicit ``--type text`` suppresses the heuristic — the user has stated intent.
+#
+# Extension list intentionally narrow: only formats that are unambiguously
+# documents/data files in the NotebookLM source domain. Adding ``.json``,
+# ``.yaml``, etc. risks false positives on legitimate inline content (e.g.
+# pasting a config snippet as a note).
+_PATH_SHAPED_EXTENSIONS = frozenset(
+    {
+        ".pdf",
+        ".txt",
+        ".md",
+        ".markdown",
+        ".html",
+        ".htm",
+        ".doc",
+        ".docx",
+        ".rtf",
+        ".odt",
+        ".csv",
+        ".tsv",
+        ".epub",
+    }
+)
+
+
+def _looks_like_path(content: str) -> bool:
+    """Return True if ``content`` is path-shaped (slash OR known extension).
+
+    Used by ``source add`` to detect the typo footgun where the user meant to
+    upload a file but the path doesn't exist. See ``_PATH_SHAPED_EXTENSIONS``
+    for the curated extension allowlist.
+    """
+    if "/" in content or "\\" in content:
+        return True
+    suffix = Path(content).suffix.lower()
+    return suffix in _PATH_SHAPED_EXTENSIONS
+
+
 # Only sources with explicit "error" status are auto-cleaned. "unknown" is
 # excluded on purpose: it covers status codes we don't recognize yet (future
 # NotebookLM states) and missing-status responses, which must not be silently
@@ -431,17 +476,25 @@ def source_add(
     \b
     Source type is auto-detected:
       - URLs (http/https) -> url or youtube
-      - Existing files (.txt, .md, etc.) -> file
+      - Existing files (.pdf, .md, .txt, etc.) -> file (uploaded)
       - Other content -> text (inline)
       - Use --type to override
 
     \b
     Examples:
       notebooklm source add https://example.com             # URL
-      notebooklm source add ./doc.md                        # File content as text
+      notebooklm source add ./doc.pdf                       # Existing file uploaded
       notebooklm source add https://youtube.com/...         # YouTube video
       notebooklm source add "My notes here"                 # Inline text
       notebooklm source add "My notes" --title "Research"   # Text with custom title
+
+    \b
+    Note: a path-shaped argument (contains '/' or ends in a known document
+    extension) that does not exist on disk is still ingested as inline text,
+    but a stderr warning is emitted so a typo (e.g. ``./missin.md``) cannot
+    silently masquerade as a successful upload. Pass ``--type text`` to suppress
+    the warning when the input is genuinely text content that happens to look
+    path-shaped.
     """
     nb_id = require_notebook(notebook_id)
 
@@ -466,6 +519,23 @@ def source_add(
             upload_path = _validate_upload_path(content, follow_symlinks)
             detected_type = "file"
         else:
+            # P4.T4 / I8: warn when the user passed a path-shaped string that
+            # doesn't exist on disk. Without this, ``source add ./missin.md``
+            # silently sends the literal string ``./missin.md`` as note content
+            # — the success line ("Added source: src_xxx") is indistinguishable
+            # from a real file upload. The source is still added as text so
+            # established inferred-text behavior is preserved (no breaking exit
+            # change). Suppressed when ``source_type`` is already set
+            # explicitly — the user has stated intent — but here we're inside
+            # the ``detected_type is None`` branch so an explicit override
+            # never reaches this code in the first place. See I8 in the audit.
+            if _looks_like_path(content):
+                click.echo(
+                    f"warning: '{content}' looks like a path but does not "
+                    f"exist; ingesting as inline text. Pass --type text to "
+                    f"suppress this warning, or check the path for typos.",
+                    err=True,
+                )
             detected_type = "text"
             file_title = title or "Pasted Text"
     elif detected_type == "file":
