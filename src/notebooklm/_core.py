@@ -5,6 +5,7 @@ import logging
 import math
 import threading
 import time
+import warnings
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Coroutine
 from datetime import datetime, timezone
@@ -223,8 +224,15 @@ class ClientCore:
         self._refresh_lock: asyncio.Lock | None = asyncio.Lock() if refresh_callback else None
         self._refresh_task: asyncio.Task[AuthTokens] | None = None
         self._http_client: httpx.AsyncClient | None = None
-        # Request ID counter for chat API (must be unique per request)
-        self._reqid_counter: int = 100000
+        # Request ID counter for chat API (must be unique per request).
+        # Access via the ``next_reqid()`` async method, which guards mutation
+        # under ``_reqid_lock``. Direct mutation through the ``_reqid_counter``
+        # property setter emits a ``DeprecationWarning``; bypass the warning
+        # for legitimate test setup by writing to ``_reqid_counter_value``.
+        self._reqid_counter_value: int = 100000
+        # Lazily-created — ``asyncio.Lock()`` needs a running loop in some
+        # Python versions, and this object can be constructed outside one.
+        self._reqid_lock: asyncio.Lock | None = None
         # OrderedDict for FIFO eviction when cache exceeds MAX_CONVERSATION_CACHE_SIZE
         self._conversation_cache: OrderedDict[str, list[dict[str, Any]]] = OrderedDict()
         # Keepalive background task configuration
@@ -248,6 +256,72 @@ class ClientCore:
         # clobber sibling-process writes (docs/auth-keepalive.md §3.4.1).
         # Per-instance, never module-global.
         self._loaded_cookie_snapshot: CookieSnapshot | None = None
+
+    # ------------------------------------------------------------------
+    # Request-id counter (chat API requires a monotonic ``_reqid`` URL param).
+    #
+    # Historical contract: callers did ``self._core._reqid_counter += 100000``
+    # then read the new value. Two concurrent ``ChatAPI.ask`` calls on the same
+    # core would race on the read-modify-write, producing duplicate ``_reqid``
+    # values that Google rejects (audit C3 / synthesis §6 Tier-2 item 2).
+    #
+    # New contract: ``await core.next_reqid()`` performs the increment under
+    # ``_reqid_lock`` and returns the post-increment value. The lock is
+    # created lazily so a ``ClientCore`` can be constructed outside a running
+    # event loop. Direct mutation of ``_reqid_counter`` still works for
+    # backwards compatibility but emits ``DeprecationWarning``.
+    # ------------------------------------------------------------------
+
+    @property
+    def _reqid_counter(self) -> int:
+        """Current request-id counter value. Read access is safe; write access
+        via the property setter emits ``DeprecationWarning``.
+        """
+        return self._reqid_counter_value
+
+    @_reqid_counter.setter
+    def _reqid_counter(self, value: int) -> None:
+        warnings.warn(
+            "Direct mutation of ClientCore._reqid_counter is deprecated; "
+            "use `await core.next_reqid()` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        self._reqid_counter_value = value
+
+    async def next_reqid(self, step: int = 100000) -> int:
+        """Atomically increment the request-id counter and return the new value.
+
+        Args:
+            step: Increment applied to the counter. Defaults to ``100000`` to
+                match the historical bump used by ``ChatAPI.ask``. Must be a
+                positive ``int`` (not ``bool``); ``step <= 0`` would break
+                monotonicity / uniqueness guarantees that Google's chat
+                backend relies on.
+
+        Returns:
+            The post-increment counter value. Successive calls return strictly
+            monotonic, distinct values even under ``asyncio.gather``.
+
+        Raises:
+            TypeError: If ``step`` is not an ``int`` (bool is rejected even
+                though it is a subclass of ``int``).
+            ValueError: If ``step`` is not positive.
+        """
+        # ``bool`` is a subclass of ``int`` in Python — reject it explicitly so
+        # ``next_reqid(step=True)`` doesn't silently degrade to ``step=1``.
+        if not isinstance(step, int) or isinstance(step, bool):
+            raise TypeError(f"step must be int, got {type(step).__name__}")
+        if step <= 0:
+            raise ValueError(f"step must be positive, got {step!r}")
+        # Safe: no await between check and assign, so no other coroutine can race us here.
+        if self._reqid_lock is None:
+            # Lazy init — safe to construct here because we're already in an
+            # async context (caller is awaiting us).
+            self._reqid_lock = asyncio.Lock()
+        async with self._reqid_lock:
+            self._reqid_counter_value += step
+            return self._reqid_counter_value
 
     async def open(self) -> None:
         """Open the HTTP client connection.
