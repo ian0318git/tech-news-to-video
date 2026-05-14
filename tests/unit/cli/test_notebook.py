@@ -234,7 +234,13 @@ class TestNotebookCreate:
             assert context["notebook_id"] == "short_id"
 
     def test_notebook_create_with_use_json(self, runner, mock_auth, mock_context_file):
-        """`create --use --json` switches context AND emits JSON (consistent with text mode)."""
+        """`create --use --json` switches context AND emits JSON (consistent with text mode).
+
+        Per audit row I12 (P4.T5), the JSON envelope MUST surface the
+        `active_notebook_id` alongside the create result so script callers
+        can pick up the new context without scraping any "Context set to ..."
+        text or shelling out to `notebooklm status --json`.
+        """
         with patch_main_cli_client() as mock_client_cls:
             mock_client = create_mock_client()
             mock_client.notebooks.create = AsyncMock(
@@ -253,8 +259,40 @@ class TestNotebookCreate:
             assert result.exit_code == 0
             data = json.loads(result.output)
             assert data["notebook"]["id"] == "new_nb_id"
+            # I12: when --use is set, the JSON envelope surfaces the new
+            # active notebook id so callers don't have to round-trip via
+            # `notebooklm status --json`.
+            assert data["active_notebook_id"] == "new_nb_id"
             context = json.loads(mock_context_file.read_text())
             assert context["notebook_id"] == "new_nb_id"
+
+    def test_notebook_create_json_without_use_omits_active_id(
+        self, runner, mock_auth, mock_context_file
+    ):
+        """`create --json` (no --use) MUST NOT emit `active_notebook_id` —
+        signals that context was not switched, so callers can branch on
+        presence/absence without parsing prose.
+        """
+        with patch_main_cli_client() as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.notebooks.create = AsyncMock(
+                return_value=Notebook(
+                    id="new_nb_id", title="Test Notebook", created_at=datetime(2024, 1, 1)
+                )
+            )
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["create", "Test Notebook", "--json"])
+
+            assert result.exit_code == 0
+            data = json.loads(result.output)
+            assert data["notebook"]["id"] == "new_nb_id"
+            assert "active_notebook_id" not in data
+            assert not mock_context_file.exists()
 
     def test_notebook_create_json_quota_error(self, runner, mock_auth):
         """Create emits structured JSON when notebook quota is detected."""

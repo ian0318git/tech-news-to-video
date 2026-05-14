@@ -41,7 +41,7 @@ from ..auth import (
 )
 from ..client import NotebookLMClient
 from ..config import get_base_host, get_base_url
-from ..exceptions import NotebookNotFoundError
+from ..exceptions import AuthError, NotebookNotFoundError
 from ..io import atomic_write_json
 from ..paths import (
     get_browser_profile_dir,
@@ -56,6 +56,7 @@ from .helpers import (
     console,
     get_auth_tokens,
     get_current_notebook,
+    handle_auth_error,
     json_output_response,
     resolve_notebook_id,
     run_async,
@@ -1579,8 +1580,9 @@ def register_session_commands(cli):
             "verification fails. Use for offline work or debugging."
         ),
     )
+    @click.option("--json", "json_output", is_flag=True, help="Output as JSON")
     @click.pass_context
-    def use_notebook(ctx, notebook_id, force):
+    def use_notebook(ctx, notebook_id, force, json_output):
         """Set the current notebook context.
 
         Once set, all commands will use this notebook by default.
@@ -1602,6 +1604,19 @@ def register_session_commands(cli):
         # Useful when the network is unavailable or for debugging.
         if force:
             set_current_notebook(notebook_id)
+            if json_output:
+                # I12: surface the new active notebook id as the primary
+                # signal so script callers can pipe `notebooklm use --json`
+                # straight into downstream automation. ``verified: false``
+                # mirrors the "(not verified — --force)" cell in text mode.
+                json_output_response(
+                    {
+                        "active_notebook_id": notebook_id,
+                        "success": True,
+                        "verified": False,
+                    }
+                )
+                return
             table = _use_notebook_table()
             table.add_row(notebook_id, "(not verified — --force)", "-", "-")
             console.print(table)
@@ -1609,13 +1624,14 @@ def register_session_commands(cli):
 
         try:
             auth = get_auth_tokens(ctx)
-        except FileNotFoundError as exc:
-            # No auth file on disk — surface a helpful error rather than
-            # poisoning the saved context with an unverified ID.
-            raise click.ClickException(
-                "Cannot verify notebook without authentication. "
-                "Run 'notebooklm login' first, or pass --force to skip verification."
-            ) from exc
+        except FileNotFoundError:
+            # No auth file on disk — fail closed (don't poison context.json
+            # with an unverified ID) and route through the typed
+            # ``handle_auth_error`` UX so JSON callers get the standard
+            # ``AUTH_REQUIRED`` envelope and text callers get the rich
+            # multi-line "Run notebooklm login" walkthrough. (I13.)
+            handle_auth_error(json_output)
+            return  # unreachable — handle_auth_error raises SystemExit
         except click.ClickException:
             raise
 
@@ -1642,10 +1658,18 @@ def register_session_commands(cli):
                 "Run 'notebooklm list' to see available notebooks, "
                 "or pass --force to bypass verification."
             ) from exc
+        except AuthError:
+            # Auth expired (e.g. SID/SSID cookies stale). Route through the
+            # typed UX so the user sees "Run notebooklm login" instead of
+            # the generic "Pass --force to persist without verification"
+            # catch-all that previously hid the real remediation. (Audit row
+            # I13 — see helpers.handle_auth_error for the canonical message.)
+            handle_auth_error(json_output)
+            return  # unreachable — handle_auth_error raises SystemExit
         except Exception as exc:
-            # All other failures (network errors, RPC errors, auth expiry,
-            # etc.) also fail closed — we cannot confirm the notebook exists,
-            # so refuse to persist. --force is the documented escape hatch.
+            # All other failures (network errors, RPC errors, etc.) also
+            # fail closed — we cannot confirm the notebook exists, so refuse
+            # to persist. --force is the documented escape hatch.
             raise click.ClickException(
                 f"Could not verify notebook {notebook_id!r}: {exc}. "
                 "Pass --force to persist without verification."
@@ -1653,6 +1677,25 @@ def register_session_commands(cli):
 
         created_str = nb.created_at.strftime("%Y-%m-%d") if nb.created_at else None
         set_current_notebook(resolved_id, nb.title, nb.is_owner, created_str)
+
+        if json_output:
+            # I12: scriptable envelope surfaces the new active notebook id
+            # plus enough metadata that callers don't have to round-trip
+            # through `notebooklm status --json` to render a confirmation.
+            json_output_response(
+                {
+                    "active_notebook_id": resolved_id,
+                    "success": True,
+                    "verified": True,
+                    "notebook": {
+                        "id": resolved_id,
+                        "title": nb.title,
+                        "is_owner": nb.is_owner,
+                        "created_at": nb.created_at.isoformat() if nb.created_at else None,
+                    },
+                }
+            )
+            return
 
         table = _use_notebook_table()
 

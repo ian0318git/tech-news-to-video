@@ -1188,6 +1188,139 @@ class TestUseCommand:
 
 
 # =============================================================================
+# USE COMMAND --json + auth-aware errors (P4.T5: I12, I13)
+# =============================================================================
+
+
+class TestUseJsonOutput:
+    """`notebooklm use <id> --json` emits a structured envelope with the new
+    active notebook id (I12) so script and AI-agent automation does not have
+    to scrape the rendered Rich table for the next-step ID.
+    """
+
+    def test_use_json_emits_active_notebook_id(self, runner, mock_auth, mock_context_file):
+        """`use <id> --json` prints `{"active_notebook_id": "...", "success": true, ...}`."""
+        with patch_main_cli_client() as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.notebooks.get = AsyncMock(
+                return_value=Notebook(
+                    id="nb_json_use",
+                    title="Use JSON",
+                    created_at=datetime(2026, 5, 14),
+                    is_owner=True,
+                )
+            )
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                with patch(
+                    "notebooklm.cli.session.resolve_notebook_id", new_callable=AsyncMock
+                ) as mock_resolve:
+                    mock_resolve.return_value = "nb_json_use"
+
+                    result = runner.invoke(cli, ["use", "nb_json_use", "--json"])
+
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        # Stable, scriptable contract: the new active notebook id is the
+        # primary signal; success boolean lets callers branch without
+        # parsing the body.
+        assert data["active_notebook_id"] == "nb_json_use"
+        assert data["success"] is True
+        # Notebook metadata is included so callers don't have to round-trip
+        # to `notebooklm list` to render a confirmation.
+        assert data["notebook"]["id"] == "nb_json_use"
+        assert data["notebook"]["title"] == "Use JSON"
+        # Context file was persisted as a side effect.
+        ctx = json.loads(mock_context_file.read_text())
+        assert ctx["notebook_id"] == "nb_json_use"
+
+    def test_use_json_with_force_emits_active_notebook_id(self, runner, mock_context_file):
+        """`use --force --json` skips verification but still emits the JSON envelope."""
+        result = runner.invoke(cli, ["use", "--force", "nb_forced_json", "--json"])
+
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data["active_notebook_id"] == "nb_forced_json"
+        assert data["success"] is True
+        # Mark verification status so script callers can detect unverified IDs.
+        assert data.get("verified") is False
+        assert mock_context_file.exists()
+
+
+class TestUseAuthAwareError:
+    """When `notebooklm use <id>` hits an `AuthError` (e.g. expired SID
+    cookies), the catch must surface the typed "run notebooklm login" UX
+    from `helpers.handle_auth_error` rather than the generic "Could not
+    verify ... Pass --force" catch-all (audit row I13).
+    """
+
+    def test_use_auth_error_suggests_notebooklm_login(self, runner, mock_auth, mock_context_file):
+        """AuthError → text mode prints the typed login hint, exit 1, no persist."""
+        from notebooklm.exceptions import AuthError
+
+        with patch_main_cli_client() as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.notebooks.get = AsyncMock(
+                side_effect=AuthError("Auth expired", method_id="rwIQyf"),
+            )
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                with patch(
+                    "notebooklm.cli.session.resolve_notebook_id", new_callable=AsyncMock
+                ) as mock_resolve:
+                    mock_resolve.return_value = "nb_auth_expired"
+
+                    result = runner.invoke(cli, ["use", "nb_auth_expired"])
+
+        assert result.exit_code == 1
+        # Fail-closed: do not poison context.json on auth expiry.
+        assert not mock_context_file.exists()
+        # The typed UX: explicit "notebooklm login" remediation.
+        assert "notebooklm login" in result.output.lower()
+        # The generic catch-all message must NOT be the one shown.
+        assert "Pass --force to persist without verification" not in result.output
+
+    def test_use_auth_error_json_emits_typed_envelope(self, runner, mock_auth, mock_context_file):
+        """AuthError + --json → typed `{"code": "AUTH_REQUIRED", ...}` envelope, exit 1."""
+        from notebooklm.exceptions import AuthError
+
+        with patch_main_cli_client() as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.notebooks.get = AsyncMock(
+                side_effect=AuthError("Auth expired", method_id="rwIQyf"),
+            )
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                with patch(
+                    "notebooklm.cli.session.resolve_notebook_id", new_callable=AsyncMock
+                ) as mock_resolve:
+                    mock_resolve.return_value = "nb_auth_expired"
+
+                    result = runner.invoke(cli, ["use", "nb_auth_expired", "--json"])
+
+        assert result.exit_code == 1
+        assert not mock_context_file.exists()
+        data = json.loads(result.output)
+        assert data["error"] is True
+        assert data["code"] == "AUTH_REQUIRED"
+        assert (
+            "notebooklm login" in data["message"].lower() or "notebooklm login" in str(data).lower()
+        )
+
+
+# =============================================================================
 # STATUS COMMAND TESTS
 # =============================================================================
 

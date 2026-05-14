@@ -101,13 +101,19 @@ def register_notebook_commands(cli):
                     set_current_notebook(nb.id, nb.title, nb.is_owner, created_str)
 
                 if json_output:
-                    data = {
+                    data: dict = {
                         "notebook": {
                             "id": nb.id,
                             "title": nb.title,
                             "created_at": nb.created_at.isoformat() if nb.created_at else None,
                         }
                     }
+                    # I12: when --use switched the active context, surface the
+                    # new active notebook id at the top level so callers can
+                    # branch on the field without scraping the "Context set
+                    # to ..." prose or round-tripping through `status --json`.
+                    if switch_context:
+                        data["active_notebook_id"] = nb.id
                     json_output_response(data)
                     return
 
