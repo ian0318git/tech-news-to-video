@@ -975,6 +975,84 @@ class TestLoginCommand:
         assert "browser" in result.output.lower() and "closed" in result.output.lower()
 
 
+class TestLoginNoTraceback:
+    """Regression: ``login`` must wrap unexpected failures in handle_errors so
+    users see a friendly one-liner instead of a Python traceback (I15).
+
+    Without the wrap, the bare ``raise`` at the end of the Playwright
+    ``except Exception`` block re-raises out of the command body, escapes
+    Click's ``standalone_mode``, and the interpreter prints
+    ``Traceback (most recent call last):`` to stderr at process exit. The
+    CliRunner shim surfaces that as ``result.exception`` being the raw
+    exception instead of a ``SystemExit``.
+    """
+
+    @pytest.fixture
+    def mock_login_crash(self, tmp_path, monkeypatch):
+        """Set up a Playwright environment where ``launch_persistent_context``
+        raises an arbitrary exception, exercising the catch-all path at the
+        end of login's ``except Exception`` block. Yields the
+        ``launch_persistent_context`` mock so each test can install its own
+        ``side_effect``.
+
+        Hermetic: ``NOTEBOOKLM_HOME=tmp_path`` so the test never touches the
+        real ``~/.notebooklm/`` (would fail with PermissionError in sandboxes).
+        """
+        monkeypatch.setenv("NOTEBOOKLM_HOME", str(tmp_path))
+        with (
+            patch("notebooklm.cli.session._ensure_chromium_installed"),
+            patch("playwright.sync_api.sync_playwright") as mock_pw,
+            patch(
+                "notebooklm.cli.session.get_storage_path", return_value=tmp_path / "storage.json"
+            ),
+            patch(
+                "notebooklm.cli.session.get_browser_profile_dir",
+                return_value=tmp_path / "profile",
+            ),
+            patch("notebooklm.cli.session._sync_server_language_to_config"),
+        ):
+            mock_launch = (
+                mock_pw.return_value.__enter__.return_value.chromium.launch_persistent_context
+            )
+            yield mock_launch
+
+    def test_login_unexpected_exception_no_traceback(self, runner, mock_login_crash):
+        """An unexpected error inside the Playwright block exits cleanly with
+        a SystemExit (not a raw exception that would print a traceback)."""
+        # An arbitrary RuntimeError surfaces from a Playwright internal —
+        # this is the catch-all path at the end of the ``except Exception``
+        # block (after the channel-browser-not-found short-circuit).
+        mock_login_crash.side_effect = RuntimeError("internal playwright crash xyz")
+
+        result = runner.invoke(cli, ["login"])
+
+        # (a) No raw exception should escape — handle_errors converts it to SystemExit.
+        # If this fires with ``RuntimeError`` (or any non-SystemExit), it means
+        # the unexpected exception escaped the command body, and in production
+        # Python would print ``Traceback (most recent call last):`` to stderr.
+        assert isinstance(result.exception, SystemExit) or result.exception is None, (
+            f"Expected handle_errors to convert RuntimeError to SystemExit, "
+            f"got {type(result.exception).__name__}: {result.exception!r}"
+        )
+        # (b) Exit code per error_handler.py policy: 2 for unexpected errors.
+        assert result.exit_code == 2, (
+            f"Unexpected exception should exit 2 per error_handler policy, got {result.exit_code}"
+        )
+        # (c) A friendly error line — not a traceback — should appear.
+        assert "Unexpected error" in result.output, (
+            f"Expected friendly 'Unexpected error: ...' message, got: {result.output!r}"
+        )
+        assert "internal playwright crash xyz" in result.output
+        # And the literal traceback marker must not appear in output.
+        assert "Traceback (most recent call last)" not in result.output
+
+    def test_login_unexpected_exception_includes_bug_report_hint(self, runner, mock_login_crash):
+        """handle_errors' UNEXPECTED_ERROR branch should include the bug-report URL."""
+        mock_login_crash.side_effect = RuntimeError("xyz")
+        result = runner.invoke(cli, ["login"])
+        assert "github.com/teng-lin/notebooklm-py/issues" in result.output
+
+
 # =============================================================================
 # USE COMMAND TESTS
 # =============================================================================
@@ -2649,25 +2727,74 @@ class TestAuthRefreshCommand:
         assert result.output.strip() == ""
 
     def test_auth_refresh_failure_exits_nonzero(self, runner, mock_storage_path):
-        """Token fetch failure exits 1 with stderr message — picked up by cron logs."""
+        """Token fetch failure exits non-zero with a friendly message — picked
+        up by cron logs.
+
+        The command body is wrapped in ``handle_errors`` (I15 polish), so an
+        unexpected ``ValueError`` flows through the UNEXPECTED_ERROR branch
+        (exit 2) and the user sees a friendly 'Unexpected error: <msg>' line
+        rather than a Python traceback.
+        """
         with patch(
             "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
         ) as mock_fetch:
             mock_fetch.side_effect = ValueError("Authentication expired or invalid.")
             result = runner.invoke(cli, ["auth", "refresh"])
-        assert result.exit_code == 1
+        # Exit code 2 per error_handler.py policy for unexpected errors.
+        assert result.exit_code == 2
+        # The original message is still surfaced verbatim, so cron logs keep
+        # the diagnostic content.
         assert "authentication expired" in result.output.lower()
+        # No Python traceback in stdout/stderr.
+        assert "Traceback (most recent call last)" not in result.output
 
-    def test_auth_refresh_failure_includes_exception_class(self, runner, mock_storage_path):
-        """Sparse exception messages (e.g. httpx.ConnectTimeout) still get a
-        diagnostic class name in the cron log."""
+    def test_auth_refresh_failure_does_not_print_exception_class(self, runner, mock_storage_path):
+        """I15 polish: ``auth refresh`` no longer leaks ``type(exc).__name__``
+        into the user-facing message. The previous code path produced
+        ``Error: ConnectTimeout: `` (with class name), which is implementation
+        detail leakage. ``handle_errors`` produces ``Unexpected error: <msg>``
+        instead.
+
+        Regression guard for the polish item folded into P3.T3.
+        """
         with patch(
             "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
         ) as mock_fetch:
             mock_fetch.side_effect = httpx.ConnectTimeout("")  # empty message
             result = runner.invoke(cli, ["auth", "refresh"])
-        assert result.exit_code == 1
-        assert "ConnectTimeout" in result.output
+        # Non-zero exit, friendly handler, no traceback.
+        assert result.exit_code == 2
+        assert "Traceback (most recent call last)" not in result.output
+        # Critical: no ``ConnectTimeout`` class name in output.
+        assert "ConnectTimeout" not in result.output, (
+            f"auth refresh must not leak exception class names; got: {result.output!r}"
+        )
+        # And no ``Error: <ClassName>:`` leak pattern from the old code path.
+        assert "Error: ConnectTimeout" not in result.output
+        # A friendly Unexpected-error line should still appear.
+        assert "Unexpected error" in result.output
+
+    def test_auth_refresh_browser_cookies_failure_uses_typed_handler(
+        self, runner, mock_storage_path
+    ):
+        """The ``--browser-cookies`` failure path also flows through
+        ``handle_errors`` — same I15 polish guarantee as the keepalive path.
+
+        Previously the browser-cookies branch had its own bespoke
+        ``except Exception: click.echo(f"Error: {type(exc).__name__}: ...")``
+        block; it now relies on the wrapping ``with handle_errors():``.
+        """
+        with patch("notebooklm.cli.session._refresh_from_browser_cookies") as mock_refresh:
+            mock_refresh.side_effect = RuntimeError("rookiepy could not read cookies")
+            result = runner.invoke(cli, ["auth", "refresh", "--browser-cookies", "chrome"])
+        assert result.exit_code == 2  # unexpected error per error_handler policy
+        assert "Traceback (most recent call last)" not in result.output
+        # No leaked ``RuntimeError`` class name.
+        assert "RuntimeError" not in result.output
+        assert "Error: RuntimeError" not in result.output
+        # Friendly Unexpected-error message + the original detail.
+        assert "Unexpected error" in result.output
+        assert "rookiepy could not read cookies" in result.output
 
     def test_auth_refresh_rejects_env_var_auth(self, runner, monkeypatch, mock_storage_path):
         """NOTEBOOKLM_AUTH_JSON has no writable backing store; refreshing it
