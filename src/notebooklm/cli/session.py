@@ -30,7 +30,6 @@ if TYPE_CHECKING:
     from playwright.sync_api import BrowserContext, Page
     from rich.console import Console
 
-from .._env import get_base_host, get_base_url
 from ..auth import (
     ALLOWED_COOKIE_DOMAINS,
     GOOGLE_REGIONAL_CCTLDS,
@@ -40,6 +39,7 @@ from ..auth import (
     read_account_metadata,
 )
 from ..client import NotebookLMClient
+from ..config import get_base_host, get_base_url
 from ..paths import (
     get_browser_profile_dir,
     get_context_path,

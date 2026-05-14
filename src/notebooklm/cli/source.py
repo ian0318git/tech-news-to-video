@@ -23,9 +23,9 @@ from urllib.parse import urlparse, urlunparse
 import click
 from rich.table import Table
 
-from .._url_utils import is_youtube_url
 from ..client import NotebookLMClient
 from ..types import source_status_to_str
+from ..urls import is_youtube_url
 from .helpers import (
     console,
     display_report,

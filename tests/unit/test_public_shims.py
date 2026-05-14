@@ -63,5 +63,26 @@ def test_research_api_reexports_cited_source_selection_for_back_compat():
 
 # ---------------------------------------------------------------------------
 # PR-D section: notebooklm.config / notebooklm.urls / notebooklm.log public shims
-# (intentionally left blank; PR-D appends below this marker)
 # ---------------------------------------------------------------------------
+
+
+def test_config_shim_exposes_documented_names(monkeypatch):
+    # Guard against a NOTEBOOKLM_BASE_URL override leaking from the env,
+    # so the assertion stays valid on developer machines and overridden CI.
+    monkeypatch.delenv("NOTEBOOKLM_BASE_URL", raising=False)
+    from notebooklm import config
+
+    assert config.get_base_url() == config.DEFAULT_BASE_URL
+    assert config.DEFAULT_BASE_URL == "https://notebooklm.google.com"
+
+
+def test_urls_shim_exposes_documented_names():
+    from notebooklm.urls import is_youtube_url
+
+    assert is_youtube_url("https://www.youtube.com/watch?v=x") is True
+
+
+def test_log_shim_exposes_install_redaction():
+    from notebooklm.log import install_redaction
+
+    assert callable(install_redaction)

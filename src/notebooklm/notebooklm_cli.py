@@ -160,7 +160,7 @@ def cli(ctx, storage, profile, verbose):
         logging.getLogger("notebooklm").setLevel(logging.DEBUG)
         # DEBUG logging on httpx/urllib3 emits full URLs and headers — install
         # redaction so credentials don't leak via third-party loggers.
-        from ._logging import install_redaction
+        from .log import install_redaction
 
         install_redaction("httpx", "urllib3")
     elif verbose == 1:
