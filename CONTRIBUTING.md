@@ -185,6 +185,7 @@ Agents should ignore files marked `Deprecated`.
 docs/
 ├── installation.md        # Canonical install guide (personas, extras, platform notes)
 ├── cli-reference.md       # CLI command reference
+├── cli-exit-codes.md      # CLI exit-code convention (binding contract for scripts/CI)
 ├── python-api.md          # Python API reference
 ├── configuration.md       # Storage and settings
 ├── troubleshooting.md     # Common issues and solutions
@@ -195,3 +196,5 @@ docs/
 ├── rpc-reference.md       # RPC payload structures
 └── examples/              # Runnable example scripts
 ```
+
+> When adding or modifying a CLI command, follow the [CLI Exit-Code Convention](docs/cli-exit-codes.md) — the policy table and the two intentional exceptions (`source stale`, `source wait`) are binding.
