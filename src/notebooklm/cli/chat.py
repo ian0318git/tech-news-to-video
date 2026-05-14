@@ -151,7 +151,7 @@ def register_chat_commands(cli):
 
         async def _run():
             async with NotebookLMClient(client_auth, **client_kwargs) as client:
-                nb_id_resolved = await resolve_notebook_id(client, nb_id)
+                nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
                 effective_conv_id = _determine_conversation_id(
                     explicit_conversation_id=conversation_id,
                     explicit_notebook_id=notebook_id,
@@ -168,7 +168,9 @@ def register_chat_commands(cli):
                     if effective_conv_id:
                         resumed_from_server = True
 
-                sources = await resolve_source_ids(client, nb_id_resolved, source_ids)
+                sources = await resolve_source_ids(
+                    client, nb_id_resolved, source_ids, json_output=json_output
+                )
                 result = await client.chat.ask(
                     nb_id_resolved,
                     question,
@@ -358,7 +360,7 @@ def register_chat_commands(cli):
                     return
 
                 nb_id = require_notebook(notebook_id)
-                nb_id_resolved = await resolve_notebook_id(client, nb_id)
+                nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
                 conv_id = await client.chat.get_conversation_id(nb_id_resolved)
                 qa_pairs = await client.chat.get_history(
                     nb_id_resolved, limit=limit, conversation_id=conv_id

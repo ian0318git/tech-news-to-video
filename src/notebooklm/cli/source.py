@@ -30,6 +30,7 @@ from .helpers import (
     console,
     display_report,
     display_research_sources,
+    emit_status,
     get_source_type_display,
     import_research_sources,
     json_output_response,
@@ -185,11 +186,16 @@ def _looks_like_full_source_id(source_id: str) -> bool:
     )
 
 
-async def _resolve_source_for_delete(client, notebook_id: str, source_id: str) -> str:
+async def _resolve_source_for_delete(
+    client, notebook_id: str, source_id: str, *, json_output: bool = False
+) -> str:
     """Resolve a source ID for delete, returning the full source ID string.
 
     Canonical UUIDs take a fast path and skip the live source list lookup.
     Partial IDs are resolved against the live list.
+
+    When ``json_output`` is True, the "Matched..." diagnostic for a successful
+    partial match is routed to stderr so stdout stays parseable JSON.
     """
     source_id = validate_id(source_id, "source")
     if _looks_like_full_source_id(source_id):
@@ -201,7 +207,10 @@ async def _resolve_source_for_delete(client, notebook_id: str, source_id: str) -
     if len(matches) == 1:
         if matches[0].id != source_id:
             title = matches[0].title or "(untitled)"
-            console.print(f"[dim]Matched: {matches[0].id[:12]}... ({title})[/dim]")
+            emit_status(
+                f"[dim]Matched: {matches[0].id[:12]}... ({title})[/dim]",
+                json_output=json_output,
+            )
         return matches[0].id
 
     if len(matches) > 1:
@@ -264,7 +273,7 @@ def source_list(ctx, notebook_id, json_output, client_auth):
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            nb_id_resolved = await resolve_notebook_id(client, nb_id)
+            nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
             sources = await client.sources.list(nb_id_resolved)
             nb = None
             if json_output:
@@ -386,7 +395,7 @@ def source_add(
 
     async def _run():
         async with NotebookLMClient(client_auth, **client_kwargs) as client:
-            nb_id_resolved = await resolve_notebook_id(client, nb_id)
+            nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
             if detected_type == "url" or detected_type == "youtube":
                 src = await client.sources.add_url(nb_id_resolved, content)
             elif detected_type == "text":
@@ -798,13 +807,21 @@ def source_fulltext(ctx, source_id, notebook_id, json_output, output, output_for
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            nb_id_resolved = await resolve_notebook_id(client, nb_id)
-            resolved_id = await resolve_source_id(client, nb_id_resolved, source_id)
+            nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
+            resolved_id = await resolve_source_id(
+                client, nb_id_resolved, source_id, json_output=json_output
+            )
 
-            with console.status("Fetching fulltext content..."):
-                fulltext = await client.sources.get_fulltext(
+            async def _fetch():
+                return await client.sources.get_fulltext(
                     nb_id_resolved, resolved_id, output_format=output_format
                 )
+
+            if json_output:
+                fulltext = await _fetch()
+            else:
+                with console.status("Fetching fulltext content..."):
+                    fulltext = await _fetch()
 
             if json_output:
                 from dataclasses import asdict
@@ -864,11 +881,19 @@ def source_guide(ctx, source_id, notebook_id, json_output, client_auth):
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            nb_id_resolved = await resolve_notebook_id(client, nb_id)
-            resolved_id = await resolve_source_id(client, nb_id_resolved, source_id)
+            nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
+            resolved_id = await resolve_source_id(
+                client, nb_id_resolved, source_id, json_output=json_output
+            )
 
-            with console.status("Generating source guide..."):
-                guide = await client.sources.get_guide(nb_id_resolved, resolved_id)
+            async def _fetch_guide():
+                return await client.sources.get_guide(nb_id_resolved, resolved_id)
+
+            if json_output:
+                guide = await _fetch_guide()
+            else:
+                with console.status("Generating source guide..."):
+                    guide = await _fetch_guide()
 
             if json_output:
                 data = {
@@ -989,8 +1014,10 @@ def source_wait(ctx, source_id, notebook_id, timeout, json_output, client_auth):
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            nb_id_resolved = await resolve_notebook_id(client, nb_id)
-            resolved_id = await resolve_source_id(client, nb_id_resolved, source_id)
+            nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
+            resolved_id = await resolve_source_id(
+                client, nb_id_resolved, source_id, json_output=json_output
+            )
 
             if not json_output:
                 console.print(f"[dim]Waiting for source {resolved_id}...[/dim]")

@@ -60,7 +60,7 @@ def note_list(ctx, notebook_id, json_output, client_auth):
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            nb_id_resolved = await resolve_notebook_id(client, nb_id)
+            nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
             notes = await client.notes.list(nb_id_resolved)
 
             if json_output:

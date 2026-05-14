@@ -35,7 +35,30 @@ if TYPE_CHECKING:
     from ..types import Artifact, Source
 
 console = Console()
+# stderr_console is used for diagnostic / status output when --json mode is
+# active so that stdout stays parseable JSON for automation. See ``emit_status``.
+stderr_console = Console(stderr=True)
 logger = logging.getLogger(__name__)
+
+
+def emit_status(msg: str, *, json_output: bool, style: str | None = None) -> None:
+    """Emit a status / diagnostic line.
+
+    When ``json_output`` is True, the message is written to stderr via a
+    dedicated Rich console so that stdout remains pure JSON for downstream
+    automation. Otherwise the message goes through the regular stdout console.
+
+    Args:
+        msg: The message text. Rich markup is honored by both consoles.
+        json_output: True when the current command is producing JSON on stdout.
+        style: Optional Rich style to apply (e.g., ``"yellow"``, ``"dim"``).
+    """
+    target = stderr_console if json_output else console
+    if style is not None:
+        target.print(msg, style=style)
+    else:
+        target.print(msg)
+
 
 # CLI artifact type name aliases
 _CLI_ARTIFACT_ALIASES = {
@@ -234,6 +257,12 @@ async def import_with_retry(
                                 f"verified {len(requested_urls_norm)} requested "
                                 f"sources — skipping retry.[/yellow]"
                             )
+                        else:
+                            logger.debug(
+                                "Import RPC timed out, but server-side verified "
+                                "%d requested sources — skipping retry (json mode).",
+                                len(requested_urls_norm),
+                            )
                         # Return only new sources that match a requested URL.
                         # No-URL new sources (research reports, pasted text)
                         # are included only if the request itself had no-URL
@@ -284,6 +313,12 @@ async def import_with_retry(
                                     "requested sources are already present — "
                                     "skipping retry.[/yellow]"
                                 )
+                            else:
+                                logger.debug(
+                                    "Import RPC timed out, but all requested "
+                                    "sources are already present — skipping retry "
+                                    "(json mode)."
+                                )
                             return _merge_imported_sources(
                                 [], verified_imported, verified_imported_ids
                             )
@@ -331,6 +366,12 @@ async def import_with_retry(
                 console.print(
                     f"[yellow]Import timed out; retrying in {sleep_for:.0f}s "
                     f"(attempt {attempt + 1})[/yellow]"
+                )
+            else:
+                logger.debug(
+                    "Import timed out; retrying in %.0fs (attempt %d) (json mode).",
+                    sleep_for,
+                    attempt + 1,
                 )
             await asyncio.sleep(sleep_for)
             delay = min(delay * backoff_factor, max_delay)
@@ -661,6 +702,8 @@ async def _resolve_partial_id(
     list_fn,
     entity_name: str,
     list_command: str,
+    *,
+    json_output: bool = False,
 ) -> str:
     """Generic partial ID resolver.
 
@@ -672,6 +715,8 @@ async def _resolve_partial_id(
         list_fn: Async function that returns list of items with id/title attributes
         entity_name: Name for error messages (e.g., "notebook", "source")
         list_command: CLI command to list items (e.g., "list", "source list")
+        json_output: When True, the "Matched..." diagnostic is routed to stderr
+            via ``emit_status`` so stdout stays parseable JSON.
 
     Returns:
         Full ID of the matched item
@@ -692,7 +737,10 @@ async def _resolve_partial_id(
     if len(matches) == 1:
         if matches[0].id != partial_id:
             title = matches[0].title or "(untitled)"
-            console.print(f"[dim]Matched: {matches[0].id[:12]}... ({title})[/dim]")
+            emit_status(
+                f"[dim]Matched: {matches[0].id[:12]}... ({title})[/dim]",
+                json_output=json_output,
+            )
         return matches[0].id
     elif len(matches) == 0:
         raise click.ClickException(
@@ -710,48 +758,78 @@ async def _resolve_partial_id(
         raise click.ClickException("\n".join(lines))
 
 
-async def resolve_notebook_id(client, partial_id: str) -> str:
-    """Resolve partial notebook ID to full ID."""
+async def resolve_notebook_id(client, partial_id: str, *, json_output: bool = False) -> str:
+    """Resolve partial notebook ID to full ID.
+
+    When ``json_output`` is True, the "Matched..." diagnostic for a successful
+    partial match is routed to stderr so stdout stays parseable JSON.
+    """
     return await _resolve_partial_id(
         partial_id,
         list_fn=lambda: client.notebooks.list(),
         entity_name="notebook",
         list_command="list",
+        json_output=json_output,
     )
 
 
-async def resolve_source_id(client, notebook_id: str, partial_id: str) -> str:
-    """Resolve partial source ID to full ID."""
+async def resolve_source_id(
+    client, notebook_id: str, partial_id: str, *, json_output: bool = False
+) -> str:
+    """Resolve partial source ID to full ID.
+
+    When ``json_output`` is True, the "Matched..." diagnostic for a successful
+    partial match is routed to stderr so stdout stays parseable JSON.
+    """
     return await _resolve_partial_id(
         partial_id,
         list_fn=lambda: client.sources.list(notebook_id),
         entity_name="source",
         list_command="source list",
+        json_output=json_output,
     )
 
 
-async def resolve_artifact_id(client, notebook_id: str, partial_id: str) -> str:
-    """Resolve partial artifact ID to full ID."""
+async def resolve_artifact_id(
+    client, notebook_id: str, partial_id: str, *, json_output: bool = False
+) -> str:
+    """Resolve partial artifact ID to full ID.
+
+    When ``json_output`` is True, the "Matched..." diagnostic for a successful
+    partial match is routed to stderr so stdout stays parseable JSON.
+    """
     return await _resolve_partial_id(
         partial_id,
         list_fn=lambda: client.artifacts.list(notebook_id),
         entity_name="artifact",
         list_command="artifact list",
+        json_output=json_output,
     )
 
 
-async def resolve_note_id(client, notebook_id: str, partial_id: str) -> str:
-    """Resolve partial note ID to full ID."""
+async def resolve_note_id(
+    client, notebook_id: str, partial_id: str, *, json_output: bool = False
+) -> str:
+    """Resolve partial note ID to full ID.
+
+    When ``json_output`` is True, the "Matched..." diagnostic for a successful
+    partial match is routed to stderr so stdout stays parseable JSON.
+    """
     return await _resolve_partial_id(
         partial_id,
         list_fn=lambda: client.notes.list(notebook_id),
         entity_name="note",
         list_command="note list",
+        json_output=json_output,
     )
 
 
 async def resolve_source_ids(
-    client, notebook_id: str, source_ids: tuple[str, ...]
+    client,
+    notebook_id: str,
+    source_ids: tuple[str, ...],
+    *,
+    json_output: bool = False,
 ) -> list[str] | None:
     """Resolve multiple partial source IDs to full IDs.
 
@@ -759,6 +837,8 @@ async def resolve_source_ids(
         client: NotebookLM client
         notebook_id: Resolved notebook ID
         source_ids: Tuple of partial source IDs from CLI
+        json_output: When True, "Matched..." diagnostics for partial matches
+            are routed to stderr so stdout stays parseable JSON.
 
     Returns:
         List of resolved source IDs, or None if no source IDs provided
@@ -767,7 +847,7 @@ async def resolve_source_ids(
         return None
     resolved = []
     for sid in source_ids:
-        resolved.append(await resolve_source_id(client, notebook_id, sid))
+        resolved.append(await resolve_source_id(client, notebook_id, sid, json_output=json_output))
     return resolved
 
 

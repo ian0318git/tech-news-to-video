@@ -219,7 +219,7 @@ def _file_contains_best_effort_after_except(filepath: Path, except_line: int) ->
 _SILENT_SITES = [
     ("cli/_firefox_containers.py", 133),
     ("cli/_firefox_containers.py", 364),
-    ("cli/helpers.py", 555),
+    ("cli/helpers.py", 596),
     ("notebooklm_cli.py", 66),
 ]
 

@@ -68,7 +68,7 @@ def research_status(ctx, notebook_id, json_output, client_auth):
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            nb_id_resolved = await resolve_notebook_id(client, nb_id)
+            nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
             status = await client.research.poll(nb_id_resolved)
 
             if json_output:
@@ -148,19 +148,21 @@ def research_wait(
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            nb_id_resolved = await resolve_notebook_id(client, nb_id)
+            nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
             max_iterations = max(1, timeout // interval)
             status = None
             task_id = None
 
-            with console.status("Waiting for research to complete..."):
+            async def _poll_loop() -> bool:
+                """Poll until completion or terminal state; returns True on success."""
+                nonlocal status, task_id
                 for _ in range(max_iterations):
                     status = await client.research.poll(nb_id_resolved)
                     status_val = status.get("status", "unknown")
 
                     if status_val == "completed":
                         task_id = status.get("task_id")
-                        break
+                        return True
                     elif status_val == "no_research":
                         if json_output:
                             json_output_response(
@@ -171,16 +173,24 @@ def research_wait(
                         raise SystemExit(1)
 
                     await asyncio.sleep(interval)
-                else:
-                    if json_output:
-                        json_output_response(
-                            {"status": "timeout", "error": f"Timed out after {timeout}s"}
-                        )
-                    else:
-                        console.print(f"[yellow]Timed out after {timeout} seconds[/yellow]")
-                    raise SystemExit(1)
 
-            # Research completed
+                if json_output:
+                    json_output_response(
+                        {"status": "timeout", "error": f"Timed out after {timeout}s"}
+                    )
+                else:
+                    console.print(f"[yellow]Timed out after {timeout} seconds[/yellow]")
+                raise SystemExit(1)
+
+            if json_output:
+                await _poll_loop()
+            else:
+                with console.status("Waiting for research to complete..."):
+                    await _poll_loop()
+
+            # Research completed — _poll_loop either populated `status` or
+            # raised SystemExit, so a non-None status is guaranteed here.
+            assert status is not None
             sources = status.get("sources", [])
             query = status.get("query", "")
 

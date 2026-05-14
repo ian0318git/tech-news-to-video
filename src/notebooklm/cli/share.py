@@ -89,7 +89,7 @@ def share_status(ctx, notebook_id, json_output, client_auth):
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            resolved_id = await resolve_notebook_id(client, nb_id)
+            resolved_id = await resolve_notebook_id(client, nb_id, json_output=json_output)
             status = await client.sharing.get_status(resolved_id)
 
             if json_output:
@@ -172,7 +172,7 @@ def share_public(ctx, notebook_id, enable, json_output, client_auth):
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            resolved_id = await resolve_notebook_id(client, nb_id)
+            resolved_id = await resolve_notebook_id(client, nb_id, json_output=json_output)
             status = await client.sharing.set_public(resolved_id, enable)
 
             if json_output:
@@ -225,7 +225,7 @@ def share_view_level(ctx, level, notebook_id, json_output, client_auth):
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            resolved_id = await resolve_notebook_id(client, nb_id)
+            resolved_id = await resolve_notebook_id(client, nb_id, json_output=json_output)
             status = await client.sharing.set_view_level(resolved_id, view_level)
 
             if json_output:
@@ -281,7 +281,7 @@ def share_add(ctx, email, notebook_id, permission, no_notify, message, json_outp
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            resolved_id = await resolve_notebook_id(client, nb_id)
+            resolved_id = await resolve_notebook_id(client, nb_id, json_output=json_output)
             await client.sharing.add_user(
                 resolved_id,
                 email,
@@ -340,7 +340,7 @@ def share_update(ctx, email, notebook_id, permission, json_output, client_auth):
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            resolved_id = await resolve_notebook_id(client, nb_id)
+            resolved_id = await resolve_notebook_id(client, nb_id, json_output=json_output)
             await client.sharing.update_user(resolved_id, email, perm)
 
             if json_output:
@@ -381,7 +381,7 @@ def share_remove(ctx, email, notebook_id, yes, json_output, client_auth):
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            resolved_id = await resolve_notebook_id(client, nb_id)
+            resolved_id = await resolve_notebook_id(client, nb_id, json_output=json_output)
 
             # Confirm after resolution so user sees context
             if not yes and not json_output:

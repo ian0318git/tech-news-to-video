@@ -87,7 +87,7 @@ def artifact_list(ctx, notebook_id, artifact_type, json_output, client_auth):
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            nb_id_resolved = await resolve_notebook_id(client, nb_id)
+            nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
             # artifacts.list() already includes mind maps from notes system
             artifacts = await client.artifacts.list(nb_id_resolved, artifact_type=type_filter)
 
@@ -353,8 +353,10 @@ def artifact_wait(ctx, artifact_id, notebook_id, timeout, interval, json_output,
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            nb_id_resolved = await resolve_notebook_id(client, nb_id)
-            resolved_id = await resolve_artifact_id(client, nb_id_resolved, artifact_id)
+            nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
+            resolved_id = await resolve_artifact_id(
+                client, nb_id_resolved, artifact_id, json_output=json_output
+            )
 
             try:
                 status = await client.artifacts.wait_for_completion(
@@ -415,12 +417,8 @@ def artifact_suggestions(ctx, notebook_id, json_output, client_auth):
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            nb_id_resolved = await resolve_notebook_id(client, nb_id)
+            nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
             suggestions = await client.artifacts.suggest_reports(nb_id_resolved)
-
-            if not suggestions:
-                console.print("[yellow]No suggestions available[/yellow]")
-                return
 
             if json_output:
                 data = [
@@ -428,6 +426,10 @@ def artifact_suggestions(ctx, notebook_id, json_output, client_auth):
                     for s in suggestions
                 ]
                 json_output_response(data)
+                return
+
+            if not suggestions:
+                console.print("[yellow]No suggestions available[/yellow]")
                 return
 
             table = Table(title="Suggested Reports")

@@ -404,8 +404,10 @@ def generate_audio(
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            nb_id_resolved = await resolve_notebook_id(client, nb_id)
-            sources = await resolve_source_ids(client, nb_id_resolved, source_ids)
+            nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
+            sources = await resolve_source_ids(
+                client, nb_id_resolved, source_ids, json_output=json_output
+            )
 
             async def _generate():
                 return await client.artifacts.generate_audio(
@@ -535,8 +537,10 @@ def generate_video(
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            nb_id_resolved = await resolve_notebook_id(client, nb_id)
-            sources = await resolve_source_ids(client, nb_id_resolved, source_ids)
+            nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
+            sources = await resolve_source_ids(
+                client, nb_id_resolved, source_ids, json_output=json_output
+            )
 
             async def _generate():
                 if is_cinematic:
@@ -651,8 +655,10 @@ def generate_slide_deck(
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            nb_id_resolved = await resolve_notebook_id(client, nb_id)
-            sources = await resolve_source_ids(client, nb_id_resolved, source_ids)
+            nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
+            sources = await resolve_source_ids(
+                client, nb_id_resolved, source_ids, json_output=json_output
+            )
 
             async def _generate():
                 return await client.artifacts.generate_slide_deck(
@@ -727,7 +733,7 @@ def generate_revise_slide(
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            nb_id_resolved = await resolve_notebook_id(client, nb_id)
+            nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
 
             async def _generate():
                 return await client.artifacts.revise_slide(
@@ -802,8 +808,10 @@ def generate_quiz(
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            nb_id_resolved = await resolve_notebook_id(client, nb_id)
-            sources = await resolve_source_ids(client, nb_id_resolved, source_ids)
+            nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
+            sources = await resolve_source_ids(
+                client, nb_id_resolved, source_ids, json_output=json_output
+            )
 
             async def _generate():
                 return await client.artifacts.generate_quiz(
@@ -877,8 +885,10 @@ def generate_flashcards(
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            nb_id_resolved = await resolve_notebook_id(client, nb_id)
-            sources = await resolve_source_ids(client, nb_id_resolved, source_ids)
+            nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
+            sources = await resolve_source_ids(
+                client, nb_id_resolved, source_ids, json_output=json_output
+            )
 
             async def _generate():
                 return await client.artifacts.generate_flashcards(
@@ -972,8 +982,10 @@ def generate_infographic(
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            nb_id_resolved = await resolve_notebook_id(client, nb_id)
-            sources = await resolve_source_ids(client, nb_id_resolved, source_ids)
+            nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
+            sources = await resolve_source_ids(
+                client, nb_id_resolved, source_ids, json_output=json_output
+            )
 
             async def _generate():
                 return await client.artifacts.generate_infographic(
@@ -1041,8 +1053,10 @@ def generate_data_table(
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            nb_id_resolved = await resolve_notebook_id(client, nb_id)
-            sources = await resolve_source_ids(client, nb_id_resolved, source_ids)
+            nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
+            sources = await resolve_source_ids(
+                client, nb_id_resolved, source_ids, json_output=json_output
+            )
 
             async def _generate():
                 return await client.artifacts.generate_data_table(
@@ -1089,8 +1103,10 @@ def generate_mind_map(
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            nb_id_resolved = await resolve_notebook_id(client, nb_id)
-            sources = await resolve_source_ids(client, nb_id_resolved, source_ids)
+            nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
+            sources = await resolve_source_ids(
+                client, nb_id_resolved, source_ids, json_output=json_output
+            )
 
             async def _generate():
                 return await client.artifacts.generate_mind_map(
@@ -1233,8 +1249,10 @@ def generate_report_cmd(
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            nb_id_resolved = await resolve_notebook_id(client, nb_id)
-            sources = await resolve_source_ids(client, nb_id_resolved, source_ids)
+            nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
+            sources = await resolve_source_ids(
+                client, nb_id_resolved, source_ids, json_output=json_output
+            )
 
             async def _generate():
                 return await client.artifacts.generate_report(

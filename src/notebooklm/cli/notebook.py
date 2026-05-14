@@ -260,7 +260,9 @@ def register_notebook_commands(cli):
         async def _run():
             async with NotebookLMClient(client_auth) as client:
                 # Resolve partial ID
-                resolved_id = await resolve_notebook_id(client, notebook_id)
+                resolved_id = await resolve_notebook_id(
+                    client, notebook_id, json_output=json_output
+                )
 
                 # Get metadata (use notebooks.get_metadata)
                 metadata = await client.notebooks.get_metadata(resolved_id)

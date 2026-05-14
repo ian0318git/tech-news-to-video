@@ -180,7 +180,7 @@ async def _download_artifacts_generic(
 
     async def _download() -> dict[str, Any]:
         async with NotebookLMClient(auth) as client:
-            nb_id_resolved = await resolve_notebook_id(client, nb_id)
+            nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
 
             # Setup download method dispatch
             download_methods: dict[str, _DownloadFn] = {
