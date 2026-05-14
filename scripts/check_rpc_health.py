@@ -424,6 +424,19 @@ def get_test_params(method: RPCMethod, notebook_id: str | None) -> list[Any] | N
         # Use "en" as safe language code
         return [[[None, [[None, None, None, None, ["en"]]]]]]
 
+    # GET_USER_TIER: read subscription tier from homepage context (no notebook required)
+    # Params mirror build_get_user_tier_params() in src/notebooklm/_settings.py.
+    if method == RPCMethod.GET_USER_TIER:
+        return [
+            [
+                [
+                    [None, "1", 627],
+                    [None, None, None, None, None, None, None, None, None, [None, None, 2]],
+                    1,
+                ]
+            ]
+        ]
+
     # Methods that require a notebook ID
     if not notebook_id:
         return None
@@ -441,11 +454,13 @@ def get_test_params(method: RPCMethod, notebook_id: str | None) -> list[Any] | N
     if method == RPCMethod.GET_SUGGESTED_REPORTS:
         return [[2], notebook_id]
 
-    # Methods that take [[notebook_id]] as the only param
-    if method in (
-        RPCMethod.GET_NOTES_AND_MIND_MAPS,
-        RPCMethod.DISCOVER_SOURCES,
-    ):
+    # Methods that take [[notebook_id]] as the only param.
+    # Note: DISCOVER_SOURCES is intentionally NOT listed here. It is in
+    # ALWAYS_SKIP_METHODS ("not fully rolled out by Google") and would be
+    # short-circuited before get_test_params runs anyway; keeping it out
+    # of get_test_params also lets the coverage assertion in
+    # tests/unit/test_rpc_health_coverage.py classify it explicitly.
+    if method == RPCMethod.GET_NOTES_AND_MIND_MAPS:
         return [[notebook_id]]
 
     # GET_LAST_CONVERSATION_ID: returns most recent conversation ID
