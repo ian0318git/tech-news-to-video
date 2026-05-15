@@ -74,6 +74,8 @@ from .exceptions import (
     NotebookLMError,
     NotebookNotFoundError,
     RateLimitError,
+    # Domain: Research (T7.F3)
+    ResearchTaskMismatchError,
     RPCError,
     RPCTimeoutError,
     ServerError,
@@ -200,6 +202,8 @@ __all__ = [
     "ArtifactNotReadyError",
     "ArtifactParseError",
     "ArtifactDownloadError",
+    # Domain Exceptions: Research (T7.F3)
+    "ResearchTaskMismatchError",
     # Warnings
     "UnknownTypeWarning",
     # User-facing type enums (str enums for .kind property)

@@ -511,7 +511,11 @@ class TestResearch:
         httpx_mock.add_response(content=response_body.encode(), method="POST")
 
         async with NotebookLMClient(auth_tokens) as client:
-            result = await client.research.poll("nb_123")
+            # T7.F3: poll() without task_id when >1 task is in flight is the
+            # ambiguous case — pin that the DeprecationWarning fires on this
+            # exact path so a future change can't silently drop it.
+            with pytest.warns(DeprecationWarning, match="task_id"):
+                result = await client.research.poll("nb_123")
 
         assert result["task_id"] == "task_latest"
         assert result["query"] == "latest query"
@@ -670,9 +674,12 @@ class TestResearch:
                     "research_task_id": "report_123",
                 },
             ]
+            # T7.F3: caller's task_id must match the source's research_task_id.
+            # For deep research the authoritative id on the wire is the
+            # report_id, which is what ``poll`` propagates onto each source.
             result = await client.research.import_sources(
                 notebook_id="nb_123",
-                task_id="task_123",
+                task_id="report_123",
                 sources=sources,
             )
 
@@ -698,8 +705,18 @@ class TestResearch:
 
     @pytest.mark.asyncio
     async def test_import_sources_rejects_mixed_research_task_ids(self, auth_tokens):
-        """Test that import_sources rejects batches spanning multiple research tasks."""
-        from notebooklm.exceptions import ValidationError
+        """Test that import_sources rejects batches spanning multiple research tasks.
+
+        Two distinct failure modes both refuse the batch:
+        - At least one source's ``research_task_id`` differs from the caller's
+          ``task_id`` (T7.F3 check; raises :class:`ResearchTaskMismatchError`).
+        - All sources match the caller's ``task_id`` but disagree among
+          themselves (legacy multi-task batch check; raises plain
+          :class:`ValidationError`). Hard to construct in practice because
+          a caller can pass only one ``task_id``, but the legacy check
+          remains a defense-in-depth guardrail.
+        """
+        from notebooklm.exceptions import ResearchTaskMismatchError
 
         async with NotebookLMClient(auth_tokens) as client:
             sources = [
@@ -716,12 +733,17 @@ class TestResearch:
                     "research_task_id": "report_456",
                 },
             ]
-            with pytest.raises(ValidationError, match="multiple research tasks"):
+            # Caller passes task_id="report_123": the first source matches,
+            # but the second source's research_task_id="report_456" mismatches
+            # and trips the T7.F3 per-source check.
+            with pytest.raises(ResearchTaskMismatchError) as exc_info:
                 await client.research.import_sources(
                     notebook_id="nb_123",
-                    task_id="task_123",
+                    task_id="report_123",
                     sources=sources,
                 )
+            assert exc_info.value.task_id == "report_123"
+            assert exc_info.value.source_research_task_id == "report_456"
 
     @pytest.mark.asyncio
     async def test_import_sources_includes_multiple_report_entries(
@@ -761,9 +783,10 @@ class TestResearch:
                     "research_task_id": "report_123",
                 },
             ]
+            # T7.F3: caller's task_id matches the sources' research_task_id.
             result = await client.research.import_sources(
                 notebook_id="nb_123",
-                task_id="task_123",
+                task_id="report_123",
                 sources=sources,
             )
 
@@ -912,7 +935,6 @@ class TestResearch:
             )
             assert start_result is not None
             assert start_result["mode"] == "deep"
-            task_id = start_result["task_id"]
 
             poll_result = await client.research.poll("nb_123")
             assert poll_result["status"] == "completed"
@@ -924,9 +946,14 @@ class TestResearch:
             sources_with_urls = [s for s in sources if s.get("url")]
             assert len(sources_with_urls) == 2
 
+            # T7.F3: for deep research the authoritative id on the wire is
+            # the report_id returned by ``poll`` (and stamped onto each
+            # source as ``research_task_id``), not the ``task_id`` returned
+            # by ``start``. Pass the poll-derived id so the per-source
+            # mismatch guard accepts the batch.
             imported = await client.research.import_sources(
                 notebook_id="nb_123",
-                task_id=task_id,
+                task_id=poll_result["task_id"],
                 sources=sources,  # Pass all, filtering happens internally
             )
 

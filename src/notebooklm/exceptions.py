@@ -75,6 +75,8 @@ __all__ = [
     "ArtifactNotReadyError",
     "ArtifactParseError",
     "ArtifactDownloadError",
+    # Domain: Research
+    "ResearchTaskMismatchError",
 ]
 
 
@@ -795,3 +797,39 @@ class ArtifactDownloadError(ArtifactError):
         if details:
             msg += f": {details}"
         super().__init__(msg)
+
+
+# =============================================================================
+# Domain: Research (T7.F3)
+# =============================================================================
+
+
+class ResearchTaskMismatchError(ValidationError):
+    """Per-source ``research_task_id`` does not match the caller's ``task_id``.
+
+    Raised by :meth:`ResearchAPI.import_sources` when one of the supplied
+    sources carries a ``research_task_id`` that differs from the
+    discriminator ``task_id`` passed by the caller. This is the wire-crossing
+    bug from audit §26: the caller intends to import results for task A,
+    but one of the source entries was actually discovered under task B.
+    Importing under the wrong task would mis-attribute provenance, so this
+    check fails loud before any RPC traffic is issued.
+
+    Inherits from :class:`ValidationError` so existing ``except
+    ValidationError`` clauses on ``import_sources`` continue to catch it.
+
+    Attributes:
+        task_id: The discriminator ``task_id`` passed by the caller.
+        source_research_task_id: The ``research_task_id`` carried by the
+            offending source dict.
+    """
+
+    def __init__(self, *, task_id: str, source_research_task_id: str):
+        self.task_id = task_id
+        self.source_research_task_id = source_research_task_id
+        super().__init__(
+            f"research_task_id mismatch: source carries "
+            f"research_task_id={source_research_task_id!r} but caller passed "
+            f"task_id={task_id!r}. Sources discovered under one research "
+            f"task cannot be imported under another."
+        )

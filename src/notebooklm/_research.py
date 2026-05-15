@@ -5,11 +5,12 @@ and importing discovered sources into notebooks.
 """
 
 import logging
+import warnings
 from typing import Any
 
 from . import research as _research_pub
 from ._core import ClientCore
-from .exceptions import ValidationError
+from .exceptions import ResearchTaskMismatchError, ValidationError
 from .rpc import RPCMethod, safe_index
 from .types import CitedSourceSelection
 
@@ -336,29 +337,54 @@ class ResearchAPI:
             }
         return None
 
-    async def poll(self, notebook_id: str) -> dict[str, Any]:
+    async def poll(
+        self,
+        notebook_id: str,
+        task_id: str | None = None,
+    ) -> dict[str, Any]:
         """Poll for research results.
 
         Args:
             notebook_id: The notebook ID.
+            task_id: Optional discriminator selecting a specific research task
+                when more than one is in flight against the same notebook.
+                When set, the returned ``task_id`` / ``status`` / ``query`` /
+                ``sources`` / ``summary`` / ``report`` fields describe the
+                matched task, and ``tasks`` contains only that task. When
+                ``None`` and multiple tasks are in flight, a
+                :class:`DeprecationWarning` is emitted and the *latest* task
+                is returned (preserving legacy behavior). When ``None`` and a
+                single task is in flight, behavior is unchanged and no
+                warning fires.
+
+                Migration: callers that started research via
+                :meth:`start` and held onto the returned ``task_id`` should
+                pass it here on every subsequent ``poll`` to remove
+                ambiguity. The ``None`` default will be removed in a future
+                major release (Tier 8).
 
         Returns:
-            Dictionary representing the latest parsed research task for the
+            Dictionary representing the parsed research task for the
             notebook. Includes:
-            - ``task_id``: task/report identifier for the latest task
+            - ``task_id``: task/report identifier for the selected task
             - ``status``: ``in_progress``, ``completed``, or ``no_research``
             - ``query``: original research query text
-            - ``sources``: parsed source dictionaries for the latest task
+            - ``sources``: parsed source dictionaries for the selected task
             - ``summary``: summary text when present
             - ``report``: extracted deep-research report markdown when present
-            - ``tasks``: additive list of all parsed research tasks, each with
-              the same shape as the top-level latest-task fields
+            - ``tasks``: list of all parsed research tasks visible at this
+              poll (filtered to the matched task when ``task_id`` is set),
+              each with the same shape as the top-level fields
 
             Each source dictionary may include:
             - ``url`` and ``title``
             - ``result_type``
             - ``research_task_id``: task/report ID that produced the source
             - ``report_markdown`` for deep-research report entries
+
+            When ``task_id`` is supplied but no in-flight task matches, the
+            return is ``{"status": "no_research", "tasks": []}`` — the same
+            shape as the empty-poll case.
         """
         logger.debug("Polling research status for notebook %s", notebook_id)
         params = [None, None, notebook_id]
@@ -380,9 +406,12 @@ class ResearchAPI:
             if not isinstance(task_data, list):
                 continue
 
-            task_id = _extract_task_id(task_data)
+            # Distinct from the ``task_id`` parameter (the caller's
+            # discriminator); name them differently to avoid the obvious
+            # shadowing trap.
+            parsed_task_id = _extract_task_id(task_data)
             task_info = _extract_task_info(task_data)
-            if task_id is None or task_info is None:
+            if parsed_task_id is None or task_info is None:
                 continue
 
             query_text = _extract_query_text(task_info) or ""
@@ -433,7 +462,7 @@ class ResearchAPI:
                         "url": url,
                         "title": title,
                         "result_type": result_type,
-                        "research_task_id": task_id,
+                        "research_task_id": parsed_task_id,
                     }
                     if source_report:
                         parsed_source["report_markdown"] = source_report
@@ -455,7 +484,7 @@ class ResearchAPI:
 
             parsed_tasks.append(
                 {
-                    "task_id": task_id,
+                    "task_id": parsed_task_id,
                     "status": status,
                     "query": query_text,
                     "sources": parsed_sources,
@@ -464,10 +493,34 @@ class ResearchAPI:
                 }
             )
 
+        # Task-id discriminator (T7.F3): when supplied, filter parsed_tasks
+        # down to the matched task so callers iterating ``tasks`` don't see
+        # un-asked-for siblings. When omitted but multiple tasks are in
+        # flight, surface the latent cross-wire hazard via a
+        # DeprecationWarning — old behavior (return latest) is preserved to
+        # avoid breaking legacy single-task callers.
+        if task_id is not None:
+            parsed_tasks = [t for t in parsed_tasks if t.get("task_id") == task_id]
+        elif len(parsed_tasks) > 1:
+            warnings.warn(
+                (
+                    f"ResearchAPI.poll(notebook_id={notebook_id!r}) returned "
+                    f"{len(parsed_tasks)} in-flight tasks but no task_id "
+                    f"discriminator was supplied. The latest task is "
+                    f"returned for back-compat, but this is ambiguous and "
+                    f"may surface results for the wrong task. Pass "
+                    f"task_id=<id> (from research.start) to select "
+                    f"explicitly. The None default will be removed in a "
+                    f"future major release."
+                ),
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
         if parsed_tasks:
-            latest_task = parsed_tasks[0]
+            selected_task = parsed_tasks[0]
             return {
-                **latest_task,
+                **selected_task,
                 "tasks": parsed_tasks,
             }
 
@@ -501,6 +554,20 @@ class ResearchAPI:
         logger.debug("Importing %d research sources into notebook %s", len(sources), notebook_id)
         if not sources:
             return []
+
+        # T7.F3: per-source ``research_task_id`` must match the caller's
+        # ``task_id`` when both are present. A mismatch is the wire-crossing
+        # bug — importing under the wrong task would mis-attribute
+        # provenance. We do this scan BEFORE the multi-task batch check so
+        # callers get the precise diagnostic (which mismatched source +
+        # which task) instead of the generic "multiple tasks" message.
+        for source in sources:
+            source_task_id = source.get("research_task_id")
+            if isinstance(source_task_id, str) and source_task_id and source_task_id != task_id:
+                raise ResearchTaskMismatchError(
+                    task_id=task_id,
+                    source_research_task_id=source_task_id,
+                )
 
         research_task_ids = {
             research_task_id
