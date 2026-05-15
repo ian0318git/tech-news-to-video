@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import warnings
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1028,6 +1029,50 @@ class TestRunAsync:
 
         result = run_async(sample_coro())
         assert result == "result"
+
+    def test_nested_event_loop_raises_helpful_error(self):
+        """Calling run_async from inside a running loop raises a CLI-shaped
+        RuntimeError and does NOT leak a 'coroutine was never awaited' warning.
+
+        T7.G4: the guard wraps ``asyncio.run`` and explicitly closes the
+        coroutine before re-raising so callers see the helpful message,
+        not the noisy RuntimeWarning.
+        """
+
+        async def sample_coro():
+            return "should-never-run"
+
+        async def driver():
+            coro = sample_coro()
+            try:
+                # Filter RuntimeWarning to surface as an error so pytest's
+                # filterwarnings doesn't swallow it even in environments
+                # that downgrade it. If close() works, no warning fires.
+                with warnings.catch_warnings():
+                    warnings.simplefilter("error", RuntimeWarning)
+                    with pytest.raises(RuntimeError) as exc_info:
+                        run_async(coro)
+                return exc_info.value
+            finally:
+                # Defensive: ensure no coroutine leak even if the assertion
+                # path above changes — close() is idempotent.
+                coro.close()
+
+        err = asyncio.run(driver())
+        assert "existing event loop" in str(err)
+        assert "async API" in str(err)
+
+    def test_non_loop_runtime_error_passes_through_unchanged(self):
+        """RuntimeError raised *inside* the coroutine must propagate as-is
+        (not be rewritten into the nested-loop message). The guard is keyed
+        on the 'running event loop' substring of asyncio.run's own error.
+        """
+
+        async def boom():
+            raise RuntimeError("kaboom")
+
+        with pytest.raises(RuntimeError, match="kaboom"):
+            run_async(boom())
 
 
 class TestImportWithRetry:
