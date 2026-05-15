@@ -179,20 +179,59 @@ def _extract_cell_text(cell: Any) -> str:
     return ""
 
 
+def _extract_data_table_rows(raw_data: Any) -> list[Any]:
+    """Extract data-table rows from the LIST_ARTIFACTS (gArtLc) response shape.
+
+    Navigates the rich-text wrapper at ``raw_data[0][0][0][0][4][2]`` to reach
+    the rows array. The first four ``[0]`` hops are wrapper layers; ``[4]`` is
+    the table content section ``[type, flags, rows_array]``, and ``[2]`` is
+    the rows array itself.
+
+    Inner-most access goes through :func:`safe_index` so a soft-mode shape
+    drift logs a structured warning and returns ``[]`` instead of raising.
+    Strict-decode mode (``NOTEBOOKLM_STRICT_DECODE=1``) lets ``safe_index``
+    raise ``UnknownRPCMethodError`` so we fail fast.
+
+    Returns:
+        The rows array on success, or ``[]`` on shape drift / non-list inner
+        value. NEVER raises for soft-mode drift — callers (e.g.
+        :func:`_parse_data_table`) are responsible for converting an empty
+        result into a domain-level :class:`ArtifactParseError`.
+    """
+    rows_array = safe_index(
+        raw_data,
+        0,
+        0,
+        0,
+        0,
+        4,
+        2,
+        method_id=RPCMethod.LIST_ARTIFACTS.value,
+        source="_artifacts._extract_data_table_rows",
+    )
+    if not isinstance(rows_array, list):
+        # safe_index returns None on soft-mode drift, and the upstream shape
+        # is also occasionally seen as a non-list scalar — normalise both to
+        # the empty-list sentinel so the caller's "empty data table" path
+        # handles them uniformly.
+        if rows_array is not None:
+            logger.warning(
+                "data table rows_array is not a list (type=%s); treating as empty",
+                type(rows_array).__name__,
+            )
+        return []
+    return rows_array
+
+
 def _parse_data_table(raw_data: list) -> tuple[list[str], list[list[str]]]:
     """Parse rich-text data table into headers and rows.
 
     Data tables from NotebookLM have a complex nested structure with position
-    markers. This function navigates to the rows array and extracts text from
-    each cell.
+    markers. This function delegates inner-most navigation to
+    :func:`_extract_data_table_rows` and then extracts text from each cell.
 
-    Structure: raw_data[0][0][0][0][4][2] contains the rows array where:
-    - [0][0][0][0] navigates through wrapper layers
-    - [4] contains the table content section [type, flags, rows_array]
-    - [2] is the actual rows array
-
-    Each row has format: [start_pos, end_pos, [cell_array]]
-    Each cell is deeply nested: [pos, pos, [[pos, pos, [[pos, pos, [["text"]]]]]]]
+    Each row has format: ``[start_pos, end_pos, [cell_array]]``.
+    Each cell is deeply nested: ``[pos, pos, [[pos, pos, [[pos, pos, [["text"]]]]]]]``.
 
     Returns:
         Tuple of (headers, rows) where headers is a list of column names
@@ -202,9 +241,12 @@ def _parse_data_table(raw_data: list) -> tuple[list[str], list[list[str]]]:
         ArtifactParseError: If the data structure cannot be parsed or is empty.
     """
     try:
-        # Navigate through nested wrappers to reach the rows array
-        rows_array = raw_data[0][0][0][0][4][2]
+        rows_array = _extract_data_table_rows(raw_data)
         if not rows_array:
+            # Covers both genuinely-empty tables and soft-mode shape drift
+            # (where ``_extract_data_table_rows`` returns ``[]``). The caller
+            # converts this into ArtifactParseError so the download_data_table
+            # surface stays unchanged.
             raise ArtifactParseError("data_table", details="Empty data table")
 
         headers: list[str] = []
