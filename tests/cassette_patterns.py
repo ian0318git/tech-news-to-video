@@ -59,8 +59,23 @@ Tier 8 plan and MUST NOT be added here:
 
 - Escaped JSON display-name literals (``\\"First Last\\"``)  → T8.A6a
 - ``lh3.googleusercontent.com/(a|ogw)/`` avatar URLs          → T8.A6a
-- ``X-GUploader-UploadID`` / upload URLs                      → T8.A6b
-- Drive AONS tokens / Drive file IDs                          → T8.A6b
+
+Upload + Drive token coverage (T8.A6b — audit finding I17)
+----------------------------------------------------------
+The registry below extends the canonical cookie/CSRF/email coverage with
+scrubbers for Google's resumable-upload and Drive integration paths:
+
+* ``X-GUploader-UploadID`` response headers leak per-upload session tokens.
+* ``upload_id=...`` query parameters echo the same token into request URLs.
+* ``AONS...`` strings are Drive ACL/permission tokens emitted with file
+  metadata. The 20-char tail threshold avoids matching incidental
+  ``AONS`` mentions in code or docs.
+* Drive file IDs (33-44 char ``[A-Za-z0-9_-]`` strings) appear inside
+  ``"file_id": "..."`` JSON keys and ``/drive/v3/files/<id>`` URLs. The
+  pattern is intentionally context-anchored so that bare 36-char UUIDs
+  (artifact IDs, source IDs, conversation IDs) are NOT scrubbed — those
+  are NotebookLM-internal identifiers and matching them would corrupt
+  cassette replay.
 """
 
 from __future__ import annotations
@@ -265,6 +280,11 @@ SCRUB_PLACEHOLDERS: frozenset[str] = frozenset(
         # ``SCRUBBED_EMAIL@example.com`` is the rendered form of the email
         # replacement; ``is_clean`` checks the full token, so we list it too.
         "SCRUBBED_EMAIL@example.com",
+        # T8.A6b — upload + Drive token placeholders (audit I17).
+        "SCRUBBED_UPLOAD_ID",
+        "SCRUBBED_UPLOAD_URL",
+        "SCRUBBED_AONS",
+        "SCRUBBED_DRIVE_FILE_ID",
     }
 )
 
@@ -393,6 +413,50 @@ SENSITIVE_PATTERNS: list[tuple[str, str]] = [
         r'__Secure-[^"]+|__Host-[^"]+)"\s*:\s*")[^"\\]*(?:\\.[^"\\]*)*(")',
         r"\1SCRUBBED\2",
     ),
+    # -------------------------------------------------------------------------
+    # 9. Upload tokens (T8.A6b — audit I17)
+    # -------------------------------------------------------------------------
+    # X-GUploader-UploadID response header line. The token is a long random
+    # string that uniquely identifies a resumable-upload session.
+    (
+        r"X-GUploader-UploadID: [A-Za-z0-9_\-]+",
+        "X-GUploader-UploadID: SCRUBBED_UPLOAD_ID",
+    ),
+    # Full upload URL that embeds the upload_id token in its query string.
+    # Match the whole URL (up to the next quote or whitespace) and collapse
+    # to a stable canonical form so the token never round-trips through a
+    # cassette body. The whole URL — including the ``upload_id=`` substring
+    # — is replaced so the subsequent standalone ``upload_id=`` pattern
+    # cannot re-match this placeholder and produce a non-idempotent rewrite.
+    (
+        r"https://notebooklm\.google\.com/upload/_/\?[^\"\s]*upload_id=[A-Za-z0-9_\-]+",
+        "SCRUBBED_UPLOAD_URL",
+    ),
+    # Standalone upload_id query parameter (anywhere it appears outside the
+    # full upload URL above).
+    (r"upload_id=[A-Za-z0-9_\-]+", "upload_id=SCRUBBED_UPLOAD_ID"),
+    # -------------------------------------------------------------------------
+    # 10. Drive AONS tokens (T8.A6b — audit I17)
+    # -------------------------------------------------------------------------
+    # AONS-prefixed strings are Drive permission/ACL tokens. The 20-char tail
+    # threshold avoids matching short literal "AONS" mentions in code or
+    # documentation while catching real tokens (which are typically 50+ chars).
+    (r"AONS[A-Za-z0-9_\-]{20,}", "SCRUBBED_AONS"),
+    # -------------------------------------------------------------------------
+    # 11. Drive file IDs (T8.A6b — audit I17) — context-aware ONLY
+    # -------------------------------------------------------------------------
+    # Match ONLY inside Drive contexts: a ``"file_id": "..."`` JSON key or a
+    # ``/drive/v3/files/<id>`` URL path. Bare 33-44 char strings elsewhere
+    # are NOT scrubbed — that would false-positive on artifact IDs, source
+    # IDs, conversation IDs, and other internal NotebookLM identifiers.
+    (
+        r'("file_id"\s*:\s*")[A-Za-z0-9_\-]{33,44}(")',
+        r"\1SCRUBBED_DRIVE_FILE_ID\2",
+    ),
+    (
+        r"(/drive/v3/files/)[A-Za-z0-9_\-]{33,44}",
+        r"\1SCRUBBED_DRIVE_FILE_ID",
+    ),
 ]
 
 
@@ -463,6 +527,37 @@ _DETECT_TOKEN_FIELDS: list[tuple[str, re.Pattern[str]]] = [
 # Compiled detection-only pattern for emails (no replacement string baked in).
 _DETECT_EMAIL = re.compile(_EMAIL_PATTERN_BASE)
 
+# T8.A6b — upload + Drive token detectors (audit I17).
+#
+# Each entry is (label, regex) where the regex's group(1) captures the value
+# that must match a known scrub placeholder. The regexes deliberately accept
+# both raw tokens AND their canonical placeholder form so that an already-
+# scrubbed cassette passes ``is_clean`` cleanly (idempotent validation).
+_DETECT_UPLOAD_DRIVE_FIELDS: list[tuple[str, re.Pattern[str]]] = [
+    # X-GUploader-UploadID response header: value must be SCRUBBED_UPLOAD_ID.
+    ("upload header", re.compile(r"X-GUploader-UploadID:\s*([A-Za-z0-9_\-]+)")),
+    # Standalone upload_id query parameter: value must be SCRUBBED_UPLOAD_ID.
+    # This intentionally matches BOTH dirty tokens and the canonical
+    # placeholder; the placeholder check below decides leak-or-clean.
+    ("upload_id param", re.compile(r"upload_id=([A-Za-z0-9_\-]+)")),
+    # Drive AONS tokens — 20-char tail threshold avoids matching short
+    # literal ``AONS`` mentions in code or docs. The captured group is the
+    # FULL token (including the ``AONS`` prefix) so the placeholder
+    # ``SCRUBBED_AONS`` is matched directly.
+    ("Drive AONS token", re.compile(r"(AONS[A-Za-z0-9_\-]{20,}|SCRUBBED_AONS)")),
+    # Drive file ID in JSON key: ``"file_id": "<id>"``.
+    ("Drive file_id (JSON)", re.compile(r'"file_id"\s*:\s*"([^"]+)"')),
+    # Drive file ID in URL: ``/drive/v3/files/<id>``.
+    ("Drive file_id (URL)", re.compile(r"/drive/v3/files/([A-Za-z0-9_\-]+)")),
+]
+
+# Full upload URL is replaced wholesale with ``SCRUBBED_UPLOAD_URL`` rather
+# than per-field, so the detector matches the whole URL form and the leak
+# check is "does it appear at all" (the only legitimate appearance of an
+# upload URL in a cassette is the placeholder itself, which this regex does
+# NOT match — so any match here is a leak).
+_DETECT_UPLOAD_URL = re.compile(r"https://notebooklm\.google\.com/upload/_/\?[^\"\s]*upload_id=")
+
 
 def is_clean(text: str) -> tuple[bool, list[str]]:
     """Validate that ``text`` contains no unredacted sensitive data.
@@ -525,5 +620,18 @@ def is_clean(text: str) -> tuple[bool, list[str]]:
             value = match.group(1)
             if value not in SCRUB_PLACEHOLDERS:
                 leaks.append(f"Leak ({label}): {value!r}")
+
+    # --- 4. T8.A6b — upload + Drive token fields ---------------------------
+    for label, regex in _DETECT_UPLOAD_DRIVE_FIELDS:
+        for match in regex.finditer(text):
+            value = match.group(1)
+            if value not in SCRUB_PLACEHOLDERS:
+                leaks.append(f"Leak ({label}): {value!r}")
+
+    # --- 5. T8.A6b — full upload URL --------------------------------------
+    # The scrubber collapses the entire URL to ``SCRUBBED_UPLOAD_URL``, so any
+    # match of the raw URL form here is by definition a leak.
+    for match in _DETECT_UPLOAD_URL.finditer(text):
+        leaks.append(f"Leak (upload URL): {match.group(0)!r}")
 
     return (not leaks, leaks)

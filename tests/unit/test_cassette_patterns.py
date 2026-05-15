@@ -467,3 +467,178 @@ def test_bad_cassette_cookie_header_payload_is_flagged() -> None:
     body = "Set-Cookie: SID=S_REAL_LEAK; Path=/\n"
     ok, _ = is_clean(body)
     assert not ok
+
+
+# ---------------------------------------------------------------------------
+# T8.A6b — upload + Drive token scrubbing (audit finding I17)
+#
+# These tests pin down two invariants:
+#
+# 1. Upload tokens (X-GUploader-UploadID headers, upload_id query params,
+#    full upload URLs) and Drive tokens (AONS permission tokens, Drive
+#    file IDs inside ``"file_id":`` JSON or ``/drive/v3/files/`` URLs)
+#    scrub to their canonical placeholders.
+#
+# 2. The DRIVE_FILE_ID regex is context-anchored so bare 36-char UUIDs
+#    elsewhere (artifact IDs, source IDs, conversation IDs) are NOT
+#    scrubbed — those are NotebookLM-internal identifiers and matching
+#    them would corrupt cassette replay. The negative regression block
+#    is the load-bearing test here.
+# ---------------------------------------------------------------------------
+
+
+def test_upload_id_header_scrubbed() -> None:
+    header = "X-GUploader-UploadID: ABPj22qXYZ_-abc123def456"
+    scrubbed = scrub_string(header)
+    assert scrubbed == "X-GUploader-UploadID: SCRUBBED_UPLOAD_ID"
+    assert "ABPj22qXYZ" not in scrubbed
+
+
+def test_upload_url_full_scrubbed() -> None:
+    """A full notebooklm upload URL is replaced with the URL placeholder.
+
+    The whole URL collapses to ``SCRUBBED_UPLOAD_URL`` (rather than leaving
+    a half-scrubbed ``upload_id=...`` fragment) so that the standalone
+    ``upload_id=`` pattern below cannot re-match the placeholder — which
+    would otherwise produce a non-idempotent rewrite.
+    """
+    url = (
+        "https://notebooklm.google.com/upload/_/?authuser=0&upload_id=AJRbA5XZXPNXlxYzAbcdef_-12345"
+    )
+    scrubbed = scrub_string(url)
+    assert scrubbed == "SCRUBBED_UPLOAD_URL"
+    assert "AJRbA5XZXPNXlx" not in scrubbed
+
+
+def test_upload_id_query_param_scrubbed() -> None:
+    """A bare ``upload_id=...`` query param outside the full URL is scrubbed."""
+    text = "POST /resume?upload_id=AJRbA5XZ_-1234567890 HTTP/1.1"
+    scrubbed = scrub_string(text)
+    assert "AJRbA5XZ_-1234567890" not in scrubbed
+    assert "upload_id=SCRUBBED_UPLOAD_ID" in scrubbed
+
+
+def test_drive_aons_token_scrubbed() -> None:
+    """A real-world Drive AONS token (50+ chars) is scrubbed."""
+    aons = "AONSffzuRealTokenValueWithLotsOfCharsAndDigits1234567890"
+    scrubbed = scrub_string(aons)
+    assert scrubbed == "SCRUBBED_AONS"
+
+
+def test_drive_aons_short_prefix_not_matched() -> None:
+    """The literal string ``AONS`` (and short tails) is NOT scrubbed.
+
+    The 20-char tail threshold avoids matching incidental ``AONS`` mentions
+    in code, comments, or short identifiers.
+    """
+    assert scrub_string("AONS") == "AONS"
+    assert scrub_string("AONSshort") == "AONSshort"
+
+
+def test_drive_file_id_in_json_key_scrubbed() -> None:
+    """File ID inside a ``"file_id": "..."`` JSON key is scrubbed."""
+    text = '{"file_id": "1NFoP9ORcSIk_dTXwMhZWRHfX6JvqYdRqmzYp8LqLi-s"}'
+    scrubbed = scrub_string(text)
+    assert "1NFoP9ORcSIk" not in scrubbed
+    assert '"file_id": "SCRUBBED_DRIVE_FILE_ID"' in scrubbed
+
+
+def test_drive_file_id_in_drive_url_scrubbed() -> None:
+    """File ID inside a ``/drive/v3/files/<id>`` URL is scrubbed."""
+    url = "https://www.googleapis.com/drive/v3/files/1A2B3C4D5E6F7G8H9I0J1K2L3M4N5O6P7Q8R"
+    scrubbed = scrub_string(url)
+    assert "1A2B3C4D5E6F7G8H9I" not in scrubbed
+    assert "/drive/v3/files/SCRUBBED_DRIVE_FILE_ID" in scrubbed
+
+
+def test_drive_file_id_negative_regression_non_drive_ids_not_scrubbed() -> None:
+    """Bare 36-char UUIDs outside Drive contexts must NOT be scrubbed.
+
+    This is the load-bearing test for T8.A6b. The codebase emits many
+    ``[A-Za-z0-9-]`` identifiers that LOOK like Drive file IDs but are
+    NotebookLM-internal (artifact IDs, conversation IDs, source IDs). A
+    naive ``[A-Za-z0-9_-]{33,44}`` pattern would corrupt cassette replay by
+    mangling them; DRIVE_FILE_ID is intentionally anchored to ``"file_id":``
+    JSON keys and ``/drive/v3/files/`` URLs only.
+    """
+    non_drive_ids = [
+        "71669a91-d5f0-4298-913e-9193178ec62c",  # notebook ID
+        "62e5c8db-3dd2-407c-8d19-32ae4ae799db",  # artifact ID
+        "f66923f0-1df4-4ffe-9822-3ed63c558b1c",  # conversation ID
+        "953b658a-579b-4b3c-b280-43b3781babf3",  # source ID
+        "c3f6285f-1709-44c4-9cd6-e95cf0ea4f5e",  # share ID
+        "167481cd-23a3-4331-9a45-c8948900bf91",  # another notebook ID
+    ]
+    for non_drive_id in non_drive_ids:
+        wrappers = [
+            f'{{"artifact_id": "{non_drive_id}"}}',
+            f'{{"conversation_id": "{non_drive_id}"}}',
+            f'{{"source_id": "{non_drive_id}"}}',
+            f"/v1/notebooks/{non_drive_id}/sources",
+            f"/v1/artifacts/{non_drive_id}",
+        ]
+        for wrapped in wrappers:
+            assert scrub_string(wrapped) == wrapped, (
+                f"DRIVE_FILE_ID false-positive on non-Drive identifier: {wrapped!r}"
+            )
+
+
+def test_upload_drive_scrubbing_is_idempotent() -> None:
+    """Scrubbing an already-scrubbed string is a no-op for T8.A6b patterns."""
+    inputs = [
+        "X-GUploader-UploadID: ABPj22qXYZ_-abc123",
+        "https://notebooklm.google.com/upload/_/?upload_id=AJRbA5XZ_-12345",
+        "POST /resume?upload_id=AJRbA5XZ_-1234567890 HTTP/1.1",
+        "AONSffzuTokenWithEnoughCharsToMatch12345",
+        '{"file_id": "1NFoP9ORcSIk_dTXwMhZWRHfX6JvqYdRqmzYp8LqLi-s"}',
+        "/drive/v3/files/1A2B3C4D5E6F7G8H9I0J1K2L3M4N5O6P7Q8R",
+    ]
+    for raw in inputs:
+        once = scrub_string(raw)
+        twice = scrub_string(once)
+        assert once == twice, f"Scrubbing not idempotent for: {raw!r}"
+
+
+def test_is_clean_flags_unscrubbed_upload_id() -> None:
+    """is_clean must catch an unscrubbed upload token."""
+    dirty = "X-GUploader-UploadID: ABPj22qXYZ_-abc123def456"
+    ok, leaks = is_clean(dirty)
+    assert not ok
+    assert any("ABPj22qXYZ" in leak for leak in leaks)
+
+
+def test_is_clean_flags_unscrubbed_aons() -> None:
+    """is_clean must catch an unscrubbed Drive AONS token."""
+    dirty = "value=AONSffzuRealTokenValueWithLotsOfChars1234567890"
+    ok, leaks = is_clean(dirty)
+    assert not ok
+    assert any("AONS" in leak for leak in leaks)
+
+
+def test_is_clean_flags_unscrubbed_drive_file_id_in_json() -> None:
+    """is_clean must catch an unscrubbed Drive file ID inside a JSON key."""
+    dirty = '{"file_id": "1NFoP9ORcSIk_dTXwMhZWRHfX6JvqYdRqmzYp8LqLi-s"}'
+    ok, leaks = is_clean(dirty)
+    assert not ok
+    assert any("1NFoP9ORcSIk" in leak for leak in leaks)
+
+
+def test_is_clean_flags_unscrubbed_upload_url() -> None:
+    """is_clean must catch an unscrubbed full upload URL."""
+    dirty = "https://notebooklm.google.com/upload/_/?upload_id=AJRbA5XZ_-12345"
+    ok, leaks = is_clean(dirty)
+    assert not ok
+
+
+def test_is_clean_recognizes_t8a6b_placeholders() -> None:
+    """The four T8.A6b placeholders register as clean."""
+    for placeholder in [
+        "X-GUploader-UploadID: SCRUBBED_UPLOAD_ID",
+        "upload_id=SCRUBBED_UPLOAD_ID",
+        "SCRUBBED_UPLOAD_URL",
+        "SCRUBBED_AONS",
+        '{"file_id": "SCRUBBED_DRIVE_FILE_ID"}',
+        "/drive/v3/files/SCRUBBED_DRIVE_FILE_ID",
+    ]:
+        ok, leaks = is_clean(placeholder)
+        assert ok, f"Placeholder form wrongly flagged as leak: {placeholder!r} -> {leaks}"
