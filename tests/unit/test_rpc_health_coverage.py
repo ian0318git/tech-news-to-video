@@ -96,14 +96,12 @@ MUTATING_SKIP_LIST: frozenset[str] = frozenset(
 )
 
 
-PATH_NOT_METHOD_SKIP: frozenset[str] = frozenset(
-    {
-        # QUERY_ENDPOINT holds a streamed-chat URL path, not a batchexecute
-        # RPC ID. The chat endpoint lives outside the /batchexecute RPC
-        # pipeline, so the canary cannot probe it via the same plumbing.
-        "QUERY_ENDPOINT",
-    }
-)
+# Reserved for ``RPCMethod`` members that hold a URL-path string rather than
+# a batchexecute RPC ID. None currently exist — the streamed-chat path was
+# relocated to a module-level constant in ``rpc/types.py`` (T8.D6) — but
+# this category remains so a future path-shaped entry can be classified
+# without re-introducing the whole skip-list scaffolding.
+PATH_NOT_METHOD_SKIP: frozenset[str] = frozenset()
 
 
 UNAVAILABLE_SKIP_LIST: frozenset[str] = frozenset(

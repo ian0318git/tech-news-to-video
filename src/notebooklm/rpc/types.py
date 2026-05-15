@@ -5,6 +5,7 @@ import logging
 import os
 from enum import Enum
 from functools import lru_cache
+from typing import Final
 
 from .._env import DEFAULT_BASE_URL, get_base_url
 
@@ -144,14 +145,18 @@ def resolve_rpc_id(method_name: str, canonical_id: str) -> str:
     return overrides.get(method_name, canonical_id)
 
 
+# URL path for the streamed-chat endpoint. Not a batchexecute RPC ID — kept
+# as a module-level constant rather than an ``RPCMethod`` member so the enum
+# only contains real RPC IDs that ``scripts/check_rpc_health.py`` can probe.
+_QUERY_ENDPOINT_PATH: Final[str] = (
+    "/_/LabsTailwindUi/data/google.internal.labs.tailwind.orchestration.v1."
+    "LabsTailwindOrchestrationService/GenerateFreeFormStreamed"
+)
+
 # Backward-compatible default-host endpoint constants. Runtime code should use
 # the lazy get_* helpers below so NOTEBOOKLM_BASE_URL is honored after import.
 BATCHEXECUTE_URL = f"{DEFAULT_BASE_URL}/_/LabsTailwindUi/data/batchexecute"
-QUERY_URL = (
-    f"{DEFAULT_BASE_URL}/_/LabsTailwindUi/data/"
-    "google.internal.labs.tailwind.orchestration.v1."
-    "LabsTailwindOrchestrationService/GenerateFreeFormStreamed"
-)
+QUERY_URL = f"{DEFAULT_BASE_URL}{_QUERY_ENDPOINT_PATH}"
 UPLOAD_URL = f"{DEFAULT_BASE_URL}/upload/_/"
 
 
@@ -162,11 +167,7 @@ def get_batchexecute_url() -> str:
 
 def get_query_url() -> str:
     """Return the NotebookLM streamed chat endpoint for the configured host."""
-    return (
-        f"{get_base_url()}/_/LabsTailwindUi/data/"
-        "google.internal.labs.tailwind.orchestration.v1."
-        "LabsTailwindOrchestrationService/GenerateFreeFormStreamed"
-    )
+    return f"{get_base_url()}{_QUERY_ENDPOINT_PATH}"
 
 
 def get_upload_url() -> str:
@@ -202,9 +203,6 @@ class RPCMethod(str, Enum):
     SUMMARIZE = "VfAZjd"
     GET_SOURCE_GUIDE = "tr032e"
     GET_SUGGESTED_REPORTS = "ciyUvf"  # AI-suggested report formats
-
-    # Query endpoint (not a batchexecute RPC ID)
-    QUERY_ENDPOINT = "/_/LabsTailwindUi/data/google.internal.labs.tailwind.orchestration.v1.LabsTailwindOrchestrationService/GenerateFreeFormStreamed"
 
     # Artifact operations
     CREATE_ARTIFACT = "R7cb6c"  # Generate any artifact (audio, video, report, quiz, etc.)

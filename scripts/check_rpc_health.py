@@ -131,8 +131,6 @@ FULL_MODE_ONLY_METHODS = {
 
 # Methods always skipped (even in full mode)
 ALWAYS_SKIP_METHODS = {
-    # Not a batchexecute RPC
-    RPCMethod.QUERY_ENDPOINT,
     # Takes too long
     RPCMethod.START_DEEP_RESEARCH,
     # Not fully rolled out by Google - fails with any IDs
