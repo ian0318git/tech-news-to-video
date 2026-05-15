@@ -55,7 +55,7 @@
 | **Research** | Web and Drive research agents (fast/deep modes) with auto-import |
 | **Sharing** | Public/private links, user permissions (viewer/editor), view level control |
 
-### Content Generation (All NotebookLM Studio Types)
+### Content Generation (All Artifact Types)
 
 | Type | Options | Download Format |
 |------|---------|-----------------|
@@ -88,57 +88,24 @@ These features are available via API/CLI but not exposed in NotebookLM's web int
 
 ## Installation
 
-**For AI agents** (Claude Code, Codex — the project's primary persona):
+The full install guide — six personas (agent, end-user, library, headless, contributor, power-user), optional extras matrix, platform notes — lives in **[docs/installation.md](docs/installation.md)**.
+
+**Quickest start** (CLI users and AI agents):
+
 ```bash
-# 1. Install the package + Chromium for the login flow
-pip install "notebooklm-py[browser]"
-playwright install chromium
-
-# 2. Optional [cookies] extra — rookiepy fails to BUILD on Python 3.13+, so gate explicitly
-#    rather than swallowing errors (a swallow would also hide typos / network failures):
-if python -c "import sys; sys.exit(0 if sys.version_info < (3, 13) else 1)"; then
-    pip install "notebooklm-py[cookies]"
-fi
-
-# 3. Register the skill so your agent harness discovers SKILL.md
-#    Both write to ~/.claude/skills/ and ~/.agents/skills/ — prefer the first if `notebooklm`
-#    is on PATH (it is, after step 1); use the npx form if not:
-notebooklm skill install
-# Alternative: npx skills add teng-lin/notebooklm-py
-
-# 4. Authenticate — `notebooklm login` is the primary path (opens a browser; user signs in once;
-#    cookies persist for subsequent runs). For HEADLESS agent contexts where opening a browser
-#    isn't feasible, use `--browser-cookies <browser>` to extract from an already-logged-in browser
-#    (requires `[cookies]` from step 2).
-notebooklm login                                  # primary: opens browser, user signs in to Google
-# Headless alternative: notebooklm login --browser-cookies auto
-
-# 5. Verify — agent should grep for `"status": "ok"` AND `"checks.token_fetch": true`
-notebooklm auth check --test --json
+pip install "notebooklm-py[browser]"   # core + Playwright
+playwright install chromium             # ~170 MB; no progress bar — be patient (30–90 s)
+notebooklm login                        # opens browser for Google sign-in
+notebooklm auth check --test --json     # verify: expect "status": "ok"
 ```
 
-**For human CLI users:**
+**As a library** (embedded in your app — no Playwright, no Chromium):
+
 ```bash
-# Install (pipx is recommended on Linux/macOS — keeps the CLI off your system Python;
-# pip works fine if you're already in a venv).
-pipx install "notebooklm-py[browser]"            # OR: pip install "notebooklm-py[browser]"
-playwright install chromium                       # ~170 MB download, no progress bar — be patient (30-90 s).
-                                                  # Login auto-installs this for chromium too,
-                                                  # but doing it up front gives you visible feedback.
-notebooklm login                                  # opens browser for Google OAuth
+pip install notebooklm-py               # ~10 MB; ship a pre-acquired storage_state.json
 ```
 
-**As a library** (embedding in your app — no Playwright, no Chromium download):
-```bash
-pip install notebooklm-py    # core install: httpx + click + rich (~10 MB)
-# All RPC traffic uses httpx; auth is cookie-based. Ship a pre-acquired
-# `storage_state.json` (or set NOTEBOOKLM_AUTH_JSON) and you never need
-# Playwright in your app or container. See docs/installation.md#c-library-user.
-```
-
-If `playwright install chromium` fails on Linux with `TypeError: onExit is not a function`, see the [Linux workaround](docs/troubleshooting.md#linux).
-
-**Contributors:** see [CONTRIBUTING.md](CONTRIBUTING.md). **Headless servers, all extras, FastAPI/Docker patterns (follow-up issue), and platform notes:** see [docs/installation.md](docs/installation.md).
+If `playwright install chromium` fails on Linux with `TypeError: onExit is not a function`, see the [Linux workaround](docs/troubleshooting.md#linux). **Contributors:** see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Quick Start
 
