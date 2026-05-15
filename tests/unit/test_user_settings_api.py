@@ -112,6 +112,49 @@ def test_extract_account_tier_preserves_unknown_tier_string():
     )
 
 
+@pytest.mark.parametrize(
+    ("tier_string", "expected_plan"),
+    [
+        ("NOTEBOOKLM_TIER_STANDARD", "Standard"),
+        ("NOTEBOOKLM_TIER_PLUS", "Google AI Plus"),
+        ("NOTEBOOKLM_TIER_PRO", "Google AI Pro"),
+        ("NOTEBOOKLM_TIER_PRO_DASHER_END_USER", "Google Workspace Pro"),
+        ("NOTEBOOKLM_TIER_ULTRA", "Google AI Ultra"),
+    ],
+)
+def test_extract_account_tier_maps_all_known_plan_names(tier_string, expected_plan):
+    """Every tier in ``_TIER_PLAN_NAMES`` must round-trip through the parser.
+
+    T8.C1: locks in the plan-name lookup table so future tier additions can't
+    silently drift between :func:`extract_account_tier` and the
+    :class:`AccountTier` ``plan_name`` mapping.
+    """
+    response = [[[[None, "1", 627], [[1613, [None, tier_string]]], 0]]]
+
+    assert extract_account_tier(response) == AccountTier(
+        tier=tier_string,
+        plan_name=expected_plan,
+    )
+
+
+def test_extract_account_tier_against_recorded_cassette_shape():
+    """Parser handles the real GET_USER_TIER envelope recorded in T8.C1.
+
+    Mirrors the deeply-nested response shape captured by the live API in
+    ``tests/cassettes/settings_get_user_tier.yaml`` so the unit test fails
+    fast if the parser drifts away from the live wire format — without
+    requiring the cassette to be present.
+    """
+    # Shape mirrors ``[[[[None, "1", 627], [[1613, [None, "<tier>"]]], 0]]]``
+    # which is what the wrb.fr envelope's inner JSON decodes to.
+    response = [[[[None, "1", 627], [[1613, [None, "NOTEBOOKLM_TIER_PRO"]]], 0]]]
+
+    result = extract_account_tier(response)
+
+    assert result.tier == "NOTEBOOKLM_TIER_PRO"
+    assert result.plan_name == "Google AI Pro"
+
+
 @pytest.mark.asyncio
 async def test_get_account_limits_calls_user_settings_rpc():
     core = MagicMock()
