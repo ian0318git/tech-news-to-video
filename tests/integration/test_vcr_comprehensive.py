@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent))
 from conftest import get_vcr_auth, skip_no_cassettes
 from notebooklm import NotebookLMClient, ReportFormat
+from notebooklm.types import Artifact, ArtifactType
 from vcr_config import notebooklm_vcr
 
 # Skip all tests in this module if cassettes are not available
@@ -325,6 +326,67 @@ class TestArtifactsListAPI:
                 else:
                     result = await method(READONLY_NOTEBOOK_ID)
                 assert isinstance(result, list)
+                # Every element the decoder hands back must be a fully-formed
+                # Artifact with a non-empty id/title and a known status. This
+                # rejects "the call replays but the parser silently returned
+                # garbage" — the failure mode the original ``isinstance(list)``
+                # check would not catch.
+                for art in result:
+                    assert isinstance(art, Artifact)
+                    assert isinstance(art.id, str) and art.id
+                    assert isinstance(art.title, str)
+                    assert isinstance(art.status, int)
+
+    @pytest.mark.vcr
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("method_name", "cassette", "expected_kind", "expected_type_code"),
+        [
+            (
+                "list_infographics",
+                "artifacts_list_infographics.yaml",
+                ArtifactType.INFOGRAPHIC,
+                7,
+            ),
+            (
+                "list_data_tables",
+                "artifacts_list_data_tables.yaml",
+                ArtifactType.DATA_TABLE,
+                9,
+            ),
+        ],
+    )
+    async def test_list_artifacts_kind_parsing(
+        self, method_name, cassette, expected_kind, expected_type_code
+    ):
+        """Parser turns INFOGRAPHIC (7) and DATA_TABLE (9) rows into the right kind.
+
+        T8.C6: closes audit finding I21. The two cassettes were already wired
+        into :data:`ARTIFACT_LIST_METHODS`, but the surrounding assertion only
+        proved the call replayed — not that the decoder mapped the integer
+        type code to the user-facing :class:`ArtifactType` enum. This test
+        asserts the full parser contract: at least one artifact is returned,
+        every artifact carries the expected ``_artifact_type`` integer, and
+        every artifact's ``.kind`` property resolves to the expected enum.
+        """
+        with notebooklm_vcr.use_cassette(cassette):
+            async with vcr_client() as client:
+                method = getattr(client.artifacts, method_name)
+                result = await method(READONLY_NOTEBOOK_ID)
+
+        assert isinstance(result, list)
+        assert len(result) >= 1, f"{cassette} should contain at least one artifact"
+        for art in result:
+            assert isinstance(art, Artifact)
+            assert art._artifact_type == expected_type_code, (
+                f"Expected raw type code {expected_type_code}, "
+                f"got {art._artifact_type} for artifact {art.id!r}"
+            )
+            assert art.kind == expected_kind, (
+                f"Expected .kind == {expected_kind!r}, got {art.kind!r} for artifact {art.id!r}"
+            )
+            # The .kind property is a str-enum so equality holds both ways.
+            assert art.kind == expected_kind.value
 
     @pytest.mark.vcr
     @pytest.mark.asyncio
