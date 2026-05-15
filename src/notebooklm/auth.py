@@ -135,6 +135,25 @@ _EXTRACTION_HINT = (
 
 # Tier 2 fires per cookie-load; a single CLI run can hit it 2-3 times across
 # the four loader entry points. One warning per process is enough signal.
+#
+# Dedupe contract (T7.G7): best-effort under threads, exactly-once on a single
+# event loop. The check-then-set at the call site (``_validate_required_cookies``
+# below) reads ``_SECONDARY_BINDING_WARNED`` and sets it to ``True`` in a single
+# synchronous block with no intervening ``await``. The asyncio scheduler can
+# only switch coroutines at ``await`` points, so concurrent coroutines on one
+# loop cannot interleave between the check and the set — the warning fires
+# exactly once per process. Under genuine OS threads (which this library does
+# NOT support per the documented concurrency contract — each client is bound
+# to one event loop), the pattern is racy: two threads can both observe
+# ``False`` before either has written ``True``, causing a duplicate warning.
+# We accept that as best-effort rather than introduce an ``asyncio.Lock``
+# (would not help threads) or a ``threading.Lock`` (re-architects for a use
+# case we don't support).
+#
+# Note: ``functools.lru_cache`` and ``logging.LoggerAdapter`` are sometimes
+# suggested as drop-in dedupe primitives here. They are NOT: ``lru_cache``
+# memoizes return values, not the side-effect of ``logger.warning``;
+# ``LoggerAdapter`` only rewrites records, it does not filter duplicates.
 _SECONDARY_BINDING_WARNED = False
 
 
@@ -1725,6 +1744,19 @@ def _file_lock(lock_path: Path, *, blocking: bool, log_prefix: str) -> Iterator[
         os.close(fd)
 
 
+# Dedupe contract (T7.G7): best-effort under threads, exactly-once on a single
+# event loop. ``_file_lock_exclusive`` below reads ``_FLOCK_UNAVAILABLE_WARNED``
+# and sets it to ``True`` in one synchronous block with no intervening
+# ``await``, so concurrent coroutines on one loop cannot interleave between
+# the check and the set — the warning fires exactly once per process. Under
+# genuine OS threads (out of scope per the documented concurrency contract),
+# duplicate warnings are possible. We accept that rather than serialize a
+# logging side-effect behind a lock for an unsupported configuration.
+#
+# Note: ``functools.lru_cache`` and ``logging.LoggerAdapter`` do NOT solve
+# this — ``lru_cache`` memoizes return values, not the ``logger.warning``
+# side-effect; ``LoggerAdapter`` only rewrites records, it does not filter
+# duplicates.
 _FLOCK_UNAVAILABLE_WARNED = False
 
 
