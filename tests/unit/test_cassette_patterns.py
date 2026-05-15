@@ -32,6 +32,7 @@ sys.path.insert(0, str(TESTS_DIR))
 
 import vcr_config  # noqa: E402
 from cassette_patterns import (  # noqa: E402
+    DISPLAY_NAME_FALSE_POSITIVES,
     EMAIL_PROVIDERS,
     HOST_COOKIES,
     OPTIONAL_COOKIES,
@@ -642,3 +643,252 @@ def test_is_clean_recognizes_t8a6b_placeholders() -> None:
     ]:
         ok, leaks = is_clean(placeholder)
         assert ok, f"Placeholder form wrongly flagged as leak: {placeholder!r} -> {leaks}"
+
+
+# ---------------------------------------------------------------------------
+# T8.A6a — display-name + avatar scrub patterns (audit C4 + /ogw/ group)
+#
+# These tests pin down four invariants:
+#
+# 1. Escaped JSON display-name literals (``\"First Last\"`` inside a double-
+#    encoded WRB payload) scrub to ``\"SCRUBBED_NAME\"``.
+# 2. ``lh3.googleusercontent.com/(?:a|ogw)/<token>`` avatar URLs scrub to
+#    ``SCRUBBED_AVATAR_URL`` for BOTH path forms and BOTH sizing suffix
+#    variants (``=s512`` and ``=s32-c-mo``).
+# 3. Legitimate two-Capitalized-word strings (font families like Google Sans,
+#    UI titles like Account Information, test-corpus artifact / notebook
+#    titles, AND bare-quoted source titles like ``"Source Title"``) are NEVER
+#    scrubbed. This is the LOAD-BEARING test: a broad
+#    ``>[A-Z][a-z]+\\s[A-Z][a-z]+<`` regex without the false-positive
+#    allowlist + escape anchoring would corrupt cassette replay. The audit
+#    explicitly flagged this as the failure mode to prevent.
+# 4. Scrubbing is idempotent on already-scrubbed input; ``is_clean`` flags
+#    raw leaks and accepts the canonical placeholders as clean.
+# ---------------------------------------------------------------------------
+
+
+# Helper: a literal backslash-quote pair as it would appear inside a JSON-
+# stringified WRB payload. Using a tiny helper keeps the test bodies readable
+# (without it every assertion would be a forest of ``\\\\"``).
+def _esc(s: str) -> str:
+    """Wrap ``s`` in the cassette's escaped-quote form ``\\"...\\"``."""
+    return f'\\"{s}\\"'
+
+
+def test_display_name_escaped_literal_scrubbed() -> None:
+    """A real escaped display-name literal scrubs to the SCRUBBED_NAME sentinel."""
+    raw = _esc("Alice Smith")
+    scrubbed = scrub_string(raw)
+    assert scrubbed == _esc("SCRUBBED_NAME")
+    assert "Alice Smith" not in scrubbed
+
+
+def test_display_name_three_word_escaped_literal_scrubbed() -> None:
+    """Three-word names (e.g. middle name present) are also scrubbed."""
+    raw = _esc("Mary Ann Smith")
+    scrubbed = scrub_string(raw)
+    assert scrubbed == _esc("SCRUBBED_NAME")
+    assert "Mary Ann Smith" not in scrubbed
+
+
+def test_display_name_inside_wrb_payload_scrubbed() -> None:
+    """The exact shape from sharing_get_status.yaml is scrubbed correctly.
+
+    This is the realistic payload form: a stringified JSON list inside a
+    WRB envelope, with the display name as a positional list element rather
+    than under a structured ``"displayName": "..."`` key. The A4 patterns
+    do NOT fire on this shape — that's the gap A6a closes.
+    """
+    payload = (
+        '[[[\\"SCRUBBED_EMAIL@example.com\\",1,[],'
+        '[\\"People Conf\\",\\"https://lh3.googleusercontent.com/a/ACg8ocXYZabc=s512\\"]]]'
+    )
+    scrubbed = scrub_string(payload)
+    assert "People Conf" not in scrubbed
+    assert "ACg8ocXYZabc" not in scrubbed
+    assert _esc("SCRUBBED_NAME") in scrubbed
+    assert "SCRUBBED_AVATAR_URL" in scrubbed
+
+
+def test_avatar_url_a_path_scrubbed() -> None:
+    """The ``/a/`` avatar URL form is scrubbed to SCRUBBED_AVATAR_URL."""
+    url = "https://lh3.googleusercontent.com/a/ACg8ocImrMoQR5mQnUHZzuc6Tat88aWfSwMre0nCoCanft5bLuZ3dTV0=s512"
+    scrubbed = scrub_string(url)
+    assert scrubbed == "SCRUBBED_AVATAR_URL"
+    assert "ACg8oc" not in scrubbed
+
+
+def test_avatar_url_ogw_path_scrubbed() -> None:
+    """The ``/ogw/`` avatar URL form is scrubbed to SCRUBBED_AVATAR_URL."""
+    url = "https://lh3.googleusercontent.com/ogw/AF2bZyi16LQ_0jOcB_3NwTmyCfSFpN74FaCfwF0mWwtxF--cwSQ=s192-c-mo"
+    scrubbed = scrub_string(url)
+    assert scrubbed == "SCRUBBED_AVATAR_URL"
+    assert "AF2bZyi" not in scrubbed
+
+
+def test_avatar_url_sizing_suffix_variants_scrubbed() -> None:
+    """Both ``=s512`` and ``=s32-c-mo`` style sizing suffixes are captured."""
+    for tail in ("=s32", "=s64-c-mo", "=s83-c-mo", "=s512"):
+        url = f"https://lh3.googleusercontent.com/ogw/AF2bZyABC123_-xyz{tail}"
+        scrubbed = scrub_string(url)
+        assert scrubbed == "SCRUBBED_AVATAR_URL", (
+            f"Sizing suffix {tail!r} not fully scrubbed: {scrubbed!r}"
+        )
+
+
+def test_display_name_false_positive_allowlist_preserved() -> None:
+    """Every entry in DISPLAY_NAME_FALSE_POSITIVES is preserved verbatim.
+
+    This is part of the load-bearing negative regression: font family
+    strings (``Google Sans``), UI page titles (``Account Information``),
+    and artifact / notebook titles from the test corpus must never be
+    scrubbed even though they match the two-Capitalized-word shape.
+    """
+    for fp in DISPLAY_NAME_FALSE_POSITIVES:
+        raw = _esc(fp)
+        scrubbed = scrub_string(raw)
+        assert scrubbed == raw, (
+            f"False-positive allowlist breach: {fp!r} got scrubbed to {scrubbed!r}"
+        )
+
+
+def test_display_name_negative_regression_bare_source_titles_preserved() -> None:
+    """Bare-quoted two-Capitalized-word source titles must NOT be scrubbed.
+
+    THIS IS THE LOAD-BEARING TEST. The audit explicitly warned that a broad
+    ``>[A-Z][a-z]+\\s[A-Z][a-z]+<`` regex would corrupt source-rename and
+    artifact-list cassettes. The A6a scrubber anchors on the escape-quote
+    form ``\\"...\\"``, so bare-quoted ``"Source Title"`` (which is how
+    artifact / notebook / source titles actually appear in cassettes) is
+    safe — both the escape anchoring AND the false-positive allowlist
+    cooperate to prevent corruption.
+    """
+    bare_titles = [
+        '"Source Title"',
+        '"Apple Pie"',
+        '"Recipe Book"',
+        '"Quantum Physics"',
+        '"Machine Learning"',
+        '"Web Development"',
+        '"Data Science"',
+        '"Climate Change"',
+    ]
+    for bare in bare_titles:
+        scrubbed = scrub_string(bare)
+        assert scrubbed == bare, (
+            f"Bare-quoted source title wrongly scrubbed: {bare!r} -> {scrubbed!r}"
+        )
+
+
+def test_display_name_negative_regression_escaped_titles_in_allowlist_preserved() -> None:
+    """Escaped artifact/notebook titles from the test corpus are preserved.
+
+    A cassette body containing ``\\"Agent Quiz\\"`` (e.g. an artifact title)
+    must NOT be scrubbed — the false-positive allowlist protects it. Without
+    this protection, the escape-anchored regex would clobber the title and
+    cassette replay would fail signature matching against the recorded
+    request bodies.
+    """
+    titles = [
+        "Agent Quiz",
+        "Agent Flashcards",
+        "Agent Development Tutorials",
+        "Slide Deck",
+        "Tool Use Loop",
+        "Claude Code",
+    ]
+    for title in titles:
+        raw = _esc(title)
+        scrubbed = scrub_string(raw)
+        assert scrubbed == raw, (
+            f"Test-corpus title wrongly scrubbed: {title!r} ({raw!r}) -> {scrubbed!r}"
+        )
+
+
+def test_display_name_and_avatar_scrubbing_is_idempotent() -> None:
+    """Scrubbing an already-scrubbed string is a no-op for T8.A6a patterns."""
+    inputs = [
+        _esc("Alice Smith"),
+        _esc("People Conf"),
+        "https://lh3.googleusercontent.com/a/ACg8ocXYZ=s512",
+        "https://lh3.googleusercontent.com/ogw/AF2bZy_-cwSQ=s32-c-mo",
+        # Realistic combined payload.
+        f'[[[\\"SCRUBBED_EMAIL@example.com\\",1,[],[{_esc("People Conf")},'
+        f'\\"https://lh3.googleusercontent.com/a/ACg8ocXYZ=s512\\"]]]',
+    ]
+    for raw in inputs:
+        once = scrub_string(raw)
+        twice = scrub_string(once)
+        assert once == twice, f"Scrubbing not idempotent for: {raw!r}"
+
+
+def test_is_clean_flags_unscrubbed_escaped_display_name() -> None:
+    """is_clean must catch an unscrubbed escaped display-name literal."""
+    dirty = _esc("Alice Smith")
+    ok, leaks = is_clean(dirty)
+    assert not ok
+    assert any("Alice Smith" in leak for leak in leaks)
+
+
+def test_is_clean_ignores_false_positive_escaped_literals() -> None:
+    """is_clean must NOT flag false-positive allowlist entries.
+
+    The detector consults DISPLAY_NAME_FALSE_POSITIVES at the call site,
+    so escaped ``\\"Google Sans\\"`` and friends don't surface as leaks
+    even though they match the two-Capitalized-word regex shape.
+    """
+    for fp in DISPLAY_NAME_FALSE_POSITIVES:
+        ok, leaks = is_clean(_esc(fp))
+        # Filter to only display-name leaks; the email/cookie detectors
+        # don't fire on these inputs but be explicit anyway.
+        display_leaks = [leak for leak in leaks if "escaped display name" in leak]
+        assert not display_leaks, (
+            f"False-positive {fp!r} wrongly flagged as display-name leak: {display_leaks}"
+        )
+
+
+def test_is_clean_flags_unscrubbed_avatar_url() -> None:
+    """is_clean must catch an unscrubbed avatar URL (both /a/ and /ogw/)."""
+    for url in (
+        "https://lh3.googleusercontent.com/a/ACg8ocXYZabc=s512",
+        "https://lh3.googleusercontent.com/ogw/AF2bZy_-cwSQ=s32-c-mo",
+    ):
+        ok, leaks = is_clean(url)
+        assert not ok
+        assert any("avatar URL" in leak for leak in leaks)
+
+
+def test_is_clean_recognizes_t8a6a_placeholders() -> None:
+    """The T8.A6a placeholders register as clean."""
+    placeholders = [
+        "SCRUBBED_AVATAR_URL",
+        _esc("SCRUBBED_NAME"),
+        # Realistic combined: an already-scrubbed sharing payload.
+        f'[[[\\"SCRUBBED_EMAIL@example.com\\",1,[],[{_esc("SCRUBBED_NAME")},'
+        f'\\"SCRUBBED_AVATAR_URL\\"]]]',
+    ]
+    for placeholder in placeholders:
+        ok, leaks = is_clean(placeholder)
+        assert ok, f"Placeholder form wrongly flagged as leak: {placeholder!r} -> {leaks}"
+
+
+def test_display_name_false_positives_mirror_shape_lint() -> None:
+    """A6a's allowlist must stay in sync with A3's shape-lint allowlist.
+
+    ``tests/unit/test_cassette_shapes.py`` carries the same set under a
+    slightly different name (``DISPLAY_NAME_FALSE_POSITIVES``), with each
+    entry wrapped in the cassette's escape-quote form. If the two drift,
+    a real cassette could pass shape-lint but trip the scrub detector (or
+    vice versa) — this test forces both lists to be updated together.
+    """
+    from test_cassette_shapes import DISPLAY_NAME_FALSE_POSITIVES as SHAPE_LINT_FPS
+
+    # Shape-lint stores entries as ``\"Name\"``; A6a stores bare names.
+    # Strip the escape wrapping to compare apples-to-apples.
+    shape_lint_bare = frozenset(
+        entry.removeprefix('\\"').removesuffix('\\"') for entry in SHAPE_LINT_FPS
+    )
+    assert shape_lint_bare == DISPLAY_NAME_FALSE_POSITIVES, (
+        "T8.A6a false-positive allowlist drifted from T8.A3 shape-lint allowlist; "
+        "update BOTH tests/cassette_patterns.py and tests/unit/test_cassette_shapes.py"
+    )

@@ -47,18 +47,11 @@ Exports
 - :data:`OPTIONAL_COOKIES`    non-essential cookies surfaced for completeness
 - :data:`EMAIL_PROVIDERS`     provider domains we redact in emails
 - :data:`SCRUB_PLACEHOLDERS`  exact-match allowlist of expected sentinels
+- :data:`DISPLAY_NAME_FALSE_POSITIVES`  two-Cap-word strings to NEVER scrub
 - :data:`SENSITIVE_PATTERNS`  ordered (regex, replacement) registry
 - :func:`scrub_string`        single sanitization entry point
 - :func:`is_clean`            validator returning ``(ok, leaks)``
 - :func:`recompute_chunk_prefix`  XSSI byte-count re-derivation (T8.D7)
-
-What this module deliberately does NOT cover
---------------------------------------------
-The following scrub classes are intentionally deferred to later tasks in the
-Tier 8 plan and MUST NOT be added here:
-
-- Escaped JSON display-name literals (``\\"First Last\\"``)  → T8.A6a
-- ``lh3.googleusercontent.com/(a|ogw)/`` avatar URLs          → T8.A6a
 
 Upload + Drive token coverage (T8.A6b — audit finding I17)
 ----------------------------------------------------------
@@ -76,6 +69,29 @@ scrubbers for Google's resumable-upload and Drive integration paths:
   (artifact IDs, source IDs, conversation IDs) are NOT scrubbed — those
   are NotebookLM-internal identifiers and matching them would corrupt
   cassette replay.
+
+Display-name + avatar coverage (T8.A6a — audit finding C4 + /ogw/ group)
+------------------------------------------------------------------------
+The registry below also covers two display/identity leak shapes that the
+A4 structured scrubbers miss because the data is double-encoded inside a
+WRB-payload JSON string:
+
+* **Escaped JSON display-name literals.** Google's sharing RPCs emit owner
+  metadata as positional list elements inside a stringified WRB payload —
+  the display name surfaces as ``\\"First Last\\"`` rather than a
+  structured ``"displayName": "..."`` key. The A4 patterns key-anchor on
+  the outer JSON key, so they never fire on the inner double-encoded form.
+  The A6a pattern anchors on the escape-quote shape ``\\"...\\"`` and
+  carries an explicit false-positive allowlist (font families, UI titles,
+  artifact/notebook names produced by the test corpus) so that legitimate
+  two-Capitalized-word fixture content is preserved. This false-positive
+  list is the load-bearing safety net — a broad
+  ``>[A-Z][a-z]+\\s[A-Z][a-z]+<`` regex without it would corrupt source-
+  rename and artifact-list cassettes during replay.
+* **lh3.googleusercontent.com avatar URLs.** Both the ``/a/`` and ``/ogw/``
+  path forms carry per-user avatar tokens. The pattern collapses the whole
+  URL (host + path + token, including any trailing ``=s512``-style sizing
+  suffix) to ``SCRUBBED_AVATAR_URL``.
 """
 
 from __future__ import annotations
@@ -285,6 +301,48 @@ SCRUB_PLACEHOLDERS: frozenset[str] = frozenset(
         "SCRUBBED_UPLOAD_URL",
         "SCRUBBED_AONS",
         "SCRUBBED_DRIVE_FILE_ID",
+        # T8.A6a — avatar URL placeholder (audit C4 + /ogw/ group). The
+        # display-name escaped-literal scrubber reuses the existing
+        # ``SCRUBBED_NAME`` sentinel from A4 (section 6) so a cassette can
+        # carry just one canonical replacement string for human names.
+        "SCRUBBED_AVATAR_URL",
+    }
+)
+
+
+# =============================================================================
+# Display-name false-positive allowlist (T8.A6a)
+# =============================================================================
+# Two-Capitalized-word strings that LOOK like human display names but are
+# legitimate UI / font-family / artifact / notebook titles produced during
+# E2E test runs. The escaped-display-name scrubber (section 12 below) carries
+# this as a negative lookahead so these strings are NEVER replaced — that
+# protection is what keeps source-rename and artifact-list cassettes from
+# being corrupted during replay.
+#
+# This list intentionally mirrors ``DISPLAY_NAME_FALSE_POSITIVES`` in
+# ``tests/unit/test_cassette_shapes.py`` (T8.A3). The two lists are NOT
+# imported from each other to keep ``cassette_patterns.py`` a leaf module —
+# the shape-lint module already depends on this registry, and a back-edge
+# would create a cycle. New entries must be added to BOTH lists. The unit
+# test ``test_display_name_false_positives_mirror_shape_lint`` asserts they
+# stay in sync.
+DISPLAY_NAME_FALSE_POSITIVES: frozenset[str] = frozenset(
+    {
+        # Google Sans family (font-family CSS in HTML responses).
+        "Google Sans",
+        "Google Sans Text",
+        "Google Sans Arabic",
+        "Google Sans Traditional Chinese",
+        # Account UI page title (not a person's name).
+        "Account Information",
+        # Artifact / notebook titles produced by the test corpus.
+        "Agent Development Tutorials",
+        "Agent Flashcards",
+        "Agent Quiz",
+        "Slide Deck",
+        "Tool Use Loop",
+        "Claude Code",
     }
 )
 
@@ -294,6 +352,17 @@ SCRUB_PLACEHOLDERS: frozenset[str] = frozenset(
 # =============================================================================
 
 _EMAIL_PATTERN_BASE = r"[A-Za-z0-9._%+\-]+@(?:" + "|".join(EMAIL_PROVIDERS) + r")\.com"
+
+# Negative-lookahead alternation built from the false-positive allowlist.
+# Each entry is regex-escaped because some legitimate UI titles could in
+# theory contain regex metacharacters (none do today, but future additions
+# might). Sort by descending length so longer prefixes match before shorter
+# ones — e.g. ``Google Sans Text`` must be tried before ``Google Sans``,
+# otherwise the lookahead would consume only the shared prefix and the
+# scrubber would proceed to clobber the longer name.
+_DISPLAY_NAME_ALLOWLIST_ALT = "|".join(
+    re.escape(name) for name in sorted(DISPLAY_NAME_FALSE_POSITIVES, key=len, reverse=True)
+)
 
 
 def _cookie_header_replacer(name: str) -> tuple[str, str]:
@@ -457,6 +526,42 @@ SENSITIVE_PATTERNS: list[tuple[str, str]] = [
         r"(/drive/v3/files/)[A-Za-z0-9_\-]{33,44}",
         r"\1SCRUBBED_DRIVE_FILE_ID",
     ),
+    # -------------------------------------------------------------------------
+    # 12. Escaped JSON display-name literals (T8.A6a — audit C4)
+    # -------------------------------------------------------------------------
+    # Owner display names surface inside Google's sharing RPCs as positional
+    # list elements inside a stringified WRB payload, e.g.
+    # ``[\"alice@gmail.com\",1,[],[\"First Last\",\"https://lh3...\"]]``.
+    # The structured ``"displayName": "..."`` scrubbers in section 6 do not
+    # fire on the double-encoded form, so we add an escape-anchored pattern
+    # here. A negative lookahead carries the false-positive allowlist (font
+    # families, UI titles, artifact / notebook names) so that legitimate
+    # two-Capitalized-word fixture content is preserved — without that
+    # allowlist a broad ``\\"[A-Z][a-z]+(?: [A-Z][a-z]+)+\\"`` regex would
+    # clobber strings like ``\"Source Title\"`` during replay.
+    #
+    # The pattern requires the LITERAL escaped quotes (``\\"`` in regex,
+    # which is ``\"`` in the cassette body — a backslash followed by a real
+    # quote inside a JSON string) so it never fires on bare ``"Foo Bar"``
+    # JSON values; those are handled by the existing displayName /
+    # givenName / familyName JSON-key-anchored scrubbers in section 6.
+    (
+        rf'\\"(?!(?:{_DISPLAY_NAME_ALLOWLIST_ALT})\\")'
+        r'[A-Z][a-z]+(?: [A-Z][a-z]+)+\\"',
+        r'\\"SCRUBBED_NAME\\"',
+    ),
+    # -------------------------------------------------------------------------
+    # 13. lh3.googleusercontent.com avatar URLs (T8.A6a — audit /ogw/ group)
+    # -------------------------------------------------------------------------
+    # Both the ``/a/`` and ``/ogw/`` path forms embed per-user avatar
+    # tokens. The character class includes ``=`` and ``-`` because the URL
+    # tail carries sizing modifiers (e.g. ``=s512``, ``=s32-c-mo``). The
+    # whole URL (scheme through token suffix) collapses to a single
+    # placeholder so that no fragment of the original token survives.
+    (
+        r"https?://lh3\.googleusercontent\.com/(?:a|ogw)/[A-Za-z0-9_=\-]+",
+        "SCRUBBED_AVATAR_URL",
+    ),
 ]
 
 
@@ -558,6 +663,22 @@ _DETECT_UPLOAD_DRIVE_FIELDS: list[tuple[str, re.Pattern[str]]] = [
 # NOT match — so any match here is a leak).
 _DETECT_UPLOAD_URL = re.compile(r"https://notebooklm\.google\.com/upload/_/\?[^\"\s]*upload_id=")
 
+# T8.A6a — escaped JSON display-name literal detector (audit C4).
+#
+# Matches ``\"First Last\"`` inside a double-encoded JSON string. The
+# false-positive allowlist is consulted at the call site in ``is_clean``
+# rather than baked into the regex so the detector stays simple and the
+# allowlist remains observable. The captured group is the inner name (no
+# escape quotes) so we can compare it to DISPLAY_NAME_FALSE_POSITIVES
+# directly.
+_DETECT_DISPLAY_NAME_ESCAPED = re.compile(r'\\"([A-Z][a-z]+(?: [A-Z][a-z]+)+)\\"')
+
+# T8.A6a — avatar URL detector (audit /ogw/ group). The pattern matches
+# both ``/a/`` and ``/ogw/`` path forms. The scrubber collapses the entire
+# URL to ``SCRUBBED_AVATAR_URL``, so any match here is by definition a
+# leak (the placeholder string doesn't itself contain ``lh3.``).
+_DETECT_AVATAR_URL = re.compile(r"https?://lh3\.googleusercontent\.com/(?:a|ogw)/[A-Za-z0-9_=\-]+")
+
 
 def is_clean(text: str) -> tuple[bool, list[str]]:
     """Validate that ``text`` contains no unredacted sensitive data.
@@ -578,14 +699,18 @@ def is_clean(text: str) -> tuple[bool, list[str]]:
     ``(ok, leaks)`` where ``ok`` is ``True`` iff ``leaks`` is empty. Each leak
     string is a human-readable description suitable for printing in CI output.
 
-    Coverage gap (intentional, deferred)
-    -----------------------------------
-    Display-name fields (``displayName``, ``givenName``, ``familyName``,
-    ``Google Account: ...``) are SCRUBBED by :func:`scrub_string` but are NOT
-    currently DETECTED by this validator. A failed scrub of a display-name
-    leak would therefore pass ``is_clean`` silently. Closing that gap is the
-    job of T8.A6a, which will introduce the JSON-key-anchored display-name
-    detector alongside its escaped-literal scrubber.
+    Display-name + avatar coverage (T8.A6a)
+    ---------------------------------------
+    Escaped display-name literals (``\\"First Last\\"`` inside double-
+    encoded WRB payloads) and ``lh3.googleusercontent.com/(a|ogw)/`` avatar
+    URLs are BOTH scrubbed and detected. The display-name detector consults
+    :data:`DISPLAY_NAME_FALSE_POSITIVES` so legitimate two-Capitalized-word
+    fixture content (font families, UI titles, artifact / notebook names)
+    is not flagged. The structured ``"displayName": "..."``-style fields
+    from section 6 remain scrub-only (no detector) — that gap is harmless
+    because A6a's escape-anchored detector also catches the equivalent
+    leak shape inside any stringified WRB payload, which is where these
+    fields actually surface.
     """
     leaks: list[str] = []
 
@@ -633,5 +758,21 @@ def is_clean(text: str) -> tuple[bool, list[str]]:
     # match of the raw URL form here is by definition a leak.
     for match in _DETECT_UPLOAD_URL.finditer(text):
         leaks.append(f"Leak (upload URL): {match.group(0)!r}")
+
+    # --- 6. T8.A6a — escaped display-name literals -------------------------
+    # The false-positive allowlist (font families, UI titles, artifact /
+    # notebook names) is consulted here rather than baked into the regex so
+    # the detector stays simple and the allowlist remains observable.
+    for match in _DETECT_DISPLAY_NAME_ESCAPED.finditer(text):
+        inner = match.group(1)
+        if inner in DISPLAY_NAME_FALSE_POSITIVES:
+            continue
+        leaks.append(f"Leak (escaped display name): {match.group(0)!r}")
+
+    # --- 7. T8.A6a — avatar URLs ------------------------------------------
+    # The scrubber collapses the whole URL to ``SCRUBBED_AVATAR_URL``, so any
+    # match of the raw URL form here is by definition a leak.
+    for match in _DETECT_AVATAR_URL.finditer(text):
+        leaks.append(f"Leak (avatar URL): {match.group(0)!r}")
 
     return (not leaks, leaks)
