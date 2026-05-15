@@ -21,6 +21,7 @@ from .error_handler import _output_error
 from .helpers import (
     console,
     json_output_response,
+    read_stdin_text,
     require_notebook,
     resolve_note_id,
     resolve_notebook_id,
@@ -107,11 +108,20 @@ def note_list(ctx, notebook_id, json_output, client_auth):
 
 @note.command("create")
 @click.argument("content", default="", required=False)
+@click.option(
+    "--content",
+    "content_flag",
+    default=None,
+    help=(
+        "Note content (or '-' to read from stdin). Mutually exclusive with the "
+        "positional CONTENT argument."
+    ),
+)
 @notebook_option
 @click.option("-t", "--title", default="New Note", help="Note title")
 @json_option
 @with_client
-def note_create(ctx, content, notebook_id, title, json_output, client_auth):
+def note_create(ctx, content, content_flag, notebook_id, title, json_output, client_auth):
     """Create a new note.
 
     \b
@@ -119,7 +129,24 @@ def note_create(ctx, content, notebook_id, title, json_output, client_auth):
       notebooklm note create                        # Empty note with default title
       notebooklm note create "My note content"     # Note with content
       notebooklm note create "Content" -t "Title"  # Note with title and content
+      cat notes.md | notebooklm note create --content -    # Content from stdin
+      cat notes.md | notebooklm note create -              # Same, positional form
     """
+    # P7.T2 / M3 — resolve content from one of (positional CONTENT, --content,
+    # stdin). Positional and --content are mutually exclusive so the failure
+    # mode on accidental double-pass is loud instead of a silent precedence.
+    # ``content`` defaults to ``""`` (Click's ``default=""``) so we can't
+    # distinguish "user passed empty" from "user passed nothing"; the explicit
+    # ``content_flag is not None`` check means ``--content ""`` still wins.
+    if content and content_flag is not None:
+        raise click.UsageError(
+            "Cannot use both the positional CONTENT argument and --content. Choose one."
+        )
+    if content_flag is not None:
+        content = content_flag
+    if content == "-":
+        content = read_stdin_text(source_label="content")
+
     nb_id = require_notebook(notebook_id)
 
     async def _run():

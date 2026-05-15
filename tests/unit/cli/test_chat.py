@@ -633,3 +633,78 @@ class TestAskNewFlag:
         mock_client.chat.get_conversation_id.assert_not_awaited()
         call = mock_client.chat.ask.call_args
         assert call.kwargs.get("conversation_id") is None
+
+
+# =============================================================================
+# P7.T2 / M3 — Stdin (`-`) convention
+# =============================================================================
+#
+# Unix tradition: a positional argument of ``-`` means "read from stdin".
+# These tests pin that ``ask -`` and ``ask --prompt-file -`` both pull the
+# question text from stdin via ``CliRunner.invoke(input=...)``. The non-``-``
+# happy path is covered above (and via existing prompt-file tests), so these
+# tests only need to assert the new dash semantics are wired correctly.
+
+
+class TestAskStdinDash:
+    """``notebooklm ask -`` and ``--prompt-file -`` accept piped stdin."""
+
+    def test_ask_positional_dash_reads_stdin(self, runner, mock_auth):
+        with patch_client_for_module("chat") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.chat.ask = AsyncMock(return_value=make_ask_result())
+            mock_client.chat.get_conversation_id = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["ask", "-", "-n", "nb_123"], input="what is X?\n")
+
+            assert result.exit_code == 0, result.output
+            call = mock_client.chat.ask.call_args
+            # Question is the second positional arg (notebook_id, question, ...)
+            assert call.args[1] == "what is X?"
+
+    def test_ask_prompt_file_dash_reads_stdin(self, runner, mock_auth):
+        with patch_client_for_module("chat") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.chat.ask = AsyncMock(return_value=make_ask_result())
+            mock_client.chat.get_conversation_id = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli,
+                    ["ask", "--prompt-file", "-", "-n", "nb_123"],
+                    input="prompt from stdin\n",
+                )
+
+            assert result.exit_code == 0, result.output
+            call = mock_client.chat.ask.call_args
+            assert call.args[1] == "prompt from stdin"
+
+    def test_ask_positional_non_dash_unchanged(self, runner, mock_auth):
+        """Regression: literal questions are not interpreted as stdin."""
+        with patch_client_for_module("chat") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.chat.ask = AsyncMock(return_value=make_ask_result())
+            mock_client.chat.get_conversation_id = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                # Pass input that should be IGNORED — positional question wins.
+                result = runner.invoke(
+                    cli, ["ask", "literal question", "-n", "nb_123"], input="ignored\n"
+                )
+
+            assert result.exit_code == 0, result.output
+            call = mock_client.chat.ask.call_args
+            assert call.args[1] == "literal question"

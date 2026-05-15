@@ -2871,3 +2871,89 @@ class TestSourceJsonOutput:
             assert data["failure_count"] == 0
             assert data["failures"] == []
             mock_client.sources.delete.assert_awaited_once_with("nb_123", "src_err")
+
+
+# =============================================================================
+# P7.T2 / M3 — Stdin (`-`) convention for ``source add``
+# =============================================================================
+#
+# Unix tradition: ``source add -`` reads source content from stdin and
+# ingests it as inline text. This is the natural pipeline for ``cat
+# content.txt | notebooklm source add -`` or ``some-cmd | notebooklm
+# source add -``. The literal ``-`` is intercepted BEFORE auto-detection
+# so it never accidentally falls into the path-shaped warning branch.
+
+
+class TestSourceAddStdinDash:
+    """``notebooklm source add -`` reads inline text from stdin."""
+
+    def test_source_add_dash_reads_stdin(self, runner, mock_auth):
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.sources.add_text = AsyncMock(
+                return_value=Source(id="src_text", title="Pasted Text")
+            )
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli,
+                    ["source", "add", "-", "-n", "nb_123"],
+                    input="content from stdin\n",
+                )
+
+            assert result.exit_code == 0, result.output
+            mock_client.sources.add_text.assert_awaited_once()
+            call = mock_client.sources.add_text.call_args
+            # signature: add_text(notebook_id, title, content)
+            assert call.args[0] == "nb_123"
+            assert call.args[2] == "content from stdin"
+
+    def test_source_add_dash_with_title(self, runner, mock_auth):
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.sources.add_text = AsyncMock(
+                return_value=Source(id="src_text", title="My Title")
+            )
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli,
+                    ["source", "add", "-", "--title", "My Title", "-n", "nb_123"],
+                    input="hello world\n",
+                )
+
+            assert result.exit_code == 0, result.output
+            call = mock_client.sources.add_text.call_args
+            assert call.args[1] == "My Title"
+            assert call.args[2] == "hello world"
+
+    def test_source_add_literal_dash_path_unchanged(self, runner, mock_auth):
+        """Regression: a normal text argument is not treated as stdin."""
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.sources.add_text = AsyncMock(
+                return_value=Source(id="src_text", title="Pasted Text")
+            )
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli,
+                    ["source", "add", "literal text", "-n", "nb_123"],
+                    input="ignored stdin\n",
+                )
+
+            assert result.exit_code == 0, result.output
+            call = mock_client.sources.add_text.call_args
+            assert call.args[2] == "literal text"

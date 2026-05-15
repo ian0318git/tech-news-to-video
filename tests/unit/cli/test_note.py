@@ -861,3 +861,105 @@ class TestNoteDeleteJson:
             # Prompt was printed; deletion was NOT performed.
             assert "Delete note" in result.output
             mock_client.notes.delete.assert_not_called()
+
+
+# =============================================================================
+# P7.T2 / M3 — Stdin (`-`) convention for ``note create``
+# =============================================================================
+#
+# Unix tradition: ``-`` as a value means "read from stdin". P7.T2 introduces
+# a new ``--content`` flag on ``note create`` so ``cat notes.md | notebooklm
+# note create --content -`` is the canonical pipeline. The positional
+# ``CONTENT`` argument also accepts ``-`` for the same reason. Both must be
+# mutually exclusive (passing both is a UsageError).
+
+
+class TestNoteCreateStdinDash:
+    """``note create --content -`` and ``note create -`` accept piped stdin."""
+
+    def test_note_create_content_flag_dash_reads_stdin(self, runner, mock_auth):
+        with patch_client_for_module("note") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.notes.create = AsyncMock(
+                return_value=["note_new", ["note_new", "from stdin", None, None, "New Note"]]
+            )
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli,
+                    ["note", "create", "--content", "-", "-n", "nb_123"],
+                    input="from stdin\n",
+                )
+
+            assert result.exit_code == 0, result.output
+            # client.notes.create(notebook_id, title, content)
+            call = mock_client.notes.create.call_args
+            assert call.args[2] == "from stdin"
+
+    def test_note_create_positional_dash_reads_stdin(self, runner, mock_auth):
+        with patch_client_for_module("note") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.notes.create = AsyncMock(
+                return_value=["note_new", ["note_new", "piped body", None, None, "New Note"]]
+            )
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli,
+                    ["note", "create", "-", "-n", "nb_123"],
+                    input="piped body\n",
+                )
+
+            assert result.exit_code == 0, result.output
+            call = mock_client.notes.create.call_args
+            assert call.args[2] == "piped body"
+
+    def test_note_create_content_flag_literal_value_unchanged(self, runner, mock_auth):
+        """Regression: ``--content "literal"`` is not interpreted as stdin."""
+        with patch_client_for_module("note") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.notes.create = AsyncMock(
+                return_value=["note_new", ["note_new", "literal", None, None, "New Note"]]
+            )
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli,
+                    ["note", "create", "--content", "literal", "-n", "nb_123"],
+                    input="ignored\n",
+                )
+
+            assert result.exit_code == 0, result.output
+            call = mock_client.notes.create.call_args
+            assert call.args[2] == "literal"
+
+    def test_note_create_positional_and_content_flag_conflict(self, runner, mock_auth):
+        """Passing both positional CONTENT and --content is a UsageError."""
+        with patch_client_for_module("note") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.notes.create = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli,
+                    ["note", "create", "positional body", "--content", "flag body", "-n", "nb_123"],
+                )
+
+            assert result.exit_code != 0
+            assert "Cannot use both" in result.output

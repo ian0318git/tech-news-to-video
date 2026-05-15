@@ -143,14 +143,42 @@ def output_option(f: FC) -> FC:
     )(f)
 
 
+class _PromptFilePath(click.ParamType):
+    """``--prompt-file`` value: a regular file OR the literal ``-`` (stdin).
+
+    Replaces ``click.Path(exists=True, dir_okay=False)`` so the Unix ``-``
+    convention works (P7.T2 / M3). For real paths we still want
+    ``click.Path``'s existence + dir-check guarantees so a typo surfaces at
+    parse time instead of inside the command body. ``-`` is passed through
+    untouched and the downstream ``resolve_prompt`` helper interprets it as
+    "read stdin".
+    """
+
+    name = "prompt_file"
+
+    def convert(self, value, param, ctx):
+        if value == "-":
+            return value
+        # Delegate to the standard ``click.Path`` validator for non-stdin
+        # paths so behavior on real files is unchanged.
+        return click.Path(exists=True, dir_okay=False).convert(value, param, ctx)
+
+
 def prompt_file_option(f: FC) -> FC:
-    """Add --prompt-file option for reading prompt/query text from a file."""
+    """Add --prompt-file option for reading prompt/query text from a file.
+
+    Accepts a path to a regular file OR the literal ``-`` to read from
+    stdin (P7.T2 / M3).
+    """
     return click.option(
         "--prompt-file",
         "prompt_file",
-        type=click.Path(exists=True, dir_okay=False),
+        type=_PromptFilePath(),
         default=None,
-        help="Read prompt/query text from a file instead of the positional argument",
+        help=(
+            "Read prompt/query text from a file (or '-' for stdin) "
+            "instead of the positional argument"
+        ),
     )(f)
 
 

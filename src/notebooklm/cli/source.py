@@ -42,6 +42,7 @@ from .helpers import (
     get_source_type_display,
     import_research_sources,
     json_output_response,
+    read_stdin_text,
     require_notebook,
     resolve_notebook_id,
     resolve_prompt,
@@ -578,6 +579,18 @@ def source_add(
     the warning when the input is genuinely text content that happens to look
     path-shaped.
     """
+    # P7.T2 / M3 — Unix ``-`` convention: ``source add -`` reads inline text
+    # from stdin and forces the text-source path. Intercepted here BEFORE
+    # the URL / file / path-shaped auto-detection branches so a single dash
+    # never falls into the path-shaped warning ("'-' looks like a path...")
+    # and so an explicit ``--type file -`` does not try to open a file
+    # literally named ``-``. We always route through the text branch — URL
+    # / file / YouTube would be nonsensical for piped text and the
+    # ``--type`` override is silently coerced for the same reason.
+    if content == "-":
+        content = read_stdin_text(source_label="source content")
+        source_type = "text"
+
     nb_id = require_notebook(notebook_id)
 
     # Auto-detect source type if not specified

@@ -904,6 +904,28 @@ async def resolve_source_ids(
     return resolved
 
 
+def read_stdin_text(*, source_label: str = "stdin") -> str:
+    """Read all of stdin as UTF-8 text and strip surrounding whitespace.
+
+    Centralizes the Unix ``-`` (stdin) convention used by ``ask``, ``note
+    create``, ``source add``, and ``--prompt-file -`` (P7.T2 / M3). Uses
+    ``click.get_text_stream("stdin").read()`` so ``CliRunner.invoke(input=...)``
+    in tests is honored without monkey-patching ``sys.stdin``.
+
+    Args:
+        source_label: Label used in error messages (e.g. ``"prompt file"``)
+            so the failure mode tells the user which input was empty.
+
+    Raises:
+        click.ClickException: stdin yields a non-UTF-8 byte sequence.
+    """
+    try:
+        text = click.get_text_stream("stdin").read()
+    except UnicodeDecodeError as e:
+        raise click.ClickException(f"{source_label} (stdin) is not valid UTF-8: {e}") from e
+    return text.strip()
+
+
 def resolve_prompt(
     argument_value: str | None,
     prompt_file: str | None,
@@ -916,6 +938,9 @@ def resolve_prompt(
     Exactly one source may be provided. The file is read as UTF-8 with surrounding
     whitespace stripped. When ``required`` is True and neither source yields
     text, a ``UsageError`` is raised; otherwise an empty string is returned.
+
+    The literal ``-`` is recognized as "read stdin" for either source
+    (P7.T2 / M3), matching the Unix convention.
 
     Args:
         argument_value: Value of the positional CLI argument (may be empty).
@@ -932,7 +957,12 @@ def resolve_prompt(
             f"Cannot use both the {param_name} argument and --prompt-file. Choose one."
         )
 
-    if prompt_file:
+    if prompt_file == "-" or argument_value == "-":
+        # Unix ``-`` convention: read text from stdin. The label hints which
+        # input is the empty one if the required check fires below.
+        label = "prompt file" if prompt_file == "-" else param_name
+        text = read_stdin_text(source_label=label)
+    elif prompt_file:
         path = Path(prompt_file)
         if not path.is_file():
             raise click.ClickException(f"Prompt file '{prompt_file}' is not a regular file.")
