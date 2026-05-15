@@ -410,6 +410,18 @@ class ClientCore:
         # Lazily-created — ``asyncio.Lock()`` needs a running loop in some
         # Python versions, and this object can be constructed outside one.
         self._reqid_lock: asyncio.Lock | None = None
+        # Serializes ``_AuthSnapshot`` reads in :meth:`_snapshot` with the
+        # refresh-side mutation block in :meth:`NotebookLMClient.refresh_auth`
+        # (audit §12 / T7.F2). The lock holds only across the four
+        # ``self.auth.*`` scalar reads / two scalar writes — never across
+        # an ``await`` — so RPC throughput isn't serialized to refresh
+        # latency. Lazy-init mirrors ``_reqid_lock`` because ``asyncio.Lock()``
+        # needs a running loop in some Python versions. Distinct from
+        # ``_refresh_lock`` (which is owned by refresh-task creation and
+        # held across ``await self._refresh_callback()``): mixing the two
+        # would re-introduce the reentrancy ambiguity T7.F2 set out to
+        # avoid.
+        self._auth_snapshot_lock: asyncio.Lock | None = None
         # OrderedDict for FIFO eviction when cache exceeds MAX_CONVERSATION_CACHE_SIZE
         self._conversation_cache: OrderedDict[str, list[dict[str, Any]]] = OrderedDict()
         # Keepalive background task configuration
@@ -812,23 +824,57 @@ class ClientCore:
 
         self.auth.cookie_jar = self._http_client.cookies
 
-    def _snapshot(self) -> _AuthSnapshot:
+    def _get_auth_snapshot_lock(self) -> asyncio.Lock:
+        """Return the lazily-initialised ``_auth_snapshot_lock``.
+
+        ``asyncio.Lock()`` needs a running loop in some Python versions, so
+        ``ClientCore.__init__`` leaves the field as ``None``. Callers must
+        be inside an async context (which we are, since both
+        :meth:`_snapshot` and :meth:`NotebookLMClient.refresh_auth` are
+        coroutines). The check-then-assign is safe without an outer lock
+        because asyncio is single-threaded — no other coroutine can
+        execute between the ``is None`` check and the assignment unless
+        we ``await``.
+        """
+        if self._auth_snapshot_lock is None:
+            self._auth_snapshot_lock = asyncio.Lock()
+        return self._auth_snapshot_lock
+
+    async def _snapshot(self) -> _AuthSnapshot:
         """Capture the current auth headers as a frozen snapshot.
 
         Used by ``_perform_authed_post`` to make a single HTTP attempt's
         URL/body consistent (no mid-attempt mutation from refresh /
         keepalive). A fresh snapshot is taken on each retry.
+
+        Acquires :attr:`_auth_snapshot_lock` for the four scalar reads so
+        a concurrent ``refresh_auth`` can't interleave between
+        ``csrf_token``/``session_id``/``authuser``/``account_email``
+        reads. The critical section is purely synchronous attribute
+        reads — no ``await``s — so the lock is uncontested in steady
+        state and refresh's tiny write block can't block RPC throughput.
+
+        The whole-request atomicity for ``(csrf, sid, cookies)`` on the
+        wire still depends on the no-await invariant between this method
+        returning and ``client.post(...)`` inside
+        :meth:`_perform_authed_post` (see the AST guard in
+        ``tests/unit/test_concurrency_refresh_race.py``). The lock
+        guarantees the four scalars in the snapshot are coherent with
+        each other; the no-await rule keeps the cookie axis aligned with
+        them.
         """
-        return _AuthSnapshot(
-            csrf_token=self.auth.csrf_token,
-            session_id=self.auth.session_id,
-            authuser=self.auth.authuser,
-            account_email=self.auth.account_email,
-        )
+        async with self._get_auth_snapshot_lock():
+            return _AuthSnapshot(
+                csrf_token=self.auth.csrf_token,
+                session_id=self.auth.session_id,
+                authuser=self.auth.authuser,
+                account_email=self.auth.account_email,
+            )
 
     def _build_url(
         self,
         rpc_method: RPCMethod,
+        snapshot: _AuthSnapshot,
         source_path: str = "/",
         rpc_id_override: str | None = None,
     ) -> str:
@@ -836,6 +882,16 @@ class ClientCore:
 
         Args:
             rpc_method: The RPC method to call.
+            snapshot: Frozen ``_AuthSnapshot`` captured by :meth:`_snapshot`
+                under ``_auth_snapshot_lock``. The URL is built entirely
+                from snapshot fields (``session_id``, ``authuser``,
+                ``account_email``) so the URL and body for one attempt
+                stay coherent across a concurrent refresh. Audit §12 /
+                T7.F2: pre-fix this method read ``self.auth`` LIVE on
+                each call, which let a refresh's write to
+                ``self.auth.session_id`` slip between ``_snapshot()`` and
+                ``_build_url()`` — producing a URL stamped with the new
+                generation while the body still carried the old CSRF.
             source_path: The source path parameter (usually notebook path).
             rpc_id_override: Optional resolved RPC id string used in the
                 ``rpcids=`` query param. When provided, the SAME string must
@@ -850,7 +906,7 @@ class ClientCore:
         params: dict[str, str] = {
             "rpcids": rpc_id,
             "source-path": source_path,
-            "f.sid": self.auth.session_id,
+            "f.sid": snapshot.session_id,
             "hl": get_default_language(),
             "rt": "c",
         }
@@ -858,10 +914,10 @@ class ClientCore:
         # auth tokens were minted for. Email is preferred when known because
         # Google's integer account indices can change as browser accounts are
         # added or removed.
-        if self.auth.account_email or self.auth.authuser:
+        if snapshot.account_email or snapshot.authuser:
             params["authuser"] = format_authuser_value(
-                self.auth.authuser,
-                self.auth.account_email,
+                snapshot.authuser,
+                snapshot.account_email,
             )
         return f"{get_batchexecute_url()}?{urlencode(params)}"
 
@@ -943,7 +999,7 @@ class ClientCore:
         start = time.perf_counter()
 
         while True:
-            snapshot = self._snapshot()
+            snapshot = await self._snapshot()
             url, body, headers = build_request(snapshot)
 
             try:
@@ -1310,21 +1366,21 @@ class ClientCore:
         rpc_request = encode_rpc_request(method, params, rpc_id_override=resolved_id)
 
         def _build(snapshot: _AuthSnapshot) -> tuple[str, str, dict[str, str]]:
-            # Deliberate divergence: the body uses the snapshot's csrf_token
-            # (a frozen point-in-time copy) while ``_build_url`` reads
-            # ``self.auth.session_id`` / ``self.auth.authuser`` /
-            # ``self.auth.account_email`` LIVE off ``self.auth``. The two
-            # stay consistent only because the no-await invariant between
-            # ``_snapshot()`` and the ``client.post(...)`` call inside
-            # ``_perform_authed_post`` guarantees no coroutine can mutate
-            # ``self.auth`` between snapshot capture and request build (see
-            # the AST guard in ``tests/unit/test_concurrency_refresh_race.py``
-            # — adding an ``await`` anywhere in this factory or in
-            # ``_build_url`` would silently desync URL from body across a
-            # refresh). The snapshot's session_id/authuser/account_email
-            # fields are carried for symmetry / future-proofing but are not
-            # the source of truth on this code path.
-            url = self._build_url(method, source_path, rpc_id_override=resolved_id)
+            # T7.F2: both the URL (via ``_build_url(snapshot, ...)``) and
+            # the body (via ``snapshot.csrf_token``) now consume the
+            # *same* frozen ``_AuthSnapshot`` captured under
+            # ``_auth_snapshot_lock``. Pre-fix this factory passed only
+            # ``snapshot.csrf_token`` to the body while ``_build_url``
+            # re-read ``self.auth.session_id`` LIVE — a torn read that
+            # let a concurrent refresh slip a new sid into the URL while
+            # the body still carried the old csrf. Now URL + body are
+            # generation-coherent for the lifetime of this attempt; cookie
+            # coherence with the snapshot is still upheld by the no-await
+            # invariant between ``_snapshot()`` returning and the
+            # ``client.post(...)`` call inside ``_perform_authed_post``
+            # (see the AST guards in
+            # ``tests/unit/test_concurrency_refresh_race.py``).
+            url = self._build_url(method, snapshot, source_path, rpc_id_override=resolved_id)
             body = build_request_body(rpc_request, snapshot.csrf_token)
             return url, body, {}
 

@@ -352,8 +352,19 @@ class NotebookLMClient:
         # ``extract_wiz_field`` returns ``Optional[str]``; with ``strict=True``
         # it never returns None — narrow the type for mypy and tolerate the
         # (unreachable) None branch without crashing.
-        self._core.auth.csrf_token = csrf or ""
-        self._core.auth.session_id = sid or ""
+        # T7.F2: serialize the csrf_token / session_id mutation with
+        # ``ClientCore._snapshot()`` via ``_auth_snapshot_lock`` so a
+        # concurrent in-flight RPC can't observe a torn ``(csrf, sid)``
+        # pair (one field from the OLD generation, the other from the
+        # NEW). The critical section is intentionally tiny — only the two
+        # scalar writes — and contains no ``await``s. ``update_auth_headers``
+        # below stays outside the lock: it reassigns ``auth.cookie_jar``
+        # to the same ``self._http_client.cookies`` object, which is
+        # already the source of truth on the wire (per the AST guard in
+        # ``tests/unit/test_concurrency_refresh_race.py``).
+        async with self._core._get_auth_snapshot_lock():
+            self._core.auth.csrf_token = csrf or ""
+            self._core.auth.session_id = sid or ""
 
         # CRITICAL: Update the HTTP client headers with new auth tokens
         # Without this, the client continues using stale credentials

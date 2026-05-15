@@ -881,7 +881,23 @@ class TestRpcCallAutoRetry:
 
 
 class TestBuildUrlAuthuser:
-    """Regression for #359: batchexecute URL routes non-default profiles."""
+    """Regression for #359: batchexecute URL routes non-default profiles.
+
+    T7.F2: ``_build_url`` consumes an ``_AuthSnapshot`` rather than
+    reading ``self.auth`` live, so each test constructs the snapshot
+    inline from its ``AuthTokens`` fixture.
+    """
+
+    @staticmethod
+    def _snapshot_for(core):
+        from notebooklm._core import _AuthSnapshot
+
+        return _AuthSnapshot(
+            csrf_token=core.auth.csrf_token,
+            session_id=core.auth.session_id,
+            authuser=core.auth.authuser,
+            account_email=core.auth.account_email,
+        )
 
     def test_default_authuser_omits_param(self):
         auth = AuthTokens(
@@ -890,7 +906,7 @@ class TestBuildUrlAuthuser:
             session_id="sess",
         )
         core = ClientCore(auth=auth)
-        url = core._build_url(RPCMethod.LIST_NOTEBOOKS)
+        url = core._build_url(RPCMethod.LIST_NOTEBOOKS, self._snapshot_for(core))
         assert "authuser" not in url
 
     def test_non_default_authuser_added(self):
@@ -901,7 +917,7 @@ class TestBuildUrlAuthuser:
             authuser=2,
         )
         core = ClientCore(auth=auth)
-        url = core._build_url(RPCMethod.LIST_NOTEBOOKS)
+        url = core._build_url(RPCMethod.LIST_NOTEBOOKS, self._snapshot_for(core))
         assert "authuser=2" in url
 
     def test_account_email_preferred_over_authuser_index(self):
@@ -913,6 +929,6 @@ class TestBuildUrlAuthuser:
             account_email="bob@example.com",
         )
         core = ClientCore(auth=auth)
-        url = core._build_url(RPCMethod.LIST_NOTEBOOKS)
+        url = core._build_url(RPCMethod.LIST_NOTEBOOKS, self._snapshot_for(core))
         assert "authuser=bob%40example.com" in url
         assert "authuser=2" not in url

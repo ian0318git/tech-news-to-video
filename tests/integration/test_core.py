@@ -577,22 +577,39 @@ class TestBuildUrlHL:
 
     This is the load-bearing site for setting the interface language on
     every RPC call.
+
+    T7.F2: ``_build_url`` now requires an ``_AuthSnapshot`` (consumes
+    ``session_id`` / ``authuser`` / ``account_email`` from it rather
+    than reading ``self.auth`` live). Tests construct a snapshot inline
+    from the fixture's ``AuthTokens`` so the URL-construction logic is
+    exercised without spinning up ``_perform_authed_post``.
     """
+
+    @staticmethod
+    def _snapshot_for(core):
+        from notebooklm._core import _AuthSnapshot
+
+        return _AuthSnapshot(
+            csrf_token=core.auth.csrf_token,
+            session_id=core.auth.session_id,
+            authuser=core.auth.authuser,
+            account_email=core.auth.account_email,
+        )
 
     def test_build_url_defaults_hl_to_en(self, auth_tokens, monkeypatch):
         monkeypatch.delenv("NOTEBOOKLM_HL", raising=False)
         core = ClientCore(auth_tokens)
-        url = core._build_url(RPCMethod.LIST_NOTEBOOKS)
+        url = core._build_url(RPCMethod.LIST_NOTEBOOKS, self._snapshot_for(core))
         assert "hl=en" in url
 
     def test_build_url_includes_hl_from_env(self, auth_tokens, monkeypatch):
         monkeypatch.setenv("NOTEBOOKLM_HL", "ja")
         core = ClientCore(auth_tokens)
-        url = core._build_url(RPCMethod.LIST_NOTEBOOKS)
+        url = core._build_url(RPCMethod.LIST_NOTEBOOKS, self._snapshot_for(core))
         assert "hl=ja" in url
 
     def test_build_url_empty_env_falls_back_to_en(self, auth_tokens, monkeypatch):
         monkeypatch.setenv("NOTEBOOKLM_HL", "")
         core = ClientCore(auth_tokens)
-        url = core._build_url(RPCMethod.LIST_NOTEBOOKS)
+        url = core._build_url(RPCMethod.LIST_NOTEBOOKS, self._snapshot_for(core))
         assert "hl=en" in url
