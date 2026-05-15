@@ -50,25 +50,20 @@ def mock_context(tmp_path: Path):
 
 
 @pytest.fixture
-def mock_auth_for_vcr(monkeypatch):
+def mock_auth_for_vcr():
     """Mock authentication that works with VCR cassettes.
 
-    VCR replays recorded responses regardless of auth tokens,
-    so we use mock auth to avoid requiring real credentials.
+    VCR replays recorded responses regardless of auth tokens, so we use mock
+    auth to avoid requiring real credentials.
 
-    Also disables the layer-1 ``RotateCookies`` keepalive poke
-    (``NOTEBOOKLM_DISABLE_KEEPALIVE_POKE=1``) — the documented escape hatch
-    in CHANGELOG `[0.4.1]` Fixed. Cassettes were recorded before that poke
-    was added; without disabling it here, every replay raises a cassette
-    mismatch on ``POST accounts.google.com/RotateCookies``. Previously the
-    mismatch surfaced as exit 1 via the legacy ``helpers.handle_error``
-    catch-all in ``cli/download.py``; under the typed handler (P3.T2 / I14)
-    that mismatch is correctly classified ``UNEXPECTED_ERROR`` (exit 2),
-    which is outside this helper's accepted ``(0, 1)`` range. Disabling the
-    poke aligns the test with what cassettes actually capture.
+    The layer-1 ``RotateCookies`` keepalive-poke disable that used to live
+    here (``NOTEBOOKLM_DISABLE_KEEPALIVE_POKE=1``) was globalized in T8.D4 —
+    see the ``_disable_keepalive_poke_for_vcr`` autouse fixture in
+    ``tests/integration/conftest.py``. Every test that pulls this fixture
+    also carries ``@pytest.mark.vcr`` (either directly or via a module-level
+    ``pytestmark``), so the global autouse already disables the poke before
+    this fixture runs.
     """
-    monkeypatch.setenv("NOTEBOOKLM_DISABLE_KEEPALIVE_POKE", "1")
-
     mock_cookies = {
         "SID": "vcr_mock_sid",
         "HSID": "vcr_mock_hsid",

@@ -123,6 +123,47 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(marker)
 
 
+# =============================================================================
+# T8.D4 — Globalize keepalive-poke disable for VCR tests
+# =============================================================================
+
+
+@pytest.fixture(autouse=True)
+def _disable_keepalive_poke_for_vcr(request, monkeypatch):
+    """Auto-set ``NOTEBOOKLM_DISABLE_KEEPALIVE_POKE=1`` for VCR tests.
+
+    The layer-1 ``RotateCookies`` keepalive poke (documented escape hatch in
+    CHANGELOG ``[0.4.1]`` Fixed) fires from inside ``_fetch_tokens_with_jar``
+    and is not part of any cassette recorded before that poke was added.
+    Letting it fire during VCR replay produces a cassette mismatch on
+    ``POST accounts.google.com/RotateCookies``, which under the typed CLI
+    error handler (P3.T2 / I14) surfaces as ``UNEXPECTED_ERROR`` (exit 2) —
+    outside what most VCR tests accept. Disabling the poke aligns every
+    replay with what the cassettes actually capture.
+
+    A test is treated as VCR if ``request.node.get_closest_marker("vcr")``
+    returns a marker. Every cassette-using test in this repo carries the
+    ``vcr`` mark via either a module-level ``pytestmark = [pytest.mark.vcr,
+    ...]`` or a per-test ``@pytest.mark.vcr`` decorator, so the marker check
+    alone is sufficient — no stack inspection of
+    ``@notebooklm_vcr.use_cassette`` is required. If a future test uses
+    ``use_cassette`` without the marker, add ``@pytest.mark.vcr`` to it.
+
+    Escape hatch: ``@pytest.mark.no_keepalive_disable`` opts a test out so
+    it can capture or assert on real ``RotateCookies`` traffic (e.g. a
+    future cassette that records the keepalive itself).
+
+    Markers are read at SETUP TIME via ``get_closest_marker`` —
+    ``request.applymarker()`` in the test body would be too late because the
+    env var must be set before the client constructs its HTTP layer.
+    """
+    if request.node.get_closest_marker("no_keepalive_disable"):
+        return
+    if request.node.get_closest_marker("vcr") is None:
+        return
+    monkeypatch.setenv("NOTEBOOKLM_DISABLE_KEEPALIVE_POKE", "1")
+
+
 @pytest.fixture
 def auth_tokens():
     """Create test authentication tokens for integration tests.

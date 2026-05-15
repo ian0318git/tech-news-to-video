@@ -38,6 +38,22 @@ NO regex literals so we can never drift between "what the recorder scrubs" and
 here are thin wrappers that delegate to
 :func:`tests.cassette_patterns.scrub_string` and
 :func:`tests.cassette_patterns.recompute_chunk_prefix`.
+
+Keepalive-poke disable (T8.D4)
+------------------------------
+Every test that carries ``@pytest.mark.vcr`` (directly or via a module-level
+``pytestmark``) automatically runs with
+``NOTEBOOKLM_DISABLE_KEEPALIVE_POKE=1`` via the
+``_disable_keepalive_poke_for_vcr`` autouse fixture in
+:mod:`tests.integration.conftest`. This silences the layer-1
+``accounts.google.com/RotateCookies`` keepalive — none of the cassettes
+recorded before that poke landed contain it, so leaving it enabled would
+produce a guaranteed cassette mismatch on every replay.
+
+If you need a VCR test that actually captures or asserts on ``RotateCookies``
+traffic (e.g. a future cassette recording the keepalive itself), opt out with
+the ``@pytest.mark.no_keepalive_disable`` marker — the autouse fixture will
+leave the env var alone and let the poke fire.
 """
 
 import importlib.util
