@@ -1,15 +1,24 @@
 """Tests for generate CLI commands."""
 
+import asyncio
+import importlib
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
 
+from notebooklm.cli.generate import _format_status_message, _status_with_elapsed
 from notebooklm.notebooklm_cli import cli
 from notebooklm.rpc.types import ReportFormat
 
 from .conftest import create_mock_client, patch_client_for_module
+
+# ``notebooklm.cli.generate`` (the module) is shadowed by ``cli.__init__``'s
+# re-export of the ``generate`` Click Group (same name). Use ``importlib`` so
+# tests target the module's attribute set (``console``, helpers) rather than
+# the Click Group sitting at the same dotted path.
+generate_module = importlib.import_module("notebooklm.cli.generate")
 
 
 @pytest.fixture
@@ -203,6 +212,49 @@ class TestGenerateAudio:
 
             assert result.exit_code == 0, result.output
             mock_client.artifacts.wait_for_completion.assert_not_awaited()
+
+    def test_generate_audio_with_wait_invokes_console_status(self, runner, mock_auth):
+        """`generate audio --wait` wraps the polling call in `console.status` (P5.T2 / I7).
+
+        The spinner gives interactive users feedback during the long wait, with
+        a transient line naming the artifact kind (and a typical-duration hint).
+        Asserts the wrap by patching `notebooklm.cli.generate.console.status`
+        and confirming it is invoked exactly once with a message that mentions
+        the artifact kind. Does not assert the elapsed-timer ticker — that's a
+        rendering detail that relies on a TTY which `CliRunner` doesn't have.
+        """
+        with patch_client_for_module("generate") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.artifacts.generate_audio = AsyncMock(
+                return_value={"artifact_id": "audio_xyz", "status": "processing"}
+            )
+            completed_status = MagicMock()
+            completed_status.is_complete = True
+            completed_status.is_failed = False
+            completed_status.url = "https://example.com/audio.mp3"
+            completed_status.task_id = "audio_xyz"
+            mock_client.artifacts.wait_for_completion = AsyncMock(return_value=completed_status)
+            mock_client_cls.return_value = mock_client
+
+            with (
+                patch(
+                    "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+                ) as mock_fetch,
+                patch.object(generate_module.console, "status") as mock_status,
+            ):
+                mock_fetch.return_value = ("csrf", "session")
+                # ``console.status`` returns a context manager; emulate one so
+                # the wrapped polling call still runs.
+                mock_status.return_value.__enter__ = MagicMock(return_value=MagicMock())
+                mock_status.return_value.__exit__ = MagicMock(return_value=False)
+                result = runner.invoke(cli, ["generate", "audio", "--wait", "-n", "nb_123"])
+
+            assert result.exit_code == 0, result.output
+            assert mock_status.called, "expected console.status to wrap the --wait polling call"
+            status_msg = mock_status.call_args.args[0]
+            assert "audio" in status_msg.lower(), (
+                f"expected status message to mention artifact kind 'audio', got: {status_msg!r}"
+            )
 
     def test_generate_audio_failure(self, runner, mock_auth):
         with patch_client_for_module("generate") as mock_client_cls:
@@ -2127,3 +2179,41 @@ class TestOutputMindMapNonDictMindMap:
         printed_calls = [call[0][0] for call in mock_console.print.call_args_list]
         # Should print the header and Note ID, then the raw result
         assert any("n1" in str(arg) for arg in printed_calls)
+
+
+class TestStatusWithElapsed:
+    """Cover the spinner helpers added for P5.T2 / I7."""
+
+    def test_format_status_message_known_kind_includes_typical_hint(self):
+        """Known kinds get a typical-duration parenthetical so users see an ETA."""
+        msg = _format_status_message("cinematic-video")
+        # The exact wording matches the audit example so the user-visible
+        # surface is anchored: "Waiting for cinematic-video generation
+        # (typically 30-40 min)...".
+        assert "cinematic-video" in msg
+        assert "typically" in msg
+        assert msg.endswith("...")
+
+    def test_format_status_message_unknown_kind_omits_hint(self):
+        """Unknown kinds fall back gracefully — no parenthetical, still rendered."""
+        msg = _format_status_message("unknown-kind")
+        assert "unknown-kind" in msg
+        assert "(" not in msg, f"unknown kind should NOT add a hint, got: {msg!r}"
+
+    def test_format_status_message_with_elapsed_appends_seconds(self):
+        """Elapsed timer is appended in `[Ns elapsed]` form for the live update."""
+        msg = _format_status_message("audio", elapsed=42.7)
+        # Truncated to int — the spinner's per-second tick doesn't need
+        # sub-second precision and an integer reads cleaner in the UI.
+        assert "[42s elapsed]" in msg
+
+    def test_status_with_elapsed_json_output_is_no_op(self):
+        """Under --json the helper must NOT call console.status (stdout stays JSON)."""
+
+        async def _exercise() -> None:
+            with patch.object(generate_module.console, "status") as mock_status:
+                async with _status_with_elapsed("audio", json_output=True):
+                    pass
+                assert not mock_status.called, "console.status must not be invoked under --json"
+
+        asyncio.run(_exercise())

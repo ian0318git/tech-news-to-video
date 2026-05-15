@@ -14,8 +14,10 @@ Commands:
 """
 
 import asyncio
+import contextlib
 import os
-from collections.abc import Awaitable, Callable
+import time
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 import click
@@ -76,6 +78,76 @@ _INFOGRAPHIC_STYLE_MAP = {
     "kawaii": InfographicStyle.KAWAII,
     "scientific": InfographicStyle.SCIENTIFIC,
 }
+
+
+# Typical-duration hints for the spinner status line (P5.T2 / I7).
+# Empirical observation; the API exposes no progress channel so these are
+# user-facing wall-clock heuristics, not authoritative ETAs. Missing keys fall
+# back to no hint — the spinner still renders kind + elapsed seconds.
+_TYPICAL_DURATIONS: dict[str, str] = {
+    "audio": "typically 2-5 min",
+    "video": "typically 5-15 min",
+    "cinematic-video": "typically 30-40 min",
+    "slide-deck": "typically 1-3 min",
+    "quiz": "typically 30-60 sec",
+    "flashcards": "typically 30-60 sec",
+    "infographic": "typically 1-3 min",
+    "data-table": "typically 30-90 sec",
+    "mind-map": "typically 30-90 sec",
+    "report": "typically 1-3 min",
+}
+
+
+def _format_status_message(artifact_type: str, elapsed: float | None = None) -> str:
+    """Build the spinner status line for a long-running generation.
+
+    Mirrors the format suggested in the audit (I7) — kind + typical-duration
+    hint + optional elapsed timer. ``elapsed`` is ``None`` on first paint and
+    an integer seconds value once the periodic ticker starts updating.
+    """
+    hint = _TYPICAL_DURATIONS.get(artifact_type)
+    suffix = f" ({hint})" if hint else ""
+    base = f"Waiting for {artifact_type} generation{suffix}..."
+    if elapsed is None:
+        return base
+    return f"{base} [{int(elapsed)}s elapsed]"
+
+
+@contextlib.asynccontextmanager
+async def _status_with_elapsed(
+    artifact_type: str, *, json_output: bool = False
+) -> AsyncIterator[None]:
+    """Show a Rich spinner with a periodically updated elapsed timer.
+
+    No-op when ``json_output`` is True so stdout stays pure JSON for
+    automation. The spinner is transient — it disappears on exit, so the
+    final ``[green]... ready[/green]`` line is the only persistent output.
+
+    The ticker task updates the status text once per second while the wrapped
+    coroutine awaits the long-running call. Cancellation is best-effort: if
+    the wrapped block raises, the ticker is cancelled in ``finally`` and the
+    exception propagates unchanged. SIGINT handling is intentionally NOT
+    added here — that is P5.T3's territory (M2).
+    """
+    if json_output:
+        yield
+        return
+    start = time.monotonic()
+    initial = _format_status_message(artifact_type)
+    with console.status(initial) as status:
+
+        async def _ticker() -> None:
+            while True:
+                await asyncio.sleep(1.0)
+                status.update(_format_status_message(artifact_type, time.monotonic() - start))
+
+        ticker_task = asyncio.create_task(_ticker())
+        try:
+            yield
+        finally:
+            ticker_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await ticker_task
 
 
 def calculate_backoff_delay(
@@ -259,7 +331,12 @@ async def handle_generation_result(
         wait_kwargs: dict[str, Any] = {"timeout": timeout}
         if interval is not None:
             wait_kwargs["initial_interval"] = interval
-        status = await client.artifacts.wait_for_completion(notebook_id, task_id, **wait_kwargs)
+        # Wrap the blocking poll in a transient spinner so interactive users see
+        # progress feedback during long generations (P5.T2 / I7). The status
+        # line includes the artifact kind, a typical-duration hint, and a
+        # live elapsed-seconds counter. No-op under --json.
+        async with _status_with_elapsed(artifact_type, json_output=json_output):
+            status = await client.artifacts.wait_for_completion(notebook_id, task_id, **wait_kwargs)
 
     # Output status
     _output_generation_status(status, artifact_type, json_output)

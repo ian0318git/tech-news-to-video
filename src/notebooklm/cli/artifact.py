@@ -11,6 +11,11 @@ Commands:
     suggestions Get AI-suggested report topics
 """
 
+import asyncio
+import contextlib
+import time
+from collections.abc import AsyncIterator
+
 import click
 from rich.table import Table
 
@@ -28,6 +33,42 @@ from .helpers import (
     with_client,
 )
 from .options import json_option, notebook_option, wait_polling_options
+
+
+@contextlib.asynccontextmanager
+async def _status_with_elapsed(message: str, *, json_output: bool = False) -> AsyncIterator[None]:
+    """Show a Rich spinner with a periodically updated elapsed timer.
+
+    Used by ``artifact wait`` so interactive callers see live feedback during
+    the blocking poll (P5.T2 / I7). No-op when ``json_output`` is True so
+    stdout stays pure JSON for automation. The spinner is transient — it
+    disappears on exit, leaving only the final completion / failure line.
+
+    The ticker task updates the status text once per second while the wrapped
+    coroutine awaits the long-running call. Cancellation is best-effort: if
+    the wrapped block raises, the ticker is cancelled in ``finally`` and the
+    exception propagates unchanged. SIGINT handling is intentionally NOT
+    added here — that is P5.T3's territory (M2).
+    """
+    if json_output:
+        yield
+        return
+    start = time.monotonic()
+    with console.status(message) as status:
+
+        async def _ticker() -> None:
+            while True:
+                await asyncio.sleep(1.0)
+                elapsed = int(time.monotonic() - start)
+                status.update(f"{message} [{elapsed}s elapsed]")
+
+        ticker_task = asyncio.create_task(_ticker())
+        try:
+            yield
+        finally:
+            ticker_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await ticker_task
 
 
 @click.group()
@@ -444,12 +485,21 @@ def artifact_wait(ctx, artifact_id, notebook_id, timeout, interval, json_output,
             )
 
             try:
-                status = await client.artifacts.wait_for_completion(
-                    nb_id_resolved,
-                    resolved_id,
-                    poll_interval=float(interval),
-                    timeout=float(timeout),
-                )
+                # Wrap the blocking poll in a transient spinner so interactive
+                # users see progress feedback during the wait (P5.T2 / I7).
+                # The status line includes the artifact ID and a live
+                # elapsed-seconds counter. No-op under --json so stdout stays
+                # pure JSON.
+                async with _status_with_elapsed(
+                    f"Waiting for artifact {resolved_id} to complete...",
+                    json_output=json_output,
+                ):
+                    status = await client.artifacts.wait_for_completion(
+                        nb_id_resolved,
+                        resolved_id,
+                        poll_interval=float(interval),
+                        timeout=float(timeout),
+                    )
 
                 if json_output:
                     data = {

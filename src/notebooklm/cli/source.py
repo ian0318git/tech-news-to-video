@@ -18,8 +18,11 @@ Commands:
 """
 
 import asyncio
+import contextlib
 import os
 import re
+import time
+from collections.abc import AsyncIterator
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
@@ -46,6 +49,44 @@ from .helpers import (
     with_client,
 )
 from .options import json_option, notebook_option, prompt_file_option, wait_polling_options
+
+
+@contextlib.asynccontextmanager
+async def _status_with_elapsed(message: str, *, json_output: bool = False) -> AsyncIterator[None]:
+    """Show a Rich spinner with a periodically updated elapsed timer.
+
+    Used by ``source wait`` so interactive callers see live feedback during
+    the blocking poll (P5.T2 / I7). No-op when ``json_output`` is True so
+    stdout stays pure JSON for automation. The spinner is transient — it
+    disappears on exit, leaving only the final ready / failure / timeout
+    line.
+
+    The ticker task updates the status text once per second while the wrapped
+    coroutine awaits the long-running call. Cancellation is best-effort: if
+    the wrapped block raises, the ticker is cancelled in ``finally`` and the
+    exception propagates unchanged. SIGINT handling is intentionally NOT
+    added here — that is P5.T3's territory (M2).
+    """
+    if json_output:
+        yield
+        return
+    start = time.monotonic()
+    with console.status(message) as status:
+
+        async def _ticker() -> None:
+            while True:
+                await asyncio.sleep(1.0)
+                elapsed = int(time.monotonic() - start)
+                status.update(f"{message} [{elapsed}s elapsed]")
+
+        ticker_task = asyncio.create_task(_ticker())
+        try:
+            yield
+        finally:
+            ticker_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await ticker_task
+
 
 # Titles matching this pattern indicate the source was blocked by an anti-bot
 # gateway, CAPTCHA, or returned an HTTP error page instead of real content.
@@ -1321,16 +1362,24 @@ def source_wait(ctx, source_id, notebook_id, timeout, interval, json_output, cli
                 client, nb_id_resolved, source_id, json_output=json_output
             )
 
-            if not json_output:
-                console.print(f"[dim]Waiting for source {resolved_id}...[/dim]")
-
             try:
-                source = await client.sources.wait_until_ready(
-                    nb_id_resolved,
-                    resolved_id,
-                    timeout=float(timeout),
-                    initial_interval=float(interval),
-                )
+                # Wrap the blocking poll in a transient spinner so interactive
+                # users see progress feedback during the wait (P5.T2 / I7).
+                # Replaces the prior static "[dim]Waiting for source ...[/dim]"
+                # print — the spinner conveys the same information AND a live
+                # elapsed-seconds counter, then disappears so the final
+                # ready / failure / timeout line stands alone. No-op under
+                # --json so stdout stays pure JSON.
+                async with _status_with_elapsed(
+                    f"Waiting for source {resolved_id} to finish processing...",
+                    json_output=json_output,
+                ):
+                    source = await client.sources.wait_until_ready(
+                        nb_id_resolved,
+                        resolved_id,
+                        timeout=float(timeout),
+                        initial_interval=float(interval),
+                    )
 
                 if json_output:
                     data = {

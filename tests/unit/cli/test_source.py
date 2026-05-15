@@ -2075,6 +2075,74 @@ class TestSourceWait:
             assert data["timeout_seconds"] == 30
             assert data["last_status_code"] == 1
 
+    def test_source_wait_invokes_console_status(self, runner, mock_auth):
+        """`source wait` wraps the polling call in `console.status` (P5.T2 / I7).
+
+        The spinner replaces the static "Waiting for source ..." print with a
+        live transient line that includes the source ID. Asserts the wrap by
+        patching `notebooklm.cli.source.console.status` and confirming it is
+        invoked exactly once with a message that mentions the source. Does not
+        assert under `--json` because the JSON path intentionally suppresses
+        the spinner to keep stdout pure JSON.
+        """
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.sources.list = AsyncMock(
+                return_value=[Source(id="src_123", title="Test Source")]
+            )
+            mock_client.sources.wait_until_ready = AsyncMock(
+                return_value=Source(id="src_123", title="Test Source", status=2)
+            )
+            mock_client_cls.return_value = mock_client
+
+            with (
+                patch(
+                    "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+                ) as mock_fetch,
+                patch.object(source_module.console, "status") as mock_status,
+            ):
+                mock_fetch.return_value = ("csrf", "session")
+                mock_status.return_value.__enter__ = MagicMock(return_value=MagicMock())
+                mock_status.return_value.__exit__ = MagicMock(return_value=False)
+                result = runner.invoke(cli, ["source", "wait", "src_123", "-n", "nb_123"])
+
+            assert result.exit_code == 0, result.output
+            assert mock_status.called, "expected console.status to wrap the wait call"
+            status_msg = mock_status.call_args.args[0]
+            assert "source" in status_msg.lower() or "src_123" in status_msg, (
+                f"expected status message to describe the source wait, got: {status_msg!r}"
+            )
+
+    def test_source_wait_json_skips_console_status(self, runner, mock_auth):
+        """`source wait --json` must NOT invoke console.status (stdout stays JSON).
+
+        The spinner is suppressed under JSON mode so automation parsing stdout
+        does not see Rich escape sequences leak in (P5.T2 / I7).
+        """
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.sources.list = AsyncMock(
+                return_value=[Source(id="src_123", title="Test Source")]
+            )
+            mock_client.sources.wait_until_ready = AsyncMock(
+                return_value=Source(id="src_123", title="Test Source", status=2)
+            )
+            mock_client_cls.return_value = mock_client
+
+            with (
+                patch(
+                    "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+                ) as mock_fetch,
+                patch.object(source_module.console, "status") as mock_status,
+            ):
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["source", "wait", "src_123", "-n", "nb_123", "--json"])
+
+            assert result.exit_code == 0, result.output
+            assert not mock_status.called, (
+                "console.status must NOT be invoked under --json (would leak ANSI into stdout)"
+            )
+
 
 # =============================================================================
 # SOURCE CLEAN TESTS
