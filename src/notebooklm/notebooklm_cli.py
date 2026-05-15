@@ -141,8 +141,17 @@ from .cli.grouped import SectionedGroup
     count=True,
     help="Increase verbosity (-v for INFO, -vv for DEBUG)",
 )
+@click.option(
+    "--quiet",
+    is_flag=True,
+    default=False,
+    help=(
+        "Suppress INFO/WARN log records on stderr (only ERROR survives). "
+        "Mutually exclusive with -v/-vv."
+    ),
+)
 @click.pass_context
-def cli(ctx, storage, profile, verbose):
+def cli(ctx, storage, profile, verbose, quiet):
     """NotebookLM CLI.
 
     \b
@@ -155,8 +164,19 @@ def cli(ctx, storage, profile, verbose):
     \b
     Tip: Use partial notebook IDs (e.g., 'notebooklm use abc' matches 'abc123...')
     """
-    # Configure logging based on verbosity: -v for INFO, -vv+ for DEBUG
-    if verbose >= 2:
+    # ``--quiet`` and ``-v/-vv`` resolve to incompatible log-level intents
+    # (ERROR vs INFO/DEBUG). Honoring either silently would surprise the
+    # other caller; reject the conflict explicitly so the user can drop one
+    # flag (P7.T3 / M4).
+    if quiet and verbose:
+        raise click.UsageError("--quiet and -v are mutually exclusive.")
+
+    # Configure logging based on verbosity: -v for INFO, -vv+ for DEBUG.
+    # ``--quiet`` raises the floor to ERROR so cron / CI logs stay clean
+    # while still surfacing real failures.
+    if quiet:
+        logging.getLogger("notebooklm").setLevel(logging.ERROR)
+    elif verbose >= 2:
         logging.getLogger("notebooklm").setLevel(logging.DEBUG)
         # DEBUG logging on httpx/urllib3 emits full URLs and headers — install
         # redaction so credentials don't leak via third-party loggers.

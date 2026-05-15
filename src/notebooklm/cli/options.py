@@ -12,7 +12,13 @@ from click.decorators import FC
 def notebook_option(f: FC) -> FC:
     """Add --notebook/-n option for notebook ID.
 
-    The option defaults to None, allowing context-based resolution.
+    The option defaults to None and falls back to the ``NOTEBOOKLM_NOTEBOOK``
+    environment variable (P7.T3 / M4) before context-based resolution kicks in
+    inside ``helpers.require_notebook``. Click's native ``envvar=`` wiring is
+    used so the binding shows up in ``--help`` automatically (``show_envvar=True``)
+    and so the env value reaches the command body via the same ``notebook_id``
+    kwarg that the flag would, with no per-command boilerplate.
+
     Supports partial ID matching (e.g., 'abc' matches 'abc123...').
     """
     return click.option(
@@ -20,6 +26,8 @@ def notebook_option(f: FC) -> FC:
         "--notebook",
         "notebook_id",
         default=None,
+        envvar="NOTEBOOKLM_NOTEBOOK",
+        show_envvar=True,
         help="Notebook ID (uses current if not set). Supports partial IDs.",
     )(f)
 

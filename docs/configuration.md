@@ -97,10 +97,50 @@ A persistent Chromium user data directory used during `notebooklm login`.
 | `NOTEBOOKLM_HOME` | Base directory for all files | `~/.notebooklm` |
 | `NOTEBOOKLM_PROFILE` | Active profile name | `default` |
 | `NOTEBOOKLM_AUTH_JSON` | Inline authentication JSON (for CI/CD) | - |
+| `NOTEBOOKLM_NOTEBOOK` | Default notebook ID for commands without `-n/--notebook` | - |
 | `NOTEBOOKLM_HL` | Default interface/output language code (e.g. `en`, `ja`, `zh_Hans`) | `en` |
 | `NOTEBOOKLM_LOG_LEVEL` | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR` | `WARNING` |
 | `NOTEBOOKLM_DEBUG_RPC` | Legacy: Enable RPC debug logging (use `LOG_LEVEL=DEBUG` instead) | `false` |
 | `NOTEBOOKLM_STRICT_DECODE` | Raise `UnknownRPCMethodError` on schema drift instead of warn-and-fallback | `0` |
+| `NOTEBOOKLM_RPC_OVERRIDES` | Comma-separated `KEY=ID` pairs that override entries in `rpc/types.py` (community self-patch when Google rotates a method ID) | - |
+| `NOTEBOOKLM_QUIET_DEPRECATIONS` | Suppress stderr deprecation notices for deprecated CLI flags | - |
+
+### Env vars and precedence
+
+Every `NOTEBOOKLM_*` variable read by the library and CLI, in one place. CLI
+flags always win over env vars; env vars win over persisted profile config /
+context; built-in defaults are the last fallback. The "Resolved by" column
+points at the canonical resolver so the precedence rule for each variable can
+be audited from one location.
+
+| Variable | Purpose | Resolution order (highest → lowest) | Resolved by |
+|----------|---------|-------------------------------------|-------------|
+| `NOTEBOOKLM_PROFILE` | Active profile name. Selects which `~/.notebooklm/profiles/<name>/` directory backs storage and context. | `-p/--profile` flag → `NOTEBOOKLM_PROFILE` → persisted `active_profile` → `default` | `paths.set_active_profile` / `paths.get_active_profile` |
+| `NOTEBOOKLM_AUTH_JSON` | Inline `storage_state.json` payload for CI/CD; bypasses on-disk profile storage entirely. | `--storage` flag → `NOTEBOOKLM_AUTH_JSON` → profile-aware `storage_state.json` → legacy fallback | `auth.load_auth_from_storage` |
+| `NOTEBOOKLM_HOME` | Base directory for all per-profile files. | `NOTEBOOKLM_HOME` → `~/.notebooklm` | `paths.get_home_dir` |
+| `NOTEBOOKLM_HL` | Default interface/output language for `generate <kind>` and the `hl` query parameter on every batchexecute RPC. | `--language` flag → `NOTEBOOKLM_HL` → profile config `language` → `en` | `language.resolve_hl` |
+| `NOTEBOOKLM_LOG_LEVEL` | `DEBUG`/`INFO`/`WARNING`/`ERROR` floor for the `notebooklm` package logger. | `--quiet` flag (forces `ERROR`) → `-v/-vv` flags (force `INFO`/`DEBUG`) → `NOTEBOOKLM_DEBUG_RPC=1` (forces `DEBUG`) → `NOTEBOOKLM_LOG_LEVEL` → `WARNING` | `_logging.configure_logging` + `notebooklm_cli.cli` |
+| `NOTEBOOKLM_DEBUG_RPC` | Legacy alias that sets the package logger to `DEBUG`. Prefer `NOTEBOOKLM_LOG_LEVEL=DEBUG` for new code. | (See `NOTEBOOKLM_LOG_LEVEL`.) | `_logging.configure_logging` |
+| `NOTEBOOKLM_NOTEBOOK` | Default notebook ID when no `-n/--notebook` flag is passed. Composes with `notebooklm use <id>` so per-shell overrides do not clobber the persisted active-notebook context. | `-n/--notebook` flag → `NOTEBOOKLM_NOTEBOOK` → active context (from `notebooklm use`) → error | `cli.helpers.require_notebook` (Click also reads it natively via `cli/options.py:notebook_option`'s `envvar=`) |
+| `NOTEBOOKLM_RPC_OVERRIDES` | Comma-separated `KEY=ID` pairs that override entries in `notebooklm/rpc/types.py`. Community self-patch when Google rotates a method ID. Empty string / unset disables the mechanism. | Process env at import time only — no flag override. | `_env.load_rpc_overrides` |
+| `NOTEBOOKLM_QUIET_DEPRECATIONS` | Suppress stderr deprecation notices for deprecated CLI flags (e.g. `source add --mime-type` on file sources). Library-level `DeprecationWarning`s are unaffected. | Set to `1` to suppress; any other value (or unset) leaves the notice enabled. | individual CLI commands; see `NOTEBOOKLM_QUIET_DEPRECATIONS` section below |
+| `NOTEBOOKLM_STRICT_DECODE` | Toggle the decoder's drift behavior — warn-and-fallback (`0`, default) vs raise `UnknownRPCMethodError` (`1`/`true`/`True`). | Process env on each decode call. | `rpc.decoder.safe_index` |
+
+**Boolean handling.** `NOTEBOOKLM_DEBUG_RPC` and `NOTEBOOKLM_STRICT_DECODE`
+treat `1` / `true` / `yes` (case-insensitive) as truthy; everything else is
+falsy. `NOTEBOOKLM_QUIET_DEPRECATIONS` requires the literal string `1`.
+`NOTEBOOKLM_NOTEBOOK` is treated as unset when empty or whitespace-only so a
+bare `export NOTEBOOKLM_NOTEBOOK=` does not block `notebooklm use` /
+`-n/--notebook` from resolving.
+
+**The `--quiet` global flag.** `notebooklm --quiet <subcommand>` raises the
+`notebooklm` package logger floor to `ERROR` for the duration of one
+invocation, so cron and CI logs stay clean while real failures still surface.
+It is mutually exclusive with `-v/-vv` — combining the two raises a
+`UsageError` (exit `2`) since the resolved log levels conflict
+(`ERROR` vs `INFO`/`DEBUG`). For per-call (rather than per-shell) silencing
+of `INFO`/`WARN` the global flag is the preferred surface; `NOTEBOOKLM_LOG_LEVEL`
+remains the right tool for shell-wide / always-on suppression.
 
 ### NOTEBOOKLM_HOME
 
@@ -219,7 +259,8 @@ batchexecute response contains RPC IDs but not the one the call requested
 |--------|-------------|---------|
 | `--storage PATH` | Path to storage_state.json | `$NOTEBOOKLM_HOME/profiles/<profile>/storage_state.json` |
 | `-p, --profile NAME` | Use a named profile | Active profile or `default` |
-| `-v, --verbose` | Enable verbose output | - |
+| `-v, --verbose` | Enable verbose output (`-v` for INFO, `-vv` for DEBUG) | - |
+| `--quiet` | Suppress INFO/WARN logs on stderr (only ERROR survives). Mutually exclusive with `-v`. | - |
 | `--version` | Show version | - |
 | `--help` | Show help | - |
 

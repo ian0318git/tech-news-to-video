@@ -465,6 +465,69 @@ class TestRequireNotebook:
             assert "notebook_id" not in printed
             # Existing context-setup hint is preserved so the user has both options.
             assert "notebooklm use" in printed
+            # Discoverability: the env-var fallback (P7.T3 / M4) must be named
+            # so the user knows the third resolution path exists.
+            assert "NOTEBOOKLM_NOTEBOOK" in printed
+
+    def test_returns_env_var_when_no_arg_and_no_context(self, tmp_path, monkeypatch):
+        """`NOTEBOOKLM_NOTEBOOK` env var is honored when no `-n` flag is passed
+        AND no active context is set. Precedence (P7.T3 / M4):
+        ``-n`` flag > ``NOTEBOOKLM_NOTEBOOK`` env > active context > error.
+        """
+        monkeypatch.setenv("NOTEBOOKLM_NOTEBOOK", "nb_from_env")
+        with patch(
+            "notebooklm.cli.helpers.get_context_path",
+            return_value=tmp_path / "nonexistent.json",
+        ):
+            result = require_notebook(None)
+            assert result == "nb_from_env"
+
+    def test_arg_overrides_env_var(self, tmp_path, monkeypatch):
+        """`-n flag-id` overrides ``NOTEBOOKLM_NOTEBOOK=env-id`` (highest precedence)."""
+        monkeypatch.setenv("NOTEBOOKLM_NOTEBOOK", "nb_from_env")
+        with patch(
+            "notebooklm.cli.helpers.get_context_path",
+            return_value=tmp_path / "nonexistent.json",
+        ):
+            result = require_notebook("nb_from_flag")
+            assert result == "nb_from_flag"
+
+    def test_env_var_overrides_active_context(self, tmp_path, monkeypatch):
+        """``NOTEBOOKLM_NOTEBOOK`` overrides the persisted active-notebook
+        context: env > context per the P7.T3 precedence ladder. This makes
+        per-shell env-var overrides composable without clobbering the saved
+        ``notebooklm use`` selection.
+        """
+        monkeypatch.setenv("NOTEBOOKLM_NOTEBOOK", "nb_from_env")
+        context_file = tmp_path / "context.json"
+        context_file.write_text('{"notebook_id": "nb_from_context"}')
+        with patch("notebooklm.cli.helpers.get_context_path", return_value=context_file):
+            result = require_notebook(None)
+            assert result == "nb_from_env"
+
+    def test_blank_env_var_falls_through_to_context(self, tmp_path, monkeypatch):
+        """An empty / whitespace-only ``NOTEBOOKLM_NOTEBOOK`` is treated as unset,
+        not as an error. The active context still wins.
+        """
+        monkeypatch.setenv("NOTEBOOKLM_NOTEBOOK", "   ")
+        context_file = tmp_path / "context.json"
+        context_file.write_text('{"notebook_id": "nb_from_context"}')
+        with patch("notebooklm.cli.helpers.get_context_path", return_value=context_file):
+            result = require_notebook(None)
+            assert result == "nb_from_context"
+
+    def test_env_var_is_stripped(self, tmp_path, monkeypatch):
+        """``NOTEBOOKLM_NOTEBOOK`` value is trimmed of surrounding whitespace
+        before being returned (consistent with ``validate_id``'s behavior on
+        the flag/context paths).
+        """
+        monkeypatch.setenv("NOTEBOOKLM_NOTEBOOK", "  nb_padded  ")
+        with patch(
+            "notebooklm.cli.helpers.get_context_path",
+            return_value=tmp_path / "nonexistent.json",
+        ):
+            result = require_notebook(None)
+            assert result == "nb_padded"
 
 
 # =============================================================================

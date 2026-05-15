@@ -727,25 +727,48 @@ def validate_id(entity_id: str, entity_name: str = "ID") -> str:
 
 
 def require_notebook(notebook_id: str | None) -> str:
-    """Get notebook ID from argument or context, raise if neither.
+    """Get notebook ID from argument, env var, or active context.
+
+    Resolution order (P7.T3 / M4 — env-var precedence):
+
+    1. ``notebook_id`` argument (the resolved value of the ``-n/--notebook``
+       Click flag — already env-var-aware via ``cli/options.py:notebook_option``,
+       which declares ``envvar="NOTEBOOKLM_NOTEBOOK"``).
+    2. ``NOTEBOOKLM_NOTEBOOK`` environment variable. Re-checked here so direct
+       callers that don't pass through the Click flag (programmatic usage,
+       legacy code paths, tests) honor the same precedence ladder.
+    3. The persisted active-notebook context written by ``notebooklm use``.
+    4. Hard error → ``SystemExit(1)`` with a discoverability hint listing all
+       three resolution paths.
 
     Args:
-        notebook_id: Optional notebook ID from command argument
+        notebook_id: Optional notebook ID from command argument. When the
+            Click flag was omitted AND the env var was unset, this is ``None``.
 
     Returns:
-        Notebook ID (from argument or context), validated and stripped
+        Notebook ID (from argument, env var, or context), validated and stripped.
 
     Raises:
-        SystemExit: If no notebook ID available
-        click.ClickException: If notebook ID is empty/whitespace
+        SystemExit: If no notebook ID can be resolved from any source.
+        click.ClickException: If the resolved notebook ID is empty/whitespace
+            after stripping.
     """
     if notebook_id:
         return validate_id(notebook_id, "Notebook")
+    # Env-var fallback runs BEFORE the active-context lookup so per-shell
+    # overrides (e.g. ``NOTEBOOKLM_NOTEBOOK=other notebooklm ask "..."``)
+    # compose without clobbering the persisted ``notebooklm use`` selection.
+    # Empty / whitespace-only values are treated as unset (consistent with
+    # ``NOTEBOOKLM_HL``'s same-shape handling) — the next fallback wins.
+    env_value = os.environ.get("NOTEBOOKLM_NOTEBOOK")
+    if env_value and env_value.strip():
+        return validate_id(env_value, "Notebook")
     current = get_current_notebook()
     if current:
         return validate_id(current, "Notebook")
     console.print(
-        "[red]No notebook specified. Use 'notebooklm use <id>' to set context or pass -n/--notebook.[/red]"
+        "[red]No notebook specified. Use 'notebooklm use <id>' to set context, "
+        "pass -n/--notebook, or set NOTEBOOKLM_NOTEBOOK.[/red]"
     )
     raise SystemExit(1)
 
