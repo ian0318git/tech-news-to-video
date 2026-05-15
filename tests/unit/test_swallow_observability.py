@@ -95,7 +95,15 @@ def test_qa_pairs_warns_on_unguarded_shape(caplog):
 
     # Got at least the question (answer is empty due to except)
     assert pairs == [("what?", "")]
-    assert any("schema drift" in r.message and r.levelno == logging.WARNING for r in caplog.records)
+    # After T8.D2b, _chat._extract_next_turn_content delegates to safe_index,
+    # which emits its own canonical "safe_index drift" warning (rather than
+    # the older _chat-specific "schema drift" wording). Accept either so
+    # this test survives future helper renames.
+    assert any(
+        ("schema drift" in r.message or "safe_index drift" in r.message)
+        and r.levelno == logging.WARNING
+        for r in caplog.records
+    )
 
 
 @pytest.mark.asyncio

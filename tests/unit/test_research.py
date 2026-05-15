@@ -15,7 +15,6 @@ from notebooklm._research import (
     _extract_task_id,
     _extract_task_info,
 )
-from notebooklm.auth import AuthTokens
 from notebooklm.rpc import RPCMethod
 
 
@@ -24,16 +23,6 @@ def _extract_request_params(request) -> list:
     body = parse_qs(request.content.decode())
     f_req = json.loads(body["f.req"][0])
     return json.loads(f_req[0][0][1])
-
-
-@pytest.fixture
-def auth_tokens():
-    """Create test authentication tokens."""
-    return AuthTokens(
-        cookies={"SID": "test"},
-        csrf_token="test_csrf",
-        session_id="test_session",
-    )
 
 
 class TestParseResultType:

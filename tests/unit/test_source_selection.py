@@ -16,18 +16,8 @@ import pytest
 
 from notebooklm._artifacts import ArtifactsAPI
 from notebooklm._chat import ChatAPI
-from notebooklm.auth import AuthTokens
 from notebooklm.exceptions import ValidationError
 from notebooklm.rpc import InfographicStyle, VideoFormat, VideoStyle
-
-
-@pytest.fixture
-def auth_tokens():
-    return AuthTokens(
-        cookies={"SID": "test"},
-        csrf_token="test_csrf",
-        session_id="test_session",
-    )
 
 
 @pytest.fixture

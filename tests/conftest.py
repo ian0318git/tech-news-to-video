@@ -6,6 +6,7 @@ import re
 
 import pytest
 
+from notebooklm.auth import AuthTokens
 from notebooklm.rpc import RPCMethod
 
 
@@ -170,3 +171,28 @@ def build_rpc_response():
         return f")]}}'\n{len(chunk)}\n{chunk}\n"
 
     return _build
+
+
+@pytest.fixture
+def auth_tokens():
+    """Canonical mock ``AuthTokens`` for unit tests.
+
+    Carries a minimal single-cookie jar plus deterministic CSRF and session
+    identifiers. Unit tests typically don't assert on these values directly —
+    they just need a valid ``AuthTokens`` instance to construct a client.
+
+    Notes:
+        - ``tests/integration/conftest.py`` defines its own ``auth_tokens``
+          with the full Tier 1 cookie set (SID/HSID/SSID/APISID/SAPISID)
+          since integration tests exercise auth pre-flight validation.
+        - ``tests/e2e/conftest.py`` defines a session-scoped fixture that
+          loads real tokens from storage.
+        - Tests that need a ``MagicMock`` rather than a real ``AuthTokens``
+          instance (e.g. ``tests/unit/test_rate_limit_retry.py``) keep their
+          own inline fixture.
+    """
+    return AuthTokens(
+        cookies={"SID": "test"},
+        csrf_token="test_csrf",
+        session_id="test_session",
+    )

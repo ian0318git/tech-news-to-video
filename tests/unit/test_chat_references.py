@@ -8,16 +8,6 @@ import json
 import pytest
 
 from notebooklm import AskResult, ChatReference, NotebookLMClient
-from notebooklm.auth import AuthTokens
-
-
-@pytest.fixture
-def auth_tokens():
-    return AuthTokens(
-        cookies={"SID": "test"},
-        csrf_token="test_csrf",
-        session_id="test_session",
-    )
 
 
 @pytest.fixture

@@ -7,6 +7,8 @@ Commands:
     clear   Clear current notebook context
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
@@ -189,7 +191,7 @@ def _enumerate_one_jar(
     browser_profile: str | None,
     *,
     quiet: bool = False,
-) -> "list[Account]":
+) -> list[Account]:
     """Probe ``?authuser=N`` against one cookie set and return tagged Accounts.
 
     Shared by both the legacy single-jar path and the chromium multi-profile
@@ -288,7 +290,7 @@ def _enumerate_browser_accounts(
     *,
     verbose: bool = True,
     include_domains: set[str] | None = None,
-) -> "tuple[dict[str | None, list[dict[str, Any]]], list[Account]]":
+) -> tuple[dict[str | None, list[dict[str, Any]]], list[Account]]:
     """Read cookies from ``browser_name`` and discover signed-in accounts.
 
     For chromium-family browsers with multiple populated user-data profiles
@@ -351,7 +353,7 @@ def _enumerate_chromium_profiles_fanout(
     *,
     verbose: bool,
     include_domains: set[str] | None,
-) -> "tuple[dict[str | None, list[dict[str, Any]]], list[Account]]":
+) -> tuple[dict[str | None, list[dict[str, Any]]], list[Account]]:
     """Fan out account discovery across multiple Chromium user-data profiles.
 
     Reads cookies from each profile's own ``Cookies`` SQLite DB and probes
@@ -1374,7 +1376,7 @@ def _ensure_chromium_installed() -> None:
         )
 
 
-def _recover_page(context: "BrowserContext", console: "Console") -> "Page":
+def _recover_page(context: BrowserContext, console: Console) -> Page:
     """Get a fresh page from a persistent browser context.
 
     Used when the current page reference is stale (TargetClosedError).

@@ -6,17 +6,7 @@ import re
 import pytest
 
 from notebooklm import AskResult, NotebookLMClient
-from notebooklm.auth import AuthTokens
 from notebooklm.exceptions import ChatError
-
-
-@pytest.fixture
-def auth_tokens():
-    return AuthTokens(
-        cookies={"SID": "test"},
-        csrf_token="test_csrf",
-        session_id="test_session",
-    )
 
 
 class TestAsk:
