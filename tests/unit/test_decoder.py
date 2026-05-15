@@ -806,3 +806,97 @@ class TestUnknownRPCMethodErrorRouting:
         # raw_response preview cap (80 chars + "..." = 83) preserved by the
         # base RPCError contract (NOTEBOOKLM_DEBUG=1 opts into full body).
         assert len(err.raw_response) <= 83
+
+
+class TestMalformedChunkResilience:
+    """T8.D1: safe_index hot-path traversal must tolerate malformed chunks.
+
+    None of these inputs should raise; the decoder API surface (collect_rpc_ids,
+    extract_rpc_result) must degrade gracefully when Google's response shape
+    drifts. This pins the soft-mode contract from rpc._safe_index: drift returns
+    None / empty rather than IndexError / TypeError bubbling up.
+    """
+
+    RPC_ID = RPCMethod.LIST_NOTEBOOKS.value
+
+    def test_collect_rpc_ids_handles_empty_chunk(self):
+        """Empty list chunk is skipped without indexing into it."""
+        assert collect_rpc_ids([[]]) == []
+
+    def test_collect_rpc_ids_handles_non_list_chunk(self):
+        """Non-list chunks (str / int / dict / None) are skipped silently."""
+        assert collect_rpc_ids(["nope", 123, None, {"k": "v"}]) == []
+
+    def test_collect_rpc_ids_handles_short_item(self):
+        """Items shorter than 2 elements are skipped before indexing item[1]."""
+        chunks: list = [["wrb.fr"]]  # missing rpc_id at index 1
+        assert collect_rpc_ids(chunks) == []
+
+    def test_collect_rpc_ids_handles_non_list_inner_item(self):
+        """Non-list items inside a nested chunk are skipped."""
+        chunks: list = [["string-item", 42, None]]
+        # First element is a string, so items becomes [chunk] (the outer list),
+        # which has len=3 and item[0]="string-item" doesn't match tags. No raise.
+        assert collect_rpc_ids(chunks) == []
+
+    def test_collect_rpc_ids_handles_deeply_nested_malformed(self):
+        """Deeply nested malformed structures do not crash the traversal."""
+        chunks: list = [[[None]], [[1, 2]], [[]], [[[]]], [["wrb.fr"]]]
+        # None of these have a (tag, rpc_id) pair with a valid string rpc_id.
+        assert collect_rpc_ids(chunks) == []
+
+    def test_extract_rpc_result_handles_empty_chunk(self):
+        """Empty chunks are skipped in extract_rpc_result."""
+        assert extract_rpc_result([[]], self.RPC_ID) is None
+
+    def test_extract_rpc_result_handles_non_list_chunk(self):
+        """Non-list chunks are skipped in extract_rpc_result."""
+        assert extract_rpc_result(["nope", 123, None], self.RPC_ID) is None
+
+    def test_extract_rpc_result_handles_missing_index_5(self):
+        """wrb.fr items with len < 6 don't trigger UserDisplayableError lookup."""
+        # Item has exactly 3 elements: tag, rpc_id, null result. No index 5.
+        chunks: list = [["wrb.fr", self.RPC_ID, None]]
+        # Should return None (the null result) without raising IndexError.
+        assert extract_rpc_result(chunks, self.RPC_ID) is None
+
+    def test_extract_rpc_result_handles_short_item(self):
+        """Items with len < 3 are skipped before any indexing."""
+        # Items shorter than 3 elements should be skipped — no IndexError.
+        chunks: list = [["wrb.fr", self.RPC_ID]]
+        assert extract_rpc_result(chunks, self.RPC_ID) is None
+
+    def test_extract_rpc_result_handles_deeply_nested_malformed(self):
+        """Pathological nesting must not raise in extract_rpc_result."""
+        chunks: list = [
+            [],
+            [[]],
+            [None, None, None],
+            [["wrb.fr"]],
+            [["wrb.fr", self.RPC_ID]],  # len < 3 — skipped
+        ]
+        assert extract_rpc_result(chunks, self.RPC_ID) is None
+
+    def test_decode_response_handles_malformed_chunk_for_status_lookup(self):
+        """_find_wrb_status (via decode_response) must not crash on malformed.
+
+        When decode_response hits the "null result data, look up status"
+        branch, the chunk list it scans may include malformed entries. None
+        of these should raise.
+        """
+        # First a malformed chunk, then the legitimate null-result entry that
+        # decode_response will report on. Use GET_NOTEBOOK to trigger the
+        # status-lookup branch.
+        rpc_id = RPCMethod.GET_NOTEBOOK.value
+        good = json.dumps(["wrb.fr", rpc_id, None, None, None, None])
+        bad_short = json.dumps(["wrb.fr"])  # malformed, len < 6
+        bad_empty = json.dumps([])
+        body = (
+            f"{len(bad_short)}\n{bad_short}\n{len(bad_empty)}\n{bad_empty}\n{len(good)}\n{good}\n"
+        )
+        raw = f")]}}'\n{body}"
+        # decode_response will still raise RPCError for the null result, but
+        # the malformed-chunk traversal must not raise IndexError on its way
+        # there.
+        with pytest.raises(RPCError, match="returned null result data"):
+            decode_response(raw, rpc_id)
