@@ -81,13 +81,13 @@ AUDIT_REPAIR_LIST: dict[str, str] = {
     "chat_ask_with_references.yaml": (
         "Phase 2 T8.B2 will fix (C3: stale chat-ask shape / shape drift)"
     ),
-    "sources_add_file.yaml": ("Phase 2 T8.B4 will fix (I17: upload tokens unscrubbed)"),
-    # sources_add_drive.yaml + sources_check_freshness_drive.yaml were
-    # repaired in T8.B5 (this PR) — Drive AONS tokens scrubbed in place.
-    # example_httpbin_{get,post}.yaml were deleted in T8.B7 — the
-    # I-misc origin-IP leak was in illustrative VCR examples, not real
-    # NotebookLM cassettes. The example tests in test_vcr_example.py that
-    # used them were also removed in the same PR.
+    # sources_add_file.yaml was repaired in T8.B4 — upload tokens (I17)
+    # scrubbed in place. sources_add_drive.yaml +
+    # sources_check_freshness_drive.yaml were repaired in T8.B5 — Drive AONS
+    # tokens scrubbed in place. example_httpbin_{get,post}.yaml were deleted
+    # in T8.B7 — the I-misc origin-IP leak was in illustrative VCR examples,
+    # not real NotebookLM cassettes. The example tests in test_vcr_example.py
+    # that used them were also removed in the same PR.
 }
 
 

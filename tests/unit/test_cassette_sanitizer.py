@@ -368,6 +368,8 @@ def test_python_guard_repo_allowlist_is_explicit_basename_list() -> None:
     }
     # Spec-explicit entries that must always be in the allowlist while
     # phase-2 repair is outstanding.
+    # ``sources_add_file.yaml`` is NOT in this required-set anymore — it was
+    # repaired in T8.B4 (the audit's I17 upload-token leak scrubbed in place).
     # ``sources_add_drive.yaml`` + ``sources_check_freshness_drive.yaml`` are
     # NOT in this required-set anymore — they were repaired in T8.B5 (the
     # audit's I17 Drive AONS-token leak scrubbed in place).
@@ -378,6 +380,5 @@ def test_python_guard_repo_allowlist_is_explicit_basename_list() -> None:
         "artifacts_revise_slide.yaml",
         "chat_ask.yaml",
         "chat_ask_with_references.yaml",
-        "sources_add_file.yaml",
     ):
         assert required in entries, f"missing required allowlist entry: {required}"
