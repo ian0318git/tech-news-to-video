@@ -1510,7 +1510,14 @@ class ArtifactsAPI:
 
             output = Path(output_path)
             output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_text(markdown_content, encoding="utf-8")
+
+            # Offload the synchronous write to a worker thread so a slow
+            # filesystem can't stall the loop (T7.D4, audit §30).
+            # Closure pattern mirrors _write_csv in download_data_table.
+            def _write_markdown() -> None:
+                output.write_text(markdown_content, encoding="utf-8")
+
+            await asyncio.to_thread(_write_markdown)
             return str(output)
 
         except (IndexError, TypeError) as e:
@@ -1561,7 +1568,16 @@ class ArtifactsAPI:
 
             output = Path(output_path)
             output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_text(json.dumps(json_data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+            # Offload both the serialization AND the write to a worker
+            # thread. ``json.dump`` streams into the file handle so we
+            # never materialize the full JSON string on the loop
+            # (T7.D4, audit §30). Mirrors _write_csv in download_data_table.
+            def _write_json() -> None:
+                with output.open("w", encoding="utf-8") as f:
+                    json.dump(json_data, f, indent=2, ensure_ascii=False)
+
+            await asyncio.to_thread(_write_json)
             return str(output)
 
         except (IndexError, TypeError, json.JSONDecodeError) as e:
@@ -2331,8 +2347,10 @@ class ArtifactsAPI:
         """
         result = DownloadResult()
 
-        # Load cookies with domain info for cross-domain redirect handling
-        cookies = load_httpx_cookies(path=self._storage_path)
+        # Load cookies with domain info for cross-domain redirect handling.
+        # Offloaded because load_httpx_cookies does a synchronous JSON read
+        # of the storage-state file (T7.D4, audit §30).
+        cookies = await asyncio.to_thread(load_httpx_cookies, path=self._storage_path)
 
         async with httpx.AsyncClient(
             cookies=cookies,
@@ -2469,8 +2487,12 @@ class ArtifactsAPI:
         # ``Path`` (no filesystem entry); switching to mkstemp creates the
         # file immediately, so the cleanup window must widen.
         try:
-            # Load cookies with domain info for cross-domain redirect handling
-            cookies = load_httpx_cookies(path=self._storage_path)
+            # Load cookies with domain info for cross-domain redirect handling.
+            # ``load_httpx_cookies`` does a synchronous JSON read of the
+            # storage-state file — offload to a worker thread so slow auth
+            # storage doesn't stall every concurrent task on the loop
+            # (T7.D4, audit §30).
+            cookies = await asyncio.to_thread(load_httpx_cookies, path=self._storage_path)
 
             # Use granular timeouts: 10s to connect, 30s per chunk read/write
             # This allows large files to download without timeout while still
