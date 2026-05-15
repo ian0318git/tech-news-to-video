@@ -24,6 +24,10 @@ import logging
 import os
 from pathlib import Path
 from types import TracebackType
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .types import ConnectionLimits
 
 from ._artifacts import ArtifactsAPI
 from ._chat import ChatAPI
@@ -86,6 +90,7 @@ class NotebookLMClient:
         keepalive_min_interval: float = DEFAULT_KEEPALIVE_MIN_INTERVAL,
         rate_limit_max_retries: int = 0,
         server_error_max_retries: int = 3,
+        limits: "ConnectionLimits | None" = None,
     ):
         """Initialize the NotebookLM client.
 
@@ -111,6 +116,12 @@ class NotebookLMClient:
                 ``httpx.RequestError`` (timeouts, connect errors). Defaults to
                 ``3``. Uses exponential backoff ``min(2 ** attempt, 30)``
                 seconds. Set to ``0`` to disable.
+            limits: HTTP connection-pool tuning (``ConnectionLimits``). ``None``
+                (default) uses ``ConnectionLimits()`` defaults sized for typical
+                batchexecute fan-out (max_connections=100,
+                max_keepalive_connections=50, keepalive_expiry=30.0s). Widen
+                for heavy batch workloads (FastAPI/Django services sharing one
+                client across many concurrent requests).
         """
         # Normalize the effective storage path onto the auth object so every
         # downstream code path (refresh_auth, ClientCore.close on-close save,
@@ -135,6 +146,7 @@ class NotebookLMClient:
             keepalive_storage_path=auth.storage_path,
             rate_limit_max_retries=rate_limit_max_retries,
             server_error_max_retries=server_error_max_retries,
+            limits=limits,
         )
 
         # Initialize sub-client APIs.
@@ -203,6 +215,7 @@ class NotebookLMClient:
         keepalive_min_interval: float = DEFAULT_KEEPALIVE_MIN_INTERVAL,
         rate_limit_max_retries: int = 0,
         server_error_max_retries: int = 3,
+        limits: "ConnectionLimits | None" = None,
     ) -> "NotebookLMClient":
         """Create a client from Playwright storage state file.
 
@@ -222,6 +235,12 @@ class NotebookLMClient:
                 (default) preserves pre-Phase-3 raise-immediately behavior.
             server_error_max_retries: Max automatic retries for HTTP 5xx /
                 network errors with exponential backoff. Defaults to ``3``.
+            limits: HTTP connection-pool tuning (``ConnectionLimits``). ``None``
+                (default) uses ``ConnectionLimits()`` defaults sized for
+                typical batchexecute fan-out (max_connections=100,
+                max_keepalive_connections=50, keepalive_expiry=30.0s). Widen
+                for heavy batch workloads (FastAPI/Django services sharing one
+                client across many concurrent requests).
 
         Returns:
             NotebookLMClient instance (not yet connected).
@@ -255,6 +274,7 @@ class NotebookLMClient:
             keepalive_min_interval=keepalive_min_interval,
             rate_limit_max_retries=rate_limit_max_retries,
             server_error_max_retries=server_error_max_retries,
+            limits=limits,
         )
 
     async def refresh_auth(self) -> AuthTokens:

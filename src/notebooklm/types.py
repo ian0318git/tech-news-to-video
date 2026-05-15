@@ -13,7 +13,10 @@ import warnings
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    import httpx
 
 from ._env import get_base_url
 
@@ -72,6 +75,43 @@ class UnknownTypeWarning(UserWarning):
     """
 
     pass
+
+
+@dataclass(frozen=True)
+class ConnectionLimits:
+    """HTTP connection-pool tuning for the underlying httpx transport.
+
+    Wraps the subset of ``httpx.Limits`` we expose so the public API
+    doesn't leak the httpx type directly (and stays stable across httpx
+    minor versions). Defaults are sized for the typical batchexecute
+    fan-out: a few dozen concurrent RPCs against a single host with
+    keep-alives held for the duration of an interactive session.
+
+    Constraint: ``max_concurrent_rpcs`` (added in T7.H1) must satisfy
+    ``max_concurrent_rpcs <= max_connections`` — otherwise the
+    semaphore lets requests through that the pool can't fulfill.
+    The constructor for ``NotebookLMClient`` enforces this when both
+    are set.
+    """
+
+    max_connections: int = 100
+    """Hard cap on total concurrent connections in the pool."""
+
+    max_keepalive_connections: int = 50
+    """Cap on idle connections held open between requests."""
+
+    keepalive_expiry: float = 30.0
+    """Seconds an idle connection stays in the pool before being closed."""
+
+    def to_httpx_limits(self) -> "httpx.Limits":
+        """Map to ``httpx.Limits`` (lazy import to keep types.py dep-light)."""
+        import httpx
+
+        return httpx.Limits(
+            max_connections=self.max_connections,
+            max_keepalive_connections=self.max_keepalive_connections,
+            keepalive_expiry=self.keepalive_expiry,
+        )
 
 
 @dataclass(frozen=True)
@@ -422,6 +462,7 @@ def _extract_artifact_url(data: list[Any], artifact_type: int | None) -> str | N
 __all__ = [
     # Dataclasses
     "CitedSourceSelection",
+    "ConnectionLimits",
     "Notebook",
     "NotebookDescription",
     "NotebookMetadata",

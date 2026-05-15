@@ -99,6 +99,7 @@ from .types import (
     ChatReference,
     ChatResponseLength,
     CitedSourceSelection,
+    ConnectionLimits,
     ConversationTurn,
     DriveMimeType,
     ExportType,
@@ -143,6 +144,7 @@ __all__ = [
     # Types
     "AccountLimits",
     "AccountTier",
+    "ConnectionLimits",
     "Notebook",
     "NotebookDescription",
     "NotebookMetadata",

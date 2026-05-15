@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Any, NoReturn, cast
+from typing import TYPE_CHECKING, Any, NoReturn, cast
 from urllib.parse import urlencode
 
 import httpx
@@ -31,6 +31,10 @@ from .auth import (
     save_cookies_to_storage,
     snapshot_cookie_jar,
 )
+
+if TYPE_CHECKING:
+    from .types import ConnectionLimits
+
 from .rpc import (
     AuthError,
     ClientError,
@@ -284,6 +288,7 @@ class ClientCore:
         keepalive_storage_path: Path | None = None,
         rate_limit_max_retries: int = 0,
         server_error_max_retries: int = 3,
+        limits: "ConnectionLimits | None" = None,
     ):
         """Initialize the core client.
 
@@ -322,14 +327,25 @@ class ClientCore:
                 429 model doesn't apply. Set to ``0`` to disable. Refresh-path
                 errors (400/401/403) are NOT covered here; those follow the
                 existing auth-refresh-and-retry flow.
+            limits: HTTP connection-pool tuning (``ConnectionLimits``). ``None``
+                (default) constructs a ``ConnectionLimits()`` with defaults
+                sized for typical batchexecute fan-out (max_connections=100,
+                max_keepalive_connections=50, keepalive_expiry=30.0). Pass an
+                explicit ``ConnectionLimits(...)`` to widen the pool for
+                heavy batch workloads (e.g. FastAPI/Django services that
+                share one client across many concurrent requests).
 
         Raises:
             ValueError: If ``keepalive`` or ``keepalive_min_interval`` is not a
                 positive finite number.
         """
+        # Lazy import to break the types.py -> _core.py cycle.
+        from .types import ConnectionLimits
+
         self.auth = auth
         self._timeout = timeout
         self._connect_timeout = connect_timeout
+        self._limits = limits if limits is not None else ConnectionLimits()
         self._refresh_callback = refresh_callback
         self._refresh_retry_delay = refresh_retry_delay
         if rate_limit_max_retries < 0:
@@ -471,6 +487,7 @@ class ClientCore:
                 cookies=cookies,
                 timeout=timeout,
                 follow_redirects=True,
+                limits=self._limits.to_httpx_limits(),
             )
 
             # Capture the open-time snapshot AFTER the AsyncClient is built
