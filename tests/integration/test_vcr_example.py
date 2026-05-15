@@ -34,43 +34,6 @@ from vcr_config import notebooklm_vcr
 pytestmark = [pytest.mark.vcr, skip_no_cassettes]
 
 
-class TestVCRBasics:
-    """Basic VCR.py functionality tests."""
-
-    @pytest.mark.vcr
-    @notebooklm_vcr.use_cassette("example_httpbin_get.yaml")
-    @pytest.mark.asyncio
-    async def test_vcr_records_and_replays(self):
-        """Verify VCR.py can record and replay HTTP interactions.
-
-        This test uses httpbin.org as a stand-in to demonstrate VCR works.
-        Real tests would use the NotebookLM API.
-        """
-        import httpx
-
-        async with httpx.AsyncClient() as client:
-            response = await client.get("https://httpbin.org/get")
-            assert response.status_code == 200
-            data = response.json()
-            assert "origin" in data
-
-    @pytest.mark.vcr
-    @notebooklm_vcr.use_cassette("example_httpbin_post.yaml")
-    @pytest.mark.asyncio
-    async def test_vcr_handles_post_requests(self):
-        """Verify VCR.py handles POST requests with form data."""
-        import httpx
-
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                "https://httpbin.org/post",
-                data={"key": "value"},
-            )
-            assert response.status_code == 200
-            data = response.json()
-            assert data["form"]["key"] == "value"
-
-
 class TestVCRScrubbing:
     """Tests verifying sensitive data scrubbing."""
 

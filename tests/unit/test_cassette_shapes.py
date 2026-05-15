@@ -88,12 +88,10 @@ AUDIT_REPAIR_LIST: dict[str, str] = {
     "sources_check_freshness_drive.yaml": (
         "Phase 2 T8.B5 will fix (I17: Drive AONS tokens unscrubbed)"
     ),
-    "example_httpbin_get.yaml": (
-        "Phase 2 T8.B7 will fix (I-misc: leaked IP 108.5.149.175 in example fixture)"
-    ),
-    "example_httpbin_post.yaml": (
-        "Phase 2 T8.B7 will fix (I-misc: leaked IP 108.5.149.175 in example fixture)"
-    ),
+    # example_httpbin_{get,post}.yaml were deleted in T8.B7 (PR #NNN) — the
+    # I-misc origin-IP leak was in illustrative VCR examples, not real
+    # NotebookLM cassettes. The example tests in test_vcr_example.py that
+    # used them were also removed in the same PR.
 }
 
 
