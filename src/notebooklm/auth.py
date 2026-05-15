@@ -503,8 +503,13 @@ class AuthTokens:
         # fails, carry the old baseline into the returned AuthTokens so a
         # later ClientCore can retry the delta instead of treating the mutated
         # jar as clean state.
+        # ``save_cookies_to_storage`` performs atomic-replace + fsync + flock
+        # under a synchronous file lock; offload to a worker thread so a
+        # slow filesystem (network FS, encrypted home, fcntl contention)
+        # can't freeze the event loop. T7.D1 / audit §6.
         post_save_snapshot = snapshot_cookie_jar(jar)
-        save_result = save_cookies_to_storage(
+        save_result = await asyncio.to_thread(
+            save_cookies_to_storage,
             jar,
             path,
             original_snapshot=snapshot,
@@ -3207,5 +3212,8 @@ async def fetch_tokens_with_domains(
         # added redirect Set-Cookies); re-snapshotting here would let those
         # retry rotations be absorbed into the baseline and never reach disk.
         snapshot = post_refresh_snapshot
-    save_cookies_to_storage(jar, path, original_snapshot=snapshot)
+    # Offload the blocking storage save to a worker thread so the
+    # atomic-replace + fsync + flock can't stall the event loop on
+    # slow filesystems. T7.D1 / audit §27.
+    await asyncio.to_thread(save_cookies_to_storage, jar, path, original_snapshot=snapshot)
     return csrf, session_id
