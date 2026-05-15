@@ -1787,22 +1787,45 @@ class ArtifactsAPI:
 
         Uses exponential backoff for polling to reduce API load.
 
+        Concurrent callers for the same ``(notebook_id, task_id)`` share a
+        single underlying poll loop via the leader/follower registry on
+        ``ClientCore._pending_polls`` (audit §21 / T7.E2). The first
+        caller is the *leader* and drives the poll loop; subsequent
+        *followers* attach to the leader's future without issuing their
+        own ``LIST_ARTIFACTS`` requests. Cancellation is per-caller —
+        only the cancelled caller's ``await`` raises ``CancelledError``;
+        the underlying poll continues and remaining followers still
+        receive the result.
+
+        Because followers attach to the leader's already-running poll,
+        only the *leader's* ``initial_interval`` / ``max_interval`` /
+        ``timeout`` / ``max_not_found`` / ``min_not_found_window`` apply
+        to the shared poll loop. Followers' values for these parameters
+        are ignored once they attach. This is acceptable for the
+        intended use case (deduping accidental fan-out from the same
+        application) — distinct waiters that genuinely need distinct
+        timeouts should serialize their calls instead.
+
         Args:
             notebook_id: The notebook ID.
             task_id: The task/artifact ID to wait for.
-            initial_interval: Initial seconds between status checks.
-            max_interval: Maximum seconds between status checks.
-            timeout: Maximum seconds to wait.
+            initial_interval: Initial seconds between status checks
+                (leader only — see note above).
+            max_interval: Maximum seconds between status checks
+                (leader only).
+            timeout: Maximum seconds to wait (leader only).
             poll_interval: Deprecated. Use initial_interval instead.
             max_not_found: Consecutive "not found" polls before treating
                 the task as failed.  When the API removes an artifact
                 from the list (e.g. after a daily-quota rejection), the
                 poller would otherwise spin until *timeout*.  Defaults
                 to 5 to tolerate brief replication lag and slow networks.
+                (Leader only.)
             min_not_found_window: Minimum seconds that must have elapsed
                 since the *first* not-found response before a consecutive
                 run triggers failure.  This avoids false positives on
                 slow or unreliable networks.  Defaults to 10.0.
+                (Leader only.)
 
         Returns:
             Final GenerationStatus.
@@ -1821,6 +1844,105 @@ class ArtifactsAPI:
             )
             initial_interval = poll_interval
 
+        pending = self._core._pending_polls
+        key = (notebook_id, task_id)
+
+        existing = pending.get(key)
+        if existing is not None:
+            # Follower path. ``asyncio.shield`` ensures that *this* caller's
+            # cancellation does not propagate into the shared future; the
+            # leader's poll task continues on behalf of every other follower.
+            return await asyncio.shield(existing[0])
+
+        # Leader path. Create the shared future, spawn the poll task,
+        # register the pair so any follower can attach. Both the future
+        # and the task live in the registry entry — the task reference
+        # alone is what anchors the running poll against GC (Python's
+        # task-GC contract is permissive; see asyncio C4 lesson /
+        # Python 3.11+ task GC fix). The done-callback pops the entry
+        # on every termination path (success / exception / cancel) so
+        # the registry cannot leak.
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[GenerationStatus] = loop.create_future()
+
+        # Consume any exception set on the future if no caller ever
+        # retrieves it (e.g. leader cancelled with no followers). Without
+        # this, ``set_exception`` on an unawaited future logs
+        # "Future exception was never retrieved" at GC time.
+        def _consume_orphan_exception(fut: asyncio.Future[GenerationStatus]) -> None:
+            if not fut.cancelled():
+                # ``exception()`` clears the _log_traceback flag inside the
+                # future. We intentionally drop the value.
+                fut.exception()
+
+        future.add_done_callback(_consume_orphan_exception)
+
+        poll_task = asyncio.create_task(
+            self._run_poll_loop(
+                notebook_id,
+                task_id,
+                initial_interval=initial_interval,
+                max_interval=max_interval,
+                timeout=timeout,
+                max_not_found=max_not_found,
+                min_not_found_window=min_not_found_window,
+            ),
+            name=f"artifact-poll-{notebook_id}-{task_id}",
+        )
+
+        pending[key] = (future, poll_task)
+
+        def _on_poll_done(task: asyncio.Task[GenerationStatus]) -> None:
+            # Pop the registry entry first so a follower that arrives
+            # concurrently with completion either (a) attaches to the
+            # already-resolved future and gets the cached result, or
+            # (b) misses the entry entirely and starts a fresh poll for
+            # the *next* generation. Either is correct.
+            pending.pop(key, None)
+            # Inside this callback there are no ``await`` points, so
+            # the single-threaded asyncio model guarantees ``future`` is
+            # still pending — assert that invariant rather than guard
+            # silently. A regression in callback ordering would surface
+            # loudly instead of dropping a result on the floor.
+            assert not future.done(), "future resolved before poll task done-callback"
+            if task.cancelled():
+                # The poll task itself was cancelled. Followers shield
+                # the future and the leader's cancel doesn't propagate
+                # to the task, so this is exceedingly rare — but if it
+                # happens, surface ``CancelledError`` to attached waiters.
+                future.cancel()
+                return
+            exc = task.exception()
+            if exc is not None:
+                future.set_exception(exc)
+                return
+            future.set_result(task.result())
+
+        poll_task.add_done_callback(_on_poll_done)
+
+        # Leader awaits via ``asyncio.shield`` so that the leader's
+        # cancellation unwinds locally without taking down the shared
+        # poll. The shielded poll task continues until the done-callback
+        # fires; remaining followers still receive the result.
+        return await asyncio.shield(future)
+
+    async def _run_poll_loop(
+        self,
+        notebook_id: str,
+        task_id: str,
+        *,
+        initial_interval: float,
+        max_interval: float,
+        timeout: float,
+        max_not_found: int,
+        min_not_found_window: float,
+    ) -> GenerationStatus:
+        """The actual polling loop. Driven by the leader's shielded task.
+
+        This is intentionally private and parameter-keyword-only — direct
+        callers should always go through ``wait_for_completion`` so the
+        leader/follower dedupe is honored.
+        """
         start_time = asyncio.get_running_loop().time()
         current_interval = initial_interval
         consecutive_not_found = 0
