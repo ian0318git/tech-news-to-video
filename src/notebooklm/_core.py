@@ -88,6 +88,178 @@ DEFAULT_MAX_CONCURRENT_RPCS = 16
 # so a malicious or buggy server can't force a multi-hour pause.
 MAX_RETRY_AFTER_SECONDS = 300
 
+# -----------------------------------------------------------------------------
+# T8.E10 — Test-only synthetic-error transport (opt-in via env var)
+# -----------------------------------------------------------------------------
+#
+# When ``NOTEBOOKLM_VCR_RECORD_ERRORS`` is set to one of ``429`` / ``5xx`` /
+# ``expired_csrf``, the next outgoing batchexecute RPC gets a substituted
+# synthetic response that the client maps onto its own exception domain. This
+# plumbing exists so T8.E4 (and any future error-cassette PR) can record
+# cassettes whose response shapes match what the client's exception mapping
+# keys on — see ``tests/cassette_patterns.py:build_synthetic_error_response``.
+#
+# **Production behavior is unchanged when the env var is unset.** The transport
+# wrapper is only constructed when the env var resolves to a valid mode; the
+# default ``httpx.AsyncClient`` is built with no explicit transport otherwise.
+#
+# This is deliberately wired through the client's HTTP layer (not just the VCR
+# config) so the substitution sits BELOW VCR — VCR records the synthetic
+# response into the cassette as if it had come from the wire. Wiring it at the
+# VCR-config layer only would mean the substitution never ran in record mode,
+# leaving the plumbing inert (the Momus iter-1 rejection rationale).
+
+ERROR_INJECT_ENV_VAR = "NOTEBOOKLM_VCR_RECORD_ERRORS"
+
+
+def _get_error_injection_mode() -> str | None:
+    """Return the synthetic-error mode from ``NOTEBOOKLM_VCR_RECORD_ERRORS``.
+
+    Returns ``None`` when the env var is unset, empty, or carries an
+    unrecognized value (we deliberately fail open rather than crash a
+    cassette-recording run on a typo — the unit tests catch the typo path,
+    and the VCR config validates the value separately).
+
+    The valid-mode set is hardcoded here (rather than imported from
+    ``tests.cassette_patterns``) so production import time never reaches into
+    the test tree. The same set is mirrored in
+    ``tests.cassette_patterns.VALID_ERROR_MODES`` and the
+    ``synthetic_error`` marker validator in ``tests/conftest.py``; the
+    duplication is intentional and bounded — adding a fourth mode requires
+    updating all three sites, which the unit tests in ``tests/unit/
+    test_vcr_config.py`` will surface immediately.
+    """
+    import os
+
+    raw = os.environ.get(ERROR_INJECT_ENV_VAR, "").strip()
+    if not raw:
+        return None
+    # Lowercase-normalize so callers can use ``"5XX"`` / ``"429"`` / etc.
+    normalized = raw.lower()
+    valid = {"429", "5xx", "expired_csrf"}
+    if normalized not in valid:
+        return None
+    return normalized
+
+
+class _SyntheticErrorTransport(httpx.AsyncBaseTransport):
+    """Test-only httpx transport that substitutes synthetic error responses.
+
+    Wraps an inner ``httpx.AsyncBaseTransport`` and substitutes a synthetic
+    error response on outgoing batchexecute POSTs, built by
+    ``tests.cassette_patterns.build_synthetic_error_response``. Non-batchexecute
+    traffic (Scotty uploads, ``RotateCookies`` pokes, the homepage GET that
+    extracts CSRF) passes through unchanged because none of those endpoints
+    are in scope for error-shape cassettes.
+
+    Substitution scope is controlled by ``always``:
+
+    - ``always=True`` (the default for record-mode use): every batchexecute
+      POST is substituted. This matters because the client's auth-refresh
+      path re-issues the same RPC; we want the SAME error to fire on every
+      retry inside the recording window so the cassette captures the full
+      retry-and-fail sequence rather than substituting once and then letting
+      a real response slip through on the retry.
+    - ``always=False``: only the FIRST batchexecute POST is substituted; later
+      POSTs fall through to the inner transport. Useful for tests that want
+      to assert the client recovers after a single transient failure.
+
+    This class is OPT-IN — ``ClientCore`` only wraps the transport when
+    ``_get_error_injection_mode()`` returns a non-``None`` value, so removing
+    the env var restores byte-for-byte production behavior.
+    """
+
+    def __init__(
+        self,
+        mode: str,
+        inner: httpx.AsyncBaseTransport,
+        *,
+        always: bool = True,
+    ):
+        self._mode = mode
+        self._inner = inner
+        self._always = always
+        self._fired = False
+        # Resolved lazily on first use so this module doesn't import the test
+        # tree at module load time.
+        self._builder: Callable[[str], tuple[int, bytes, dict[str, str]]] | None = None
+
+    def _is_batchexecute(self, request: httpx.Request) -> bool:
+        # NotebookLM's batchexecute endpoint lives under
+        # ``notebooklm.google.com/_/LabsTailwindUi/data/batchexecute``. We
+        # match on the path suffix so any subdomain / region variant still
+        # triggers substitution.
+        return request.url.path.endswith("/batchexecute")
+
+    def _load_builder(
+        self,
+    ) -> Callable[[str], tuple[int, bytes, dict[str, str]]]:
+        if self._builder is not None:
+            return self._builder
+        # Import lazily and via importlib to avoid a hard dependency on the
+        # tests tree from production code. The env var that gates this whole
+        # path is itself test-only, so this import only ever runs in
+        # recording / unit-test contexts.
+        import importlib.util
+        from pathlib import Path
+
+        # Walk up from src/notebooklm/_core.py to the repo root, then dive
+        # into tests/cassette_patterns.py. This keeps the lookup robust to
+        # installed-package layouts (where ``tests/`` may not exist) — in
+        # that case we raise a clear error rather than silently no-oping.
+        repo_root = Path(__file__).resolve().parent.parent.parent
+        target = repo_root / "tests" / "cassette_patterns.py"
+        if not target.exists():
+            raise RuntimeError(
+                f"{ERROR_INJECT_ENV_VAR} is set but "
+                f"tests/cassette_patterns.py is not available at {target}. "
+                f"This plumbing is test-only — unset {ERROR_INJECT_ENV_VAR} "
+                f"to restore normal behavior."
+            )
+        spec = importlib.util.spec_from_file_location("_notebooklm_cassette_patterns", target)
+        # NOT ``assert`` — runtime invariant must survive ``python -O``. The
+        # check is defensive (spec_from_file_location on an existing .py file
+        # virtually always succeeds) but if it ever fails the user has clear
+        # remediation via the env var.
+        if spec is None or spec.loader is None:
+            raise RuntimeError(
+                f"Failed to load module spec for {target}. "
+                f"Unset {ERROR_INJECT_ENV_VAR} to restore normal behavior."
+            )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        self._builder = cast(
+            Callable[[str], tuple[int, bytes, dict[str, str]]],
+            mod.build_synthetic_error_response,
+        )
+        return self._builder
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        # Substitute ONLY on POST batchexecute calls. Non-POST traffic on the
+        # same path (a hypothetical GET batchexecute probe, OPTIONS preflight,
+        # etc.) is out of scope for error-shape cassettes and must pass through
+        # unchanged — see CodeRabbit feedback on PR #638.
+        if (
+            request.method.upper() == "POST"
+            and self._is_batchexecute(request)
+            and (self._always or not self._fired)
+        ):
+            self._fired = True
+            status_code, body, headers = self._load_builder()(self._mode)
+            response = httpx.Response(
+                status_code=status_code,
+                headers=headers,
+                content=body,
+                request=request,
+            )
+            # ``httpx.Response`` constructed this way is already "read" — VCR
+            # can serialize it directly via its standard before_record hook.
+            return response
+        return await self._inner.handle_async_request(request)
+
+    async def aclose(self) -> None:
+        await self._inner.aclose()
+
 
 def _parse_retry_after(value: str | None) -> int | None:
     """Parse RFC 7231 Retry-After: integer-seconds OR HTTP-date.
@@ -707,6 +879,27 @@ class ClientCore:
                 cookies=self.auth.cookies,
                 storage_path=self.auth.storage_path,
             )
+            # T8.E10 — opt-in synthetic-error transport wrapper. When the env
+            # var is unset (the default) this is a no-op and the AsyncClient
+            # is constructed exactly as before. See ``_SyntheticErrorTransport``
+            # docstring at module top.
+            error_mode = _get_error_injection_mode()
+            synthetic_transport: httpx.AsyncBaseTransport | None = None
+            if error_mode is not None:
+                # When we supply a custom ``transport=`` to ``AsyncClient``,
+                # httpx no longer constructs its own internal transport from
+                # the ``limits=`` kwarg below — those limits are consumed by
+                # the inner transport here instead, so connection-pool sizing
+                # remains identical to the no-injection path.
+                inner_transport = httpx.AsyncHTTPTransport(
+                    limits=self._limits.to_httpx_limits(),
+                )
+                synthetic_transport = _SyntheticErrorTransport(error_mode, inner_transport)
+                logger.info(
+                    "T8.E10 synthetic-error injection enabled (mode=%s) — "
+                    "production paths will see substituted responses",
+                    error_mode,
+                )
             self._http_client = httpx.AsyncClient(
                 headers={
                     "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
@@ -714,7 +907,14 @@ class ClientCore:
                 cookies=cookies,
                 timeout=timeout,
                 follow_redirects=True,
+                # ``limits=`` is honored when ``transport=None`` (default) —
+                # httpx builds its own default transport with these limits.
+                # When ``transport=synthetic_transport`` (T8.E10 record mode)
+                # this kwarg is ignored by httpx and the inner_transport above
+                # carries the limits instead. The redundant pass is harmless
+                # and avoids a branch on the AsyncClient construction site.
                 limits=self._limits.to_httpx_limits(),
+                transport=synthetic_transport,
             )
 
             # Capture the open-time snapshot AFTER the AsyncClient is built
