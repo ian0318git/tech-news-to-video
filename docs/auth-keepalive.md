@@ -1,5 +1,7 @@
 # Auth keepalive — design notes and field findings
 
+**Last Updated:** 2026-05-14
+
 > **Status:** design notes for the L1/L2/L3 keepalive code already in `main`
 > (L1 `RotateCookies` POST + 60 s mtime guard merged via
 > [#346](https://github.com/teng-lin/notebooklm-py/pull/346); concurrent-poke
@@ -370,6 +372,88 @@ session entering a risk-flagged state (§3.2) or to the rotation
 mechanism failing for hours and `*SID` finally aging out — not to a
 shorter server-side TTL.
 
+### 2.6 Domain tiering: REQUIRED vs OPTIONAL cookie domains
+
+Not every Google cookie a logged-in browser holds is load-bearing for
+NotebookLM automation. The library splits the cookie-source domain list
+into two tiers (`src/notebooklm/auth.py:205-283`):
+
+| Tier | Constant | Domains | Extracted by default | Opt-in via |
+|---|---|---|---|---|
+| **REQUIRED** | `REQUIRED_COOKIE_DOMAINS` | `.google.com`, `notebooklm.google.com` (+ regional ccTLDs), `accounts.google.com`, `.googleusercontent.com`, `drive.google.com` | ✅ | — (always extracted) |
+| **OPTIONAL** | `OPTIONAL_COOKIE_DOMAINS_BY_LABEL` | `youtube` (`.youtube.com` + `accounts.youtube.com`), `docs` (`docs.google.com`), `myaccount` (`myaccount.google.com`), `mail` (`mail.google.com`) | ❌ | `notebooklm login --include-domains=<label>[,<label>...]` (or `=all`) |
+
+The REQUIRED tier is precisely the set traced through every exercised
+code path: the API host (`notebooklm.google.com`), the identity carriers
+(`.google.com`, `accounts.google.com`), authenticated media downloads
+(`.googleusercontent.com`), and Drive-source ingest (`drive.google.com`).
+Removing any one of these breaks an observed flow.
+
+The OPTIONAL tier is the historical "extract everything a logged-in
+browser would have, for symmetry" set ([#360](https://github.com/teng-lin/notebooklm-py/issues/360)).
+None of these domains is exercised by current `notebooklm-py` traffic;
+they're available to opt into only because users with non-standard
+flows or future protocol shifts may need them.
+
+#### Why two tiers — the "why" rationale
+
+**Data minimization, applied to a session-cookie file.** `storage_state.json`
+is a high-value target: anyone who exfiltrates it inherits the user's
+Google session. The smaller the cookie set we persist, the less
+authority a leaked file confers. The `--include-domains` opt-in is the
+data minimization control: by default the file holds only what the
+REQUIRED tier needs, and broader sibling-product access is added only
+when the operator asks for it.
+
+Concretely, the REQUIRED tier carries enough cookies to authenticate to
+NotebookLM and the auth surfaces NotebookLM transitively touches. The
+OPTIONAL tier additionally carries cookies that would let an attacker
+read the user's Gmail, Drive contents, YouTube history, and account
+settings. There is no NotebookLM code path that needs those cookies, so
+extracting them by default would broaden the post-leak attack surface
+without any functional benefit.
+
+The control is enforced at **extraction time** (what
+`rookiepy.load(domains=...)` is asked for), not at the runtime
+allow-list. This matters because:
+
+- Once a cookie is in `storage_state.json`, every subsequent process
+  that reads the file sees it. Filtering it out at runtime would still
+  leave the leaked-file attack surface.
+- Filtering at extraction means the cookie is never written to disk in
+  the first place — the smallest set that lets all known flows succeed
+  is the set we persist.
+- The runtime filter (`_is_allowed_cookie_domain` in
+  `auth.py`) stays permissive over the REQUIRED ∪ OPTIONAL
+  union so that opted-in domains survive downstream filters — but it's
+  not the load-bearing security control. The extraction-time filter is.
+
+This is the **single load-bearing T5.G control**
+([#483](https://github.com/teng-lin/notebooklm-py/pull/483)): narrow
+the extraction list to REQUIRED by default, expose OPTIONAL behind an
+explicit opt-in flag, and document the trade-off so users with sibling-
+product flows know what to ask for.
+
+#### When sibling cookies matter
+
+Two practical cases where opting into OPTIONAL is the right call:
+
+- **YouTube-source automation at scale.** `notebooklm-py` parses
+  YouTube URLs locally and delegates the fetch to NotebookLM's backend,
+  so YouTube cookies are not strictly required for source-add. But
+  workflows that mix YouTube source-adds with cross-tool YouTube
+  scraping (e.g. a parallel `yt-dlp` pipeline reading the same
+  `storage_state.json`) benefit from `--include-domains=youtube`.
+- **Drive-picker / Docs-picker flows.** If a future code path needs to
+  authenticate against `docs.google.com` directly (rather than via the
+  current `drive.google.com` redirect chain), `--include-domains=docs`
+  is the future-proofing knob.
+
+In both cases the operator opts in explicitly — `notebooklm login
+--browser-cookies firefox --include-domains=youtube,docs` — and the
+broader cookie set lands in `storage_state.json` only for accounts
+where it's needed.
+
 ---
 
 ## 3 · Threat model
@@ -516,41 +600,51 @@ Mitigations available today (still useful even with the fix in place):
   ensure no parallel long-lived processes write to the same
   `storage_state.json`.
 
-#### 3.4.2 The `(name, domain)` collapse — `path` ignored
+#### 3.4.2 Historical: the `(name, domain)` collapse — resolved end-to-end
 
-> **Resolved in #361 (side effect).** The snapshot/delta path now uses a
-> path-aware ``CookieSnapshotKey(name, domain, path)`` NamedTuple, and
-> ``build_httpx_cookies_from_storage`` loads all path variants into the live
-> jar. Two storage entries with the same ``(name, domain)`` but different paths
-> are distinct keys and survive a load → save round trip in the live jar/save
-> path. The legacy ``(name, domain)`` maps listed below (``AuthTokens.cookies``,
-> ``AuthTokens.cookie_header``, ``_cookie_map_from_jar``,
-> ``extract_cookies_with_domains``, etc.) are intentionally still lossy because
-> their public return type cannot represent path; they are compatibility
-> surfaces, not the persistence-merge hot path that fired §3.4.1.
+> **Resolved in #361 + #369.** The persistence-merge hot path that
+> originally fired this hazard is now fully path-aware. ``CookieKey`` /
+> ``DomainCookieMap`` are ``(name, domain, path)`` tuples
+> (`auth.py:63-71`); ``extract_cookies_with_domains`` returns path-keyed
+> entries (`auth.py:1531-1566`); the save merge in
+> ``save_cookies_to_storage`` builds its merge key as
+> ``(name, domain, path)`` (`auth.py:1995-2010`); ``_cookie_map_from_jar``
+> preserves ``path`` on the way out of httpx (`auth.py:2644-2658`); and
+> ``build_httpx_cookies_from_storage`` loads all path variants into the
+> live jar. Two storage entries that share ``(name, domain)`` at distinct
+> paths survive a load → save round trip as independent rows.
 
-Multiple paths in `auth.py` key cookies by `(name, domain)` and drop
-`path`:
+Section retained for historical context so triage of older bug reports
+makes sense. Current state of each former collapse site:
 
-| Site | Effect |
-|---|---|
-| `extract_cookies_with_domains` (`auth.py:786`) | Two storage_state entries with same name+domain but different paths → first one wins, second silently dropped |
-| `_cookie_map_from_jar` (`auth.py:1227`) | Same collapse on the way out of httpx |
-| `cookies_by_key` in `save_cookies_to_storage` (`auth.py:997`) | Same collapse on save |
+| Site | Identity key today | Notes |
+|---|---|---|
+| `extract_cookies_with_domains` (`auth.py:1531-1566`) | `(name, domain, path)` | Path-aware since #369; per-path entries survive extraction. |
+| `_cookie_map_from_jar` (`auth.py:2644-2658`) | `(name, domain, path)` | Path-aware on the way out of httpx. |
+| `cookies_by_key` in `save_cookies_to_storage` (`auth.py:1995-2010`) | `(name, domain, path)` | Merge keyed by full triple; previously-shadowed variants are now refreshed independently. |
+| `AuthTokens.cookies`, `AuthTokens.cookie_header` (public API) | `(name, domain)` — intentionally lossy | Public return types cannot represent ``path`` without breaking compat. Compatibility surfaces, not the persistence-merge hot path. |
 
 RFC 6265 treats `path` as part of cookie identity. If Google ever
 path-scopes a rotation target — `OSID` for a per-product path is the
-likely candidate, since it's already per-product — we silently keep
-one variant and lose the rest. Empirically not a hot bug today, but a
-trip-wire for future protocol changes.
+likely candidate, since it's already per-product — the persistence-
+merge hot path now keeps each variant on its own identity key, so the
+"first variant wins, others silently shadowed" failure mode is closed.
+The lossy public-API surfaces still flatten on the way out, but a
+caller that hits one of them and round-trips the result back through
+the save path will still keep on-disk per-path rows distinct (the save
+machinery rebuilds keys from the in-memory httpx jar, which preserves
+``path``).
 
-Worse: the iteration order of `cookies_by_key`'s dict-comprehension
-over `cookie_jar.jar` is **not specified by `http.cookiejar`** —
-which variant survives the collapse depends on insertion order, which
-depends on the order Google sent its `Set-Cookie` headers in the
-response. So the bug is not just "we drop a variant" but "we
-non-deterministically drop a variant", which makes failures hard to
-reproduce.
+Worst-case framing of the historical bug, retained because the
+diagnostic pattern in §3.4.8 still points at it: the iteration order
+of the pre-#369 `cookies_by_key` dict-comprehension over
+`cookie_jar.jar` was **not specified by `http.cookiejar`** — which
+variant survived the collapse depended on insertion order, which
+depended on the order Google sent its `Set-Cookie` headers. The bug
+was not just "we lose a variant" but "we non-deterministically lose a
+variant", which made historical failures hard to reproduce. The
+current path-aware code path eliminates the non-determinism by keying
+on the full triple.
 
 #### 3.4.3 Sibling Google products in the cookie allowlist
 
@@ -1602,3 +1696,22 @@ Things we don't know that would inform future iterations:
   anything — relevant to triaging the hour-scale-survival pattern in
   Gemini-API [#203](https://github.com/HanaokaYuzu/Gemini-API/issues/203)
   and similar reports.
+- **2026-05-14** — Documentation remediation pass (T8 in the
+  `documentation-fix` plan). Added `**Last Updated:**` header. New
+  §2.6 *Domain tiering: REQUIRED vs OPTIONAL cookie domains* documents
+  the T5.G ([#483](https://github.com/teng-lin/notebooklm-py/pull/483))
+  split between `REQUIRED_COOKIE_DOMAINS` (always extracted) and
+  `OPTIONAL_COOKIE_DOMAINS_BY_LABEL` (opt-in via
+  `--include-domains=<label>`), with the data-minimization /
+  blast-radius rationale for why the split is enforced at extraction
+  time rather than at the runtime allow-list. Rewrote §3.4.2 to
+  reflect end-to-end path-awareness of the persistence-merge hot path
+  ([#369](https://github.com/teng-lin/notebooklm-py/pull/369)
+  follow-up to #361) — `CookieKey`, `extract_cookies_with_domains`,
+  `_cookie_map_from_jar`, and the `cookies_by_key` merge in
+  `save_cookies_to_storage` all key on `(name, domain, path)` now, so
+  the historical "`(name, domain)` collapse drops `path`" claim was
+  removed. The lossy public-API surfaces (`AuthTokens.cookies`,
+  `AuthTokens.cookie_header`) are called out explicitly as
+  compatibility-bound, not load-bearing for persistence. Verified both
+  Google Workspace admin URLs (§3.3, §10) still resolve.
