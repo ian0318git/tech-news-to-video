@@ -375,8 +375,6 @@ def test_python_guard_repo_allowlist_is_explicit_basename_list() -> None:
         "artifacts_revise_slide.yaml",
         "chat_ask.yaml",
         "chat_ask_with_references.yaml",
-        "sharing_get_status.yaml",
-        "sharing_set_public.yaml",
         "sources_add_file.yaml",
         "sources_add_drive.yaml",
         "sources_check_freshness_drive.yaml",

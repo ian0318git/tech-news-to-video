@@ -81,8 +81,6 @@ AUDIT_REPAIR_LIST: dict[str, str] = {
     "chat_ask_with_references.yaml": (
         "Phase 2 T8.B2 will fix (C3: stale chat-ask shape / shape drift)"
     ),
-    "sharing_get_status.yaml": ("Phase 2 T8.B3 will fix (C4: escaped display-name in WRB payload)"),
-    "sharing_set_public.yaml": ("Phase 2 T8.B3 will fix (C4: escaped display-name in WRB payload)"),
     "sources_add_file.yaml": ("Phase 2 T8.B4 will fix (I17: upload tokens unscrubbed)"),
     "sources_add_drive.yaml": ("Phase 2 T8.B5 will fix (I17: Drive AONS tokens unscrubbed)"),
     "sources_check_freshness_drive.yaml": (
