@@ -7,7 +7,14 @@ from urllib.parse import parse_qs
 import pytest
 
 from notebooklm import NotebookLMClient
-from notebooklm._research import ResearchAPI
+from notebooklm._research import (
+    ResearchAPI,
+    _extract_query_text,
+    _extract_sources_and_summary,
+    _extract_status_code,
+    _extract_task_id,
+    _extract_task_info,
+)
 from notebooklm.auth import AuthTokens
 from notebooklm.rpc import RPCMethod
 
@@ -201,6 +208,142 @@ class TestExtractLegacyReportChunks:
             ResearchAPI._extract_legacy_report_chunks([None, "t", None, 5, None, None, ["", None]])
             == ""
         )
+
+
+class TestExtractTaskId:
+    """Tests for ``_extract_task_id`` helper."""
+
+    def test_happy_path(self):
+        assert _extract_task_id(["task_abc", ["info"]]) == "task_abc"
+
+    def test_empty_list_drift_returns_none(self, caplog):
+        with caplog.at_level(logging.WARNING):
+            assert _extract_task_id([]) is None
+        assert "safe_index drift" in caplog.text
+
+    def test_non_string_id_drift_returns_none(self, caplog):
+        with caplog.at_level(logging.WARNING):
+            assert _extract_task_id([42, ["info"]]) is None
+        assert "task_data[0] is not a string" in caplog.text
+
+    def test_non_list_input_returns_none(self, caplog):
+        with caplog.at_level(logging.WARNING):
+            assert _extract_task_id(None) is None
+
+
+class TestExtractTaskInfo:
+    """Tests for ``_extract_task_info`` helper."""
+
+    def test_happy_path(self):
+        info = [None, ["q"], None, [[]], 2]
+        assert _extract_task_info(["task_id", info]) is info
+
+    def test_missing_index_returns_none(self, caplog):
+        with caplog.at_level(logging.WARNING):
+            assert _extract_task_info(["only_id"]) is None
+        assert "safe_index drift" in caplog.text
+
+    def test_non_list_value_returns_none(self, caplog):
+        with caplog.at_level(logging.WARNING):
+            assert _extract_task_info(["task_id", "not_a_list"]) is None
+        assert "task_data[1] is not a list" in caplog.text
+
+
+class TestExtractQueryText:
+    """Tests for ``_extract_query_text`` helper."""
+
+    def test_happy_path(self):
+        task_info = [None, ["quantum computing", "extra"], None, [], 1]
+        assert _extract_query_text(task_info) == "quantum computing"
+
+    def test_missing_query_info_returns_none(self, caplog):
+        with caplog.at_level(logging.WARNING):
+            # task_info[1] missing entirely
+            assert _extract_query_text([None]) is None
+        assert "safe_index drift" in caplog.text
+
+    def test_non_string_query_returns_none(self, caplog):
+        with caplog.at_level(logging.WARNING):
+            assert _extract_query_text([None, [123], None, [], 1]) is None
+        assert "task_info[1][0] is not a string" in caplog.text
+
+
+class TestExtractStatusCode:
+    """Tests for ``_extract_status_code`` helper."""
+
+    def test_happy_path_in_progress(self):
+        assert _extract_status_code([None, ["q"], None, [], 1]) == 1
+
+    def test_happy_path_completed(self):
+        assert _extract_status_code([None, ["q"], None, [], 2]) == 2
+
+    def test_happy_path_deep_completed(self):
+        assert _extract_status_code([None, ["q"], None, [], 6]) == 6
+
+    def test_missing_index_returns_none(self, caplog):
+        with caplog.at_level(logging.WARNING):
+            assert _extract_status_code([None, ["q"], None, []]) is None
+        assert "safe_index drift" in caplog.text
+
+    def test_non_int_returns_none(self, caplog):
+        with caplog.at_level(logging.WARNING):
+            assert _extract_status_code([None, ["q"], None, [], "completed"]) is None
+        assert "task_info[4] is not an int" in caplog.text
+
+    def test_bool_rejected(self, caplog):
+        with caplog.at_level(logging.WARNING):
+            assert _extract_status_code([None, ["q"], None, [], True]) is None
+        assert "task_info[4] is bool" in caplog.text
+
+
+class TestExtractSourcesAndSummary:
+    """Tests for ``_extract_sources_and_summary`` helper."""
+
+    def test_happy_path_with_summary(self):
+        task_info = [
+            None,
+            ["q"],
+            None,
+            [[["https://example.com", "Example"]], "Summary text"],
+            2,
+        ]
+        sources, summary = _extract_sources_and_summary(task_info)
+        assert sources == [["https://example.com", "Example"]]
+        assert summary == "Summary text"
+
+    def test_happy_path_sources_only(self):
+        task_info = [None, ["q"], None, [[["url", "title"]]], 2]
+        sources, summary = _extract_sources_and_summary(task_info)
+        assert sources == [["url", "title"]]
+        assert summary is None
+
+    def test_missing_bundle_returns_empty(self, caplog):
+        with caplog.at_level(logging.WARNING):
+            sources, summary = _extract_sources_and_summary([None, ["q"], None])
+        assert sources == []
+        assert summary is None
+        assert "safe_index drift" in caplog.text
+
+    def test_empty_bundle_returns_empty(self):
+        sources, summary = _extract_sources_and_summary([None, ["q"], None, [], 2])
+        assert sources == []
+        assert summary is None
+
+    def test_non_list_bundle_drift(self, caplog):
+        with caplog.at_level(logging.WARNING):
+            sources, summary = _extract_sources_and_summary([None, ["q"], None, "drift", 2])
+        assert sources == []
+        assert summary is None
+        assert "task_info[3] is not a list" in caplog.text
+
+    def test_non_list_sources_slot_drift(self, caplog):
+        with caplog.at_level(logging.WARNING):
+            sources, summary = _extract_sources_and_summary(
+                [None, ["q"], None, ["not_a_list", "Summary"], 2]
+            )
+        assert sources == []
+        assert summary == "Summary"
+        assert "task_info[3][0] is not a list" in caplog.text
 
 
 class TestResearch:
