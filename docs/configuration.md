@@ -1,7 +1,7 @@
 # Configuration
 
 **Status:** Active
-**Last Updated:** 2026-01-20
+**Last Updated:** 2026-05-14
 
 This guide covers storage locations, environment settings, and configuration options for `notebooklm-py`.
 
@@ -11,7 +11,7 @@ All data is stored under `~/.notebooklm/` by default, organized by profile:
 
 ```
 ~/.notebooklm/
-├── active_profile        # Tracks the current profile name
+├── config.json           # Global config: default_profile, language
 ├── profiles/
 │   ├── default/          # Default profile (auto-created)
 │   │   ├── storage_state.json    # Authentication cookies and session
@@ -25,7 +25,12 @@ All data is stored under `~/.notebooklm/` by default, organized by profile:
 │       └── ...
 ```
 
-**Legacy layout:** If upgrading from a pre-profile version, the first run auto-migrates flat files into `profiles/default/`. The legacy flat layout continues to work as a fallback.
+`config.json` stores process-wide settings — the persisted default profile
+name (under the `default_profile` key) and the configured interface language
+(`language`). It is **global, not per-profile** (see
+`src/notebooklm/paths.py` and `src/notebooklm/cli/language.py`).
+
+**Legacy layout:** If upgrading from a pre-profile version, the first run auto-migrates flat files into `profiles/default/`. The migration runs under a single-writer `filelock` rooted at `~/.notebooklm/.migration.lock`, so concurrent CLI invocations (e.g., container start-up races) cannot interleave copies — the loser of the lock re-checks the completion marker and no-ops (see `src/notebooklm/migration.py`). The legacy flat layout continues to work as a fallback.
 
 You can relocate all files by setting `NOTEBOOKLM_HOME`:
 
@@ -71,16 +76,29 @@ notebooklm --storage /path/to/storage_state.json list
 
 ### Context File (`context.json`)
 
-Stores the current CLI context (active notebook and conversation):
+Stores the current CLI context (active notebook plus optional metadata)
+and the multi-account routing payload used by `auth`:
 
 ```json
 {
   "notebook_id": "abc123def456",
-  "conversation_id": "conv789"
+  "title": "Quarterly review notes",
+  "is_owner": true,
+  "created_at": "2026-05-01T17:43:21Z",
+  "account": {
+    "authuser": 0,
+    "email": "you@example.com"
+  }
 }
 ```
 
-This file is managed automatically by `notebooklm use` and `notebooklm clear`.
+Field summary:
+
+- `notebook_id` — currently selected notebook, written by `notebooklm use` and read by every command that takes `-n/--notebook`.
+- `title`, `is_owner`, `created_at` — optional notebook metadata captured at selection time so `status` / display commands don't need an extra round-trip. Omitted when the CLI didn't have the values to write (see `src/notebooklm/cli/helpers.py:623-651`).
+- `account` — preserved across `notebooklm use` / `notebooklm clear` (only `notebooklm auth logout` removes it). Records `authuser` (Google account index, default `0`) and optional `email` so the client routes batchexecute requests to the same account that minted the cookies (see `src/notebooklm/auth.py:1168-1283`).
+
+This file is managed automatically by `notebooklm use`, `notebooklm clear`, and the `auth` commands.
 
 ### Browser Profile (`browser_profile/`)
 
@@ -99,10 +117,15 @@ A persistent Chromium user data directory used during `notebooklm login`.
 | `NOTEBOOKLM_AUTH_JSON` | Inline authentication JSON (for CI/CD) | - |
 | `NOTEBOOKLM_NOTEBOOK` | Default notebook ID for commands without `-n/--notebook` | - |
 | `NOTEBOOKLM_HL` | Default interface/output language code (e.g. `en`, `ja`, `zh_Hans`) | `en` |
+| `NOTEBOOKLM_BASE_URL` | NotebookLM base URL. Constrained to `https://notebooklm.google.com` (personal) or `https://notebooklm.cloud.google.com` (enterprise) | `https://notebooklm.google.com` |
+| `NOTEBOOKLM_BL` | `bl` (build label) URL parameter for the chat streaming endpoint; override when chasing a regression tied to a specific frontend build snapshot | built-in default in `_env.DEFAULT_BL` |
 | `NOTEBOOKLM_LOG_LEVEL` | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR` | `WARNING` |
 | `NOTEBOOKLM_DEBUG_RPC` | Legacy: Enable RPC debug logging (use `LOG_LEVEL=DEBUG` instead) | `false` |
+| `NOTEBOOKLM_DEBUG` | Show untruncated RPC response bodies in error messages instead of the default 80-char preview (verbose; intended for deep debugging) | `0` |
 | `NOTEBOOKLM_STRICT_DECODE` | Raise `UnknownRPCMethodError` on schema drift instead of warn-and-fallback | `0` |
-| `NOTEBOOKLM_RPC_OVERRIDES` | Comma-separated `KEY=ID` pairs that override entries in `rpc/types.py` (community self-patch when Google rotates a method ID) | - |
+| `NOTEBOOKLM_RPC_OVERRIDES` | JSON object mapping `RPCMethod` enum names to RPC ID strings (community self-patch when Google rotates a method ID; e.g. `{"LIST_NOTEBOOKS":"AbC123"}`) | - |
+| `NOTEBOOKLM_REFRESH_CMD_USE_SHELL` | Opt the `NOTEBOOKLM_REFRESH_CMD` subprocess back into `shell=True` execution. Default `shell=False` (argv list) — set to `1`/`true` only when the refresh command requires shell metacharacters | `0` |
+| `NOTEBOOKLM_DISABLE_KEEPALIVE_POKE` | Disable the proactive `accounts.google.com/RotateCookies` poke that refreshes `__Secure-1PSIDTS` ahead of expiry | `0` |
 | `NOTEBOOKLM_QUIET_DEPRECATIONS` | Suppress stderr deprecation notices for deprecated CLI flags | - |
 
 ### Env vars and precedence
@@ -115,16 +138,21 @@ be audited from one location.
 
 | Variable | Purpose | Resolution order (highest → lowest) | Resolved by |
 |----------|---------|-------------------------------------|-------------|
-| `NOTEBOOKLM_PROFILE` | Active profile name. Selects which `~/.notebooklm/profiles/<name>/` directory backs storage and context. | `-p/--profile` flag → `NOTEBOOKLM_PROFILE` → persisted `active_profile` → `default` | `paths.set_active_profile` / `paths.get_active_profile` |
+| `NOTEBOOKLM_PROFILE` | Active profile name. Selects which `~/.notebooklm/profiles/<name>/` directory backs storage and context. | `-p/--profile` flag → `NOTEBOOKLM_PROFILE` → `default_profile` from `~/.notebooklm/config.json` → `default` | `paths.resolve_profile` |
 | `NOTEBOOKLM_AUTH_JSON` | Inline `storage_state.json` payload for CI/CD; bypasses on-disk profile storage entirely. | `--storage` flag → `NOTEBOOKLM_AUTH_JSON` → profile-aware `storage_state.json` → legacy fallback | `auth.load_auth_from_storage` |
 | `NOTEBOOKLM_HOME` | Base directory for all per-profile files. | `NOTEBOOKLM_HOME` → `~/.notebooklm` | `paths.get_home_dir` |
-| `NOTEBOOKLM_HL` | Default interface/output language for `generate <kind>` and the `hl` query parameter on every batchexecute RPC. | `--language` flag → `NOTEBOOKLM_HL` → profile config `language` → `en` | `language.resolve_hl` |
+| `NOTEBOOKLM_HL` | Default interface/output language for `generate <kind>` and the `hl` query parameter on every batchexecute RPC. | `--language` flag → `NOTEBOOKLM_HL` → `language` value from **global** `~/.notebooklm/config.json` (NOT per-profile) → `en` | `language.resolve_hl` |
 | `NOTEBOOKLM_LOG_LEVEL` | `DEBUG`/`INFO`/`WARNING`/`ERROR` floor for the `notebooklm` package logger. | `--quiet` flag (forces `ERROR`) → `-v/-vv` flags (force `INFO`/`DEBUG`) → `NOTEBOOKLM_DEBUG_RPC=1` (forces `DEBUG`) → `NOTEBOOKLM_LOG_LEVEL` → `WARNING` | `_logging.configure_logging` + `notebooklm_cli.cli` |
 | `NOTEBOOKLM_DEBUG_RPC` | Legacy alias that sets the package logger to `DEBUG`. Prefer `NOTEBOOKLM_LOG_LEVEL=DEBUG` for new code. | (See `NOTEBOOKLM_LOG_LEVEL`.) | `_logging.configure_logging` |
 | `NOTEBOOKLM_NOTEBOOK` | Default notebook ID when no `-n/--notebook` flag is passed. Composes with `notebooklm use <id>` so per-shell overrides do not clobber the persisted active-notebook context. | `-n/--notebook` flag → `NOTEBOOKLM_NOTEBOOK` → active context (from `notebooklm use`) → error | `cli.helpers.require_notebook` (Click also reads it natively via `cli/options.py:notebook_option`'s `envvar=`) |
-| `NOTEBOOKLM_RPC_OVERRIDES` | Comma-separated `KEY=ID` pairs that override entries in `notebooklm/rpc/types.py`. Community self-patch when Google rotates a method ID. Empty string / unset disables the mechanism. | Process env at import time only — no flag override. | `_env.load_rpc_overrides` |
+| `NOTEBOOKLM_RPC_OVERRIDES` | **JSON object** mapping `RPCMethod` enum names to RPC ID strings (e.g. `{"LIST_NOTEBOOKS": "AbC123"}`). Overrides entries in `notebooklm/rpc/types.py` — community self-patch when Google rotates a method ID. Empty string / unset disables the mechanism; invalid JSON or non-object payloads emit a `WARNING` and are ignored. | Process env, evaluated per RPC resolve (cached on the raw env string). | `rpc.types._parse_rpc_overrides` |
 | `NOTEBOOKLM_QUIET_DEPRECATIONS` | Suppress stderr deprecation notices for deprecated CLI flags (e.g. `source add --mime-type` on file sources). Library-level `DeprecationWarning`s are unaffected. | Set to `1` to suppress; any other value (or unset) leaves the notice enabled. | individual CLI commands; see `NOTEBOOKLM_QUIET_DEPRECATIONS` section below |
-| `NOTEBOOKLM_STRICT_DECODE` | Toggle the decoder's drift behavior — warn-and-fallback (`0`, default) vs raise `UnknownRPCMethodError` (`1`/`true`/`True`). | Process env on each decode call. | `rpc.decoder.safe_index` |
+| `NOTEBOOKLM_STRICT_DECODE` | Toggle the decoder's drift behavior — warn-and-fallback (`0`, default) vs raise `UnknownRPCMethodError` (`1`/`true`/`True`). | Process env on each decode call. | `_env.is_strict_decode_enabled` |
+| `NOTEBOOKLM_BASE_URL` | NotebookLM base URL. Constrained to `https://notebooklm.google.com` (personal) or `https://notebooklm.cloud.google.com` (enterprise); other schemes/hosts/paths raise `ValueError`. | Process env on every base-URL lookup. | `_env.get_base_url` |
+| `NOTEBOOKLM_BL` | `bl` (build label) URL parameter sent on the chat streaming endpoint (`ChatAPI.ask`). Pins the frontend build the request is attributed to. | Process env on every chat stream call; whitespace-only falls back to `_env.DEFAULT_BL`. | `_env.get_default_bl` |
+| `NOTEBOOKLM_DEBUG` | When `1`, RPC error messages include the **full** untruncated response body instead of the default 80-char preview. Verbose; intended for deep debugging only. | Process env on each error formatting call. | `exceptions._truncate_response_preview` |
+| `NOTEBOOKLM_REFRESH_CMD_USE_SHELL` | Opt the optional `NOTEBOOKLM_REFRESH_CMD` subprocess back into `shell=True`. Default `shell=False` parses the command with `shlex.split` and invokes it as an argv list (safer; resists shell-injection footguns when the env var is sourced from CI configs or container env files). | Process env on each refresh subprocess spawn. | `auth` refresh-spawn helper (see `auth.py:2482-2510`) |
+| `NOTEBOOKLM_DISABLE_KEEPALIVE_POKE` | When `1`, disable the proactive `accounts.google.com/RotateCookies` poke that refreshes `__Secure-1PSIDTS` ahead of expiry. Useful when running behind a proxy that rejects the extra request, or in offline test fixtures. | Process env on every keepalive check. | `auth` keepalive guards (see `auth.py:2899-2977`) |
 
 **Boolean handling.** `NOTEBOOKLM_DEBUG_RPC` and `NOTEBOOKLM_STRICT_DECODE`
 treat `1` / `true` / `yes` (case-insensitive) as truthy; everything else is
@@ -170,6 +198,12 @@ notebooklm list   # Uses ~/.notebooklm/profiles/work/
 
 Equivalent to passing `-p work` on every command. The CLI flag takes precedence over the env var.
 
+The **persisted default** is read from the `default_profile` key of
+`~/.notebooklm/config.json` (set via `notebooklm profile switch <name>`). When
+neither a `-p/--profile` flag nor `NOTEBOOKLM_PROFILE` is set, `paths.resolve_profile`
+falls back to this value (and finally to `"default"` if `config.json` doesn't
+exist or has no `default_profile` key).
+
 ### NOTEBOOKLM_AUTH_JSON
 
 Provides authentication inline without writing files. Ideal for CI/CD:
@@ -205,7 +239,12 @@ back to `en`. For the generate commands, the resolution order is:
 
 1. `--language` CLI flag
 2. `NOTEBOOKLM_HL` environment variable
-3. `language` value from the active profile's config
+3. `language` value from the **global** `~/.notebooklm/config.json` (set via
+   `notebooklm config language <code>`). The language is stored once per
+   `NOTEBOOKLM_HOME`, **not** per profile — switching `notebooklm -p work`
+   does not switch the configured language. See
+   `src/notebooklm/cli/language.py:111-151` for the resolver and
+   `src/notebooklm/paths.py:331-337` for the storage location.
 4. `en` (built-in default)
 
 ### NOTEBOOKLM_QUIET_DEPRECATIONS
@@ -228,6 +267,20 @@ warning text is silenced. Library-level `DeprecationWarning`s emitted from
 the Python API (e.g. `client.sources.add_file(..., mime_type=...)`) are
 **not** affected by this variable; use standard `warnings.filterwarnings`
 to manage those programmatically.
+
+### Timeouts
+
+Every batchexecute RPC issued by the client (whether through `NotebookLMClient`
+or any of the CLI commands) uses a **30-second** HTTP request timeout by
+default, with a tighter **10-second** connection-establishment timeout. The
+shorter connect timeout helps surface network-level issues quickly while the
+longer read timeout accommodates slow server responses. Both are exposed as
+constructor arguments on `NotebookLMClient` (`timeout=` and `connect_timeout=`)
+for callers that need to tune them per-workload — see
+`src/notebooklm/_core.py:55-57, 278-295`. The chat streaming endpoint
+(`ChatAPI.ask`) keeps its own longer per-stream deadlines because individual
+chat responses can exceed 30 seconds; refer to the Python API reference for
+its `timeout=` argument.
 
 ### Decoder strictness
 
@@ -346,12 +399,24 @@ notebooklm login
 notebooklm --storage /path/to/storage_state.json list
 ```
 
-When `--storage <path>` is set, notebook/conversation context is isolated to a
-sibling file `<path>.context.json` next to the storage file. This means two
-`--storage` invocations against different files cannot see each other's
-selected notebook, and neither pollutes the default profile context. Run
-`notebooklm --storage <path> status --paths` to see exactly which sibling
-context file is being used.
+When `--storage <path>` is set, **two different context files** are used —
+they are NOT the same file:
+
+- **Notebook / conversation context** lives at a *suffixed* file
+  `<path>.context.json` (`storage_path.with_suffix(storage_path.suffix + ".context.json")`,
+  see `paths.get_context_path`). Two `--storage` invocations against different
+  files cannot see each other's selected notebook, and neither pollutes the
+  default profile context.
+- **Account-routing metadata** (the `account` object — `authuser` index and
+  optional `email`) lives at a *sibling* file `context.json` next to the
+  storage file (`storage_path.with_name("context.json")`, see
+  `auth._account_context_path`). The split is deliberate: account metadata is
+  shared across CLI tooling that resolves the storage file by directory
+  (e.g., interactive `auth check`) while notebook context belongs to the
+  specific storage payload.
+
+Run `notebooklm --storage <path> status --paths` to see exactly which
+context file is being used for notebook selection.
 
 ## CI/CD Configuration
 
