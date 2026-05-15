@@ -30,6 +30,8 @@ if TYPE_CHECKING:
     from playwright.sync_api import BrowserContext, Page
     from rich.console import Console
 
+    from ..auth import Account
+
 from ..auth import (
     GOOGLE_REGIONAL_CCTLDS,
     OPTIONAL_COOKIE_DOMAINS_BY_LABEL,
@@ -180,13 +182,121 @@ def _handle_rookiepy_error(e: Exception, browser_name: str) -> None:
         console.print(f"[red]Failed to read cookies from {browser_name}:[/red] {e}")
 
 
+def _enumerate_one_jar(
+    raw_cookies: list[dict[str, Any]],
+    browser_name: str,
+    browser_profile: str | None,
+    *,
+    quiet: bool = False,
+) -> "list[Account]":
+    """Probe ``?authuser=N`` against one cookie set and return tagged Accounts.
+
+    Shared by both the legacy single-jar path and the chromium multi-profile
+    fan-out path. ``browser_profile`` annotates the resulting Accounts so the
+    fan-out caller can route writes back to the right source.
+
+    Args:
+        raw_cookies: rookiepy cookie dicts for one source.
+        browser_name: The browser the cookies came from (for error messages).
+        browser_profile: Tag attached to each Account (``"Default"``,
+            ``"Profile 1"``, ...) or ``None`` for the legacy single-jar path.
+        quiet: Suppress the loud multi-line user-facing error panels
+            (``"No valid Google authentication cookies"``, ``"Account
+            discovery failed: …stale"``) for "this profile is signed out"
+            cases and just raise ``SystemExit``. Used by the fan-out caller,
+            which prints its own per-profile soft note for signed-out /
+            stale-cookie profiles and would otherwise bleed those panels into
+            the table output. Network errors (``httpx.RequestError``) are
+            NOT downgraded — they propagate as-is so the caller can
+            distinguish transport failures from per-profile "signed out".
+
+    Raises:
+        SystemExit: On missing required cookies or stale-cookie rejection
+            by Google (Google redirected to the account chooser, etc.).
+            These are per-profile "signed out" conditions in fan-out mode
+            and are caught and skipped by the fan-out caller.
+        httpx.RequestError: On network transport failure. Re-raised
+            unchanged so the fan-out aborts (vs. silently downgrading every
+            offline profile to a soft skip).
+    """
+    from ..auth import (
+        Account,
+        build_cookie_jar,
+        enumerate_accounts,
+        extract_cookies_with_domains,
+    )
+
+    storage_state = convert_rookiepy_cookies_to_storage_state(raw_cookies)
+    try:
+        extract_cookies_from_storage(storage_state)
+    except ValueError as e:
+        if not quiet:
+            console.print(
+                "[red]No valid Google authentication cookies found.[/red]\n"
+                f"{e}\n\n"
+                "Make sure you are logged into Google in your browser."
+            )
+        raise SystemExit(1) from None
+
+    cookie_map = extract_cookies_with_domains(storage_state)
+    jar = build_cookie_jar(cookies=cookie_map)
+    try:
+        accounts = run_async(enumerate_accounts(jar))
+    except ValueError:
+        # Cookies are present but Google rejected them (passive sign-in
+        # redirected to the account chooser, or RotateCookies returned 401).
+        if not quiet:
+            console.print(
+                f"[red]Account discovery failed: {browser_name}'s saved cookies are "
+                f"too stale for Google to re-authenticate.[/red]\n\n"
+                "Refresh them by opening the browser and visiting a Google site "
+                "(e.g. https://notebooklm.google.com), then re-run this command.\n\n"
+                "If the browser is signed out, sign back in there first.\n"
+                "If you'd rather skip the browser entirely, use "
+                "[cyan]notebooklm login[/cyan] (Playwright flow)."
+            )
+        raise SystemExit(1) from None
+    except httpx.RequestError as e:
+        # Distinct from "signed out / stale" SystemExit branches above:
+        # a network failure means EVERY profile probe will fail the same
+        # way, so we must surface the transport error rather than let the
+        # fan-out caller collapse it into a soft per-profile skip.
+        if not quiet:
+            console.print(
+                f"[red]Account discovery failed (network error):[/red] {e}\n"
+                "Check your internet connection and try again."
+            )
+            raise SystemExit(1) from None
+        raise
+
+    if browser_profile is None:
+        return list(accounts)
+    return [
+        Account(
+            authuser=a.authuser,
+            email=a.email,
+            is_default=a.is_default,
+            browser_profile=browser_profile,
+        )
+        for a in accounts
+    ]
+
+
 def _enumerate_browser_accounts(
     browser_name: str,
     *,
     verbose: bool = True,
     include_domains: set[str] | None = None,
-) -> tuple[list[Any], list[Any]]:
+) -> "tuple[dict[str | None, list[dict[str, Any]]], list[Account]]":
     """Read cookies from ``browser_name`` and discover signed-in accounts.
+
+    For chromium-family browsers with multiple populated user-data profiles
+    (``Default`` plus ``Profile 1``, ``Profile 2``, …), fans out across every
+    profile and aggregates the discovered accounts, deduping by email.
+
+    For non-chromium browsers, single-profile chromium installs, and the
+    legacy path, falls back to a single rookiepy call — preserving every
+    existing test mock and runtime behavior.
 
     Args:
         browser_name: rookiepy browser alias.
@@ -197,60 +307,165 @@ def _enumerate_browser_accounts(
             :func:`_parse_include_domains`.
 
     Returns:
-        ``(raw_cookies, accounts)`` — the original rookiepy cookies and the
-        list of :class:`notebooklm.auth.Account` records discovered via
-        per-index ``?authuser=N`` probing.
+        ``(per_profile_cookies, accounts)``:
+
+        * ``per_profile_cookies`` — dict keyed by :attr:`Account.browser_profile`
+          (e.g. ``"Default"``, ``"Profile 1"``) mapping to the raw rookiepy
+          cookies that yielded that profile's accounts. The legacy / single-jar
+          path uses ``None`` as the key.
+        * ``accounts`` — :class:`notebooklm.auth.Account` records, each tagged
+          with the originating ``browser_profile``, deduped by email (first
+          occurrence wins; later duplicates are dropped with a warning).
 
     Raises:
         SystemExit: On rookiepy failure, missing required cookies, or
-            authuser=0 not returning a signed-in account.
+            ``authuser=0`` not returning a signed-in account from every probed
+            profile.
     """
-    from ..auth import (
-        build_cookie_jar,
-        enumerate_accounts,
-        extract_cookies_with_domains,
-    )
+    from ._chromium_profiles import discover_chromium_profiles, is_chromium_browser
+
+    # Chromium multi-profile fan-out — only kicks in when discovery surfaces
+    # >1 populated profile. Single-profile installs and non-chromium browsers
+    # take the legacy path below so all existing rookiepy mocks keep working.
+    if is_chromium_browser(browser_name):
+        profiles = discover_chromium_profiles(browser_name)
+        if len(profiles) > 1:
+            return _enumerate_chromium_profiles_fanout(
+                browser_name,
+                profiles,
+                verbose=verbose,
+                include_domains=include_domains,
+            )
 
     raw_cookies = _read_browser_cookies(
         browser_name, verbose=verbose, include_domains=include_domains
     )
-    storage_state = convert_rookiepy_cookies_to_storage_state(raw_cookies)
-    try:
-        extract_cookies_from_storage(storage_state)
-    except ValueError as e:
-        console.print(
-            "[red]No valid Google authentication cookies found.[/red]\n"
-            f"{e}\n\n"
-            "Make sure you are logged into Google in your browser."
-        )
-        raise SystemExit(1) from None
+    accounts = _enumerate_one_jar(raw_cookies, browser_name, browser_profile=None)
+    return {None: raw_cookies}, accounts
 
-    cookie_map = extract_cookies_with_domains(storage_state)
-    jar = build_cookie_jar(cookies=cookie_map)
-    try:
-        accounts = run_async(enumerate_accounts(jar))
-    except ValueError:
-        # Cookies are present but Google rejected them (passive sign-in
-        # redirected to the account chooser, or RotateCookies returned 401).
-        # The on-disk cookie store the browser persists is too stale for
-        # Google to refresh server-side. User has to refresh it themselves.
+
+def _enumerate_chromium_profiles_fanout(
+    browser_name: str,
+    profiles: list[Any],
+    *,
+    verbose: bool,
+    include_domains: set[str] | None,
+) -> "tuple[dict[str | None, list[dict[str, Any]]], list[Account]]":
+    """Fan out account discovery across multiple Chromium user-data profiles.
+
+    Reads cookies from each profile's own ``Cookies`` SQLite DB and probes
+    ``?authuser=N`` per profile. Aggregates accounts across profiles and
+    dedupes by email (first occurrence wins — typically ``Default``, then
+    ``Profile 1``, ``Profile 2``, … in numeric order; duplicates are dropped
+    with a console warning so the user can investigate).
+    """
+    from ._chromium_profiles import read_chromium_profile_cookies
+
+    domains = _build_google_cookie_domains(include_domains=include_domains)
+
+    if verbose:
+        names = ", ".join(f"'{p.human_name}'" for p in profiles)
         console.print(
-            f"[red]Account discovery failed: {browser_name}'s saved cookies are "
-            f"too stale for Google to re-authenticate.[/red]\n\n"
-            "Refresh them by opening the browser and visiting a Google site "
-            "(e.g. https://notebooklm.google.com), then re-run this command.\n\n"
-            "If the browser is signed out, sign back in there first.\n"
-            "If you'd rather skip the browser entirely, use "
-            "[cyan]notebooklm login[/cyan] (Playwright flow)."
+            f"[yellow]Reading cookies from {len(profiles)} {browser_name} "
+            f"user-profiles: {names}[/yellow]"
         )
-        raise SystemExit(1) from None
-    except httpx.RequestError as e:
+
+    from ..auth import Account
+
+    per_profile_cookies: dict[str | None, list[dict[str, Any]]] = {}
+    seen_emails: dict[str, str] = {}  # email -> winning browser_profile
+    aggregated: list[Account] = []
+    global_default_assigned = False
+
+    for profile in profiles:
+        try:
+            raw = read_chromium_profile_cookies(profile, domains=domains)
+        except ImportError:
+            # rookiepy isn't installed — same friendly message the legacy
+            # single-jar path prints (``_read_browser_cookies``). Abort fan-out
+            # since every profile would fail the same way.
+            console.print(
+                "[red]rookiepy is not installed.[/red]\n"
+                "Install it with:\n"
+                "  pip install 'notebooklm-py[cookies]'\n"
+                "or directly:\n"
+                "  pip install rookiepy"
+            )
+            raise SystemExit(1) from None
+        except (OSError, RuntimeError) as e:
+            # One profile failing (e.g. a locked DB) shouldn't kill discovery
+            # of the others. Surface a per-profile note and continue.
+            if verbose:
+                console.print(
+                    f"  [yellow]skipping {browser_name} profile "
+                    f"'{profile.human_name}': {e}[/yellow]"
+                )
+            continue
+
+        try:
+            accounts = _enumerate_one_jar(
+                raw,
+                browser_name,
+                browser_profile=profile.directory_name,
+                quiet=True,
+            )
+        except SystemExit:
+            # ``_enumerate_one_jar`` exits the CLI on a stale-jar / missing-cookies
+            # failure, but in fan-out mode an individual profile being signed
+            # out is normal. Catch and continue.
+            if verbose:
+                console.print(
+                    f"  [dim]no signed-in Google accounts in '{profile.human_name}'[/dim]"
+                )
+            continue
+        except httpx.RequestError as e:
+            # Network failure — every subsequent profile probe will hit the
+            # same error, so abort the entire fan-out rather than collapse
+            # the transport failure into per-profile "signed out" skips.
+            console.print(
+                f"[red]Account discovery failed (network error):[/red] {e}\n"
+                "Check your internet connection and try again."
+            )
+            raise SystemExit(1) from None
+
+        per_profile_cookies[profile.directory_name] = raw
+        for account in accounts:
+            if account.email in seen_emails:
+                if verbose:
+                    console.print(
+                        f"  [yellow]warning: {account.email} also appears in "
+                        f"'{profile.human_name}'; using cookies from "
+                        f"'{seen_emails[account.email]}'[/yellow]"
+                    )
+                continue
+            seen_emails[account.email] = profile.directory_name
+            # ``is_default`` from ``_enumerate_one_jar`` is the per-jar
+            # authuser=0 marker — every Chromium user-profile has its own.
+            # For a unified cross-profile view, only the FIRST profile's
+            # default carries the global default flag (typically Default's
+            # primary Google account, matching what the user sees when they
+            # open Chrome without explicitly picking a different profile).
+            is_default = account.is_default and not global_default_assigned
+            if is_default:
+                global_default_assigned = True
+            aggregated.append(
+                Account(
+                    authuser=account.authuser,
+                    email=account.email,
+                    is_default=is_default,
+                    browser_profile=account.browser_profile,
+                )
+            )
+
+    if not aggregated:
         console.print(
-            f"[red]Account discovery failed (network error):[/red] {e}\n"
-            "Check your internet connection and try again."
+            f"[red]No signed-in Google accounts found across {len(profiles)} "
+            f"{browser_name} user-profiles.[/red]\n"
+            "Sign in to a Google account in your browser and try again."
         )
-        raise SystemExit(1) from None
-    return raw_cookies, accounts
+        raise SystemExit(1)
+
+    return per_profile_cookies, aggregated
 
 
 def _login_browser_cookies_single(
@@ -287,7 +502,7 @@ def _login_browser_cookies_single(
 
     # Path 2: targeted extraction. We need the email to derive a profile name
     # when --profile-name is omitted.
-    raw_cookies, accounts = _enumerate_browser_accounts(
+    per_profile_cookies, accounts = _enumerate_browser_accounts(
         browser_cookies, include_domains=include_domains
     )
     selected = _select_account(accounts, account_email=account_email)
@@ -299,7 +514,7 @@ def _login_browser_cookies_single(
     target_storage = explicit_storage or get_storage_path(profile=target_profile)
 
     _write_extracted_cookies(
-        raw_cookies,
+        per_profile_cookies[selected.browser_profile],
         storage_path=target_storage,
         profile=target_profile if not explicit_storage else active_profile,
         authuser=selected.authuser,
@@ -343,7 +558,7 @@ def _login_all_accounts_from_browser(
     """Extract every signed-in Google account into its own profile."""
     from ..paths import list_profiles
 
-    raw_cookies, accounts = _enumerate_browser_accounts(
+    per_profile_cookies, accounts = _enumerate_browser_accounts(
         browser_cookies, include_domains=include_domains
     )
     if not accounts:
@@ -370,7 +585,7 @@ def _login_all_accounts_from_browser(
 
         target_storage = get_storage_path(profile=target_profile)
         _write_extracted_cookies(
-            raw_cookies,
+            per_profile_cookies[account.browser_profile],
             storage_path=target_storage,
             profile=target_profile,
             authuser=account.authuser,
@@ -515,7 +730,7 @@ def _refresh_from_browser_cookies(
     include_domains: set[str] | None = None,
 ) -> None:
     """Refresh the active profile from browser cookies, repairing account drift."""
-    raw_cookies, accounts = _enumerate_browser_accounts(
+    per_profile_cookies, accounts = _enumerate_browser_accounts(
         browser_name, verbose=not quiet, include_domains=include_domains
     )
     if not accounts:
@@ -525,7 +740,7 @@ def _refresh_from_browser_cookies(
     metadata = read_account_metadata(storage_path)
     selected = _select_refresh_account(accounts, metadata, browser_name)
     _write_extracted_cookies(
-        raw_cookies,
+        per_profile_cookies[selected.browser_profile],
         storage_path=storage_path,
         profile=profile,
         authuser=selected.authuser,
@@ -1955,16 +2170,34 @@ def register_session_commands(cli):
         ),
     )
     @click.option("--json", "json_output", is_flag=True, help="Output as JSON")
-    def auth_inspect(browser_name, include_domains_raw, json_output):
+    @click.option(
+        "-v",
+        "--verbose",
+        "verbose",
+        is_flag=True,
+        default=False,
+        help=(
+            "Also show which browser user-profile each account's cookies came "
+            "from. Useful for Chromium-family browsers with multiple "
+            "user-profiles."
+        ),
+    )
+    def auth_inspect(browser_name, include_domains_raw, json_output, verbose):
         """List Google accounts visible to a browser's cookie store.
 
         Read-only — never writes to disk. Use this before
         ``notebooklm login --browser-cookies <browser> --account <email>`` to
         see which account emails are available.
 
+        For Chromium-family browsers (chrome, brave, edge, …) with multiple
+        user-profiles, accounts from every populated profile are surfaced and
+        deduped by email. Pass ``-v`` to see the originating user-profile per
+        account, or ``--json`` for a structured ``browser_profile`` field.
+
         \b
         Examples:
           notebooklm auth inspect --browser chrome
+          notebooklm auth inspect --browser chrome -v
           notebooklm auth inspect --browser firefox --json
         """
         include_domains = _parse_include_domains(include_domains_raw)
@@ -1975,30 +2208,44 @@ def register_session_commands(cli):
             json_output_response(
                 {
                     "browser": browser_name,
-                    "accounts": [{"email": a.email, "is_default": a.is_default} for a in accounts],
+                    "accounts": [
+                        {
+                            "email": a.email,
+                            "is_default": a.is_default,
+                            "browser_profile": a.browser_profile,
+                        }
+                        for a in accounts
+                    ],
                 }
             )
             return
         console.print(f"\n[bold]Browser:[/bold] {browser_name}")
         console.print(f"[bold]Found {len(accounts)} signed-in Google account(s):[/bold]\n")
+        show_browser_profile = verbose and any(a.browser_profile for a in accounts)
         table = Table(show_header=True, header_style="bold")
         table.add_column("email")
+        if show_browser_profile:
+            table.add_column(f"{browser_name} user")
         table.add_column("default", justify="center")
         for a in accounts:
-            table.add_row(
-                a.email,
-                "[green]✓[/green]" if a.is_default else "",
-            )
+            row = [a.email]
+            if show_browser_profile:
+                row.append(a.browser_profile or "")
+            row.append("[green]✓[/green]" if a.is_default else "")
+            table.add_row(*row)
         console.print(table)
-        console.print(
-            "\n[dim]Note: --browser-cookies <browser> reads cookies from the "
-            "browser's default user-data profile only. Accounts in other "
-            "browser profiles will not appear here.[/dim]\n"
-            "Pick one with: [cyan]notebooklm login --browser-cookies "
+        hint = (
+            f"Pick one with: [cyan]notebooklm login --browser-cookies "
             f"{browser_name} --account EMAIL[/cyan]\n"
-            "Or extract them all: [cyan]notebooklm login --browser-cookies "
+            f"Or extract them all: [cyan]notebooklm login --browser-cookies "
             f"{browser_name} --all-accounts[/cyan]"
         )
+        if not verbose and any(a.browser_profile for a in accounts):
+            hint = (
+                "[dim]Pass -v to see which browser user-profile each account "
+                "came from.[/dim]\n" + hint
+            )
+        console.print("\n" + hint)
 
     @auth_group.command("check")
     @click.option(

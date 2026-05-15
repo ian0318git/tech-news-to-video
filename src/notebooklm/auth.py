@@ -1012,11 +1012,17 @@ class Account:
         email: The account's email address as it appears in the NotebookLM
             page's ``WIZ_global_data`` block.
         is_default: True only for the account at ``authuser=0``.
+        browser_profile: For Chromium-family browsers with multiple
+            user-data profiles, the on-disk directory name (``"Default"``,
+            ``"Profile 1"``) the cookies came from. ``None`` for non-chromium
+            browsers and for the legacy single-jar path where source isn't
+            tracked.
     """
 
     authuser: int
     email: str
     is_default: bool
+    browser_profile: str | None = None
 
 
 # Hard cap on how many ``authuser`` indices to probe before giving up.
