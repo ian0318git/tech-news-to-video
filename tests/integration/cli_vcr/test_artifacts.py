@@ -45,7 +45,7 @@ class TestArtifactListByType:
             ("infographic", "artifacts_list_infographics.yaml"),
             ("slide-deck", "artifacts_list_slide_decks.yaml"),
             ("data-table", "artifacts_list_data_tables.yaml"),
-            ("mind-map", "artifacts_list_audio.yaml"),  # Uses audio cassette as fallback
+            ("mind-map", "notes_list_mind_maps.yaml"),
         ],
     )
     def test_artifact_list_by_type(

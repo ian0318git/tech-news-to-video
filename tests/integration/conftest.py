@@ -76,7 +76,7 @@ _T8_A1_XFAIL_NODEIDS = frozenset(
         "tests/integration/cli_vcr/test_artifacts.py::TestArtifactListByType::test_artifact_list_by_type[infographic-artifacts_list_infographics.yaml]",
         "tests/integration/cli_vcr/test_artifacts.py::TestArtifactListByType::test_artifact_list_by_type[slide-deck-artifacts_list_slide_decks.yaml]",
         "tests/integration/cli_vcr/test_artifacts.py::TestArtifactListByType::test_artifact_list_by_type[data-table-artifacts_list_data_tables.yaml]",
-        "tests/integration/cli_vcr/test_artifacts.py::TestArtifactListByType::test_artifact_list_by_type[mind-map-artifacts_list_audio.yaml]",
+        "tests/integration/cli_vcr/test_artifacts.py::TestArtifactListByType::test_artifact_list_by_type[mind-map-notes_list_mind_maps.yaml]",
         "tests/integration/cli_vcr/test_artifacts.py::TestArtifactSuggestionsCommand::test_artifact_suggestions",
         # test_chat.py
         "tests/integration/cli_vcr/test_chat.py::TestAskCommand::test_ask_question",
