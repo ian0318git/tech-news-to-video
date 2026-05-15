@@ -70,9 +70,12 @@ def _real_cassettes() -> list[Path]:
 # so the xfail message points reviewers at the eventual fix.
 #
 # This is the audit's explicit "needs re-recording" set (see phase-1 plan,
-# T8.A5a acceptance line 254). The much larger "67 cassettes with /ogw/"
-# set is detected dynamically — see `_xfail_reason` below — and mapped to
-# T8.B6 (bulk avatar re-scrub).
+# T8.A5a acceptance line 254). The "67 cassettes with /ogw/" dynamic set
+# that used to surface here was cleared in T8.B6: the bulk re-scrub script
+# in ``scripts/rescrub-cassettes.py`` collapsed every remaining avatar URL
+# to ``SCRUBBED_AVATAR_URL`` and re-derived the chunked byte-counts in the
+# same pass, so the dynamic ``/ogw/`` detector and its accompanying xfail
+# branch are now dead code — both were removed.
 AUDIT_REPAIR_LIST: dict[str, str] = {
     # artifacts_revise_slide.yaml was repaired in T8.B1 (this PR) — the
     # cassette was re-recorded against the live REVISE_SLIDE RPC so f.req
@@ -89,26 +92,10 @@ AUDIT_REPAIR_LIST: dict[str, str] = {
     # in T8.B7 — the I-misc origin-IP leak was in illustrative VCR examples,
     # not real NotebookLM cassettes. The example tests in test_vcr_example.py
     # that used them were also removed in the same PR.
+    # The 61 ``/ogw/`` avatar URL cassettes were bulk re-scrubbed in T8.B6 —
+    # the dynamic detector / xfail branch that used to live here was removed
+    # in the same PR.
 }
-
-
-def _has_ogw_avatar(cassette: Path) -> bool:
-    """Return True if the cassette contains an ``/ogw/`` avatar URL leak.
-
-    The audit identified 67 cassettes carrying these legacy avatar URLs;
-    T8.B6 bulk re-scrubs them in phase 2. Detecting dynamically (rather
-    than maintaining a hard-coded list of 67) means cassettes don't need
-    this file touched when T8.B6 lands — the moment an /ogw/ URL is gone
-    the xfail goes away.
-    """
-    try:
-        # Explicit UTF-8 — cassettes routinely carry emoji bytes in
-        # notebook/artifact titles. Default Python text mode uses the
-        # platform encoding (cp1252 on Windows), which can't decode the
-        # 4-byte UTF-8 emoji sequences.
-        return "/ogw/" in cassette.read_text(encoding="utf-8")
-    except OSError:
-        return False
 
 
 def _has_bytecount_drift(cassette: Path) -> bool:
@@ -458,20 +445,20 @@ def _xfail_reason(cassette: Path) -> str | None:
     """Return the xfail reason for a cassette in the audit's repair set, else None.
 
     Resolution order (most specific first):
-      1. Explicit AUDIT_REPAIR_LIST — the 10 cassettes the audit named.
-      2. /ogw/ avatar URL present — the 67 cassettes T8.B6 will bulk-rescrub.
-      3. Byte-count drift present — audit class I9, fixed by T8.D7.
+      1. Explicit AUDIT_REPAIR_LIST — the cassettes the audit named.
+      2. Byte-count drift present — audit class I9, fixed by T8.D7.
 
     Each branch returns a different reason so phase-2 PRs can identify
     which xfail markers their work should clear.
+
+    The ``/ogw/`` avatar URL branch that used to sit between (1) and (2)
+    was removed in T8.B6 — the bulk re-scrub script in
+    ``scripts/rescrub-cassettes.py`` collapsed every remaining avatar URL
+    and re-derived the affected chunk byte-counts in a single pass, so
+    no real cassette can satisfy the old detector anymore.
     """
     if cassette.name in AUDIT_REPAIR_LIST:
         return AUDIT_REPAIR_LIST[cassette.name]
-    if _has_ogw_avatar(cassette):
-        return (
-            "Phase 2 T8.B6 will fix (audit I18: /ogw/ avatar URL "
-            "unscrubbed; bulk re-scrub recomputes byte counts via T8.D7)"
-        )
     if _has_bytecount_drift(cassette):
         return (
             "Phase 2 T8.D7 will fix (audit I9: chunked byte-count "
