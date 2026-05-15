@@ -57,10 +57,7 @@ class TestGetConversationTurnsCommand:
       2. khqZz (GET_CONVERSATION_TURNS) → returns Q&A turns for that conversation
     """
 
-    @notebooklm_vcr.use_cassette(
-        "chat_get_conversation_turns.yaml",
-        match_on=["method", "scheme", "host", "port", "path", "rpcids"],
-    )
+    @notebooklm_vcr.use_cassette("chat_get_conversation_turns.yaml")
     def test_history_shows_qa_previews(self, runner, mock_auth_for_vcr, mock_context):
         """history command shows Q&A preview columns populated from khqZz turns API."""
         # Use the full UUID directly so resolve_notebook_id skips LIST_NOTEBOOKS

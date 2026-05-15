@@ -262,9 +262,10 @@ notebooklm_vcr = vcr.VCR(
     cassette_library_dir="tests/cassettes",
     # Record mode: 'none' = only replay (CI), 'new_episodes' = record if missing
     record_mode=_record_mode,
-    # Match requests by method and path, NOT query params (contain session IDs).
-    # For cassettes with multiple POSTs to the same path, add "rpcids" per-cassette.
-    match_on=["method", "scheme", "host", "port", "path"],
+    # Match requests by method and path, including rpcids for batchexecute.
+    # All batchexecute POSTs share the same URL path; rpcids disambiguates them
+    # deterministically (closes C1: replay-order fragility on Windows CI).
+    match_on=["method", "scheme", "host", "port", "path", "rpcids"],
     # Scrub sensitive data before recording
     before_record_request=scrub_request,
     before_record_response=scrub_response,
