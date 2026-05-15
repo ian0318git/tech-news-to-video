@@ -1,7 +1,7 @@
 # CLI Reference
 
 **Status:** Active
-**Last Updated:** 2026-05-15
+**Last Updated:** 2026-05-15 (T5 Part B)
 
 Complete command reference for the `notebooklm` CLI—providing full programmatic access to all NotebookLM features, including capabilities not exposed in the web UI.
 
@@ -338,7 +338,7 @@ Authenticate with Google NotebookLM via browser.
 notebooklm login [OPTIONS]
 ```
 
-By default, opens a Chromium browser with a persistent profile. Log in to your Google account, then press Enter in the terminal to save the session. Use `--browser msedge` for Microsoft Edge, or `--browser-cookies <browser>` to import cookies from an already-logged-in browser without launching Playwright.
+By default, opens a Chromium browser with a persistent profile. Complete the Google login in the browser window — the CLI detects the redirect back to `notebooklm.google.com` and saves the session automatically (no terminal keystroke required). The wait window is 5 minutes; if login is not detected before then, the command exits with a retry hint. Use `--browser msedge` for Microsoft Edge, or `--browser-cookies <browser>` to import cookies from an already-logged-in browser without launching Playwright.
 
 **Options:**
 - `--storage PATH` - Where to save storage_state.json (default: `$NOTEBOOKLM_HOME/profiles/<profile>/storage_state.json`)
@@ -998,6 +998,60 @@ notebooklm generate report --format briefing-doc --append "Focus on AI trends, k
 notebooklm generate report --prompt-file custom_report.txt
 ```
 
+### Artifact: `list`, `get`, `rename`, `delete`, `export`, `poll`, `wait`, `suggestions`
+
+Manage existing artifacts (audio, video, slide decks, quizzes, reports, etc.). Every subcommand resolves the notebook via the standard precedence (`-n/--notebook` flag > `NOTEBOOKLM_NOTEBOOK` env > active context).
+
+```bash
+notebooklm artifact <list|get|rename|delete|export|poll|wait|suggestions> [OPTIONS]
+```
+
+**Common options (all subcommands):**
+- `-n, --notebook ID` - Notebook ID (uses current if not set; supports partial IDs)
+
+**Per-subcommand options:**
+
+| Subcommand | Required arguments | Options |
+|---|---|---|
+| `list` | (none) | `--type [all\|audio\|video\|slide-deck\|quiz\|flashcard\|infographic\|data-table\|mind-map\|report]`, `--limit N` (default: unlimited), `--no-truncate`, `--json` |
+| `get` | `ARTIFACT_ID` | `--json` |
+| `rename` | `ARTIFACT_ID NEW_TITLE` | `--json` |
+| `delete` | `ARTIFACT_ID` | `-y/--yes` (skip confirmation), `--json` |
+| `export` | `ARTIFACT_ID` | `--title TEXT` (**required**), `--type [docs\|sheets]` (default: docs), `--json` |
+| `poll` | `TASK_ID` (from `generate <type>`) | `--json` |
+| `wait` | `ARTIFACT_ID` | `--timeout SECONDS` (default: 300), `--interval SECONDS` (default: 2), `--json` |
+| `suggestions` | (none) | `--json` |
+
+**Examples:**
+```bash
+# Filter artifact list to one notebook and one type, JSON for scripting
+notebooklm artifact list --notebook nb_abc --type audio --json
+
+# Inspect a single artifact (partial ID OK)
+notebooklm artifact get art123 --json
+
+# Rename an artifact
+notebooklm artifact rename art123 "Final cut"
+
+# Delete without prompting
+notebooklm artifact delete art123 -y --json
+
+# Export a report to Google Docs (title is required)
+notebooklm artifact export art123 --title "Climate briefing" --type docs
+
+# Poll a task immediately after a generate call returns
+notebooklm generate audio --json   # -> { "task_id": "task_abc...", "status": "..." }
+notebooklm artifact poll task_abc
+
+# Block until the artifact finishes (or 600s elapses)
+notebooklm artifact wait art123 --timeout 600 --json
+
+# Get AI-suggested report topics for the active notebook
+notebooklm artifact suggestions --json
+```
+
+> **`poll` vs `wait`:** The API returns one identifier that doubles as both `task_id` (right after `generate`) and `artifact_id` (once it appears in `artifact list`). `poll` is a one-shot status check that does not prefix-match against `artifact list` (use it immediately after `generate`); `wait` blocks until terminal status and accepts partial IDs that resolve against `artifact list`. See the quick-reference note above for full details.
+
 ### Download: `audio`, `video`, `slide-deck`, `infographic`, `report`, `mind-map`, `data-table`
 
 Download generated artifacts to your local machine.
@@ -1094,6 +1148,196 @@ notebooklm download flashcards --format markdown cards.md
 notebooklm download flashcards --format html cards.html
 ```
 
+### Note: `list`, `create`, `get`, `save`, `rename`, `delete`
+
+Read, create, and update notebook notes (the "Notes" panel in the web UI). Mind-map artifacts surface as notes in the underlying API but are filtered out of `note list` — use `artifact list --type mind-map` for those.
+
+```bash
+notebooklm note <list|create|get|save|rename|delete> [OPTIONS]
+```
+
+**Common options (all subcommands):**
+- `-n, --notebook ID` - Notebook ID (uses current if not set; supports partial IDs)
+- `--json` - Machine-readable output
+
+**Per-subcommand options:**
+
+| Subcommand | Required arguments | Type-specific options |
+|---|---|---|
+| `list` | (none) | — |
+| `create` | `[CONTENT]` (positional or stdin via `-`) | `--content TEXT` (or `-` for stdin; mutually exclusive with positional), `-t/--title TEXT` (default: `"New Note"`) |
+| `get` | `NOTE_ID` | — |
+| `save` | `NOTE_ID` | `--title TEXT`, `--content TEXT` |
+| `rename` | `NOTE_ID NEW_TITLE` | — |
+| `delete` | `NOTE_ID` | `-y/--yes` (skip confirmation) |
+
+**Examples:**
+```bash
+# List notes in the active notebook
+notebooklm note list --json
+
+# Create a titled note from a positional string
+notebooklm note create "Quick thought" -t "Idea: research follow-up"
+
+# Pipe markdown from a file or another command (use `-` to read stdin)
+cat draft.md | notebooklm note create -
+
+# Equivalent --content form
+cat draft.md | notebooklm note create --content -
+
+# Update an existing note (partial ID OK; only the fields you pass change)
+notebooklm note save note_abc --title "Updated title"
+notebooklm note save note_abc --content "New body"
+
+# Rename without touching content
+notebooklm note rename note_abc "Renamed"
+
+# Delete without prompting
+notebooklm note delete note_abc -y --json
+```
+
+### Profile: `list`, `create`, `switch`, `delete`, `rename`
+
+Manage named profiles under `$NOTEBOOKLM_HOME/profiles/<name>/`. Each profile owns its own `storage_state.json`, `context.json`, and browser profile, so multiple Google accounts can coexist. The active profile is selected by `-p/--profile`, `NOTEBOOKLM_PROFILE`, or the `default_profile` field in `$NOTEBOOKLM_HOME/config.json` (in that precedence). See [configuration.md](configuration.md) for the full profile model.
+
+```bash
+notebooklm profile <list|create|switch|delete|rename> [OPTIONS]
+```
+
+**Per-subcommand options:**
+
+| Subcommand | Required arguments | Options |
+|---|---|---|
+| `list` | (none) | `--json` |
+| `create` | `NAME` | — |
+| `switch` | `NAME` | — |
+| `delete` | `NAME` | `--confirm` (skip prompt; the active default profile cannot be deleted) |
+| `rename` | `OLD_NAME NEW_NAME` | — |
+
+**Examples:**
+```bash
+# Enumerate profiles (active flag included in JSON)
+notebooklm profile list --json
+
+# Create a profile shell, then authenticate into it
+notebooklm profile create work
+notebooklm -p work login
+
+# Make 'work' the default for subsequent commands
+notebooklm profile switch work
+
+# Rename a profile (does not change `storage_state.json` contents)
+notebooklm profile rename work work-old
+
+# Delete a non-active profile without prompting
+notebooklm profile delete old-account --confirm
+```
+
+> **Note:** `profile delete` refuses to remove the currently active default profile. Switch to a different profile first (`notebooklm profile switch <other>`) and then delete.
+
+### Skill: `install`, `status`, `uninstall`, `show`
+
+Manage the bundled NotebookLM agent-skill template. The skill lives in `SKILL.md` at the repository root; installing it materializes a copy under one of:
+- `.claude/skills/notebooklm/SKILL.md` (Claude Code, `--target claude`)
+- `.agents/skills/notebooklm/SKILL.md` (universal agent skill directory, `--target agents`)
+
+`--scope` selects whether to write into the **user's** home (`~/.claude/skills/...`, `~/.agents/skills/...`) or the **current project** (`./.claude/skills/...`, `./.agents/skills/...`).
+
+```bash
+notebooklm skill <install|status|uninstall|show> [OPTIONS]
+```
+
+**Options matrix** (defaults: `--scope user --target all`):
+
+| Subcommand | `--scope` choices | `--target` choices | Default `--target` |
+|---|---|---|---|
+| `install` | `user`, `project` | `all`, `claude`, `agents` | `all` |
+| `status` | `user`, `project` | `all`, `claude`, `agents` | `all` |
+| `uninstall` | `user`, `project` | `all`, `claude`, `agents` | `all` |
+| `show` | `user`, `project` | `source`, `claude`, `agents` | `source` |
+
+`skill show --target source` prints the packaged `SKILL.md` straight out of the wheel (the canonical content); the other `show` targets read the materialized copy from disk.
+
+**Examples:**
+```bash
+# Install both targets for the current user (default scope+target)
+notebooklm skill install
+
+# Install only the Claude Code target into the current project
+notebooklm skill install --scope project --target claude
+
+# Inspect what's installed in the user-scope agents directory
+notebooklm skill status --scope user --target agents
+
+# Print the packaged skill source (e.g. for piping into another agent's loader)
+notebooklm skill show --target source
+
+# Print the installed Claude target verbatim
+notebooklm skill show --scope project --target claude
+
+# Remove all installed targets from the current project
+notebooklm skill uninstall --scope project --target all
+```
+
+Codex does not consume the `skill` subcommand. In this repository it reads the root [`AGENTS.md`](../AGENTS.md) file and invokes the `notebooklm` CLI or Python API directly.
+
+### Source: `add-drive`
+
+Add a Google Drive document, slide deck, sheet, or PDF as a source. The Drive `--mime-type` is **live and functional** on this subcommand (unlike the deprecated file-source `--mime-type` documented above) — it tells the backend which Drive document type to import.
+
+```bash
+notebooklm source add-drive [OPTIONS] FILE_ID TITLE
+```
+
+**Options:**
+- `-n, --notebook ID` - Notebook ID (uses current if not set; supports partial IDs)
+- `--mime-type [google-doc|google-slides|google-sheets|pdf]` - Drive document type (default: `google-doc`)
+- `--json` - Output as JSON
+
+**Examples:**
+```bash
+# Default — treat the Drive file as a Google Doc
+notebooklm source add-drive 1AbcD...XyZ "Project Brief"
+
+# Import as Google Slides
+notebooklm source add-drive 1AbcD...XyZ "Quarterly Deck" --mime-type google-slides
+
+# Import a Drive-hosted PDF
+notebooklm source add-drive 1AbcD...XyZ "Whitepaper" --mime-type pdf --json
+```
+
+### Source: `stale`, `clean`
+
+`source stale` is a shell-friendly predicate that reports whether a URL/Drive source needs a refresh; `source clean` removes duplicate, error, or access-blocked sources in bulk.
+
+```bash
+notebooklm source stale [OPTIONS] SOURCE_ID
+notebooklm source clean [OPTIONS]
+```
+
+**`stale` exit codes (deliberately inverted from the rest of the CLI for shell control-flow use):**
+- `0` - source is stale (needs refresh)
+- `1` - source is fresh
+- See [CLI Exit-Code Convention](cli-exit-codes.md) for details; under `--json`, branch on the `stale` field instead of the exit code if the inversion is awkward.
+
+**`stale` options:** `-n/--notebook ID`, `--json`.
+
+**`clean` options:** `-n/--notebook ID`, `--dry-run` (preview the candidate set), `-y/--yes` (skip the confirmation prompt), `--json`.
+
+**Examples:**
+```bash
+# Refresh a single stale URL source if needed
+if notebooklm source stale src_abc; then
+  notebooklm source refresh src_abc
+fi
+
+# Preview what `clean` would remove
+notebooklm source clean --dry-run
+
+# Remove duplicates/errors/blocked sources without prompting
+notebooklm source clean -y --json
+```
+
 ---
 
 ## Common Workflows
@@ -1113,7 +1357,7 @@ notebooklm use abc123
 # 3. Add a starting source
 notebooklm source add "https://en.wikipedia.org/wiki/Climate_change"
 
-# 4. Research more sources automatically (blocking - waits up to 5 min)
+# 4. Research more sources automatically (blocking; --import-all retry budget defaults to 1800s)
 notebooklm source add-research "climate change policy 2024" --mode deep --import-all
 
 # 5. Generate a podcast
