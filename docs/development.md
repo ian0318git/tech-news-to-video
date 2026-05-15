@@ -280,12 +280,60 @@ uv run pytest tests/integration/
 
 # Run only CLI VCR tests
 uv run pytest tests/integration/cli_vcr/
-
-# Record new cassettes (sensitive data auto-scrubbed)
-NOTEBOOKLM_VCR_RECORD=1 uv run pytest tests/integration/test_vcr_*.py -v
 ```
 
 Sensitive data (cookies, tokens, emails) is automatically scrubbed from cassettes.
+
+### Cassette recording
+
+Maintainers re-record cassettes against the live API when an RPC payload
+shape changes. Recording is opt-in (`NOTEBOOKLM_VCR_RECORD=1`) and requires
+a valid `notebooklm login` session.
+
+Two notebook env vars steer which notebook the recording session targets.
+**Neither UUID is committed** — both are per-maintainer secrets (notebook IDs
+are linkable to a Google account):
+
+| Env var | Used by | Notebook role |
+|---------|---------|---------------|
+| `NOTEBOOKLM_READ_ONLY_NOTEBOOK_ID` | read-heavy cassettes (`list`, `download`, `get`) | A maintainer-owned notebook pre-populated with sources + artifacts. Tests only READ from it. |
+| `NOTEBOOKLM_GENERATION_NOTEBOOK_ID` | mutation/generation cassettes (`add source`, `generate`, `delete`) | A **separate** maintainer-owned notebook used only for destructive/generation flows, so the read-only notebook stays pristine. |
+
+#### One-time setup — generation notebook
+
+Run the setup script once per Google account that records cassettes:
+
+```bash
+uv run python tests/scripts/setup-generation-notebook.py
+```
+
+The script is idempotent: it reuses an existing notebook titled
+`VCR Generation Notebook (Tier 8)` if one already exists, otherwise creates it.
+It prints the notebook UUID and an `export` line. Copy the export line into
+your maintainer environment (e.g. `~/.zshrc` or a profile-specific `.env`
+file you do NOT commit):
+
+```bash
+export NOTEBOOKLM_GENERATION_NOTEBOOK_ID=<printed-uuid>
+```
+
+The script is a manual maintainer helper — CI never runs it.
+
+#### Recording a cassette
+
+```bash
+# Re-record (or record-new) cassettes; sensitive data auto-scrubbed
+NOTEBOOKLM_VCR_RECORD=1 uv run pytest tests/integration/test_vcr_*.py -v
+```
+
+The scrubbing pipeline (`tests/vcr_config.py`) redacts cookies, CSRF tokens,
+emails, and other sensitive patterns before the cassette hits disk. Verify
+the result with the cassette guard before committing:
+
+```bash
+# Current guard (a Python replacement is landing in the Tier 8 arc)
+tests/check_cassettes_clean.sh
+```
 
 ### E2E Fixtures
 
