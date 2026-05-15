@@ -531,7 +531,21 @@ class TestChatAPI:
 
     @pytest.mark.vcr
     @pytest.mark.asyncio
-    @notebooklm_vcr.use_cassette("chat_ask.yaml")
+    @pytest.mark.xfail(
+        reason="T8.B2 re-record: chat_ask.yaml predates the f.req body matcher "
+        "and carries a stale 5-param shape (C3). This xfail must be removed in "
+        "the same PR that re-records chat_ask.yaml against the freq matcher.",
+        strict=False,
+    )
+    @notebooklm_vcr.use_cassette(
+        "chat_ask.yaml",
+        # Opt this streaming-chat test in to the ``freq`` body matcher (T8.A2).
+        # The matcher decodes the form-encoded ``f.req`` payload so two
+        # otherwise-identical POSTs (same method/scheme/host/port/path) can be
+        # disambiguated by their param shape. ``freq`` is opt-in per-cassette
+        # because most endpoints do not send ``f.req``.
+        match_on=["method", "scheme", "host", "port", "path", "freq"],
+    )
     async def test_ask(self):
         """Ask a question."""
         async with vcr_client() as client:

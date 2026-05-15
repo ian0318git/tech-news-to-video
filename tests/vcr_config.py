@@ -30,6 +30,7 @@ When to use VCR vs pytest-httpx:
     - VCR.py: Recorded real responses for regression testing
 """
 
+import json
 import os
 import re
 from typing import Any
@@ -247,6 +248,103 @@ def _rpcids_matcher(r1, r2):
     assert qs1.get("rpcids") == qs2.get("rpcids")
 
 
+def _freq_body_matcher(r1: Any, r2: Any) -> bool:
+    """Match form-encoded streaming requests by their decoded ``f.req`` payload.
+
+    This matcher is for **non-batchexecute streaming endpoints** (notably the
+    streaming chat endpoint) that POST an ``application/x-www-form-urlencoded``
+    body carrying an ``f.req`` field whose value is itself a JSON-encoded
+    ``[null, "<inner_json>"]`` envelope. The inner JSON, once decoded, is a
+    list of positional parameters whose structure is endpoint-specific.
+
+    The default VCR matchers (``method``, ``scheme``, ``host``, ``port``,
+    ``path``) cannot distinguish two streaming-chat POSTs because they share
+    everything except the body. ``rpcids`` is a query-string concept and does
+    not apply to streaming endpoints, so a body-aware matcher is required.
+
+    Match rules:
+
+    1. Both requests must decode to a parseable ``f.req`` param list. If
+       neither body parses (e.g. this matcher was invoked for a non-streaming
+       request), return ``True`` so the other ``match_on`` matchers
+       (``method`` / ``path`` / etc.) drive the decision. If exactly one body
+       parses, return ``False`` — the two requests are structurally different.
+    2. **Param count** must match. A 9-param shape must not match a 5-param
+       shape (catches the C3 stale-cassette regression class).
+    3. **Notebook ID** at slot 7 (when the shape has at least 8 elements) must
+       match. Two requests differing only in notebook_id are distinct
+       interactions.
+
+    Match rules **deliberately ignored**:
+
+    - ``conversation_id`` (slot 4) — legitimately varies across replays. The
+       server assigns a fresh conversation_id on each unique ask, and the
+       client echoes it back on follow-ups; cassette replay would otherwise
+       break on every recording.
+    - Per-request nonces / counters at later slots — same rationale.
+
+    This matcher is **opt-in per cassette** (not added to the default
+    ``match_on`` list) because most endpoints do not send ``f.req`` and the
+    matcher would either no-op or — worse — collapse to identity equality on
+    every request.
+
+    Returns:
+        ``True`` if the two requests are considered the same interaction,
+        ``False`` otherwise.
+    """
+
+    def _extract_freq(request: Any) -> list[Any] | None:
+        body = request.body
+        if not body:
+            return None
+        if isinstance(body, bytes):
+            try:
+                body = body.decode("utf-8")
+            except UnicodeDecodeError:
+                return None
+
+        # Parse application/x-www-form-urlencoded
+        qs = parse_qs(body)
+        f_req_values = qs.get("f.req", [])
+        if not f_req_values:
+            return None
+        f_req = f_req_values[0]
+        if not f_req:
+            return None
+
+        try:
+            # f.req is the JSON envelope [null, "<inner_json>"].
+            outer = json.loads(f_req)
+            if not isinstance(outer, list) or len(outer) < 2:
+                return None
+            inner = outer[1]
+            if not isinstance(inner, str):
+                return None
+            params = json.loads(inner)
+            if not isinstance(params, list):
+                return None
+            return params
+        except (json.JSONDecodeError, TypeError, IndexError):
+            return None
+
+    p1 = _extract_freq(r1)
+    p2 = _extract_freq(r2)
+
+    # If neither side parses, defer to the other matchers (return True so this
+    # matcher doesn't block). If exactly one parses, the requests are
+    # structurally different — return False.
+    if p1 is None or p2 is None:
+        return p1 is None and p2 is None
+
+    # Rule 1: param count must agree (catches C3 stale-cassette regression).
+    if len(p1) != len(p2):
+        return False
+
+    # Rule 2: notebook_id at slot 7 must agree (when present). Two requests
+    # carrying different notebook_ids are distinct interactions.
+    return not (len(p1) >= 8 and p1[7] != p2[7])
+
+
 # =============================================================================
 # VCR Configuration
 # =============================================================================
@@ -281,3 +379,9 @@ notebooklm_vcr = vcr.VCR(
 
 # Register custom matcher for rpcids-based request differentiation
 notebooklm_vcr.register_matcher("rpcids", _rpcids_matcher)
+# Opt-in matcher for streaming endpoints whose disambiguator lives in the
+# form-encoded ``f.req`` body rather than the query string (e.g. streaming
+# chat). Tests that need it add ``"freq"`` to a per-cassette ``match_on``
+# override; it is intentionally NOT in the default list because most endpoints
+# do not send ``f.req``.
+notebooklm_vcr.register_matcher("freq", _freq_body_matcher)
