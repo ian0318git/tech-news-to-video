@@ -74,9 +74,10 @@ def _real_cassettes() -> list[Path]:
 # set is detected dynamically — see `_xfail_reason` below — and mapped to
 # T8.B6 (bulk avatar re-scrub).
 AUDIT_REPAIR_LIST: dict[str, str] = {
-    "artifacts_revise_slide.yaml": (
-        "Phase 2 T8.B1 will fix (C2: f.req=SCRUBBED destroyed payload)"
-    ),
+    # artifacts_revise_slide.yaml was repaired in T8.B1 (this PR) — the
+    # cassette was re-recorded against the live REVISE_SLIDE RPC so f.req
+    # carries the real urlencoded JSON payload again (only sensitive scalars
+    # scrubbed inside, not the whole body collapsed to ``"SCRUBBED"``).
     # chat_ask.yaml + chat_ask_with_references.yaml were repaired in T8.B2 —
     # re-recorded against the current 9-param streaming-chat builder
     # (src/notebooklm/_chat.py:459-469) with the ``freq`` body matcher

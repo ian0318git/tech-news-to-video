@@ -87,7 +87,8 @@ _T8_A1_XFAIL_NODEIDS = frozenset(
         "tests/integration/cli_vcr/test_generate.py::TestGenerateCommands::test_generate[flashcards-artifacts_generate_flashcards.yaml-extra_args1]",
         "tests/integration/cli_vcr/test_generate.py::TestGenerateCommands::test_generate[report-artifacts_generate_report.yaml-extra_args2]",
         "tests/integration/cli_vcr/test_generate.py::TestGenerateCommands::test_generate[report-artifacts_generate_study_guide.yaml-extra_args3]",
-        "tests/integration/cli_vcr/test_generate.py::TestGenerateCommands::test_revise_slide",
+        # ``test_revise_slide`` was repaired in T8.B1 — cassette re-recorded
+        # against the live REVISE_SLIDE RPC.
         # test_notebooks.py
         "tests/integration/cli_vcr/test_notebooks.py::TestSummaryCommand::test_summary",
         # test_notes.py

@@ -36,14 +36,18 @@
 example_batchexecute_pattern.yaml
 example_scrubbed_cookies.yaml
 
-# --- spec-explicit entries (1 total; also in the /ogw/ group) ------------
-# ``sources_add_file.yaml`` was removed in T8.B4 (I17 upload tokens re-scrub,
-# /ogw/ avatar URLs collapsed in the same pass).
-# ``chat_ask.yaml`` + ``chat_ask_with_references.yaml`` were removed in T8.B2
-# — both were re-recorded against the current 9-param streaming-chat builder
-# (src/notebooklm/_chat.py:459-469) so they no longer need the allowlist
-# escape hatch.
-artifacts_revise_slide.yaml
+# --- spec-explicit entries (none remaining) -------------------------------
+# All spec-explicit phase-2 cassettes have been repaired or removed:
+# - ``artifacts_revise_slide.yaml`` — re-recorded in T8.B1 against the live
+#   REVISE_SLIDE RPC; f.req is real urlencoded JSON now.
+# - ``chat_ask.yaml`` + ``chat_ask_with_references.yaml`` — re-recorded in
+#   T8.B2 against the current 9-param streaming-chat builder.
+# - ``sharing_get_status.yaml`` + ``sharing_set_public.yaml`` — re-scrubbed
+#   in T8.B3 for escaped display names + avatar URLs.
+# - ``sources_add_file.yaml`` — re-scrubbed in T8.B4 for upload tokens.
+# - ``sources_add_drive.yaml`` + ``sources_check_freshness_drive.yaml`` —
+#   re-scrubbed in T8.B5 for Drive tokens.
+# - ``example_httpbin_*.yaml`` — deleted in T8.B7 (illustrative fixtures).
 
 # --- /ogw/ avatar URL group (61 entries; no spec-explicit cassettes overlap
 # with this group anymore — sources_add_file was repaired in T8.B4 and
