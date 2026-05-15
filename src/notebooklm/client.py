@@ -167,6 +167,24 @@ class NotebookLMClient:
         if storage_path is not None and auth.storage_path != storage_path:
             auth = dataclasses.replace(auth, storage_path=storage_path)
 
+        # Canonicalize the keepalive storage path so different representations
+        # of the same physical file (relative vs absolute, ``~`` shorthand,
+        # symlink components) hash to the same key in the in-process rotation
+        # dedupe (``_get_poke_lock`` / ``_try_claim_rotation`` /
+        # ``_rotation_lock_path`` in auth.py). The auth refresh path already
+        # canonicalizes at ``auth.py:_fetch_tokens_with_refresh`` via
+        # ``Path(p).expanduser().resolve()``; this mirrors it so two clients
+        # pointing at the same file via different path syntaxes share one
+        # ``_LAST_POKE_ATTEMPT_MONOTONIC`` entry instead of bypassing dedupe
+        # and firing duplicate ``RotateCookies`` POSTs (audit §29 / T7.G6).
+        # NOTE: the public ``storage_path`` argument and ``auth.storage_path``
+        # are intentionally left as the caller provided them — only the
+        # internal-derived ``ClientCore._keepalive_storage_path`` is
+        # canonicalized.
+        keepalive_storage_path: Path | None = auth.storage_path
+        if keepalive_storage_path is not None:
+            keepalive_storage_path = Path(keepalive_storage_path).expanduser().resolve()
+
         # Pass refresh_auth as callback for automatic retry on auth failures
         # Note: refresh_auth calls update_auth_headers internally
         self._core = ClientCore(
@@ -175,7 +193,7 @@ class NotebookLMClient:
             refresh_callback=self.refresh_auth,
             keepalive=keepalive,
             keepalive_min_interval=keepalive_min_interval,
-            keepalive_storage_path=auth.storage_path,
+            keepalive_storage_path=keepalive_storage_path,
             rate_limit_max_retries=rate_limit_max_retries,
             server_error_max_retries=server_error_max_retries,
             limits=limits,
