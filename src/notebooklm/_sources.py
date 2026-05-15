@@ -1598,9 +1598,18 @@ class SourcesAPI:
             # (legacy direct-call), we open here as a one-off helper whose
             # ``with`` closes the locally-opened FD when the generator ends.
             async def file_stream():
+                # T7.D2 / audit §22: chunk reads are synchronous file I/O.
+                # On slow storage (network FS, encrypted home, large PDFs
+                # served from a cold cache) a bare ``f.read(65536)`` from
+                # an ``async`` context stalls the entire event loop for
+                # the duration of each chunk read. Wrap each read with
+                # ``asyncio.to_thread`` so the blocking syscall runs on
+                # the default thread executor and sibling tasks (auth
+                # refresh, heartbeats, the cancellation watchdog above)
+                # keep making progress while bytes stream in.
                 if path_fallback is not None:
                     with open(path_fallback, "rb") as f:
-                        while chunk := f.read(65536):  # 64KB chunks
+                        while chunk := await asyncio.to_thread(f.read, 65536):  # 64KB chunks
                             yield chunk
                     return
                 # FD path: caller transferred ownership to this helper; we
@@ -1609,7 +1618,7 @@ class SourcesAPI:
                 # background task can still read from it under post-finalize
                 # cancel.
                 assert not isinstance(file_obj, Path)  # narrowed by branch above
-                while chunk := file_obj.read(65536):  # 64KB chunks
+                while chunk := await asyncio.to_thread(file_obj.read, 65536):  # 64KB chunks
                     yield chunk
 
             # `finalize_started` flips after the local ``httpx.AsyncClient``
