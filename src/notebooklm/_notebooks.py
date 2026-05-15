@@ -25,6 +25,98 @@ def build_create_notebook_params(title: str) -> list[Any]:
     return [title, None, None, [2], [1]]
 
 
+def _extract_summary(outer: Any) -> str:
+    """Extract the summary string from a SUMMARIZE ``result[0]`` payload.
+
+    The expected shape is ``[[summary_string, ...], ...]`` — i.e. the summary
+    lives at ``outer[0][0]``. ``safe_index`` is used for the inner-most
+    descent so drift is logged with method_id + source rather than raising
+    ``IndexError`` from a raw subscript.
+
+    Returns:
+        The summary string, or ``""`` when the payload is missing the
+        expected slot (the caller is responsible for treating an empty
+        summary as "no description available").
+    """
+    summary_val = safe_index(
+        outer,
+        0,
+        0,
+        method_id=RPCMethod.SUMMARIZE.value,
+        source="_notebooks._extract_summary",
+    )
+    if summary_val is None:
+        return ""
+    return str(summary_val)
+
+
+def _extract_suggested_topics(outer: Any) -> list[SuggestedTopic]:
+    """Extract suggested topics from a SUMMARIZE ``result[0]`` payload.
+
+    The expected shape is ``[..., [[[question, prompt, ...], ...], ...], ...]``
+    — the topics list lives at ``outer[1][0]``, and each topic is itself a
+    list whose first two entries are ``question`` and ``prompt``.
+
+    The outer ``[1]`` slot is treated as routinely-optional (a notebook with
+    no topics legitimately omits it, so missing-slot is not "drift"); the
+    inner ``[0]`` descent goes through ``safe_index`` so genuine schema
+    drift surfaces with method_id + source. Per-topic shape checks log a
+    debug diagnostic and skip malformed entries rather than abort, because
+    a partial response (some valid topics + some drift) is more useful to
+    callers than an empty list.
+
+    Returns:
+        List of :class:`SuggestedTopic`. Empty when the payload omits the
+        slot or when every topic entry fails shape validation.
+    """
+    # outer[1] is routinely absent/empty when a notebook has no topics;
+    # use a plain guard rather than safe_index so that case doesn't log
+    # a drift warning on every healthy "no topics" response. Still log
+    # a DEBUG record so partial descriptions remain observable to anyone
+    # tailing logs while diagnosing a notebook with missing topics.
+    if not isinstance(outer, list) or len(outer) < 2:
+        logger.debug("_extract_suggested_topics: Partial description — no outer[1] slot")
+        return []
+
+    topics_container = outer[1]
+    if not isinstance(topics_container, list) or len(topics_container) == 0:
+        logger.debug(
+            "_extract_suggested_topics: Partial description — outer[1] is empty or non-list"
+        )
+        return []
+
+    topics_list = safe_index(
+        topics_container,
+        0,
+        method_id=RPCMethod.SUMMARIZE.value,
+        source="_notebooks._extract_suggested_topics",
+    )
+    if not isinstance(topics_list, list):
+        if topics_list is not None:
+            logger.debug(
+                "_extract_suggested_topics: expected list at outer[1][0], got %s",
+                type(topics_list).__name__,
+            )
+        return []
+
+    topics: list[SuggestedTopic] = []
+    for index, topic in enumerate(topics_list):
+        if not isinstance(topic, list) or len(topic) < 2:
+            logger.debug(
+                "_extract_suggested_topics: skipping malformed topic at index %d (type=%s)",
+                index,
+                type(topic).__name__,
+            )
+            continue
+        topics.append(
+            SuggestedTopic(
+                question=str(topic[0]) if topic[0] else "",
+                prompt=str(topic[1]) if topic[1] else "",
+            )
+        )
+    return topics
+
+
 class NotebooksAPI:
     """Operations on NotebookLM notebooks.
 
@@ -355,33 +447,14 @@ class NotebooksAPI:
         suggested_topics: list[SuggestedTopic] = []
 
         # Response structure: [[[summary_string], [[topics]], ...]]
-        # Summary is at result[0][0][0], topics at result[0][1][0]
-        if result and isinstance(result, list):
-            try:
-                outer = result[0]
-
-                # Summary at outer[0][0]
-                summary_val = outer[0][0]
-                summary = str(summary_val) if summary_val else ""
-
-                # Suggested topics at outer[1][0]
-                topics_list = outer[1][0]
-                if isinstance(topics_list, list):
-                    for topic in topics_list:
-                        if isinstance(topic, list) and len(topic) >= 2:
-                            suggested_topics.append(
-                                SuggestedTopic(
-                                    question=str(topic[0]) if topic[0] else "",
-                                    prompt=str(topic[1]) if topic[1] else "",
-                                )
-                            )
-            except (IndexError, TypeError) as e:
-                # A partial result (e.g. summary but no topics) is possible.
-                logger.debug(
-                    "Partial description for notebook %s (no topics?): %s",
-                    notebook_id,
-                    e,
-                )
+        # Summary is at result[0][0][0], topics at result[0][1][0].
+        # The outer descent and per-slot extraction live in named helpers
+        # (`_extract_summary` / `_extract_suggested_topics`) so the deep
+        # index access stays auditable when Google's shape drifts.
+        if result and isinstance(result, list) and len(result) > 0:
+            outer = result[0]
+            summary = _extract_summary(outer)
+            suggested_topics = _extract_suggested_topics(outer)
 
         return NotebookDescription(summary=summary, suggested_topics=suggested_topics)
 
