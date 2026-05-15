@@ -1,7 +1,7 @@
 # Python API Reference
 
 **Status:** Active
-**Last Updated:** 2026-05-11
+**Last Updated:** 2026-05-15
 
 Complete reference for the `notebooklm` Python library.
 
@@ -119,10 +119,15 @@ import json
 import os
 import rookiepy
 from notebooklm import NotebookLMClient
-from notebooklm.auth import convert_rookiepy_cookies_to_storage_state
+from notebooklm.auth import (
+    REQUIRED_COOKIE_DOMAINS,
+    convert_rookiepy_cookies_to_storage_state,
+)
 
-# Pull Google cookies from Chrome (or .firefox(), .edge(), .safari(), .load() for auto-detect)
-raw = rookiepy.chrome(domains=[".google.com", "notebooklm.google.com"])
+# Pull Google cookies from Chrome (or .firefox(), .edge(), .safari(), .load() for auto-detect).
+# REQUIRED_COOKIE_DOMAINS mirrors the CLI's extraction set so rotation, media
+# downloads, and Drive flows all have the cookies they need.
+raw = rookiepy.chrome(domains=list(REQUIRED_COOKIE_DOMAINS))
 storage_state = convert_rookiepy_cookies_to_storage_state(raw)
 
 # Persist for future runs; restrict to owner-only on POSIX since this file holds auth cookies
@@ -136,7 +141,26 @@ async with await NotebookLMClient.from_storage(storage_path) as client:
     notebooks = await client.notebooks.list()
 ```
 
-The helper converts the cookie list returned by `rookiepy` into the storage-state format `NotebookLMClient.from_storage()` expects — the actual cookie extraction (and Google-account selection) happens in the `rookiepy.<browser>(...)` call. As a result, the storage state reflects whichever Google account is currently active in the source browser on `google.com` / `notebooklm.google.com`. The CLI equivalent is `notebooklm login --browser-cookies <browser>`.
+`convert_rookiepy_cookies_to_storage_state(rookiepy_cookies)` converts the
+cookie list returned by `rookiepy` into the storage-state format
+`NotebookLMClient.from_storage()` expects:
+
+- **Key remap:** `http_only` → `httpOnly`, `expires=None` →
+  `expires=-1` (Playwright's session-cookie convention), `sameSite="None"`.
+- **Filtering:** cookies missing `name`/`value`/`domain`, or from domains
+  outside the auth allowlist (regional Google ccTLDs + `REQUIRED_COOKIE_DOMAINS`
+  ∪ `OPTIONAL_COOKIE_DOMAINS`), are silently skipped.
+- **Return:** `{"cookies": [...], "origins": []}` — drop straight into
+  `storage_state.json`.
+
+Cookie extraction (and Google-account selection) happens in the
+`rookiepy.<browser>(...)` call: the storage state reflects whichever Google
+account is currently active in the source browser. To pick up cookies for
+optional surfaces (YouTube, Docs, MyAccount, Mail), extend the rookiepy
+`domains=` argument with `OPTIONAL_COOKIE_DOMAINS` (or a label-specific
+subset via `OPTIONAL_COOKIE_DOMAINS_BY_LABEL`) — both imported from
+`notebooklm.auth` alongside `REQUIRED_COOKIE_DOMAINS`. The CLI equivalent
+is `notebooklm login --browser-cookies <browser> [--include-domains youtube,docs,...]`.
 
 **Environment Variable Support:**
 
@@ -232,6 +256,9 @@ class NotebookLMClient:
         profile: str | None = None,
         keepalive: float | None = None,
         keepalive_min_interval: float = 60.0,
+        rate_limit_max_retries: int = 0,
+        server_error_max_retries: int = 3,
+        limits: ConnectionLimits | None = None,
     ) -> "NotebookLMClient"
 
     def __init__(
@@ -239,6 +266,9 @@ class NotebookLMClient:
         storage_path: Path | None = None,
         keepalive: float | None = None,
         keepalive_min_interval: float = 60.0,
+        rate_limit_max_retries: int = 0,
+        server_error_max_retries: int = 3,
+        limits: ConnectionLimits | None = None,
     )
 
     async def refresh_auth(self) -> AuthTokens
@@ -252,6 +282,35 @@ by default (`keepalive=None`). Values below `keepalive_min_interval` (default
 `60.0`) are clamped up to that floor. See [Cookie freshness for long-running
 / unattended use](troubleshooting.md#cookie-freshness-for-long-running--unattended-use)
 for the full layered story.
+
+**Retry behavior:** the client retries transient failures transparently.
+
+- `server_error_max_retries` (default `3`) retries HTTP 5xx and network-layer
+  `httpx.RequestError` (timeouts, connect errors) with exponential backoff
+  capped at 30 seconds (`min(2 ** attempt, 30)`, plus ±20% jitter to
+  desynchronize concurrent retries). Set to `0` to disable.
+- `rate_limit_max_retries` (default `0`) retries HTTP 429 responses when the
+  `Retry-After` header is parseable. The default of `0` preserves the
+  pre-Phase-3 contract of raising `RateLimitError` immediately so callers
+  can implement their own back-off policy; bump to a positive value to opt
+  into automatic retry.
+- `limits` accepts a `ConnectionLimits` dataclass to tune the underlying
+  `httpx` connection pool. The default (`ConnectionLimits()`) sets
+  `max_connections=100`, `max_keepalive_connections=50`,
+  `keepalive_expiry=30.0` — sized for typical batchexecute fan-out. Widen
+  for heavy concurrent workloads such as FastAPI/Django services that share
+  one client across many requests.
+
+```python
+from notebooklm import ConnectionLimits, NotebookLMClient
+
+# Allow up to 3 retries on rate limits, widen the pool for a heavy worker
+async with await NotebookLMClient.from_storage(
+    rate_limit_max_retries=3,
+    limits=ConnectionLimits(max_connections=200, max_keepalive_connections=100),
+) as client:
+    ...
+```
 
 ---
 
@@ -317,14 +376,17 @@ print(url)
 | `get(notebook_id, source_id)` | `str, str` | `Source \| None` | Get source details (returns None if not found) |
 | `get_fulltext(notebook_id, source_id, *, output_format="text")` | `str, str, *, output_format: Literal["text", "markdown"]` | `SourceFulltext` | Get full content; `"markdown"` requires the optional `markdownify` extra |
 | `get_guide(notebook_id, source_id)` | `str, str` | `dict` | Get AI-generated summary and keywords |
-| `add_url(notebook_id, url)` | `str, str` | `Source` | Add URL source (autodetects YouTube URLs and routes them appropriately) |
-| `add_text(notebook_id, title, content)` | `str, str, str` | `Source` | Add text content |
-| `add_file(notebook_id, path, mime_type=None)` | `str, Path, str` | `Source` | Upload file |
+| `add_url(notebook_id, url, wait=False, wait_timeout=120.0)` | `str, str, bool, float` | `Source` | Add URL source (autodetects YouTube URLs and routes them appropriately) |
+| `add_text(notebook_id, title, content, wait=False, wait_timeout=120.0)` | `str, str, str, bool, float` | `Source` | Add text content |
+| `add_file(notebook_id, file_path, mime_type=None, wait=False, wait_timeout=120.0, *, title=None)` | `str, str \| Path, str \| None, bool, float, *, str \| None` | `Source` | Upload file. `mime_type` is **deprecated** and ignored (server infers from filename); passing non-`None` raises `DeprecationWarning`. `title` (keyword-only) sets the display name via a post-upload `UPDATE_SOURCE` and forces a brief registration wait even when `wait=False`. |
 | `add_drive(notebook_id, file_id, title, mime_type)` | `str, str, str, str` | `Source` | Add Google Drive doc |
 | `rename(notebook_id, source_id, new_title)` | `str, str, str` | `Source` | Rename source |
 | `refresh(notebook_id, source_id)` | `str, str` | `bool` | Refresh URL/Drive source |
 | `check_freshness(notebook_id, source_id)` | `str, str` | `bool` | Check if source needs refresh |
 | `delete(notebook_id, source_id)` | `str, str` | `bool` | Delete source |
+| `wait_until_ready(notebook_id, source_id, timeout=120.0, ...)` | `str, str, float, ...` | `Source` | Poll until `status == READY` (fully processed). Raises `SourceTimeoutError`/`SourceProcessingError`/`SourceNotFoundError`. |
+| `wait_until_registered(notebook_id, source_id, timeout=30.0, ...)` | `str, str, float, ...` | `Source` | Poll until the source is visible server-side (any non-ERROR status). Completes quickly (seconds for typical sources); intended for narrow follow-up RPCs (e.g. `UPDATE_SOURCE`) that only require registration, not full processing. |
+| `wait_for_sources(notebook_id, source_ids, timeout=120.0, **kwargs)` | `str, list[str], float, ...` | `list[Source]` | Wait for multiple sources to become ready **in parallel**. Per-source timeout; `**kwargs` are forwarded to `wait_until_ready`. |
 
 **Example:**
 ```python
@@ -335,6 +397,23 @@ await client.sources.add_url(nb_id, "https://example.com/article")
 await client.sources.add_url(nb_id, "https://youtube.com/watch?v=...")  # YouTube URLs autodetected
 await client.sources.add_text(nb_id, "My Notes", "Content here...")
 await client.sources.add_file(nb_id, Path("./document.pdf"))
+
+# Upload a file with a custom display title (rename happens after upload via
+# UPDATE_SOURCE — a brief registration wait runs even when wait=False so the
+# rename can land). The mime_type kwarg is deprecated; the server infers
+# MIME type from the filename extension.
+await client.sources.add_file(nb_id, Path("./document.pdf"), title="Q4 Strategy Memo")
+
+# Wait for several uploads to finish processing in parallel
+ids = [
+    (await client.sources.add_url(nb_id, "https://example.com/a")).id,
+    (await client.sources.add_url(nb_id, "https://example.com/b")).id,
+]
+ready = await client.sources.wait_for_sources(nb_id, ids, timeout=180)
+
+# Narrow wait: only block until the source is visible server-side (not fully
+# processed). Use this before follow-up RPCs like UPDATE_SOURCE.
+registered = await client.sources.wait_until_registered(nb_id, ids[0])
 
 # List and manage
 sources = await client.sources.list(nb_id)
@@ -475,9 +554,9 @@ Export artifacts to Google Docs or Google Sheets.
 
 | Method | Parameters | Returns | Description |
 |--------|------------|---------|-------------|
-| `export_report(notebook_id, artifact_id, title, export_type)` | `str, str, str, ExportType` | `Any` | Export report to Google Docs/Sheets |
-| `export_data_table(notebook_id, artifact_id, title)` | `str, str, str` | `Any` | Export data table to Google Sheets |
-| `export(notebook_id, artifact_id, content, title, export_type)` | `str, str, str, str, ExportType` | `Any` | Generic export to Docs/Sheets |
+| `export_report(notebook_id, artifact_id, title="Export", export_type=ExportType.DOCS)` | `str, str, str, ExportType` | `Any` | Export report to Google Docs/Sheets |
+| `export_data_table(notebook_id, artifact_id, title="Export")` | `str, str, str` | `Any` | Export data table to Google Sheets |
+| `export(notebook_id, artifact_id=None, content=None, title="Export", export_type=ExportType.DOCS)` | `str, str \| None, str \| None, str, ExportType` | `Any` | Generic export to Docs/Sheets. All trailing parameters are optional with defaults; pass `content=...` to export inline content without a pre-existing artifact. |
 
 **Export Types (ExportType enum):**
 - `ExportType.DOCS` (1): Export to Google Docs
@@ -503,7 +582,11 @@ result = await client.artifacts.export_data_table(
 )
 # result contains the Google Sheets URL
 
-# Generic export (e.g., export any artifact to Sheets)
+# Generic export (e.g., export any artifact to Sheets). All trailing
+# parameters have defaults: `artifact_id=None`, `content=None`,
+# `title="Export"`, `export_type=ExportType.DOCS`. Supply `content=...`
+# instead of `artifact_id=...` to export inline text without a pre-existing
+# artifact.
 result = await client.artifacts.export(
     nb_id,
     artifact_id="artifact_789",
@@ -669,14 +752,41 @@ async def start(
 
 async def poll(notebook_id: str) -> dict:
     """
-    Returns: {"task_id": str, "status": str, "query": str, "sources": list, "summary": str}
-    Status is "completed", "in_progress", or "no_research"
+    Returns a dict for the LATEST research task. Top-level keys:
+      - task_id:   str       — task/report identifier
+      - status:    str       — "completed" | "in_progress" | "no_research"
+      - query:     str       — original research query
+      - sources:   list[dict]
+      - summary:   str       — summary text when present
+      - report:    str       — deep-research report markdown when present
+      - tasks:     list[dict] — ALL parsed tasks (same shape as the top-level
+                                latest-task fields), additive across polls
+
+    Each source dict may include:
+      - url, title
+      - result_type:        int — 1=web, 2=drive, 5=deep-research report entry
+      - research_task_id:   str — task/report ID that produced this source
+      - report_markdown:    str — deep-research report markdown (for type-5 entries)
     """
 
 async def import_sources(notebook_id: str, task_id: str, sources: list[dict]) -> list[dict]:
     """
-    sources: List of dicts with 'url' and 'title' keys
-    Returns: List of imported sources with 'id' and 'title'
+    sources: list of dicts with 'url' and 'title' keys. Deep-research entries
+        from poll() may also include 'report_markdown', 'result_type', and
+        'research_task_id'.
+    Returns: list of imported sources with 'id' and 'title'.
+
+    Raises:
+      - ValidationError if `sources` contains entries from more than one
+        research task (`research_task_id` mismatch). Import each task's
+        sources in a separate call.
+
+    Caveats:
+      - The API response can under-report — fewer items may come back than
+        were actually imported. After this call, re-list with
+        `client.sources.list(notebook_id)` to verify the final source set.
+      - Entries without a `url` and without a complete report (`title` +
+        `report_markdown` + `result_type == 5`) are skipped with a warning.
     """
 ```
 
@@ -922,9 +1032,11 @@ print(f"Type: {source.kind}")  # "Type: pdf"
 class Artifact:
     id: str
     title: str
+    _artifact_type: int             # Internal type code; field order matters. Access via .kind.
     status: int                     # 1=processing, 2=pending, 3=completed, 4=failed
     created_at: Optional[datetime]
     url: Optional[str]
+    _variant: int | None = None     # Internal variant for type-4 artifacts (1=flashcards, 2=quiz).
 
     @property
     def kind(self) -> ArtifactType:
@@ -941,7 +1053,16 @@ class Artifact:
     @property
     def is_flashcards(self) -> bool:
         """Check if this is a flashcards artifact."""
+
+    @property
+    def report_subtype(self) -> str | None:
+        """Title-derived report subtype: 'briefing_doc', 'study_guide',
+        'blog_post', or 'report' for type-2 artifacts; None otherwise.
+        Use this instead of parsing titles in caller code.
+        """
 ```
+
+**Note on `_artifact_type` / `_variant`:** these are private (leading-underscore) fields with `repr=False` and are part of the dataclass for `from_api_response()` round-tripping. Always consume them via the public `.kind`, `.is_quiz`, `.is_flashcards`, and `.report_subtype` accessors — the underscore prefix signals that direct access is unsupported and subject to change without notice.
 
 **Type Identification:**
 
@@ -990,6 +1111,18 @@ class GenerationStatus:
     @property
     def is_pending(self) -> bool:
         """Check if generation is pending."""
+
+    @property
+    def is_not_found(self) -> bool:
+        """Check if the artifact is absent from the poll response.
+
+        Distinct from ``is_pending``: a *pending* artifact exists in the
+        artifact list and is queued, while *not_found* means the artifact
+        has either not yet appeared (brief lag after creation) or was
+        silently removed server-side (e.g. after a daily-quota rejection).
+        ``wait_for_completion`` treats a sustained run of ``not_found``
+        responses as a failure — see its ``max_not_found`` parameter.
+        """
 
     @property
     def is_rate_limited(self) -> bool:
@@ -1068,6 +1201,39 @@ class SharedUser:
     permission: SharePermission        # OWNER, EDITOR, or VIEWER
     display_name: str | None           # User's display name
     avatar_url: str | None             # URL to user's avatar image
+```
+
+### AccountLimits
+
+Returned by `client.settings.get_account_limits()`. Use these fields for
+quota decisions in preference to the raw tier string — the server-reported
+limits are what NotebookLM actually enforces.
+
+```python
+@dataclass(frozen=True)
+class AccountLimits:
+    notebook_limit: int | None = None  # Max notebooks the account can hold
+    source_limit: int | None = None    # Max sources per notebook
+    raw_limits: tuple[Any, ...] = ()   # Untouched RPC payload for forensic use
+```
+
+### AccountTier
+
+Returned by `client.settings.get_account_tier()`. Raw tier metadata from
+NotebookLM's homepage tier RPC. `plan_name` is the user-facing label when
+available (e.g. `"NotebookLM Pro"`); `tier` is the internal identifier
+(`"STANDARD"`, `"PLUS"`, `"PRO"`, `"PRO_DASHER_END_USER"`, `"ULTRA"`).
+
+```python
+@dataclass(frozen=True)
+class AccountTier:
+    tier: str | None = None        # Internal tier identifier
+    plan_name: str | None = None   # User-facing plan label
+```
+
+```python
+tier = await client.settings.get_account_tier()
+label = tier.plan_name or tier.tier or "unknown"
 ```
 
 ### SourceFulltext
