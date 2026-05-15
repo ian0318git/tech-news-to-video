@@ -165,6 +165,49 @@ def retry_option(f: FC) -> FC:
     )(f)
 
 
+def list_options(f: FC) -> FC:
+    """Add ``--limit`` and ``--no-truncate`` flags shared by every ``list``-style command.
+
+    Audit row I16 / Phase 6 (P6.T1). Used by the top-level ``notebooklm list``,
+    ``notebooklm source list``, and ``notebooklm artifact list`` so the
+    output-shaping flag surface stays uniform across list-style commands as
+    notebooks grow large enough that the default rendering becomes unreadable
+    or unparseable. The wrapped function gains two kwargs:
+
+    - ``limit`` (``int | None``) — when non-``None``, the command must slice
+      its result set to the first ``limit`` rows BEFORE rendering (and before
+      counting in the JSON envelope). Default ``None`` means "show every
+      row" so the existing behavior is preserved exactly when neither flag
+      is passed; callers do offset-based slicing client-side (no server-side
+      cursors in scope for this phase).
+    - ``no_truncate`` (``bool``) — when ``True``, the command must NOT impose
+      ``max_width`` constraints on free-form columns (titles, IDs, etc.) so
+      long values render in full. JSON output is structurally unaffected by
+      this flag (JSON never truncates).
+
+    The companion ``--no-truncate`` flag on ``notebooklm chat history`` is
+    NOT bundled here — that command does not gain ``--limit`` (it already has
+    ``-l/--limit`` with different semantics: a server-side cap on the number
+    of Q/A turns to fetch), so it wires ``--no-truncate`` directly. Bundling
+    a divergent two-flag set would push us toward a misleading shared name.
+    """
+    f = click.option(
+        "--no-truncate",
+        "no_truncate",
+        is_flag=True,
+        default=False,
+        help="Disable column truncation in the rendered table (default: truncate).",
+    )(f)
+    f = click.option(
+        "--limit",
+        "limit",
+        type=int,
+        default=None,
+        help="Show at most N rows (default: unlimited). Applies to both text and --json output.",
+    )(f)
+    return f
+
+
 # Composite decorators for common patterns
 
 

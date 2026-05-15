@@ -351,6 +351,13 @@ def register_chat_commands(cli):
     @click.option("-t", "--note-title", "note_title", default=None, help="Note title (with --save)")
     @click.option("--json", "json_output", is_flag=True, help="Output as JSON")
     @click.option("--show-all", is_flag=True, help="Show full Q&A content instead of preview")
+    @click.option(
+        "--no-truncate",
+        "no_truncate",
+        is_flag=True,
+        default=False,
+        help="Disable the 50-char preview cap on Question/Answer columns in the table view.",
+    )
     @with_client
     def history_cmd(
         ctx,
@@ -361,6 +368,7 @@ def register_chat_commands(cli):
         note_title,
         json_output,
         show_all,
+        no_truncate,
         client_auth,
     ):
         """Get conversation history or save it as a note.
@@ -376,6 +384,7 @@ def register_chat_commands(cli):
           notebooklm history --save --note-title "Summary"  # Save with custom title
           notebooklm history --json               # Machine-readable JSON output
           notebooklm history --show-all           # Full Q&A content
+          notebooklm history --no-truncate        # Full Q&A content in the table view
         """
 
         async def _run():
@@ -437,10 +446,21 @@ def register_chat_commands(cli):
                     console.print(f"\n[dim]── {conv_id} ──[/dim]")
                 table = Table()
                 table.add_column("#", style="dim", width=4)
-                table.add_column("Question", style="white", max_width=50)
-                table.add_column("Answer preview", style="dim", max_width=50)
-                for i, (question, answer) in enumerate(qa_pairs, 1):
-                    table.add_row(str(i), question[:50], answer[:50])
+                # P6.T1 / I16: ``--no-truncate`` lifts both the column-level
+                # ``max_width=50`` constraint and the ``[:50]`` cell slice so
+                # the table view can render long Q/A turns in full. Default
+                # behavior is unchanged — the 50-char preview is preserved
+                # to match the existing UX when the flag is not passed.
+                if no_truncate:
+                    table.add_column("Question", style="white", overflow="fold")
+                    table.add_column("Answer", style="dim", overflow="fold")
+                    for i, (question, answer) in enumerate(qa_pairs, 1):
+                        table.add_row(str(i), question, answer)
+                else:
+                    table.add_column("Question", style="white", max_width=50)
+                    table.add_column("Answer preview", style="dim", max_width=50)
+                    for i, (question, answer) in enumerate(qa_pairs, 1):
+                        table.add_row(str(i), question[:50], answer[:50])
                 console.print(table)
                 console.print("\n[dim]Use 'notebooklm history --save' to save as a note.[/dim]")
 

@@ -24,6 +24,7 @@ import re
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlparse, urlunparse
 
 import click
@@ -48,7 +49,13 @@ from .helpers import (
     validate_id,
     with_client,
 )
-from .options import json_option, notebook_option, prompt_file_option, wait_polling_options
+from .options import (
+    json_option,
+    list_options,
+    notebook_option,
+    prompt_file_option,
+    wait_polling_options,
+)
 
 
 @contextlib.asynccontextmanager
@@ -425,15 +432,25 @@ async def _resolve_source_by_exact_title(client, notebook_id: str, title: str):
 @source.command("list")
 @notebook_option
 @click.option("--json", "json_output", is_flag=True, help="Output as JSON")
+@list_options
 @with_client
-def source_list(ctx, notebook_id, json_output, client_auth):
-    """List all sources in a notebook."""
+def source_list(ctx, notebook_id, json_output, limit, no_truncate, client_auth):
+    """List all sources in a notebook.
+
+    \b
+    Pagination & display:
+      --limit N         Show at most N sources (default: unlimited).
+      --no-truncate     Do not truncate the Title column in the table view.
+    """
     nb_id = require_notebook(notebook_id)
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
             nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
             sources = await client.sources.list(nb_id_resolved)
+            # P6.T1 / I16: client-side offset slicing.
+            if limit is not None and limit >= 0:
+                sources = sources[:limit]
             nb = None
             if json_output:
                 nb = await client.notebooks.get(nb_id_resolved)
@@ -462,7 +479,8 @@ def source_list(ctx, notebook_id, json_output, client_auth):
 
             table = Table(title=f"Sources in {nb_id_resolved}")
             table.add_column("ID", style="cyan")
-            table.add_column("Title", style="green")
+            title_overflow: Literal["fold", "ellipsis"] = "fold" if no_truncate else "ellipsis"
+            table.add_column("Title", style="green", overflow=title_overflow)
             table.add_column("Type")
             table.add_column("Created", style="dim")
             table.add_column("Status", style="yellow")

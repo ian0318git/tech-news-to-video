@@ -243,6 +243,72 @@ class TestHistoryCommand:
             assert long_q in flat
             assert long_a in flat
 
+    def test_history_no_truncate_outputs_full_text(self, runner, mock_auth):
+        """`history --no-truncate` lifts the ``max_width=50`` table cap (P6.T1 / I16).
+
+        The default table preview slices each Q/A to 50 chars for the table
+        cell *and* sets ``max_width=50`` on the column. ``--no-truncate``
+        drops both, so a long Q/A pair renders in full. We verify by
+        counting character occurrences (Rich may wrap inside the table cell
+        depending on the auto-detected terminal width, but the character
+        budget is preserved).
+        """
+        long_q = "Q" * 100
+        long_a = "A" * 100
+        pairs = [(long_q, long_a)]
+
+        with patch_client_for_module("chat") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.chat.get_history = AsyncMock(return_value=pairs)
+            mock_client.chat.get_conversation_id = AsyncMock(return_value=MOCK_CONV_ID)
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli,
+                    ["history", "--no-truncate", "-n", "nb_123"],
+                )
+
+            assert result.exit_code == 0, result.output
+            # Default behavior slices to 50 chars per cell; --no-truncate
+            # MUST emit all 100 instances of each character (Rich may
+            # soft-wrap, but cannot drop characters).
+            assert result.output.count("Q") >= 100
+            assert result.output.count("A") >= 100
+
+    def test_history_default_truncates_to_50_chars(self, runner, mock_auth):
+        """Default (no flag) preserves the legacy 50-char preview cap (P6.T1 / I16).
+
+        This regression test pins the existing behavior so the new
+        --no-truncate flag does not silently change the default rendering.
+        """
+        long_q = "Q" * 200
+        long_a = "A" * 200
+        pairs = [(long_q, long_a)]
+
+        with patch_client_for_module("chat") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.chat.get_history = AsyncMock(return_value=pairs)
+            mock_client.chat.get_conversation_id = AsyncMock(return_value=MOCK_CONV_ID)
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["history", "-n", "nb_123"])
+
+            assert result.exit_code == 0, result.output
+            # The default branch slices each cell to 50 chars before adding
+            # to the table, so the rendered output must contain at most ~50
+            # of each character (giving generous slack for the
+            # "Question"/"Answer preview" header letters).
+            assert result.output.count("Q") <= 60
+            assert result.output.count("A") <= 60
+
 
 class TestAskTimeout:
     def test_ask_passes_timeout_to_client(self, runner, mock_auth):

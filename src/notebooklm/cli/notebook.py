@@ -11,6 +11,8 @@ Commands:
 Note: Sharing commands moved to 'share' command group.
 """
 
+from typing import Literal
+
 import click
 from rich.table import Table
 
@@ -25,7 +27,7 @@ from .helpers import (
     set_current_notebook,
     with_client,
 )
-from .options import notebook_option
+from .options import list_options, notebook_option
 
 
 def register_notebook_commands(cli):
@@ -33,13 +35,27 @@ def register_notebook_commands(cli):
 
     @cli.command("list")
     @click.option("--json", "json_output", is_flag=True, help="Output as JSON")
+    @list_options
     @with_client
-    def list_cmd(ctx, json_output, client_auth):
-        """List all notebooks."""
+    def list_cmd(ctx, json_output, limit, no_truncate, client_auth):
+        """List all notebooks.
+
+        \b
+        Pagination & display:
+          --limit N         Show at most N notebooks (default: unlimited).
+          --no-truncate     Do not truncate the Title column in the table view.
+        """
 
         async def _run():
             async with NotebookLMClient(client_auth) as client:
                 notebooks = await client.notebooks.list()
+
+                # P6.T1 / I16: client-side offset slicing. No server-side
+                # cursors in scope for this phase — `client.notebooks.list()`
+                # always returns the full result set, we just trim before
+                # rendering / counting.
+                if limit is not None and limit >= 0:
+                    notebooks = notebooks[:limit]
 
                 if json_output:
                     data = {
@@ -60,7 +76,12 @@ def register_notebook_commands(cli):
 
                 table = Table(title="Notebooks")
                 table.add_column("ID", style="cyan")
-                table.add_column("Title", style="green")
+                # P6.T1 / I16: keep the legacy unconstrained Title rendering
+                # by default and rely on the explicit --no-truncate to also
+                # disable Rich's auto-ellipsis at narrow terminals via
+                # overflow="fold".
+                title_overflow: Literal["fold", "ellipsis"] = "fold" if no_truncate else "ellipsis"
+                table.add_column("Title", style="green", overflow=title_overflow)
                 table.add_column("Owner")
                 table.add_column("Created", style="dim")
 

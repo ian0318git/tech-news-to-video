@@ -85,6 +85,8 @@ See [Configuration](configuration.md) for details on environment variables and C
 | Command | Description | Example |
 |---------|-------------|---------|
 | `list` | List all notebooks | `notebooklm list` |
+| `list --limit N` | Show at most N notebooks (default: unlimited) | `notebooklm list --limit 10` |
+| `list --no-truncate` | Do not truncate the Title column | `notebooklm list --no-truncate` |
 | `create <title>` | Create notebook (does not change active context) | `notebooklm create "Research"` |
 | `create <title> --use` | Create notebook and make it the active context | `notebooklm create "Research" --use` |
 | `delete -n <id>` | Delete notebook (uses current notebook if `-n` omitted) | `notebooklm delete -n abc123` |
@@ -108,6 +110,7 @@ See [Configuration](configuration.md) for details on environment variables and C
 | `history --save` | Save history as a note | `notebooklm history --save` |
 | `history --save --note-title` | Save history with custom title | `notebooklm history --save --note-title "Summary"` |
 | `history --show-all` | Show full Q&A content (not preview) | `notebooklm history --show-all` |
+| `history --no-truncate` | Disable the 50-char preview cap on the Question/Answer columns in the table view (the existing `-l/--limit` flag is unchanged: it caps the number of Q&A turns fetched server-side) | `notebooklm history --no-truncate` |
 
 ### Source Commands (`notebooklm source <cmd>`)
 
@@ -115,7 +118,7 @@ Supported source types: URLs, YouTube videos, files (PDF, text, Markdown, Word, 
 
 | Command | Arguments | Options | Example |
 |---------|-----------|---------|---------|
-| `list` | - | - | `source list` |
+| `list` | - | `--limit N`, `--no-truncate`, `--json` | `source list --limit 20 --no-truncate` |
 | `add <content>` | URL/file/text | `--title`, `--type`, `--mime-type`, `--timeout`, `--json` | `source add "https://..." --timeout 90` |
 | `add-drive <id> <title>` | Drive file ID | - | `source add-drive abc123 "Doc"` |
 | `add-research [query]` | Search query | `--mode [fast|deep]`, `--from [web|drive]`, `--import-all`, `--no-wait`, `--timeout`, `--prompt-file PATH` | `source add-research "AI" --mode deep --no-wait` |
@@ -168,7 +171,7 @@ Language-aware generate commands (`audio`, `video`, `cinematic-video`, `report`,
 
 | Command | Arguments | Options | Example |
 |---------|-----------|---------|---------|
-| `list` | - | `--type` | `artifact list --type audio` |
+| `list` | - | `--type`, `--limit N`, `--no-truncate`, `--json` | `artifact list --type audio --limit 5` |
 | `get <id>` | Artifact ID | `--json` | `artifact get art123` |
 | `rename <id> <title>` | Artifact ID, title | - | `artifact rename art123 "Title"` |
 | `delete <id>` | Artifact ID | - | `artifact delete art123` |

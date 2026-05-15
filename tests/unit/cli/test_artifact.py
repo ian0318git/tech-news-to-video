@@ -110,6 +110,110 @@ class TestArtifactList:
             assert "artifacts" in data
             assert data["count"] == 1
 
+    @pytest.mark.filterwarnings("ignore::notebooklm.types.UnknownTypeWarning")
+    def test_artifact_list_limit_caps_rows(self, runner, mock_auth):
+        """`artifact list --limit N` returns at most N data rows (P6.T1 / I16)."""
+        many = [
+            Artifact(id=f"art_{i:02d}", title=f"Artifact {i:02d}", _artifact_type=4, status=3)
+            for i in range(15)
+        ]
+        with patch_client_for_module("artifact") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.artifacts.list = AsyncMock(return_value=many)
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["artifact", "list", "-n", "nb_123", "--limit", "3"])
+
+            assert result.exit_code == 0, result.output
+            for i in range(3):
+                assert f"art_{i:02d}" in result.output
+            for i in range(3, 15):
+                assert f"art_{i:02d}" not in result.output
+
+    @pytest.mark.filterwarnings("ignore::notebooklm.types.UnknownTypeWarning")
+    def test_artifact_list_limit_json_caps_rows(self, runner, mock_auth):
+        """`artifact list --limit N --json` caps the JSON `artifacts` array (P6.T1 / I16)."""
+        many = [
+            Artifact(id=f"art_{i:02d}", title=f"Artifact {i:02d}", _artifact_type=4, status=3)
+            for i in range(15)
+        ]
+        with patch_client_for_module("artifact") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.artifacts.list = AsyncMock(return_value=many)
+            mock_client.notebooks.get = AsyncMock(return_value=MagicMock(title="Test"))
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli, ["artifact", "list", "-n", "nb_123", "--limit", "2", "--json"]
+                )
+
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            assert data["count"] == 2
+            assert len(data["artifacts"]) == 2
+            assert [a["id"] for a in data["artifacts"]] == ["art_00", "art_01"]
+
+    def test_artifact_list_no_truncate_disables_ellipsis(self, runner, mock_auth):
+        """`artifact list --no-truncate` shows full title without ellipsis (P6.T1 / I16).
+
+        The default Title column uses Rich's ``overflow="ellipsis"`` so a
+        title that exceeds the auto-detected terminal width is truncated
+        with ``…``. ``--no-truncate`` flips the column to ``overflow="fold"``
+        so the title wraps instead, preserving every character.
+        """
+        long_title = "X" * 200
+        with patch_client_for_module("artifact") as mock_client_cls:
+            mock_client = create_mock_client()
+            # _artifact_type=1 (AUDIO) avoids the QUIZ/FLASHCARDS variant
+            # disambiguation so the Type column stays narrow ("🎧 Audio")
+            # and never injects an ellipsis on its own.
+            mock_client.artifacts.list = AsyncMock(
+                return_value=[
+                    Artifact(id="art_long", title=long_title, _artifact_type=1, status=3),
+                ]
+            )
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["artifact", "list", "-n", "nb_123", "--no-truncate"])
+
+            assert result.exit_code == 0, result.output
+            assert result.output.count("X") >= 200
+            assert "…" not in result.output
+
+    def test_artifact_list_default_truncates_long_title(self, runner, mock_auth):
+        """Default rendering inserts an ellipsis for over-wide titles (P6.T1 / I16)."""
+        long_title = "X" * 200
+        with patch_client_for_module("artifact") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.artifacts.list = AsyncMock(
+                return_value=[
+                    Artifact(id="art_long", title=long_title, _artifact_type=1, status=3),
+                ]
+            )
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["artifact", "list", "-n", "nb_123"])
+
+            assert result.exit_code == 0, result.output
+            assert result.output.count("X") < 200
+            assert "…" in result.output
+
 
 # =============================================================================
 # ARTIFACT GET TESTS

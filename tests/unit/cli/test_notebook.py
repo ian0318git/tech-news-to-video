@@ -113,6 +113,131 @@ class TestNotebookList:
             assert data["count"] == 1
             assert data["notebooks"][0]["id"] == "nb_1"
 
+    def test_notebook_list_limit_caps_rows(self, runner, mock_auth):
+        """`--limit N` returns at most N data rows in text output (P6.T1 / I16)."""
+        many = [
+            Notebook(
+                id=f"nb_{i:02d}",
+                title=f"Notebook {i:02d}",
+                created_at=datetime(2024, 1, 1),
+                is_owner=True,
+            )
+            for i in range(25)
+        ]
+        with patch_main_cli_client() as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.notebooks.list = AsyncMock(return_value=many)
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["list", "--limit", "5"])
+
+            assert result.exit_code == 0, result.output
+            # The first 5 notebook ids (zero-padded) should appear; later ones must not.
+            for i in range(5):
+                assert f"nb_{i:02d}" in result.output
+            for i in range(5, 25):
+                assert f"nb_{i:02d}" not in result.output
+
+    def test_notebook_list_limit_json_caps_rows(self, runner, mock_auth):
+        """`--limit N` also caps the JSON `notebooks` array (P6.T1 / I16)."""
+        many = [
+            Notebook(
+                id=f"nb_{i:02d}",
+                title=f"Notebook {i:02d}",
+                created_at=datetime(2024, 1, 1),
+                is_owner=True,
+            )
+            for i in range(25)
+        ]
+        with patch_main_cli_client() as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.notebooks.list = AsyncMock(return_value=many)
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["list", "--limit", "3", "--json"])
+
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            assert data["count"] == 3
+            assert len(data["notebooks"]) == 3
+            assert [n["id"] for n in data["notebooks"]] == ["nb_00", "nb_01", "nb_02"]
+
+    def test_notebook_list_no_truncate_disables_ellipsis(self, runner, mock_auth):
+        """`--no-truncate` renders the full title without an ellipsis (P6.T1 / I16).
+
+        The default Title column uses Rich's ``overflow="ellipsis"`` so a
+        title that exceeds the auto-detected terminal width is truncated
+        with ``…``. ``--no-truncate`` flips the column to ``overflow="fold"``
+        so the title wraps instead, preserving every character.
+        """
+        long_title = "X" * 200
+        with patch_main_cli_client() as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.notebooks.list = AsyncMock(
+                return_value=[
+                    Notebook(
+                        id="nb_long",
+                        title=long_title,
+                        created_at=datetime(2024, 1, 1),
+                        is_owner=True,
+                    ),
+                ]
+            )
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["list", "--no-truncate"])
+
+            assert result.exit_code == 0, result.output
+            # Rich may soft-wrap the cell across many lines, but
+            # --no-truncate MUST preserve every character of the title and
+            # MUST NOT insert an ellipsis.
+            assert result.output.count("X") >= 200
+            assert "…" not in result.output
+
+    def test_notebook_list_default_truncates_long_title(self, runner, mock_auth):
+        """Default rendering inserts an ellipsis for over-wide titles (P6.T1 / I16).
+
+        Pins the existing default behavior so --no-truncate doesn't change
+        rendering when the flag is not passed.
+        """
+        long_title = "X" * 200
+        with patch_main_cli_client() as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.notebooks.list = AsyncMock(
+                return_value=[
+                    Notebook(
+                        id="nb_long",
+                        title=long_title,
+                        created_at=datetime(2024, 1, 1),
+                        is_owner=True,
+                    ),
+                ]
+            )
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["list"])
+
+            assert result.exit_code == 0, result.output
+            # Default truncation should drop characters and add ellipsis.
+            assert result.output.count("X") < 200
+            assert "…" in result.output
+
 
 # =============================================================================
 # NOTEBOOK CREATE TESTS

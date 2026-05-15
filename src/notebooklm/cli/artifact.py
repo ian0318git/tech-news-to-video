@@ -15,6 +15,7 @@ import asyncio
 import contextlib
 import time
 from collections.abc import AsyncIterator
+from typing import Literal
 
 import click
 from rich.table import Table
@@ -32,7 +33,7 @@ from .helpers import (
     resolve_notebook_id,
     with_client,
 )
-from .options import json_option, notebook_option, wait_polling_options
+from .options import json_option, list_options, notebook_option, wait_polling_options
 
 
 @contextlib.asynccontextmanager
@@ -141,9 +142,16 @@ def artifact():
     help="Filter by type",
 )
 @click.option("--json", "json_output", is_flag=True, help="Output as JSON")
+@list_options
 @with_client
-def artifact_list(ctx, notebook_id, artifact_type, json_output, client_auth):
-    """List artifacts in a notebook."""
+def artifact_list(ctx, notebook_id, artifact_type, json_output, limit, no_truncate, client_auth):
+    """List artifacts in a notebook.
+
+    \b
+    Pagination & display:
+      --limit N         Show at most N artifacts (default: unlimited).
+      --no-truncate     Do not truncate the Title column in the table view.
+    """
     nb_id = require_notebook(notebook_id)
     type_filter = cli_name_to_artifact_type(artifact_type)
 
@@ -152,6 +160,9 @@ def artifact_list(ctx, notebook_id, artifact_type, json_output, client_auth):
             nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
             # artifacts.list() already includes mind maps from notes system
             artifacts = await client.artifacts.list(nb_id_resolved, artifact_type=type_filter)
+            # P6.T1 / I16: client-side offset slicing.
+            if limit is not None and limit >= 0:
+                artifacts = artifacts[:limit]
 
             if json_output:
                 nb = await client.notebooks.get(nb_id_resolved)
@@ -182,7 +193,8 @@ def artifact_list(ctx, notebook_id, artifact_type, json_output, client_auth):
 
             table = Table(title=f"Artifacts in {nb_id_resolved}")
             table.add_column("ID", style="cyan")
-            table.add_column("Title", style="green")
+            title_overflow: Literal["fold", "ellipsis"] = "fold" if no_truncate else "ellipsis"
+            table.add_column("Title", style="green", overflow=title_overflow)
             table.add_column("Type")
             table.add_column("Created", style="dim")
             table.add_column("Status", style="yellow")
