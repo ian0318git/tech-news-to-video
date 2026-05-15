@@ -523,7 +523,13 @@ def _login_browser_cookies_single(
 
 
 def _profiles_by_account_email(profile_names: list[str]) -> dict[str, str]:
-    """Return existing profiles keyed by account metadata email."""
+    """Return existing profiles keyed by *casefolded* account metadata email.
+
+    Keys are casefolded so that mixed-casing in stored ``context.json``
+    metadata (``Alice@Gmail.com`` vs. an incoming ``alice@gmail.com``)
+    doesn't cause us to miss the match and wrongly allocate a suffixed
+    profile. Lookup callers must casefold their email key likewise.
+    """
     from ..auth import read_account_metadata
 
     profiles_by_email: dict[str, str] = {}
@@ -533,8 +539,23 @@ def _profiles_by_account_email(profile_names: list[str]) -> dict[str, str]:
         if isinstance(email, str) and email:
             # list_profiles() is sorted, so this also prefers the unsuffixed
             # profile over older duplicate suffixes such as alice-2.
-            profiles_by_email.setdefault(email, profile)
+            profiles_by_email.setdefault(email.casefold(), profile)
     return profiles_by_email
+
+
+def _profile_account_email(profile: str) -> str | None:
+    """Return the account email recorded in ``profile``'s ``context.json``.
+
+    ``None`` when the profile has no account metadata at all (hand-created
+    via plain ``notebooklm login --profile NAME``, or pre-dating the
+    account-tracking feature). Used by ``--all-accounts --update`` to
+    decide whether adopting a name-matching profile is safe.
+    """
+    from ..auth import read_account_metadata
+
+    metadata = read_account_metadata(get_storage_path(profile=profile))
+    email = metadata.get("email")
+    return email if isinstance(email, str) and email else None
 
 
 def _next_available_profile_name(base_name: str, unavailable: set[str]) -> str:
@@ -553,9 +574,24 @@ def _next_available_profile_name(base_name: str, unavailable: set[str]) -> str:
 def _login_all_accounts_from_browser(
     browser_cookies: str,
     *,
+    update: bool = False,
     include_domains: set[str] | None = None,
 ) -> None:
-    """Extract every signed-in Google account into its own profile."""
+    """Extract every signed-in Google account into its own profile.
+
+    Args:
+        browser_cookies: rookiepy browser alias forwarded to
+            :func:`_enumerate_browser_accounts`.
+        update: When True and the natural profile name for an account
+            (e.g. ``alice`` for ``alice@gmail.com``) already exists but has
+            no account metadata — or its metadata matches the same email —
+            adopt that profile in place rather than allocating a suffixed
+            ``alice-2``. Profiles whose metadata already binds a *different*
+            email are still given a suffix to avoid clobbering them. Useful
+            for users who hand-created profiles via plain ``notebooklm
+            login --profile NAME`` before extending to ``--all-accounts``.
+        include_domains: Forwarded to :func:`_enumerate_browser_accounts`.
+    """
     from ..paths import list_profiles
 
     per_profile_cookies, accounts = _enumerate_browser_accounts(
@@ -572,14 +608,22 @@ def _login_all_accounts_from_browser(
     # allocate a suffix when the desired profile name belongs to a different
     # account or a hand-created profile with no account metadata.
     existing_profiles = list_profiles()
+    existing_profiles_set = set(existing_profiles)
     profiles_by_email = _profiles_by_account_email(existing_profiles)
     unavailable: set[str] = set(existing_profiles)
     claimed: set[str] = set()
     for account in accounts:
         base_name = email_to_profile_name(account.email)
-        target_profile = profiles_by_email.get(account.email)
+        target_profile = profiles_by_email.get(account.email.casefold())
         if target_profile is None or target_profile in claimed:
-            target_profile = _next_available_profile_name(base_name, unavailable | claimed)
+            target_profile = _resolve_all_accounts_target(
+                base_name=base_name,
+                account_email=account.email,
+                existing_profiles=existing_profiles_set,
+                unavailable=unavailable,
+                claimed=claimed,
+                update=update,
+            )
         unavailable.add(target_profile)
         claimed.add(target_profile)
 
@@ -591,6 +635,34 @@ def _login_all_accounts_from_browser(
             authuser=account.authuser,
             email=account.email,
         )
+
+
+def _resolve_all_accounts_target(
+    *,
+    base_name: str,
+    account_email: str,
+    existing_profiles: set[str],
+    unavailable: set[str],
+    claimed: set[str],
+    update: bool,
+) -> str:
+    """Pick the destination profile when no email-metadata match exists.
+
+    Without ``--update`` (default): always allocate the next available
+    suffix (``alice``, ``alice-2``, …) — never touch a hand-created profile.
+
+    With ``--update``: adopt the unsuffixed ``base_name`` profile in place
+    if it exists AND has either (a) no account metadata at all or (b)
+    metadata for the same email (defensive — that should have been picked
+    up by ``profiles_by_email`` upstream, but the casefold mismatch case is
+    cheap to handle). Profiles whose metadata binds a *different* email
+    fall back to the suffix path to avoid clobbering them.
+    """
+    if update and base_name in existing_profiles and base_name not in claimed:
+        existing_email = _profile_account_email(base_name)
+        if existing_email is None or existing_email.casefold() == account_email.casefold():
+            return base_name
+    return _next_available_profile_name(base_name, unavailable | claimed)
 
 
 def _select_account(
@@ -1380,6 +1452,20 @@ def register_session_commands(cli):
         ),
     )
     @click.option(
+        "--update",
+        "update",
+        is_flag=True,
+        default=False,
+        help=(
+            "With --all-accounts: when an account's natural profile name "
+            "(e.g. 'alice' for alice@gmail.com) already exists but has no "
+            "account metadata, update that profile in place instead of "
+            "creating a suffixed 'alice-2'. Profiles that already bind a "
+            "different email are still given a suffix to avoid clobbering. "
+            "Only valid with --all-accounts."
+        ),
+    )
+    @click.option(
         "--profile-name",
         "profile_name",
         default=None,
@@ -1416,6 +1502,7 @@ def register_session_commands(cli):
         browser_cookies,
         account_email,
         all_accounts,
+        update,
         profile_name,
         fresh,
         include_domains_raw,
@@ -1470,6 +1557,9 @@ def register_session_commands(cli):
                     "and cannot be combined with --storage.[/red]"
                 )
                 raise SystemExit(1)
+            if update and not all_accounts:
+                console.print("[red]Error: --update only applies to --all-accounts.[/red]")
+                raise SystemExit(1)
 
             # Parse + validate --include-domains. Raises click.BadParameter on
             # unknown labels (Click converts that to a non-zero exit + stderr
@@ -1489,7 +1579,9 @@ def register_session_commands(cli):
                 _warn_missing_optional_domains(include_domains)
                 if all_accounts:
                     _login_all_accounts_from_browser(
-                        browser_cookies, include_domains=include_domains
+                        browser_cookies,
+                        update=update,
+                        include_domains=include_domains,
                     )
                     return
                 active_profile = ctx.obj.get("profile") if ctx.obj else None

@@ -3430,6 +3430,175 @@ class TestLoginMultiAccount:
         assert "all-accounts" in result.output.lower()
 
 
+class TestLoginAllAccountsUpdate:
+    """``--update`` lets ``--all-accounts`` adopt name-matching profiles in
+    place instead of allocating a suffixed ``alice-2`` when the natural name
+    is held by a hand-created profile with no account metadata."""
+
+    @staticmethod
+    def _run_all_accounts(
+        runner,
+        tmp_path,
+        *,
+        update: bool,
+        accounts: list[tuple[int, str, bool]],
+        preexisting: dict[str, dict | None] | None = None,
+    ):
+        """Run ``login --browser-cookies chrome --all-accounts [--update]``
+        against a mocked rookiepy + ``enumerate_accounts`` setup.
+
+        Args:
+            accounts: ``(authuser, email, is_default)`` tuples returned by the
+                mocked ``enumerate_accounts``.
+            preexisting: map of ``profile_dir -> context.json contents``
+                (``None`` = create the directory + an empty storage_state.json
+                with no context.json, i.e. a hand-created profile with no
+                account metadata).
+        """
+        mock_rk = _multiaccount_rookiepy_mock()
+
+        async def _enum(*args, **kwargs):
+            from notebooklm.auth import Account
+
+            return [Account(authuser=a, email=e, is_default=d) for a, e, d in accounts]
+
+        target_root = tmp_path / "profiles"
+        target_root.mkdir(parents=True)
+        for name, ctx in (preexisting or {}).items():
+            d = target_root / name
+            d.mkdir()
+            (d / "storage_state.json").write_text("{}")
+            if ctx is not None:
+                (d / "context.json").write_text(json.dumps(ctx))
+
+        def fake_get_storage_path(profile=None):
+            return target_root / (profile or "default") / "storage_state.json"
+
+        def fake_list_profiles():
+            return sorted(p.name for p in target_root.iterdir() if p.is_dir())
+
+        argv = ["login", "--browser-cookies", "chrome", "--all-accounts"]
+        if update:
+            argv.append("--update")
+        with (
+            patch.dict("sys.modules", {"rookiepy": mock_rk}),
+            patch("notebooklm.cli.session.get_storage_path", side_effect=fake_get_storage_path),
+            patch("notebooklm.paths.list_profiles", side_effect=fake_list_profiles),
+            patch("notebooklm.auth.enumerate_accounts", new=_enum),
+            patch(
+                "notebooklm.cli.session.fetch_tokens_with_domains",
+                new_callable=AsyncMock,
+                return_value=("csrf", "sess"),
+            ),
+        ):
+            result = runner.invoke(cli, argv)
+        return result, target_root
+
+    def test_update_adopts_unsuffixed_profile_with_no_metadata(self, runner, tmp_path):
+        # Pre-existing "alice" hand-created via `notebooklm login --profile alice`
+        # — no context.json, no email metadata. With --update, it should
+        # be adopted in place instead of getting an alice-2 suffix.
+        result, root = self._run_all_accounts(
+            runner,
+            tmp_path,
+            update=True,
+            accounts=[(0, "alice@example.com", True)],
+            preexisting={"alice": None},
+        )
+        assert result.exit_code == 0, result.output
+        assert (root / "alice" / "context.json").exists()
+        assert (root / "alice-2").exists() is False
+        assert json.loads((root / "alice" / "context.json").read_text())["account"] == {
+            "authuser": 0,
+            "email": "alice@example.com",
+        }
+
+    def test_default_still_allocates_suffix_for_unsuffixed_no_metadata(self, runner, tmp_path):
+        # Same setup as above but WITHOUT --update — confirms the new flag is
+        # the only opt-in for the in-place adoption.
+        result, root = self._run_all_accounts(
+            runner,
+            tmp_path,
+            update=False,
+            accounts=[(0, "alice@example.com", True)],
+            preexisting={"alice": None},
+        )
+        assert result.exit_code == 0, result.output
+        assert (root / "alice-2" / "context.json").exists()
+        # alice still exists but unchanged (no context.json was written there).
+        assert (root / "alice" / "context.json").exists() is False
+
+    def test_update_does_not_clobber_profile_bound_to_different_email(self, runner, tmp_path):
+        # Safety guard: a profile named "alice" that already binds
+        # alice@OTHER.com must NOT be hijacked by alice@example.com just
+        # because --update is on. Falls back to the suffix path.
+        result, root = self._run_all_accounts(
+            runner,
+            tmp_path,
+            update=True,
+            accounts=[(0, "alice@example.com", True)],
+            preexisting={"alice": {"account": {"authuser": 0, "email": "alice@OTHER.com"}}},
+        )
+        assert result.exit_code == 0, result.output
+        assert (root / "alice-2" / "context.json").exists()
+        # Existing alice metadata must be untouched.
+        assert json.loads((root / "alice" / "context.json").read_text())["account"] == {
+            "authuser": 0,
+            "email": "alice@OTHER.com",
+        }
+
+    def test_update_is_idempotent_when_profile_already_has_matching_metadata(
+        self, runner, tmp_path
+    ):
+        # If "alice" already binds the same email, --update changes nothing
+        # observable (re-stamps the same metadata; doesn't create alice-2).
+        result, root = self._run_all_accounts(
+            runner,
+            tmp_path,
+            update=True,
+            accounts=[(0, "alice@example.com", True)],
+            preexisting={"alice": {"account": {"authuser": 0, "email": "alice@example.com"}}},
+        )
+        assert result.exit_code == 0, result.output
+        assert sorted(p.name for p in root.iterdir()) == ["alice"]
+        assert json.loads((root / "alice" / "context.json").read_text())["account"] == {
+            "authuser": 0,
+            "email": "alice@example.com",
+        }
+
+    def test_update_requires_all_accounts(self, runner):
+        result = runner.invoke(cli, ["login", "--browser-cookies", "chrome", "--update"])
+        assert result.exit_code != 0
+        assert "--update" in result.output
+        assert "--all-accounts" in result.output
+
+    def test_all_accounts_matches_existing_profile_case_insensitively(self, runner, tmp_path):
+        """Stored email metadata may differ in case from what Google returns
+        on a later probe (e.g. ``Alice@Gmail.com`` stored, ``alice@gmail.com``
+        probed). The email-keyed reuse path must casefold both sides so the
+        same profile is reused rather than allocating a suffixed duplicate.
+        Regression for CodeRabbit's review on #594.
+        """
+        # No --update — proving the case-insensitive match works on the
+        # default reuse-by-email-metadata path (not the --update name path).
+        result, root = self._run_all_accounts(
+            runner,
+            tmp_path,
+            update=False,
+            accounts=[(0, "alice@gmail.com", True)],
+            preexisting={"alice": {"account": {"authuser": 0, "email": "Alice@Gmail.com"}}},
+        )
+        assert result.exit_code == 0, result.output
+        # No alice-2 — the existing alice profile was reused despite the
+        # casing mismatch.
+        assert (root / "alice-2").exists() is False
+        # Re-stamped metadata uses the email as Google reports it now.
+        assert json.loads((root / "alice" / "context.json").read_text())["account"] == {
+            "authuser": 0,
+            "email": "alice@gmail.com",
+        }
+
+
 class TestStaleAccountMetadataCleanup:
     """Default-account login must clear stale account metadata from previous targeted runs."""
 
