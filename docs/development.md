@@ -1,9 +1,13 @@
 # Contributing Guide
 
 **Status:** Active
-**Last Updated:** 2026-03-12
+**Last Updated:** 2026-05-14
 
 This guide covers everything you need to contribute to `notebooklm-py`: architecture overview, testing, and releasing.
+
+> **New contributor?** Start with [CONTRIBUTING.md](../CONTRIBUTING.md) at the
+> repo root for the install/lint/test workflow and PR conventions, then come
+> back here for architectural context once you're ready to write code.
 
 ---
 
@@ -101,6 +105,54 @@ src/notebooklm/
 
 ---
 
+## Concurrency Model
+
+Multiple `notebooklm` processes (parallel CLI runs, an in-process keepalive
+beside a cron-driven `notebooklm auth refresh`, container start-up races,
+`xargs -P` fan-outs) can target the same `NOTEBOOKLM_HOME` simultaneously.
+The library coordinates with **cross-process file locks** (POSIX `flock` /
+Windows `LockFileEx`, via the [`filelock`](https://pypi.org/project/filelock/)
+package) so reads and writes against shared on-disk state never tear or
+clobber a sibling's update.
+
+All locks are sibling files next to the resource they guard (zero-byte,
+left on disk after release — `filelock` reuses them).
+
+| Lock file | Owner | Scope | Acquisition |
+|---|---|---|---|
+| `<profile>/storage_state.json.lock` | `auth.save_cookies_to_storage` (`auth.py:1935`) | Read-merge-write of `storage_state.json` (cookie sync after a rotation or 302) | Blocking exclusive |
+| `<profile>/.storage_state.json.rotate.lock` | `auth._poke_session` (`auth.py:2817`) | Cross-process dedup of the `accounts.google.com/RotateCookies` keepalive POST | Non-blocking exclusive (`LOCK_NB`); skip on contention |
+| `<home>/.migration.lock` | `migration.migrate_to_profiles` (`migration.py:28`) | One-shot legacy→profile layout migration on startup | Blocking exclusive, 30s timeout (raises `MigrationLockTimeoutError`) |
+| `<profile>/context.json.lock` | `cli.helpers.set_context` / `clear_context` via `_atomic_io.atomic_update_json` (`_atomic_io.py:136`) | Read-modify-write of the active-notebook/account-routing context for a profile | Blocking exclusive, 10s timeout |
+
+Design notes:
+
+- **Two layered storage locks (not one).** The `.lock` and `.rotate.lock`
+  files protect the *same* `storage_state.json` but serve different access
+  patterns: a long-running save must not block — or be blocked by — a
+  best-effort rotation poke. Keeping them separate prevents the keepalive
+  from queueing behind a slow cookie write (and vice-versa).
+- **Fail-open on lock infrastructure failure.** When the lock file itself
+  cannot be created (read-only home dir, NFS without `flock`, permission
+  denied), `_poke_session` proceeds *without* coordination rather than
+  wedging forever. A duplicate rotation across processes is bounded and
+  harmless; a permanently-suppressed rotation is not.
+- **Locks are sibling files, never the resource itself.** `filelock` reuses
+  the sentinel across invocations, so cleanup is not required — and a
+  TOCTOU race between unlink and reacquire is avoided.
+- **In-process serializers complement, not replace, file locks.**
+  `auth._poke_session` also takes an `asyncio.Lock` keyed on
+  `(event_loop, profile)` to dedupe an `asyncio.gather` fan-out before
+  reaching the cross-process flock — the file lock only sees one
+  contender per process per rate-limit window.
+
+Path resolution for all locked resources flows through `paths.py`
+(`get_storage_path`, `get_context_path`, `get_home_dir`), so a `--storage`
+override or a different `NOTEBOOKLM_PROFILE` automatically yields a distinct
+lock sibling and the two invocations never contend.
+
+---
+
 ## Testing
 
 ### Prerequisites
@@ -179,12 +231,35 @@ NOTEBOOKLM_READ_ONLY_NOTEBOOK_ID=<work-nb-id> \
 
 ```
 tests/
-├── unit/               # No network, fast, mock everything
-├── integration/        # Mocked HTTP responses + VCR cassettes
-│   ├── test_vcr_*.py   # Client-level VCR tests
-│   └── cli_vcr/        # CLI integration tests with VCR
-└── e2e/                # Real API calls (requires auth)
+├── unit/                            # No network, fast, mock everything
+├── integration/                     # Mocked HTTP responses + VCR cassettes
+│   ├── test_artifacts.py            # ArtifactsAPI integration
+│   ├── test_artifacts_drift.py      # CREATE_ARTIFACT payload drift guard
+│   ├── test_auto_refresh.py         # Keepalive/refresh integration
+│   ├── test_chat.py                 # ChatAPI integration
+│   ├── test_cli_source_delete.py    # CLI source-delete path
+│   ├── test_core.py                 # ClientCore + RPC plumbing
+│   ├── test_download_multi_artifact.py
+│   ├── test_get_summary_drift.py    # GET_NOTEBOOK_SUMMARY drift guard
+│   ├── test_notebooks.py            # NotebooksAPI integration
+│   ├── test_notes.py                # NotesAPI integration
+│   ├── test_research_api.py         # ResearchAPI integration
+│   ├── test_settings.py             # SettingsAPI integration
+│   ├── test_sharing.py              # SharingAPI integration
+│   ├── test_skill_packaging.py      # Packaging smoke (skills, entry-points)
+│   ├── test_sources.py              # SourcesAPI integration
+│   ├── test_vcr_comprehensive.py    # End-to-end VCR walkthrough
+│   ├── test_vcr_example.py          # VCR pattern reference
+│   ├── test_vcr_real_api.py         # VCR against real-API cassettes
+│   ├── cli_vcr/                     # CLI → Client → RPC VCR tests
+│   └── concurrency/                 # Cross-process / asyncio races
+└── e2e/                             # Real API calls (requires auth)
 ```
+
+The `*_drift.py` tests are payload-shape canaries: they decode a recorded
+RPC response (or assemble a synthetic one) and assert the live decoder still
+produces the expected dataclass. They fail loudly when Google changes a
+payload field, so the failure shows up here before users hit it.
 
 ### VCR Testing (Recorded HTTP)
 
@@ -442,4 +517,5 @@ The `auth check --json` output shows:
 - Check existing implementations in `_*.py` files
 - Look at test files for expected structures
 - See [RPC Development Guide](rpc-development.md) for protocol details
+- See [CONTRIBUTING.md](../CONTRIBUTING.md) for install, lint, and PR workflow
 - Open an issue with captured request/response (sanitized)
