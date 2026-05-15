@@ -4,10 +4,12 @@ Provides operations for asking questions, managing conversations, and
 retrieving conversation history.
 """
 
+import asyncio
 import json
 import logging
 import re
 import uuid
+import weakref
 from typing import Any
 from urllib.parse import quote, urlencode
 
@@ -106,6 +108,44 @@ class ChatAPI:
             core: The core client infrastructure.
         """
         self._core = core
+        # Per-``conversation_id`` lock that serializes follow-up asks on the
+        # same conversation (audit §10 / T7.F1). Without this, two
+        # ``asyncio.gather``'d ``ask`` calls on the same conversation read
+        # identical pre-update history at the top, both POST that history,
+        # then race to append to ``_core._conversation_cache`` — the server
+        # sees two follow-ups both claiming to be turn N+1 and the local
+        # cache loses one turn's lineage.
+        #
+        # ``WeakValueDictionary`` keeps the map bounded automatically:
+        # callers hold a strong reference to the lock while inside
+        # ``async with lock:``; once every waiter releases, the entry GCs
+        # itself and the key is removed. The cost is per-key churn for
+        # one-shot conversations, which is negligible compared to the
+        # round-trip we're protecting.
+        self._conversation_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
+            weakref.WeakValueDictionary()
+        )
+
+    def _get_conversation_lock(self, conversation_id: str) -> asyncio.Lock:
+        """Return the (lazily created) lock for ``conversation_id``.
+
+        Single-threaded asyncio means ``WeakValueDictionary.get`` /
+        ``__setitem__`` are atomic w.r.t. coroutine interleaving — no
+        ``await`` between the lookup and the insert, so two concurrent
+        callers on the same conversation either both see the existing lock
+        or one creates it and the other reads it. Either way they share a
+        single lock instance.
+
+        Returning the bare lock (vs. an async-context-manager wrapper) so
+        callers use ``async with self._get_conversation_lock(cid):`` and
+        the strong reference to ``lock`` keeps the WeakValueDictionary
+        entry alive for the duration of the critical section.
+        """
+        lock = self._conversation_locks.get(conversation_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._conversation_locks[conversation_id] = lock
+        return lock
 
     async def ask(
         self,
@@ -147,64 +187,79 @@ class ChatAPI:
         is_new_conversation = conversation_id is None
         if is_new_conversation:
             conversation_id = str(uuid.uuid4())
-            conversation_history = None
-        else:
-            assert conversation_id is not None  # Type narrowing for mypy
-            conversation_history = self._build_conversation_history(conversation_id)
-        # Rebind to non-Optional locals so the build_request closure below
-        # carries the narrowed types — mypy doesn't propagate flow-narrowing
-        # of ``conversation_id`` / ``source_ids`` through a nested-function
-        # capture. ``_build_chat_request`` declares both as non-Optional, so
-        # the closure capture would otherwise be a latent type error.
-        active_conversation_id: str = conversation_id
-        active_source_ids: list[str] = source_ids
+        assert conversation_id is not None  # Type narrowing for mypy
 
-        # Mint the request-id under the asyncio-safe counter helper so two
-        # concurrent ``ask`` calls on the same client never collide (audit C3,
-        # synthesis §6 Tier-2 item 2). The previous direct mutation
-        # ``self._core._reqid_counter += 100000`` raced under
-        # ``asyncio.gather`` and produced duplicate ``_reqid`` URL params.
-        reqid = await self._core.next_reqid()
+        # Hold the per-``conversation_id`` lock across history-build, the
+        # network round-trip, and the cache append (audit §10 / T7.F1).
+        # Without this, two ``asyncio.gather``'d follow-ups on the same
+        # conversation read identical pre-update history at the top, both
+        # POST that history, and the server sees two follow-ups both
+        # claiming to be turn N+1. New conversations use a fresh UUID so
+        # the lookup is uncontested — the overhead is a no-op
+        # ``WeakValueDictionary`` insert + a single uncontested
+        # ``asyncio.Lock`` acquire.
+        async with self._get_conversation_lock(conversation_id):
+            if is_new_conversation:
+                conversation_history = None
+            else:
+                conversation_history = self._build_conversation_history(conversation_id)
+            # Rebind to non-Optional locals so the build_request closure below
+            # carries the narrowed types — mypy doesn't propagate flow-narrowing
+            # of ``conversation_id`` / ``source_ids`` through a nested-function
+            # capture. ``_build_chat_request`` declares both as non-Optional, so
+            # the closure capture would otherwise be a latent type error.
+            active_conversation_id: str = conversation_id
+            active_source_ids: list[str] = source_ids
 
-        def build_request(snapshot: _AuthSnapshot) -> tuple[str, str, dict[str, str]]:
-            return self._build_chat_request(
-                snapshot=snapshot,
-                notebook_id=notebook_id,
-                question=question,
-                source_ids=active_source_ids,
-                conversation_history=conversation_history,
-                conversation_id=active_conversation_id,
-                reqid=reqid,
+            # Mint the request-id under the asyncio-safe counter helper so two
+            # concurrent ``ask`` calls on the same client never collide (audit C3,
+            # synthesis §6 Tier-2 item 2). The previous direct mutation
+            # ``self._core._reqid_counter += 100000`` raced under
+            # ``asyncio.gather`` and produced duplicate ``_reqid`` URL params.
+            reqid = await self._core.next_reqid()
+
+            def build_request(snapshot: _AuthSnapshot) -> tuple[str, str, dict[str, str]]:
+                return self._build_chat_request(
+                    snapshot=snapshot,
+                    notebook_id=notebook_id,
+                    question=question,
+                    source_ids=active_source_ids,
+                    conversation_history=conversation_history,
+                    conversation_id=active_conversation_id,
+                    reqid=reqid,
+                )
+
+            # ``query_post`` owns the retry/refresh/429 transport pipeline plus
+            # the transport→ChatError/NetworkError mapping that ``ask`` used to
+            # duplicate inline. The request-id context lives here so retries
+            # inside the helper share the same ``[req=<id>]`` log prefix as the
+            # initial attempt.
+            reqid_token = set_request_id()
+            try:
+                response = await self._core.query_post(
+                    build_request=build_request,
+                    parse_label="chat.ask",
+                )
+            finally:
+                reset_request_id(reqid_token)
+
+            answer_text, references, server_conv_id = self._parse_ask_response_with_references(
+                response.text
             )
+            # Prefer the conversation ID returned by the server over our locally
+            # generated UUID, so that get_conversation_id() and
+            # get_conversation_turns() stay in sync.
+            if server_conv_id:
+                conversation_id = server_conv_id
 
-        # ``query_post`` owns the retry/refresh/429 transport pipeline plus
-        # the transport→ChatError/NetworkError mapping that ``ask`` used to
-        # duplicate inline. The request-id context lives here so retries
-        # inside the helper share the same ``[req=<id>]`` log prefix as the
-        # initial attempt.
-        reqid_token = set_request_id()
-        try:
-            response = await self._core.query_post(
-                build_request=build_request,
-                parse_label="chat.ask",
-            )
-        finally:
-            reset_request_id(reqid_token)
-
-        answer_text, references, server_conv_id = self._parse_ask_response_with_references(
-            response.text
-        )
-        # Prefer the conversation ID returned by the server over our locally generated UUID,
-        # so that get_conversation_id() and get_conversation_turns() stay in sync.
-        if server_conv_id:
-            conversation_id = server_conv_id
-
-        turns = self._core.get_cached_conversation(conversation_id)
-        if answer_text:
-            turn_number = len(turns) + 1
-            self._core.cache_conversation_turn(conversation_id, question, answer_text, turn_number)
-        else:
-            turn_number = len(turns)
+            turns = self._core.get_cached_conversation(conversation_id)
+            if answer_text:
+                turn_number = len(turns) + 1
+                self._core.cache_conversation_turn(
+                    conversation_id, question, answer_text, turn_number
+                )
+            else:
+                turn_number = len(turns)
 
         return AskResult(
             answer=answer_text,
