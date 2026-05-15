@@ -167,9 +167,26 @@ class NotebookLMClient:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
-        """Close the client connection."""
+        """Close the client connection.
+
+        Exception arbitration (T7.B4 / audit §25): if the ``async with``
+        body raised, prefer that exception and demote any ``close()``
+        failure to a WARNING log so the original cause isn't masked.
+        If the body succeeded, propagate ``close()`` failures normally.
+        ``BaseException`` is caught so ``CancelledError`` /
+        ``KeyboardInterrupt`` mid-close also flow through arbitration.
+        """
         logger.debug("Closing NotebookLM client")
-        await self._core.close()
+        try:
+            await self._core.close()
+        except BaseException as close_exc:
+            if exc_val is not None:
+                logger.warning(
+                    "Suppressing close() error to preserve original exception: %s",
+                    close_exc,
+                )
+                return
+            raise
 
     @property
     def is_connected(self) -> bool:

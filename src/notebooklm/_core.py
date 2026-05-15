@@ -578,27 +578,45 @@ class ClientCore:
         """Close the HTTP client connection.
 
         Called automatically by NotebookLMClient.__aexit__.
-        """
-        # Stop the keepalive task before tearing down the HTTP client so the
-        # loop can't issue a poke against an already-closed transport.
-        if self._keepalive_task is not None:
-            self._keepalive_task.cancel()
-            await asyncio.gather(self._keepalive_task, return_exceptions=True)
-            self._keepalive_task = None
 
-        if self._http_client:
-            try:
-                # Single source of truth for the on-close save: takes the
-                # in-process lock, snapshots, off-loads. Serializes naturally
-                # with any keepalive save still finishing in a worker thread
-                # — close() owns the freshest jar and must win, not the older
-                # snapshot.
-                await self.save_cookies(self._http_client.cookies)
-            except Exception as e:
-                logger.warning("Failed to sync refreshed cookies during close: %s", e)
-            finally:
-                await self._http_client.aclose()
-                self._http_client = None
+        Cancellation safety (T7.B4 / audit §7):
+        the entire close sequence is wrapped in ``try/finally`` and the
+        final ``self._http_client.aclose()`` is wrapped in
+        ``asyncio.shield`` — without the shield, a ``CancelledError``
+        arriving during keepalive teardown or the cookie save would
+        skip ``aclose()`` and leak the underlying httpx transport.
+        ``self._http_client = None`` runs in an inner ``finally`` so
+        the instance is consistently marked closed even if the
+        shielded ``aclose`` itself raises.
+        """
+        try:
+            # Stop the keepalive task before tearing down the HTTP client so
+            # the loop can't issue a poke against an already-closed transport.
+            if self._keepalive_task is not None:
+                self._keepalive_task.cancel()
+                await asyncio.gather(self._keepalive_task, return_exceptions=True)
+                self._keepalive_task = None
+
+            if self._http_client:
+                try:
+                    # Single source of truth for the on-close save: takes the
+                    # in-process lock, snapshots, off-loads. Serializes
+                    # naturally with any keepalive save still finishing in a
+                    # worker thread — close() owns the freshest jar and must
+                    # win, not the older snapshot.
+                    await self.save_cookies(self._http_client.cookies)
+                except Exception as e:
+                    logger.warning("Failed to sync refreshed cookies during close: %s", e)
+        finally:
+            if self._http_client:
+                try:
+                    # Shield: cancellation arriving mid-aclose must not leak
+                    # the transport. The shielded aclose runs to completion;
+                    # ``self._http_client = None`` then makes ``is_open``
+                    # return False correctly.
+                    await asyncio.shield(self._http_client.aclose())
+                finally:
+                    self._http_client = None
 
     async def _keepalive_loop(self, interval: float) -> None:
         """Background loop that periodically pokes the identity surface.
