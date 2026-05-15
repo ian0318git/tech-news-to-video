@@ -57,3 +57,39 @@ class TestGenerateCommands:
                 ],
             )
             assert_command_success(result)
+
+    def test_mind_map(self, runner, mock_auth_for_vcr, mock_context):
+        """mind-map command drives the same 3-RPC chain T8.C3 captured.
+
+        ``notebooklm generate mind-map`` calls ``client.artifacts.generate_mind_map``,
+        which emits a sequential ``GENERATE_MIND_MAP`` → ``CREATE_NOTE`` →
+        ``UPDATE_NOTE`` chain. T8.C3 already recorded that exact chain in
+        ``generate_mind_map_chain.yaml`` for the Python-API path; this CLI
+        replay test **reuses** that cassette rather than re-recording.
+
+        Reuse works because:
+
+        - Both ``-n`` (full 36-char UUID) and ``--source`` (full 36-char UUID)
+          are passed explicitly so ``resolve_notebook_id`` /
+          ``resolve_source_ids`` short-circuit (the 20+ char branch in
+          ``_resolve_partial_id``) and no extra ``LIST_NOTEBOOKS`` /
+          ``LIST_SOURCES`` RPC enters the wire sequence.
+        - The default VCR matcher only inspects ``method, scheme, host, port,
+          path, rpcids`` (see ``tests/vcr_config.py``). Notebook / source IDs
+          live in the URL's source-path query param and the request body, both
+          of which the matcher ignores — so the CLI-side IDs can differ from
+          the recorded payload without breaking replay.
+        """
+        with notebooklm_vcr.use_cassette("generate_mind_map_chain.yaml"):
+            result = runner.invoke(
+                cli,
+                [
+                    "generate",
+                    "mind-map",
+                    "-n",
+                    "bb00c9e3-656c-4fd2-b890-2b71e1cf3814",
+                    "--source",
+                    "466b9ee3-c1ce-45ef-861c-1d4bfcd939ad",
+                ],
+            )
+            assert_command_success(result)
