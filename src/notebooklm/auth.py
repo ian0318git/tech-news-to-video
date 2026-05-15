@@ -2405,6 +2405,111 @@ _REFRESH_LOCKS_BY_LOOP: "weakref.WeakKeyDictionary[Any, dict[Path | None, asynci
 )
 _REFRESH_GENERATIONS: dict[str, int] = {}
 
+# In-flight ``asyncio.Future`` registry for refresh-cmd coalescing (T7.F4).
+#
+# Same-loop concurrent callers that both encounter auth-expiry coalesce on a
+# single in-flight subprocess by sharing a per-resolved-storage-path
+# ``asyncio.Future``. The future is keyed per-loop because ``asyncio.Future``
+# is loop-bound; cross-loop coordination falls back to the
+# ``_REFRESH_GENERATIONS`` counter guarded by ``_REFRESH_STATE_LOCK``.
+#
+# The strong-ref ``_REFRESH_INFLIGHT_TASKS`` set keeps the shielded subprocess
+# Tasks alive so the asyncio GC does not collect them (audit C4 lesson). The
+# task self-removes via ``add_done_callback(set.discard)`` once settled.
+_REFRESH_INFLIGHT_BY_LOOP: "weakref.WeakKeyDictionary[Any, dict[str, asyncio.Future[None]]]" = (
+    weakref.WeakKeyDictionary()
+)
+_REFRESH_INFLIGHT_TASKS: set[asyncio.Task[None]] = set()
+
+
+def _get_inflight_registry() -> dict[str, asyncio.Future[None]]:
+    """Return the per-loop in-flight refresh-cmd future registry.
+
+    Mirrors ``_get_refresh_lock``: ``asyncio.Future`` is loop-bound, so we
+    need a per-loop registry. ``_REFRESH_STATE_LOCK`` makes the lookup /
+    insert atomic across threads (different loops on different threads can
+    each populate their own per-loop dict concurrently).
+    """
+    loop = asyncio.get_running_loop()
+    with _REFRESH_STATE_LOCK:
+        per_loop = _REFRESH_INFLIGHT_BY_LOOP.get(loop)
+        if per_loop is None:
+            per_loop = {}
+            _REFRESH_INFLIGHT_BY_LOOP[loop] = per_loop
+        return per_loop
+
+
+async def _coalesced_run_refresh_cmd(
+    refresh_key: str,
+    resolved_storage_path: Path,
+    profile: str | None,
+) -> None:
+    """Run ``_run_refresh_cmd`` once per ``refresh_key`` on this event loop.
+
+    Same-loop concurrent callers that hit this function while a refresh is
+    in flight will await the same underlying ``asyncio.Future`` rather than
+    spawning their own subprocess (T7.F4 audit §27 — failure #2).
+
+    Cancel-safety design:
+
+    - The subprocess is driven by a strongly-referenced background
+      ``asyncio.Task`` (registered in ``_REFRESH_INFLIGHT_TASKS``) so it
+      survives cancellation of any individual awaiter.
+    - Each awaiter wraps the future in ``asyncio.shield`` so local
+      cancellation of the awaiter does NOT cancel the shared subprocess —
+      mirrors the ``ClientCore._await_refresh`` pattern from T7.C1.
+    - The caller in ``_fetch_tokens_with_refresh`` keeps re-awaiting the
+      shielded future under the per-loop asyncio lock so the lock is not
+      released until the subprocess settles. This prevents the audit §27
+      failure #2 (lock released mid-subprocess → second caller spawns
+      duplicate subprocess).
+    """
+    loop = asyncio.get_running_loop()
+    registry = _get_inflight_registry()
+    with _REFRESH_STATE_LOCK:
+        existing = registry.get(refresh_key)
+        leader = existing is None or existing.done()
+        if leader:
+            future: asyncio.Future[None] = loop.create_future()
+            registry[refresh_key] = future
+        else:
+            future = existing  # type: ignore[assignment]
+
+    if leader:
+        task = asyncio.create_task(_run_refresh_cmd(resolved_storage_path, profile))
+        # Strong-ref pattern (audit C4): without ``add_done_callback`` the
+        # task can be collected by the asyncio GC before completion if no
+        # awaiter is holding a reference.
+        _REFRESH_INFLIGHT_TASKS.add(task)
+        task.add_done_callback(_REFRESH_INFLIGHT_TASKS.discard)
+
+        def _settle(t: asyncio.Task[None]) -> None:
+            # ``Future.set_*`` is loop-affine; the callback runs on the owning
+            # loop (same loop that created the future and the task), so direct
+            # ``set_result`` / ``set_exception`` is safe.
+            if not future.done():
+                if t.cancelled():
+                    future.cancel()
+                else:
+                    exc = t.exception()
+                    if exc is not None:
+                        future.set_exception(exc)
+                    else:
+                        future.set_result(None)
+            # Intentionally LEAVE the (now-done) future in the registry so the
+            # caller's CancelledError handler in ``_fetch_tokens_with_refresh``
+            # can still inspect ``inflight.exception()`` after a cancel/settle
+            # race (CodeRabbit PR #621 finding). The leader-check at the
+            # get-or-create site (``existing is None or existing.done()``)
+            # treats a done future as overwritable, so the next refresh
+            # cycle's leader replaces this slot — no accumulation.
+
+        task.add_done_callback(_settle)
+
+    # All callers (leader + followers) await the shared future under shield.
+    # Re-raises subprocess exception to every awaiter.
+    await asyncio.shield(future)
+
 
 def _get_refresh_lock(resolved_storage_path: Path | None) -> asyncio.Lock:
     """Return the ``asyncio.Lock`` for ``(running event loop, resolved storage path)``.
@@ -2619,21 +2724,99 @@ async def _fetch_tokens_with_refresh(
         refresh_token = _REFRESH_ATTEMPTED_CONTEXT.set(True)
         try:
             async with _get_refresh_lock(refresh_storage_path):
-                # Re-check under the sync state lock so the check-and-update is
-                # atomic ACROSS event loops. The per-loop asyncio lock only
+                # T7.F4: bump generation ONLY after the subprocess succeeds
+                # AND storage is reloaded (per spec acceptance criterion). The
+                # previous implementation bumped the generation eagerly BEFORE
+                # ``_run_refresh_cmd`` — when the subprocess failed, the
+                # phantom bump made concurrent waiters short-circuit and
+                # proceed with stale storage (audit §27 failure #1).
+                #
+                # Re-check under the sync state lock so the read is atomic
+                # ACROSS event loops. The per-loop asyncio lock only
                 # serializes within a single loop; a second loop sharing this
-                # storage path holds its own asyncio.Lock and could otherwise
-                # race the generation bump.
+                # storage path holds its own asyncio.Lock.
                 with _REFRESH_STATE_LOCK:
                     current_generation = _REFRESH_GENERATIONS.get(refresh_key, 0)
-                    should_run_refresh = current_generation == refresh_generation
-                    if should_run_refresh:
-                        # Claim the slot eagerly so any other loop that wakes
-                        # up while ``_run_refresh_cmd`` is in flight sees the
-                        # bump and skips its own refresh.
-                        _REFRESH_GENERATIONS[refresh_key] = refresh_generation + 1
+                    # ``current > refresh_generation`` means another caller
+                    # (any loop) has SUCCESSFULLY refreshed since we observed
+                    # auth-expiry — we can skip ``_run_refresh_cmd`` and just
+                    # reload the freshly-written storage.
+                    should_run_refresh = current_generation <= refresh_generation
                 if should_run_refresh:
-                    await _run_refresh_cmd(refresh_storage_path, profile)
+                    # T7.F4: cancel-safety — drive the subprocess through the
+                    # shared in-flight future. Same-loop concurrent callers
+                    # coalesce on the same subprocess. If THIS caller is
+                    # cancelled while the subprocess is in flight, we keep
+                    # awaiting the shielded future so the asyncio lock is
+                    # NOT released until the subprocess settles (audit §27
+                    # failure #2: lock released mid-subprocess →
+                    # duplicate concurrent refresh).
+                    caller_cancelled = False
+                    subprocess_exc: BaseException | None = None
+                    while True:
+                        try:
+                            await _coalesced_run_refresh_cmd(
+                                refresh_key, refresh_storage_path, profile
+                            )
+                            break
+                        except asyncio.CancelledError:
+                            # Caller-side cancellation. Re-enter the await
+                            # so the shielded subprocess can settle while we
+                            # still hold the asyncio lock.
+                            caller_cancelled = True
+                            registry = _get_inflight_registry()
+                            with _REFRESH_STATE_LOCK:
+                                inflight = registry.get(refresh_key)
+                            if inflight is None or inflight.done():
+                                # Subprocess already settled; we absorbed the
+                                # cancellation. Inspect its terminal state.
+                                # Per the CodeRabbit finding on PR #621, the
+                                # ``_settle`` callback intentionally leaves
+                                # the done future in the registry so this
+                                # branch can still observe ``inflight.
+                                # exception()`` after a cancel/settle race.
+                                if inflight is not None:
+                                    if inflight.cancelled():
+                                        # Subprocess itself was cancelled —
+                                        # treat as failure (do not bump gen).
+                                        subprocess_exc = asyncio.CancelledError()
+                                    else:
+                                        subprocess_exc = inflight.exception()
+                                break
+                            # Otherwise loop — re-await the shielded future.
+                        except BaseException as exc:  # noqa: BLE001
+                            subprocess_exc = exc
+                            break
+
+                    if subprocess_exc is not None:
+                        # T7.F4: subprocess failed — DO NOT bump generation.
+                        # Concurrent / subsequent waiters re-attempt the
+                        # refresh instead of short-circuiting on a phantom
+                        # bump.
+                        if caller_cancelled:
+                            # Caller cancellation takes priority for THIS
+                            # caller.
+                            raise asyncio.CancelledError() from subprocess_exc
+                        raise subprocess_exc
+
+                    # T7.F4: subprocess succeeded AND we're about to reload
+                    # storage. Bump the generation now so other callers
+                    # (any loop) see the success and skip their own
+                    # subprocess. The bump is atomic across loops via
+                    # ``_REFRESH_STATE_LOCK``.
+                    with _REFRESH_STATE_LOCK:
+                        # ``max(...)`` defends against the rare interleaving
+                        # where another loop's pre-lock capture was AFTER
+                        # ours and bumped past us.
+                        existing = _REFRESH_GENERATIONS.get(refresh_key, 0)
+                        _REFRESH_GENERATIONS[refresh_key] = max(existing, refresh_generation + 1)
+
+                    if caller_cancelled:
+                        # Subprocess succeeded; generation bump persists for
+                        # other callers' benefit. THIS caller still
+                        # propagates cancellation rather than completing the
+                        # retry.
+                        raise asyncio.CancelledError()
                 fresh_jar = build_httpx_cookies_from_storage(refresh_storage_path)
                 _replace_cookie_jar(cookie_jar, fresh_jar)
                 # Capture the baseline NOW — after the wholesale replacement

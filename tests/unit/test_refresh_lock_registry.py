@@ -220,22 +220,38 @@ class TestWeakKeyDictionaryCleanup:
 
 
 class TestCrossLoopGenerationGuard:
-    def test_two_loops_one_refresh(self, monkeypatch, tmp_path):
+    def test_two_loops_at_most_two_refreshes(self, monkeypatch, tmp_path):
         """Two concurrent event loops both call ``_fetch_tokens_with_refresh``;
-        only ONE actual refresh command runs (the second is short-circuited
-        by the generation check guarded by ``_REFRESH_STATE_LOCK``).
+        AT MOST 2 subprocess invocations occur (each loop runs once at the
+        worst), and crucially BOTH calls succeed without raising.
 
         Race model: both loops observe an auth-expiry failure, each
         capture the same pre-refresh generation, each acquire their OWN
         per-loop asyncio lock (the registry hands out distinct locks per
         loop), then race the check-and-claim under ``_REFRESH_STATE_LOCK``.
-        Exactly one wins.
+
+        Pre-T7.F4: this test asserted ``run_count == 1`` because the old
+        code bumped ``_REFRESH_GENERATIONS`` EAGERLY pre-subprocess; the
+        cross-loop loser saw the bump and skipped. That eager-bump
+        behavior was the root cause of audit §27 failure #1 — when the
+        subprocess failed, the phantom bump fooled concurrent waiters
+        into skipping with stale storage.
+
+        Post-T7.F4: generation is bumped ONLY after the subprocess
+        succeeds. Cross-loop callers cannot signal "in flight" to each
+        other (``asyncio.Future`` is loop-bound). In the rare
+        cross-loop-concurrent-refresh case both loops may run their own
+        subprocess — equivalent to two ``RotateCookies`` POSTs against
+        the same storage. The end-state is correct (fresh cookies on
+        disk; last writer wins, but both write the same fresh data).
+
+        For SAME-LOOP coalescing (the dominant real-world case), the
+        per-loop in-flight future ensures exactly-once subprocess
+        execution; see ``tests/integration/concurrency/test_refresh_cmd_race.py``.
 
         To force a deterministic race in a unit test, we use a barrier at
         the point AFTER both threads have captured the generation but
-        BEFORE either has entered the inner sync mutex. Without this
-        alignment, GIL scheduling could let the first thread complete its
-        entire refresh before the second even captures the generation.
+        BEFORE either has entered the inner sync mutex.
         """
         import httpx
 
@@ -340,9 +356,17 @@ class TestCrossLoopGenerationGuard:
         for r in results:
             assert not isinstance(r, BaseException), f"Refresh raised: {r!r}"
 
-        # The critical assertion: only ONE actual refresh command ran across
-        # the two event loops sharing the storage path.
-        assert run_count == 1, (
-            f"Expected exactly 1 refresh across loops, observed {run_count}. "
-            "Cross-loop generation guard failed."
+        # The critical assertion under T7.F4: AT MOST one subprocess
+        # invocation per loop (== 2 across two loops). Pre-T7.F4 this
+        # asserted ``run_count == 1`` (eager-bump cross-loop coalescing);
+        # T7.F4 dropped eager-bump to fix the audit §27 phantom-bump
+        # failure, accepting that two cross-loop callers may both run
+        # their subprocess in the rare concurrent-refresh case (correct
+        # end-state: fresh cookies on disk).
+        assert 1 <= run_count <= 2, (
+            f"Expected 1–2 refresh invocations across loops, observed "
+            f"{run_count}. ``run_count == 0`` would mean the cross-loop "
+            "generation guard SKIPPED both refreshes (bug §27 regression). "
+            "``run_count > 2`` means each loop ran refresh more than once "
+            "(per-loop coalescing broken)."
         )
