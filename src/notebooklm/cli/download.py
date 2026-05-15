@@ -37,7 +37,7 @@ from .helpers import (
     resolve_notebook_id,
     run_async,
 )
-from .options import notebook_option
+from .options import _complete_artifacts, notebook_option
 
 # Common signature shared by all artifact download functions.
 # Each function accepts (notebook_id, output_path, *, artifact_id=None, **kwargs).
@@ -520,7 +520,13 @@ def _display_download_result(result: dict, artifact_type: str) -> None:
 @click.option("--earliest", is_flag=True, help="Download earliest")
 @click.option("--all", "download_all", is_flag=True, help="Download all artifacts")
 @click.option("--name", help="Filter by artifact title (fuzzy match)")
-@click.option("-a", "--artifact", "artifact_id", help="Select by artifact ID")
+@click.option(
+    "-a",
+    "--artifact",
+    "artifact_id",
+    help="Select by artifact ID",
+    shell_complete=_complete_artifacts,
+)
 @click.option("--json", "json_output", is_flag=True, help="Output JSON instead of text")
 @click.option("--dry-run", is_flag=True, help="Preview without downloading")
 @click.option("--force", is_flag=True, help="Overwrite existing files")
@@ -556,7 +562,13 @@ def download_audio(ctx, **kwargs):
 @click.option("--earliest", is_flag=True, help="Download earliest")
 @click.option("--all", "download_all", is_flag=True, help="Download all artifacts")
 @click.option("--name", help="Filter by artifact title (fuzzy match)")
-@click.option("-a", "--artifact", "artifact_id", help="Select by artifact ID")
+@click.option(
+    "-a",
+    "--artifact",
+    "artifact_id",
+    help="Select by artifact ID",
+    shell_complete=_complete_artifacts,
+)
 @click.option("--json", "json_output", is_flag=True, help="Output JSON instead of text")
 @click.option("--dry-run", is_flag=True, help="Preview without downloading")
 @click.option("--force", is_flag=True, help="Overwrite existing files")
@@ -607,7 +619,13 @@ download.add_command(_cinematic_video_cmd)
 @click.option("--earliest", is_flag=True, help="Download earliest")
 @click.option("--all", "download_all", is_flag=True, help="Download all artifacts")
 @click.option("--name", help="Filter by artifact title (fuzzy match)")
-@click.option("-a", "--artifact", "artifact_id", help="Select by artifact ID")
+@click.option(
+    "-a",
+    "--artifact",
+    "artifact_id",
+    help="Select by artifact ID",
+    shell_complete=_complete_artifacts,
+)
 @click.option("--json", "json_output", is_flag=True, help="Output JSON instead of text")
 @click.option("--dry-run", is_flag=True, help="Preview without downloading")
 @click.option("--force", is_flag=True, help="Overwrite existing files")
@@ -653,7 +671,13 @@ def download_slide_deck(ctx, **kwargs):
 @click.option("--earliest", is_flag=True, help="Download earliest")
 @click.option("--all", "download_all", is_flag=True, help="Download all artifacts")
 @click.option("--name", help="Filter by artifact title (fuzzy match)")
-@click.option("-a", "--artifact", "artifact_id", help="Select by artifact ID")
+@click.option(
+    "-a",
+    "--artifact",
+    "artifact_id",
+    help="Select by artifact ID",
+    shell_complete=_complete_artifacts,
+)
 @click.option("--json", "json_output", is_flag=True, help="Output JSON instead of text")
 @click.option("--dry-run", is_flag=True, help="Preview without downloading")
 @click.option("--force", is_flag=True, help="Overwrite existing files")
@@ -761,7 +785,13 @@ def _run_artifact_download(ctx, artifact_type: str, **kwargs) -> None:
 @click.option("--earliest", is_flag=True, help="Download earliest")
 @click.option("--all", "download_all", is_flag=True, help="Download all artifacts")
 @click.option("--name", help="Filter by artifact title (fuzzy match)")
-@click.option("-a", "--artifact", "artifact_id", help="Select by artifact ID")
+@click.option(
+    "-a",
+    "--artifact",
+    "artifact_id",
+    help="Select by artifact ID",
+    shell_complete=_complete_artifacts,
+)
 @click.option("--json", "json_output", is_flag=True, help="Output JSON instead of text")
 @click.option("--dry-run", is_flag=True, help="Preview without downloading")
 @click.option("--force", is_flag=True, help="Overwrite existing files")
@@ -797,7 +827,13 @@ def download_report(ctx, **kwargs):
 @click.option("--earliest", is_flag=True, help="Download earliest")
 @click.option("--all", "download_all", is_flag=True, help="Download all artifacts")
 @click.option("--name", help="Filter by artifact title (fuzzy match)")
-@click.option("-a", "--artifact", "artifact_id", help="Select by artifact ID")
+@click.option(
+    "-a",
+    "--artifact",
+    "artifact_id",
+    help="Select by artifact ID",
+    shell_complete=_complete_artifacts,
+)
 @click.option("--json", "json_output", is_flag=True, help="Output JSON instead of text")
 @click.option("--dry-run", is_flag=True, help="Preview without downloading")
 @click.option("--force", is_flag=True, help="Overwrite existing files")
@@ -833,7 +869,13 @@ def download_mind_map(ctx, **kwargs):
 @click.option("--earliest", is_flag=True, help="Download earliest")
 @click.option("--all", "download_all", is_flag=True, help="Download all artifacts")
 @click.option("--name", help="Filter by artifact title (fuzzy match)")
-@click.option("-a", "--artifact", "artifact_id", help="Select by artifact ID")
+@click.option(
+    "-a",
+    "--artifact",
+    "artifact_id",
+    help="Select by artifact ID",
+    shell_complete=_complete_artifacts,
+)
 @click.option("--json", "json_output", is_flag=True, help="Output JSON instead of text")
 @click.option("--dry-run", is_flag=True, help="Preview without downloading")
 @click.option("--force", is_flag=True, help="Overwrite existing files")
@@ -869,7 +911,13 @@ def download_data_table(ctx, **kwargs):
 @click.option("--earliest", is_flag=True, help="Download earliest")
 @click.option("--all", "download_all", is_flag=True, help="Download all artifacts")
 @click.option("--name", help="Filter by artifact title (fuzzy match)")
-@click.option("-a", "--artifact", "artifact_id", help="Select by artifact ID")
+@click.option(
+    "-a",
+    "--artifact",
+    "artifact_id",
+    help="Select by artifact ID",
+    shell_complete=_complete_artifacts,
+)
 @click.option("--json", "json_output", is_flag=True, help="Output JSON instead of text")
 @click.option("--dry-run", is_flag=True, help="Preview without downloading")
 @click.option("--force", is_flag=True, help="Overwrite existing files")
@@ -919,7 +967,13 @@ def download_quiz_cmd(ctx, **kwargs):
 @click.option("--earliest", is_flag=True, help="Download earliest")
 @click.option("--all", "download_all", is_flag=True, help="Download all artifacts")
 @click.option("--name", help="Filter by artifact title (fuzzy match)")
-@click.option("-a", "--artifact", "artifact_id", help="Select by artifact ID")
+@click.option(
+    "-a",
+    "--artifact",
+    "artifact_id",
+    help="Select by artifact ID",
+    shell_complete=_complete_artifacts,
+)
 @click.option("--json", "json_output", is_flag=True, help="Output JSON instead of text")
 @click.option("--dry-run", is_flag=True, help="Preview without downloading")
 @click.option("--force", is_flag=True, help="Overwrite existing files")

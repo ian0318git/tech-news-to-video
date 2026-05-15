@@ -52,6 +52,8 @@ from .helpers import (
 )
 from .language import SUPPORTED_LANGUAGES, get_language
 from .options import (
+    _complete_artifacts,
+    _complete_sources,
     json_option,
     notebook_option,
     prompt_file_option,
@@ -479,7 +481,14 @@ def generate():
     default=None,
     help="Output language (default: --language > NOTEBOOKLM_HL env > config > 'en')",
 )
-@click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
+@click.option(
+    "--source",
+    "-s",
+    "source_ids",
+    multiple=True,
+    help="Limit to specific source IDs",
+    shell_complete=_complete_sources,
+)
 @click.option("--wait/--no-wait", default=False, help="Wait for completion (default: no-wait)")
 @wait_polling_options(default_timeout=300, default_interval=2)
 @retry_option
@@ -592,7 +601,14 @@ def generate_audio(
     default=None,
     help="Output language (default: --language > NOTEBOOKLM_HL env > config > 'en')",
 )
-@click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
+@click.option(
+    "--source",
+    "-s",
+    "source_ids",
+    multiple=True,
+    help="Limit to specific source IDs",
+    shell_complete=_complete_sources,
+)
 @click.option("--wait/--no-wait", default=False, help="Wait for completion (default: no-wait)")
 @wait_polling_options(default_timeout=600, default_interval=2)
 @retry_option
@@ -762,7 +778,14 @@ generate.add_command(_cinematic_video_gen_cmd)
     default=None,
     help="Output language (default: --language > NOTEBOOKLM_HL env > config > 'en')",
 )
-@click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
+@click.option(
+    "--source",
+    "-s",
+    "source_ids",
+    multiple=True,
+    help="Limit to specific source IDs",
+    shell_complete=_complete_sources,
+)
 @click.option("--wait/--no-wait", default=False, help="Wait for completion (default: no-wait)")
 @wait_polling_options(default_timeout=300, default_interval=2)
 @retry_option
@@ -847,6 +870,7 @@ def generate_slide_deck(
     "artifact_id",
     required=True,
     help="Slide deck artifact ID to revise",
+    shell_complete=_complete_artifacts,
 )
 @click.option(
     "--slide",
@@ -922,7 +946,14 @@ def generate_revise_slide(
 @notebook_option
 @click.option("--quantity", type=click.Choice(["fewer", "standard", "more"]), default="standard")
 @click.option("--difficulty", type=click.Choice(["easy", "medium", "hard"]), default="medium")
-@click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
+@click.option(
+    "--source",
+    "-s",
+    "source_ids",
+    multiple=True,
+    help="Limit to specific source IDs",
+    shell_complete=_complete_sources,
+)
 @click.option("--wait/--no-wait", default=False, help="Wait for completion (default: no-wait)")
 @wait_polling_options(default_timeout=300, default_interval=2)
 @retry_option
@@ -1003,7 +1034,14 @@ def generate_quiz(
 @notebook_option
 @click.option("--quantity", type=click.Choice(["fewer", "standard", "more"]), default="standard")
 @click.option("--difficulty", type=click.Choice(["easy", "medium", "hard"]), default="medium")
-@click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
+@click.option(
+    "--source",
+    "-s",
+    "source_ids",
+    multiple=True,
+    help="Limit to specific source IDs",
+    shell_complete=_complete_sources,
+)
 @click.option("--wait/--no-wait", default=False, help="Wait for completion (default: no-wait)")
 @wait_polling_options(default_timeout=300, default_interval=2)
 @retry_option
@@ -1102,7 +1140,14 @@ def generate_flashcards(
     default=None,
     help="Output language (default: --language > NOTEBOOKLM_HL env > config > 'en')",
 )
-@click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
+@click.option(
+    "--source",
+    "-s",
+    "source_ids",
+    multiple=True,
+    help="Limit to specific source IDs",
+    shell_complete=_complete_sources,
+)
 @click.option("--wait/--no-wait", default=False, help="Wait for completion (default: no-wait)")
 @wait_polling_options(default_timeout=300, default_interval=2)
 @retry_option
@@ -1190,7 +1235,14 @@ def generate_infographic(
     default=None,
     help="Output language (default: --language > NOTEBOOKLM_HL env > config > 'en')",
 )
-@click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
+@click.option(
+    "--source",
+    "-s",
+    "source_ids",
+    multiple=True,
+    help="Limit to specific source IDs",
+    shell_complete=_complete_sources,
+)
 @click.option("--wait/--no-wait", default=False, help="Wait for completion (default: no-wait)")
 @wait_polling_options(default_timeout=300, default_interval=2)
 @retry_option
@@ -1255,7 +1307,14 @@ def generate_data_table(
 
 @generate.command("mind-map")
 @notebook_option
-@click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
+@click.option(
+    "--source",
+    "-s",
+    "source_ids",
+    multiple=True,
+    help="Limit to specific source IDs",
+    shell_complete=_complete_sources,
+)
 @click.option(
     "--language",
     default=None,
@@ -1335,7 +1394,14 @@ def _output_mind_map_result(result: Any, json_output: bool) -> None:
     help="Report format (default: briefing-doc)",
 )
 @notebook_option
-@click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
+@click.option(
+    "--source",
+    "-s",
+    "source_ids",
+    multiple=True,
+    help="Limit to specific source IDs",
+    shell_complete=_complete_sources,
+)
 @click.option(
     "--language",
     default=None,

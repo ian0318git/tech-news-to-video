@@ -34,7 +34,7 @@ class SectionedGroup(click.Group):
     # Regular commands - show help text
     command_sections = OrderedDict(
         [
-            ("Session", ["login", "use", "status", "clear", "doctor", "auth"]),
+            ("Session", ["login", "use", "status", "clear", "doctor", "auth", "completion"]),
             ("Notebooks", ["list", "create", "delete", "rename", "summary", "metadata"]),
             ("Chat", ["ask", "configure", "history"]),
         ]

@@ -1,12 +1,167 @@
 """Shared CLI option decorators.
 
 Provides reusable option decorators to reduce boilerplate in commands.
+
+Shell completion (P7.T1 / M1)
+-----------------------------
+
+The ``-n/--notebook``, ``-s/--source``, and ``-a/--artifact`` options below
+attach Click ``shell_complete`` callbacks that emit live IDs from the active
+profile. Activate completion in your shell once (see ``docs/cli-reference.md``),
+then ``notebooklm <cmd> -n <TAB>`` will list real notebook IDs.
+
+The callbacks are intentionally **best-effort**: if auth is missing, the
+network is offline, or any exception fires, they return ``[]`` so the user
+just gets no suggestions instead of an error printed by their shell. This
+keeps tab-completion safe to use even in fresh shells without credentials.
 """
 
+import os
 from collections.abc import Callable
 
 import click
 from click.decorators import FC
+from click.shell_completion import CompletionItem
+
+
+def _complete_notebooks(ctx, param, incomplete):
+    """Best-effort ``shell_complete`` for the ``-n/--notebook`` option.
+
+    Lists notebooks in the active profile, filters by ``incomplete`` prefix,
+    and returns up to 50 ``CompletionItem`` rows (id + title shown as the
+    description).
+
+    Failure mode: returns ``[]`` on any exception. Shell completion runs in
+    a fresh subprocess invoked by the user's shell on every TAB; raising or
+    printing here would surface as garbage in the user's terminal. Network
+    failures, missing auth, and rate limits all degrade silently to "no
+    suggestions" — exactly what the user expects when ``notebooklm list``
+    would also fail.
+    """
+    try:
+        from ..client import NotebookLMClient
+        from .helpers import get_auth_tokens, run_async
+
+        auth = get_auth_tokens(ctx)
+
+        async def _list():
+            async with NotebookLMClient(auth) as client:
+                return await client.notebooks.list()
+
+        notebooks = run_async(_list())
+        items: list[CompletionItem] = []
+        for nb in notebooks:
+            if nb.id.startswith(incomplete):
+                items.append(CompletionItem(nb.id, help=nb.title or ""))
+                if len(items) >= 50:
+                    break
+        return items
+    except Exception:
+        return []
+
+
+def _resolve_notebook_for_completion(ctx) -> str | None:
+    """Resolve the notebook id usable for sub-resource completion.
+
+    Walks the same precedence ladder as ``helpers.require_notebook`` but
+    silently — completion must never raise. Order:
+
+    1. ``-n/--notebook`` flag value already parsed into the current command
+       context (or any parent Click context — important when the flag is
+       declared on the top-level group).
+    2. ``NOTEBOOKLM_NOTEBOOK`` environment variable.
+    3. The persisted active-notebook context written by ``notebooklm use``.
+
+    Returns ``None`` when no notebook can be resolved, in which case the
+    caller should return an empty completion list rather than guess.
+    """
+    # 1) walk up Click contexts looking for an already-parsed --notebook value.
+    cur = ctx
+    while cur is not None:
+        nid = cur.params.get("notebook_id") if cur.params else None
+        if nid:
+            return nid
+        cur = cur.parent
+
+    # 2) env var fallback (helpers.require_notebook treats whitespace-only as unset).
+    env_val = os.environ.get("NOTEBOOKLM_NOTEBOOK", "").strip()
+    if env_val:
+        return env_val
+
+    # 3) active context written by ``notebooklm use``.
+    try:
+        from .helpers import get_current_notebook
+
+        return get_current_notebook()
+    except Exception:
+        return None
+
+
+def _complete_sources(ctx, param, incomplete):
+    """Best-effort ``shell_complete`` for the ``-s/--source`` option.
+
+    Resolves the active notebook (flag > env > context), then lists its
+    sources and filters by ``incomplete`` prefix. Returns ``[]`` on any
+    failure — see ``_complete_notebooks`` for the rationale.
+    """
+    try:
+        from ..client import NotebookLMClient
+        from .helpers import get_auth_tokens, run_async
+
+        nb_id = _resolve_notebook_for_completion(ctx)
+        if not nb_id:
+            return []
+        auth = get_auth_tokens(ctx)
+
+        async def _list():
+            async with NotebookLMClient(auth) as client:
+                return await client.sources.list(nb_id)
+
+        sources = run_async(_list())
+        items: list[CompletionItem] = []
+        for src in sources:
+            sid = getattr(src, "id", None) or getattr(src, "source_id", "")
+            if sid and sid.startswith(incomplete):
+                title = getattr(src, "title", "") or ""
+                items.append(CompletionItem(sid, help=title))
+                if len(items) >= 50:
+                    break
+        return items
+    except Exception:
+        return []
+
+
+def _complete_artifacts(ctx, param, incomplete):
+    """Best-effort ``shell_complete`` for the ``-a/--artifact`` option.
+
+    Same shape as ``_complete_sources`` but lists artifacts in the resolved
+    notebook. Returns ``[]`` on any failure.
+    """
+    try:
+        from ..client import NotebookLMClient
+        from .helpers import get_auth_tokens, run_async
+
+        nb_id = _resolve_notebook_for_completion(ctx)
+        if not nb_id:
+            return []
+        auth = get_auth_tokens(ctx)
+
+        async def _list():
+            async with NotebookLMClient(auth) as client:
+                return await client.artifacts.list(nb_id)
+
+        artifacts = run_async(_list())
+        items: list[CompletionItem] = []
+        for art in artifacts:
+            aid = getattr(art, "id", None) or getattr(art, "artifact_id", "")
+            if aid and aid.startswith(incomplete):
+                title = getattr(art, "title", "") or getattr(art, "name", "") or ""
+                items.append(CompletionItem(aid, help=title))
+                if len(items) >= 50:
+                    break
+        return items
+    except Exception:
+        return []
 
 
 def notebook_option(f: FC) -> FC:
@@ -20,6 +175,11 @@ def notebook_option(f: FC) -> FC:
     kwarg that the flag would, with no per-command boilerplate.
 
     Supports partial ID matching (e.g., 'abc' matches 'abc123...').
+
+    Tab completion (P7.T1 / M1): when shell completion is activated for
+    ``notebooklm`` (see ``docs/cli-reference.md``), ``-n <TAB>`` lists real
+    notebook IDs from the active profile. Best-effort — returns no
+    suggestions on auth / network failure.
     """
     return click.option(
         "-n",
@@ -29,6 +189,7 @@ def notebook_option(f: FC) -> FC:
         envvar="NOTEBOOKLM_NOTEBOOK",
         show_envvar=True,
         help="Notebook ID (uses current if not set). Supports partial IDs.",
+        shell_complete=_complete_notebooks,
     )(f)
 
 
@@ -115,6 +276,12 @@ def source_option(f: FC) -> FC:
     """Add --source/-s option for source ID.
 
     Supports partial ID matching (e.g., 'abc' matches 'abc123...').
+
+    Tab completion (P7.T1 / M1): when shell completion is activated, ``-s
+    <TAB>`` lists source IDs from the resolved active notebook. Resolution
+    follows the same precedence as the command body (``-n`` flag > env >
+    persisted context); without a resolvable notebook the completer returns
+    no suggestions silently.
     """
     return click.option(
         "-s",
@@ -122,6 +289,7 @@ def source_option(f: FC) -> FC:
         "source_id",
         required=True,
         help="Source ID. Supports partial IDs.",
+        shell_complete=_complete_sources,
     )(f)
 
 
@@ -129,6 +297,10 @@ def artifact_option(f: FC) -> FC:
     """Add --artifact/-a option for artifact ID.
 
     Supports partial ID matching (e.g., 'abc' matches 'abc123...').
+
+    Tab completion (P7.T1 / M1): when shell completion is activated, ``-a
+    <TAB>`` lists artifact IDs from the resolved active notebook. See
+    ``source_option`` for the resolution rules.
     """
     return click.option(
         "-a",
@@ -136,6 +308,7 @@ def artifact_option(f: FC) -> FC:
         "artifact_id",
         required=True,
         help="Artifact ID. Supports partial IDs.",
+        shell_complete=_complete_artifacts,
     )(f)
 
 

@@ -25,7 +25,7 @@ from .helpers import (
     set_current_conversation,
     with_client,
 )
-from .options import json_option, notebook_option, prompt_file_option
+from .options import _complete_sources, json_option, notebook_option, prompt_file_option
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +99,7 @@ def register_chat_commands(cli):
         "source_ids",
         multiple=True,
         help="Limit to specific source IDs (can be repeated)",
+        shell_complete=_complete_sources,
     )
     @click.option(
         "--json", "json_output", is_flag=True, help="Output as JSON (includes references)"

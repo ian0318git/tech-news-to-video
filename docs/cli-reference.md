@@ -1,7 +1,7 @@
 # CLI Reference
 
 **Status:** Active
-**Last Updated:** 2026-05-11
+**Last Updated:** 2026-05-15
 
 Complete command reference for the `notebooklm` CLI—providing full programmatic access to all NotebookLM features, including capabilities not exposed in the web UI.
 
@@ -57,6 +57,7 @@ See [Configuration](configuration.md) for details on environment variables and C
 | `doctor` | Check environment health | `notebooklm doctor` |
 | `doctor --fix` | Auto-fix detected issues | `notebooklm doctor --fix` |
 | `doctor --json` | Output diagnostics as JSON | `notebooklm doctor --json` |
+| `completion <shell>` | Print shell completion script (`bash`/`zsh`/`fish`) | `notebooklm completion zsh > ~/.zfunc/_notebooklm` |
 
 ### Profile Commands (`notebooklm profile <cmd>`)
 
@@ -569,6 +570,43 @@ notebooklm --profile work auth refresh --quiet
 - `keepalive=<seconds>` on `NotebookLMClient` for in-process long-lived workers (no OS scheduler needed)
 
 See [Troubleshooting](troubleshooting.md) for full per-OS scheduler recipes (launchd plist, systemd user timer, cron, Task Scheduler, k8s CronJob).
+
+### Session: `completion`
+
+Print the shell completion script for `bash`, `zsh`, or `fish`. Pipe the output into a file your shell sources at startup; once the script is loaded, Click handles the `_NOTEBOOKLM_COMPLETE` env-var protocol automatically.
+
+```bash
+notebooklm completion <bash|zsh|fish>
+```
+
+**Install (one-time):**
+
+```bash
+# zsh — drop the script anywhere on $fpath; the file MUST be named _notebooklm
+notebooklm completion zsh > ~/.zfunc/_notebooklm
+# (ensure ~/.zfunc is on $fpath in ~/.zshrc, then `autoload -Uz compinit && compinit`)
+
+# bash — source from ~/.bashrc
+notebooklm completion bash > ~/.notebooklm-complete.bash
+echo 'source ~/.notebooklm-complete.bash' >> ~/.bashrc
+
+# fish — drop into the system completions directory
+notebooklm completion fish > ~/.config/fish/completions/notebooklm.fish
+```
+
+**ID-aware tab completion (P7.T1 / M1):** Once the script is installed, `-n/--notebook`, `-s/--source`, and `-a/--artifact` complete from the active profile's live IDs:
+
+```bash
+notebooklm ask -n <TAB>            # lists notebook IDs (filtered by what you've typed)
+notebooklm ask -s <TAB>            # lists sources in the active notebook
+notebooklm download audio -a <TAB> # lists artifacts in the active notebook
+```
+
+Note: commands that take a positional source / artifact / notebook ID (e.g. `source delete <id>`, `artifact get <id>`, `use <id>`) currently complete only after the option / argument is fully typed — Click's `shell_complete=` is attached to the flag-style `-n/--notebook`, `-s/--source`, `-a/--artifact` declarations enumerated below.
+
+For `-s` and `-a` the active notebook is resolved with the same precedence the command body uses: `-n/--notebook` flag value already on the line > `NOTEBOOKLM_NOTEBOOK` env var > the persisted `notebooklm use` context. With no resolvable notebook (and on any auth / network failure), the completer returns no suggestions silently — it never prints a traceback into your terminal.
+
+**Print-only by design:** the command never writes to your shell config; you decide where the script lands. This keeps the install path discoverable and avoids surprising shutdowns of existing completion setups.
 
 ### Source: `add` — `--mime-type` deprecation
 

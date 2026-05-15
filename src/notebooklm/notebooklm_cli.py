@@ -239,6 +239,53 @@ cli.add_command(profile)
 
 
 # =============================================================================
+# SHELL COMPLETION (P7.T1 / M1)
+# =============================================================================
+
+
+@cli.command("completion")
+@click.argument("shell", type=click.Choice(["bash", "zsh", "fish"]))
+def completion_cmd(shell: str) -> None:
+    """Print the shell completion script for SHELL.
+
+    Pipe the output into a file your shell sources at startup. Click handles
+    the ``_NOTEBOOKLM_COMPLETE`` env-var protocol automatically once the
+    script is sourced; only the script needs to be installed.
+
+    \b
+    Install (one-time):
+      # bash (~/.bashrc)
+      notebooklm completion bash > ~/.notebooklm-complete.bash
+      echo 'source ~/.notebooklm-complete.bash' >> ~/.bashrc
+
+      # zsh (anywhere on $fpath)
+      notebooklm completion zsh > ~/.zfunc/_notebooklm
+
+      # fish
+      notebooklm completion fish > ~/.config/fish/completions/notebooklm.fish
+
+    Then ``notebooklm <cmd> -n <TAB>`` lists notebook IDs from the active
+    profile (best-effort — no suggestions when not authenticated).
+    """
+    # Click ships shell-specific completion classes that emit the script
+    # body. We just print whatever ``source()`` returns and let the user
+    # redirect it themselves; auto-installing into shell configs would be
+    # too magical and would hide the install path from users who care.
+    from click.shell_completion import BashComplete, FishComplete, ZshComplete
+
+    cls_map = {"bash": BashComplete, "zsh": ZshComplete, "fish": FishComplete}
+    completer_cls = cls_map[shell]
+    completer = completer_cls(cli, {}, "notebooklm", "_NOTEBOOKLM_COMPLETE")
+    click.echo(completer.source())
+
+
+# ``completion`` is a one-time install command (like ``login``) so it lives
+# in the Session section. The binning is declared in
+# ``cli/grouped.py::SectionedGroup.command_sections`` so the no-orphans
+# guardrail in ``tests/unit/cli/test_grouped.py`` finds it.
+
+
+# =============================================================================
 # MAIN ENTRY POINT
 # =============================================================================
 
