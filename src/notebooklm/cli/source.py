@@ -32,7 +32,7 @@ from rich.table import Table
 from ..client import NotebookLMClient
 from ..types import source_status_to_str
 from ..urls import is_youtube_url
-from .error_handler import _output_error
+from .error_handler import _output_error, emit_cancelled_and_exit
 from .helpers import (
     console,
     display_report,
@@ -52,23 +52,45 @@ from .options import json_option, notebook_option, prompt_file_option, wait_poll
 
 
 @contextlib.asynccontextmanager
-async def _status_with_elapsed(message: str, *, json_output: bool = False) -> AsyncIterator[None]:
+async def _status_with_elapsed(
+    message: str,
+    *,
+    json_output: bool = False,
+    resume_hint: str | None = None,
+) -> AsyncIterator[None]:
     """Show a Rich spinner with a periodically updated elapsed timer.
 
     Used by ``source wait`` so interactive callers see live feedback during
-    the blocking poll (P5.T2 / I7). No-op when ``json_output`` is True so
-    stdout stays pure JSON for automation. The spinner is transient — it
-    disappears on exit, leaving only the final ready / failure / timeout
-    line.
+    the blocking poll (P5.T2 / I7). No-op (for the spinner) when
+    ``json_output`` is True so stdout stays pure JSON for automation. The
+    spinner is transient — it disappears on exit, leaving only the final
+    ready / failure / timeout line.
 
     The ticker task updates the status text once per second while the wrapped
     coroutine awaits the long-running call. Cancellation is best-effort: if
     the wrapped block raises, the ticker is cancelled in ``finally`` and the
-    exception propagates unchanged. SIGINT handling is intentionally NOT
-    added here — that is P5.T3's territory (M2).
+    exception propagates unchanged.
+
+    SIGINT handling (M2 / P5.T3): when ``resume_hint`` is provided, a
+    ``KeyboardInterrupt`` raised inside the wrapped block is caught and
+    converted into a friendly cancellation message via
+    :func:`emit_cancelled_and_exit`. ``source wait`` uses the parallel
+    ``notebooklm source wait <source_id>`` hint (no separate ``poll`` command
+    exists for sources — re-running the same wait IS the resume).
     """
+
+    @contextlib.contextmanager
+    def _sigint_guard():
+        try:
+            yield
+        except KeyboardInterrupt:
+            if resume_hint is None:
+                raise
+            emit_cancelled_and_exit(resume_hint, json_output=json_output)
+
     if json_output:
-        yield
+        with _sigint_guard():
+            yield
         return
     start = time.monotonic()
     with console.status(message) as status:
@@ -81,7 +103,8 @@ async def _status_with_elapsed(message: str, *, json_output: bool = False) -> As
 
         ticker_task = asyncio.create_task(_ticker())
         try:
-            yield
+            with _sigint_guard():
+                yield
         finally:
             ticker_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -1373,6 +1396,12 @@ def source_wait(ctx, source_id, notebook_id, timeout, interval, json_output, cli
                 async with _status_with_elapsed(
                     f"Waiting for source {resolved_id} to finish processing...",
                     json_output=json_output,
+                    # Parallel hint for ``source wait`` (M2 / P5.T3): there is
+                    # no separate ``source poll`` command, so the resume IS
+                    # re-running the same wait. Keeps the ``Cancelled. Resume
+                    # with: ...`` phrasing consistent across the three
+                    # long-running paths.
+                    resume_hint=f"notebooklm source wait {resolved_id}",
                 ):
                     source = await client.sources.wait_until_ready(
                         nb_id_resolved,

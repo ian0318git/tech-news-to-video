@@ -2143,6 +2143,61 @@ class TestSourceWait:
                 "console.status must NOT be invoked under --json (would leak ANSI into stdout)"
             )
 
+    def test_source_wait_sigint_prints_resume_hint_and_exits_130(self, runner, mock_auth):
+        """Ctrl-C during ``source wait`` exits 130 with a parallel resume hint
+        naming the source id (M2 / P5.T3).
+
+        Sources have no separate ``poll`` command — re-running the same wait
+        IS the resume — so the hint shape is
+        ``Cancelled. Resume with: notebooklm source wait <source_id>`` rather
+        than the ``artifact poll <task_id>`` shape used by the other two
+        long-running paths.
+        """
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.sources.list = AsyncMock(
+                return_value=[Source(id="src_sigint", title="Test Source")]
+            )
+            mock_client.sources.wait_until_ready = AsyncMock(side_effect=KeyboardInterrupt)
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["source", "wait", "src_sigint", "-n", "nb_123"])
+
+        assert result.exit_code == 130, (
+            f"expected SIGINT exit 130, got {result.exit_code}; output={result.output!r}"
+        )
+        combined = result.output + (result.stderr if result.stderr_bytes else "")
+        assert "Cancelled. Resume with: notebooklm source wait src_sigint" in combined, (
+            f"expected parallel resume hint with source id; got: {combined!r}"
+        )
+
+    def test_source_wait_sigint_json_emits_cancelled_envelope(self, runner, mock_auth):
+        """Ctrl-C under ``source wait --json`` emits a CANCELLED envelope, exits 130
+        (M2 / P5.T3)."""
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.sources.list = AsyncMock(
+                return_value=[Source(id="src_json_sigint", title="T")]
+            )
+            mock_client.sources.wait_until_ready = AsyncMock(side_effect=KeyboardInterrupt)
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli, ["source", "wait", "src_json_sigint", "-n", "nb_123", "--json"]
+                )
+
+        assert result.exit_code == 130
+        assert '"code": "CANCELLED"' in result.output
+        assert "notebooklm source wait src_json_sigint" in result.output
+
 
 # =============================================================================
 # SOURCE CLEAN TESTS

@@ -7,7 +7,7 @@ across all CLI commands.
 import json
 from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, NoReturn
 
 import click
 
@@ -52,6 +52,55 @@ def _output_error(
         if hint:
             safe_echo(hint, err=True)
     raise SystemExit(exit_code)
+
+
+def emit_cancelled_and_exit(
+    resume_hint: str | None = None,
+    *,
+    json_output: bool = False,
+    extra: dict[str, Any] | None = None,
+) -> NoReturn:
+    """Emit a Ctrl-C cancellation message with an optional resume hint and exit 130.
+
+    Used by the long-running ``--wait`` paths (M2) so SIGINT during a poll
+    surfaces a friendly resume hint instead of a Python traceback. The hint
+    follows the canonical phrasing from the audit:
+
+        Cancelled. Resume with: notebooklm artifact poll <task_id>
+
+    For ``source wait`` the parallel hint is ``notebooklm source wait <id>``
+    (no separate poll command exists for sources).
+
+    Args:
+        resume_hint: Free-form resume command string. When ``None`` the helper
+            emits a plain ``Cancelled.`` line, matching the generic
+            KeyboardInterrupt branch in ``handle_errors``.
+        json_output: When True, emit a structured envelope on stdout
+            (``{"error": true, "code": "CANCELLED", ...}``) so automation can
+            still parse the cancellation. When False, write to stderr.
+        extra: Optional dict merged into the JSON envelope (e.g. ``{"task_id":
+            "abc"}``). Ignored in text mode — the resume hint already names
+            the resource.
+
+    Always raises ``SystemExit(130)`` (128 + signal 2 / SIGINT).
+    """
+    if json_output:
+        response: dict[str, Any] = {
+            "error": True,
+            "code": "CANCELLED",
+            "message": "Cancelled by user",
+        }
+        if resume_hint:
+            response["resume_hint"] = resume_hint
+        if extra:
+            response.update(extra)
+        click.echo(json.dumps(response, indent=2, default=str, ensure_ascii=False))
+    else:
+        if resume_hint:
+            safe_echo(f"\nCancelled. Resume with: {resume_hint}", err=True)
+        else:
+            safe_echo("\nCancelled.", err=True)
+    raise SystemExit(130)
 
 
 @contextmanager

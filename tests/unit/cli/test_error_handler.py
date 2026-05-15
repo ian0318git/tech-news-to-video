@@ -6,7 +6,11 @@ from pathlib import Path
 import pytest
 
 import notebooklm.cli._encoding as encoding_module
-from notebooklm.cli.error_handler import _output_error, handle_errors
+from notebooklm.cli.error_handler import (
+    _output_error,
+    emit_cancelled_and_exit,
+    handle_errors,
+)
 from notebooklm.exceptions import (
     AuthError,
     ConfigurationError,
@@ -274,3 +278,76 @@ class TestHandleErrorsKeyboardInterrupt:
         data = json.loads(output)
         assert data["error"] is True
         assert data["code"] == "CANCELLED"
+
+
+class TestEmitCancelledAndExit:
+    """Tests for the M2 / P5.T3 SIGINT-with-resume-hint helper.
+
+    ``emit_cancelled_and_exit`` is the canonical exit point for Ctrl-C during
+    a long-running ``--wait`` poll. The helper enforces the audit's required
+    phrasing: ``Cancelled. Resume with: <resume_hint>`` and exit 130.
+    """
+
+    def test_emit_cancelled_with_hint_writes_to_stderr_and_exits_130(self, capsys):
+        """Text mode: prints the canonical resume line on stderr, exits 130."""
+        with pytest.raises(SystemExit) as exc_info:
+            emit_cancelled_and_exit("notebooklm artifact poll task_abc")
+
+        assert exc_info.value.code == 130
+        captured = capsys.readouterr()
+        # Canonical phrasing from the M2 audit row — used as a literal so a
+        # future cosmetic tweak can't silently drift the user-facing string.
+        assert "Cancelled. Resume with: notebooklm artifact poll task_abc" in captured.err
+        assert captured.out == "", "resume hint must NOT leak onto stdout in text mode"
+
+    def test_emit_cancelled_without_hint_falls_back_to_plain_cancelled(self, capsys):
+        """No hint: emits the bare ``Cancelled.`` line (matches generic handler)."""
+        with pytest.raises(SystemExit) as exc_info:
+            emit_cancelled_and_exit(None)
+
+        assert exc_info.value.code == 130
+        captured = capsys.readouterr()
+        assert "Cancelled." in captured.err
+        assert "Resume with" not in captured.err
+
+    def test_emit_cancelled_json_envelope_includes_resume_hint(self, capsys):
+        """JSON mode: structured envelope with code=CANCELLED + resume_hint, exit 130."""
+        with pytest.raises(SystemExit) as exc_info:
+            emit_cancelled_and_exit(
+                "notebooklm artifact poll task_xyz",
+                json_output=True,
+            )
+
+        assert exc_info.value.code == 130
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        assert data["error"] is True
+        assert data["code"] == "CANCELLED"
+        assert data["resume_hint"] == "notebooklm artifact poll task_xyz"
+        assert "message" in data
+
+    def test_emit_cancelled_json_omits_resume_hint_when_none(self, capsys):
+        """JSON mode without a hint: envelope still parses but no resume_hint key."""
+        with pytest.raises(SystemExit) as exc_info:
+            emit_cancelled_and_exit(None, json_output=True)
+
+        assert exc_info.value.code == 130
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        assert data["error"] is True
+        assert data["code"] == "CANCELLED"
+        assert "resume_hint" not in data
+
+    def test_emit_cancelled_json_extra_merged_into_envelope(self, capsys):
+        """JSON mode: ``extra`` dict is merged so callers can attach a task_id."""
+        with pytest.raises(SystemExit):
+            emit_cancelled_and_exit(
+                "notebooklm artifact poll task_abc",
+                json_output=True,
+                extra={"task_id": "task_abc"},
+            )
+
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        assert data["task_id"] == "task_abc"
+        assert data["resume_hint"] == "notebooklm artifact poll task_abc"

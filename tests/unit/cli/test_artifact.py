@@ -945,6 +945,63 @@ class TestArtifactWait:
                 "console.status must NOT be invoked under --json (would leak ANSI into stdout)"
             )
 
+    def test_artifact_wait_sigint_prints_resume_hint_and_exits_130(self, runner, mock_auth):
+        """Ctrl-C during ``artifact wait`` exits 130 with the canonical resume hint
+        naming the resolved artifact id (M2 / P5.T3).
+
+        Same hint shape as ``generate <kind> --wait`` because both polling
+        loops resume via ``artifact poll``. Simulates the Ctrl-C by raising
+        ``KeyboardInterrupt`` from the awaitable that the wait loop is
+        currently suspended on.
+        """
+        with patch_client_for_module("artifact") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.artifacts.list = AsyncMock(
+                return_value=[Artifact(id="art_sigint", title="Test", _artifact_type=1, status=3)]
+            )
+            mock_client.artifacts.wait_for_completion = AsyncMock(side_effect=KeyboardInterrupt)
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["artifact", "wait", "art_sigint", "-n", "nb_123"])
+
+        assert result.exit_code == 130, (
+            f"expected SIGINT exit 130, got {result.exit_code}; output={result.output!r}"
+        )
+        combined = result.output + (result.stderr if result.stderr_bytes else "")
+        assert "Cancelled. Resume with: notebooklm artifact poll art_sigint" in combined, (
+            f"expected canonical resume hint with artifact id; got: {combined!r}"
+        )
+
+    def test_artifact_wait_sigint_json_emits_cancelled_envelope(self, runner, mock_auth):
+        """Ctrl-C under ``artifact wait --json`` emits a CANCELLED envelope with
+        the resume hint, exits 130 (M2 / P5.T3).
+
+        Keeps stdout-as-JSON automation from breaking on a Python traceback.
+        """
+        with patch_client_for_module("artifact") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.artifacts.list = AsyncMock(
+                return_value=[Artifact(id="art_json_sigint", title="T", _artifact_type=1, status=3)]
+            )
+            mock_client.artifacts.wait_for_completion = AsyncMock(side_effect=KeyboardInterrupt)
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli, ["artifact", "wait", "art_json_sigint", "-n", "nb_123", "--json"]
+                )
+
+        assert result.exit_code == 130
+        assert '"code": "CANCELLED"' in result.output
+        assert "notebooklm artifact poll art_json_sigint" in result.output
+
 
 # =============================================================================
 # ARTIFACT SUGGESTIONS TESTS

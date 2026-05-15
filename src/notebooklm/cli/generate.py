@@ -39,6 +39,7 @@ from ..types import (
     VideoFormat,
     VideoStyle,
 )
+from .error_handler import emit_cancelled_and_exit
 from .helpers import (
     console,
     json_error_response,
@@ -115,22 +116,44 @@ def _format_status_message(artifact_type: str, elapsed: float | None = None) -> 
 
 @contextlib.asynccontextmanager
 async def _status_with_elapsed(
-    artifact_type: str, *, json_output: bool = False
+    artifact_type: str,
+    *,
+    json_output: bool = False,
+    resume_hint: str | None = None,
 ) -> AsyncIterator[None]:
     """Show a Rich spinner with a periodically updated elapsed timer.
 
-    No-op when ``json_output`` is True so stdout stays pure JSON for
-    automation. The spinner is transient — it disappears on exit, so the
-    final ``[green]... ready[/green]`` line is the only persistent output.
+    No-op (for the spinner) when ``json_output`` is True so stdout stays pure
+    JSON for automation. The spinner is transient — it disappears on exit, so
+    the final ``[green]... ready[/green]`` line is the only persistent output.
 
     The ticker task updates the status text once per second while the wrapped
     coroutine awaits the long-running call. Cancellation is best-effort: if
     the wrapped block raises, the ticker is cancelled in ``finally`` and the
-    exception propagates unchanged. SIGINT handling is intentionally NOT
-    added here — that is P5.T3's territory (M2).
+    exception propagates unchanged.
+
+    SIGINT handling (M2 / P5.T3): when ``resume_hint`` is provided, a
+    ``KeyboardInterrupt`` raised inside the wrapped block is caught and
+    converted into a friendly cancellation message via
+    :func:`emit_cancelled_and_exit`, which prints
+    ``Cancelled. Resume with: <resume_hint>`` to stderr (or a structured
+    ``CANCELLED`` envelope under ``--json``) and exits 130. When
+    ``resume_hint`` is ``None`` the interrupt propagates so the generic
+    handler in ``error_handler.handle_errors`` keeps owning non-wait paths.
     """
+
+    @contextlib.contextmanager
+    def _sigint_guard() -> Any:
+        try:
+            yield
+        except KeyboardInterrupt:
+            if resume_hint is None:
+                raise
+            emit_cancelled_and_exit(resume_hint, json_output=json_output)
+
     if json_output:
-        yield
+        with _sigint_guard():
+            yield
         return
     start = time.monotonic()
     initial = _format_status_message(artifact_type)
@@ -143,7 +166,8 @@ async def _status_with_elapsed(
 
         ticker_task = asyncio.create_task(_ticker())
         try:
-            yield
+            with _sigint_guard():
+                yield
         finally:
             ticker_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -335,7 +359,17 @@ async def handle_generation_result(
         # progress feedback during long generations (P5.T2 / I7). The status
         # line includes the artifact kind, a typical-duration hint, and a
         # live elapsed-seconds counter. No-op under --json.
-        async with _status_with_elapsed(artifact_type, json_output=json_output):
+        #
+        # The ``resume_hint`` plumbs the canonical M2 cancellation message
+        # (``Cancelled. Resume with: notebooklm artifact poll <task_id>``)
+        # so Ctrl-C during the wait surfaces the resume command instead of
+        # a Python KeyboardInterrupt traceback. See ``cli/error_handler.py``
+        # ``emit_cancelled_and_exit``.
+        async with _status_with_elapsed(
+            artifact_type,
+            json_output=json_output,
+            resume_hint=f"notebooklm artifact poll {task_id}",
+        ):
             status = await client.artifacts.wait_for_completion(notebook_id, task_id, **wait_kwargs)
 
     # Output status

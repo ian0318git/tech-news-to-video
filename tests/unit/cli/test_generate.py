@@ -2217,3 +2217,118 @@ class TestStatusWithElapsed:
                 assert not mock_status.called, "console.status must not be invoked under --json"
 
         asyncio.run(_exercise())
+
+
+# =============================================================================
+# SIGINT / RESUME-HINT TESTS (M2 / P5.T3)
+# =============================================================================
+
+
+class TestGenerateWaitSigintResumeHint:
+    """Ctrl-C during ``generate <kind> --wait`` surfaces the resume hint (M2).
+
+    The hint follows the canonical phrasing
+    ``Cancelled. Resume with: notebooklm artifact poll <task_id>``
+    and the process exits 130. This guards against the pre-P5.T3 regression
+    where Ctrl-C during a 30-min cinematic-video wait dumped a Python
+    KeyboardInterrupt traceback with no actionable next step.
+    """
+
+    def test_generate_audio_wait_sigint_prints_resume_hint_and_exits_130(self, runner, mock_auth):
+        """SIGINT during ``generate audio --wait`` exits 130 with a resume hint
+        naming the task_id.
+
+        Simulates the Ctrl-C by patching ``client.artifacts.wait_for_completion``
+        to raise ``KeyboardInterrupt`` — the same exception Python delivers
+        when the user hits Ctrl-C during the polling loop.
+        """
+        from notebooklm.types import GenerationStatus
+
+        initial_status = GenerationStatus(
+            task_id="task_sigint_1", status="pending", error=None, error_code=None
+        )
+
+        with patch_client_for_module("generate") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.artifacts.generate_audio = AsyncMock(return_value=initial_status)
+            # The polling call is where Ctrl-C lands (asyncio.sleep inside the
+            # library's wait loop is the actual suspension point). Surfacing
+            # KeyboardInterrupt from the awaitable is the cleanest way to
+            # simulate that without spinning up a real polling loop.
+            mock_client.artifacts.wait_for_completion = AsyncMock(side_effect=KeyboardInterrupt)
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["generate", "audio", "-n", "nb_123", "--wait"])
+
+        # Exit 130 = 128 + signal 2 (SIGINT). Standard convention.
+        assert result.exit_code == 130, (
+            f"expected SIGINT exit 130, got {result.exit_code}; output={result.output!r}"
+        )
+        # Canonical phrasing from the M2 audit row. Hard-coded so any drift in
+        # the user-visible string is caught here, not by a downstream user.
+        combined = result.output + (result.stderr if result.stderr_bytes else "")
+        assert "Cancelled. Resume with: notebooklm artifact poll task_sigint_1" in combined, (
+            f"expected resume hint with task_id; got: {combined!r}"
+        )
+
+    def test_generate_audio_wait_sigint_json_emits_cancelled_envelope(self, runner, mock_auth):
+        """SIGINT under ``--json`` emits a structured CANCELLED envelope on stdout.
+
+        Automation parsing stdout-as-JSON gets a parseable cancellation
+        instead of a half-printed JSON document or a Python traceback. The
+        envelope carries the resume hint so an agent can re-issue the resume
+        command without scraping a human-facing string.
+        """
+        from notebooklm.types import GenerationStatus
+
+        initial_status = GenerationStatus(
+            task_id="task_sigint_json", status="pending", error=None, error_code=None
+        )
+
+        with patch_client_for_module("generate") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.artifacts.generate_audio = AsyncMock(return_value=initial_status)
+            mock_client.artifacts.wait_for_completion = AsyncMock(side_effect=KeyboardInterrupt)
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli, ["generate", "audio", "-n", "nb_123", "--wait", "--json"]
+                )
+
+        assert result.exit_code == 130
+        # Last JSON document on stdout is the cancellation envelope (the
+        # earlier ``Started`` line is suppressed under --wait + --json since
+        # the wait succeeds before any status print).
+        # Find a JSON object containing "code": "CANCELLED".
+        assert '"code": "CANCELLED"' in result.output, (
+            f"expected CANCELLED envelope on stdout under --json; got: {result.output!r}"
+        )
+        assert "notebooklm artifact poll task_sigint_json" in result.output
+
+    def test_status_with_elapsed_propagates_keyboardinterrupt_when_no_resume_hint(self):
+        """Without ``resume_hint``, KeyboardInterrupt propagates to the generic handler.
+
+        Preserves the existing ``error_handler.handle_errors`` ownership of
+        non-wait commands — the SIGINT-with-hint path is opt-in via the
+        ``resume_hint`` argument so unrelated callers (e.g. mind-map's static
+        ``console.status`` block) keep getting the generic ``Cancelled.``
+        treatment.
+        """
+
+        async def _exercise() -> None:
+            with patch.object(generate_module.console, "status") as mock_status:
+                mock_status.return_value.__enter__ = MagicMock(return_value=MagicMock())
+                mock_status.return_value.__exit__ = MagicMock(return_value=False)
+                with pytest.raises(KeyboardInterrupt):
+                    async with _status_with_elapsed("audio", resume_hint=None):
+                        raise KeyboardInterrupt
+
+        asyncio.run(_exercise())
