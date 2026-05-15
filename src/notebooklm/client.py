@@ -26,6 +26,8 @@ from pathlib import Path
 from types import TracebackType
 from typing import TYPE_CHECKING
 
+import httpx
+
 if TYPE_CHECKING:
     from .types import ConnectionLimits
 
@@ -97,6 +99,7 @@ class NotebookLMClient:
         server_error_max_retries: int = 3,
         limits: "ConnectionLimits | None" = None,
         max_concurrent_uploads: int | None = DEFAULT_MAX_CONCURRENT_UPLOADS,
+        upload_timeout: httpx.Timeout | None = None,
     ):
         """Initialize the NotebookLM client.
 
@@ -140,6 +143,17 @@ class NotebookLMClient:
                 Independent of the RPC pool sizing (uploads use their own
                 ``httpx.AsyncClient`` against the Scotty endpoint and
                 don't share the RPC connection pool).
+            upload_timeout: Optional override for the ``httpx.Timeout`` used
+                by the resumable-upload start handshake and the finalize
+                POST in ``client.sources.add_file``. ``None`` (default)
+                preserves the original hardcoded values (10.0s connect /
+                60.0s read for start; 10.0s connect / 300.0s read for
+                finalize). The supplied ``Timeout`` is used wholesale at
+                both upload sites — specify all components explicitly
+                (e.g. ``httpx.Timeout(10.0, read=600.0)``), or partial
+                fields will fall back to httpx's own 5.0s defaults rather
+                than the original 10.0s connect. Defaults are NOT changed
+                silently for back-compat (audit §20 / T7.H3).
         """
         # Normalize the effective storage path onto the auth object so every
         # downstream code path (refresh_auth, ClientCore.close on-close save,
@@ -173,7 +187,7 @@ class NotebookLMClient:
         # module for mind-map primitives, so their construction order is
         # not significant (see T6.F).
         self.notebooks = NotebooksAPI(self._core)
-        self.sources = SourcesAPI(self._core)
+        self.sources = SourcesAPI(self._core, upload_timeout=upload_timeout)
         self.artifacts = ArtifactsAPI(self._core, storage_path=storage_path)
         self.notes = NotesAPI(self._core)
         self.chat = ChatAPI(self._core)
@@ -236,6 +250,7 @@ class NotebookLMClient:
         server_error_max_retries: int = 3,
         limits: "ConnectionLimits | None" = None,
         max_concurrent_uploads: int | None = DEFAULT_MAX_CONCURRENT_UPLOADS,
+        upload_timeout: httpx.Timeout | None = None,
     ) -> "NotebookLMClient":
         """Create a client from Playwright storage state file.
 
@@ -266,6 +281,11 @@ class NotebookLMClient:
                 ``None`` resolves to the default. See :class:`NotebookLMClient`
                 for full semantics (FD-exhaustion guard, independence from
                 the RPC pool).
+            upload_timeout: Optional override for the ``httpx.Timeout`` used
+                by the resumable-upload start handshake and the finalize
+                POST. ``None`` (default) preserves the original hardcoded
+                values for back-compat. See :class:`NotebookLMClient` for
+                full semantics.
 
         Returns:
             NotebookLMClient instance (not yet connected).
@@ -301,6 +321,7 @@ class NotebookLMClient:
             server_error_max_retries=server_error_max_retries,
             limits=limits,
             max_concurrent_uploads=max_concurrent_uploads,
+            upload_timeout=upload_timeout,
         )
 
     async def refresh_auth(self) -> AuthTokens:

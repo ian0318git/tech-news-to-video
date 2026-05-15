@@ -129,13 +129,32 @@ class SourcesAPI:
             await client.sources.rename(notebook_id, new_src.id, "Better Title")
     """
 
-    def __init__(self, core: ClientCore):
+    def __init__(
+        self,
+        core: ClientCore,
+        upload_timeout: httpx.Timeout | None = None,
+    ):
         """Initialize the sources API.
 
         Args:
             core: The core client infrastructure.
+            upload_timeout: Optional override for the ``httpx.Timeout`` used
+                by the resumable-upload start handshake and the finalize
+                POST. ``None`` (default) preserves the original hardcoded
+                values (10.0s connect / 60.0s read for start; 10.0s connect
+                / 300.0s read for finalize). The supplied ``Timeout`` is
+                used wholesale at both sites — supplying ``httpx.Timeout(read=600.0)``
+                leaves ``connect``/``write``/``pool`` at httpx's own 5.0s
+                defaults, NOT the original 10.0s. Specify all components
+                explicitly (e.g. ``httpx.Timeout(10.0, read=600.0)``) to
+                avoid surprises.
         """
         self._core = core
+        self._upload_timeout = upload_timeout
+
+    def _resolve_upload_timeout(self, default: httpx.Timeout) -> httpx.Timeout:
+        """Return the configured upload timeout, or ``default`` if unset."""
+        return self._upload_timeout if self._upload_timeout is not None else default
 
     @staticmethod
     def _handle_malformed_list_response(
@@ -1489,7 +1508,7 @@ class SourcesAPI:
         # Using get_http_client().cookies (instead of auth.cookie_jar) so we
         # pick up SIDCC/SIDTS rotations applied during the live session. See #373.
         async with httpx.AsyncClient(
-            timeout=httpx.Timeout(10.0, read=60.0),
+            timeout=self._resolve_upload_timeout(httpx.Timeout(10.0, read=60.0)),
             cookies=self._core.get_http_client().cookies,
         ) as client:
             response = await client.post(url, headers=headers, content=body)
@@ -1636,7 +1655,7 @@ class SourcesAPI:
                 # httpx scopes cookies per Domain attribute. Scotty validates
                 # OSID against host and rejects foreign-host cookies. (#373)
                 async with httpx.AsyncClient(
-                    timeout=httpx.Timeout(10.0, read=300.0),
+                    timeout=self._resolve_upload_timeout(httpx.Timeout(10.0, read=300.0)),
                     cookies=self._core.get_http_client().cookies,
                 ) as client:
                     finalize_started = True
