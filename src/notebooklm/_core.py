@@ -778,6 +778,7 @@ class ClientCore:
         *,
         build_request: _BuildRequest,
         log_label: str,
+        disable_internal_retries: bool = False,
     ) -> httpx.Response:
         """Run an authed POST through the shared retry/refresh pipeline.
 
@@ -895,8 +896,14 @@ class ClientCore:
                 # --- 429 rate-limit path --------------------------------
                 if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429:
                     retry_after = _parse_retry_after(exc.response.headers.get("retry-after"))
+                    # ``disable_internal_retries`` (T7.B2) suppresses the 429
+                    # retry loop for declared mutating create RPCs whose retries
+                    # would risk duplicate-resource creation. The API-layer
+                    # ``_idempotency.idempotent_create`` wrapper owns the
+                    # probe-then-retry loop instead.
                     if (
-                        retry_after is not None
+                        not disable_internal_retries
+                        and retry_after is not None
                         and rate_limit_retries < self._rate_limit_max_retries
                     ):
                         logger.warning(
@@ -926,7 +933,16 @@ class ClientCore:
                 )
                 is_network_error = isinstance(exc, httpx.RequestError)
                 if is_server_error or is_network_error:
-                    if server_error_retries < self._server_error_max_retries:
+                    # ``disable_internal_retries`` (T7.B2) short-circuits the
+                    # 5xx / network retry loop for declared mutating create
+                    # RPCs (e.g. CREATE_NOTEBOOK, ADD_SOURCE) where a naive
+                    # re-POST after a server commit would duplicate the
+                    # resource. The API-layer ``idempotent_create`` wrapper
+                    # owns the probe-then-retry loop instead.
+                    if (
+                        not disable_internal_retries
+                        and server_error_retries < self._server_error_max_retries
+                    ):
                         # Exponential backoff capped at 30s. The cap blunts
                         # thundering-herd well past the first few retries
                         # (every retry beyond ~5 attempts waits exactly 30s),
@@ -1096,6 +1112,8 @@ class ClientCore:
         source_path: str = "/",
         allow_null: bool = False,
         _is_retry: bool = False,
+        *,
+        disable_internal_retries: bool = False,
     ) -> Any:
         """Make an RPC call to the NotebookLM API.
 
@@ -1108,6 +1126,15 @@ class ClientCore:
             source_path: The source path parameter (usually /notebook/{id}).
             allow_null: If True, don't raise error when response is null.
             _is_retry: Internal flag to prevent infinite decode-time retries.
+            disable_internal_retries: When True, suppresses the inner 5xx /
+                429 / network retry loop in ``_perform_authed_post`` so that
+                the first transport-level failure surfaces immediately. Used
+                by declared mutating create RPCs (T7.B2): a naive re-POST
+                after a server-side commit would duplicate the resource, so
+                the API-layer ``_idempotency.idempotent_create`` wrapper
+                owns the probe-then-retry loop instead. The auth-refresh
+                path is unaffected (a 401 → refresh → retry is still legal
+                because the request was rejected, not accepted).
 
         Returns:
             Decoded response data.
@@ -1127,11 +1154,25 @@ class ClientCore:
         # inside ``_perform_authed_post`` without recursion, so they don't
         # need this guard.
         if _is_retry:
-            return await self._rpc_call_impl(method, params, source_path, allow_null, _is_retry)
+            return await self._rpc_call_impl(
+                method,
+                params,
+                source_path,
+                allow_null,
+                _is_retry,
+                disable_internal_retries=disable_internal_retries,
+            )
 
         _reqid_token = set_request_id()
         try:
-            return await self._rpc_call_impl(method, params, source_path, allow_null, _is_retry)
+            return await self._rpc_call_impl(
+                method,
+                params,
+                source_path,
+                allow_null,
+                _is_retry,
+                disable_internal_retries=disable_internal_retries,
+            )
         finally:
             reset_request_id(_reqid_token)
 
@@ -1142,6 +1183,8 @@ class ClientCore:
         source_path: str,
         allow_null: bool,
         _is_retry: bool,
+        *,
+        disable_internal_retries: bool = False,
     ) -> Any:
         # Caller (rpc_call) has already verified self._http_client is not None;
         # re-assert for mypy narrowing through this helper.
@@ -1187,6 +1230,7 @@ class ClientCore:
             response = await self._perform_authed_post(
                 build_request=_build,
                 log_label=f"RPC {method.name}",
+                disable_internal_retries=disable_internal_retries,
             )
         except _TransportAuthExpired as exc:
             # Refresh callback raised. Historical contract:
@@ -1276,7 +1320,12 @@ class ClientCore:
             # Check if this is an auth error and we can retry
             if not _is_retry and self._refresh_callback and is_auth_error(e):
                 refreshed = await self._try_refresh_and_retry(
-                    method, params, source_path, allow_null, e
+                    method,
+                    params,
+                    source_path,
+                    allow_null,
+                    e,
+                    disable_internal_retries=disable_internal_retries,
                 )
                 if refreshed is not None:
                     return refreshed
@@ -1382,6 +1431,8 @@ class ClientCore:
         source_path: str,
         allow_null: bool,
         original_error: Exception,
+        *,
+        disable_internal_retries: bool = False,
     ) -> Any | None:
         """Attempt to refresh auth tokens and retry the RPC call.
 
@@ -1395,6 +1446,10 @@ class ClientCore:
             source_path: Original source path.
             allow_null: Original allow_null setting.
             original_error: The auth error that triggered this retry.
+            disable_internal_retries: When True, suppress the inner 5xx /
+                429 / network retry loop on the post-refresh ``rpc_call``,
+                so transport failures are surfaced immediately for the
+                caller's idempotency wrapper to handle.
 
         Returns:
             The RPC result if retry succeeds, None if refresh failed.
@@ -1426,7 +1481,14 @@ class ClientCore:
         logger.info("Token refresh successful, retrying RPC %s", method.name)
 
         # Retry with refreshed tokens
-        return await self.rpc_call(method, params, source_path, allow_null, _is_retry=True)
+        return await self.rpc_call(
+            method,
+            params,
+            source_path,
+            allow_null,
+            _is_retry=True,
+            disable_internal_retries=disable_internal_retries,
+        )
 
     def get_http_client(self) -> httpx.AsyncClient:
         """Get the underlying HTTP client for direct requests.

@@ -1671,6 +1671,107 @@ interactions:
       code: 200
       message: OK
 - request:
+    body: f.req=%5B%5B%5B%22CCqFvf%22%2C%22%5B%5C%22VCR%20Delete%20Test%20Notebook%5C%22%2Cnull%2Cnull%2C%5B2%5D%2C%5B1%5D%5D%22%2Cnull%2C%22generic%22%5D%5D%5D&at=SCRUBBED_CSRF%3A1768963653481&
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '199'
+      Content-Type:
+      - application/x-www-form-urlencoded;charset=UTF-8
+      Cookie:
+      - NID=SCRUBBED; SID=SCRUBBED; __Secure-1PSID=SCRUBBED; __Secure-3PSID=SCRUBBED;
+        HSID=SCRUBBED; SSID=SCRUBBED; APISID=SCRUBBED; SAPISID=SCRUBBED; __Secure-1PAPISID=SCRUBBED;
+        __Secure-3PAPISID=SCRUBBED; __Secure-1PSIDTS=SCRUBBED; __Secure-3PSIDTS=SCRUBBED;
+        OSID=SCRUBBED; __Secure-OSID=SCRUBBED; SIDCC=SCRUBBED; __Secure-1PSIDCC=SCRUBBED;
+        __Secure-3PSIDCC=SCRUBBED
+      Host:
+      - notebooklm.google.com
+      User-Agent:
+      - python-httpx/0.28.1
+    method: POST
+    uri: https://notebooklm.google.com/_/LabsTailwindUi/data/batchexecute?rpcids=CCqFvf&source-path=%2F&f.sid=SCRUBBED&rt=c
+  response:
+    body:
+      string: ')]}''
+
+
+        325
+
+        [["wrb.fr","CCqFvf","[\"VCR Delete Test Notebook\",null,\"fc9cc125-fc20-439b-9f3d-d801c5b0de38\",null,null,[1,false,true,null,null,null,1,null,null,null,null,null,false],null,null,null,null,null,[[\"46a30ddb-2c13-413c-a11a-6b72d0e6639d\"]]]",null,null,null,"generic"],["di",318],["af.httprm",318,"-1746164872252725421",10]]
+
+        25
+
+        [["e",4,null,null,361]]
+
+        '
+    headers:
+      Accept-CH:
+      - Sec-CH-UA-Arch, Sec-CH-UA-Bitness, Sec-CH-UA-Full-Version, Sec-CH-UA-Full-Version-List,
+        Sec-CH-UA-Model, Sec-CH-UA-WoW64, Sec-CH-UA-Form-Factors, Sec-CH-UA-Platform,
+        Sec-CH-UA-Platform-Version
+      Alt-Svc:
+      - h3=":443"; ma=2592000,h3-29=":443"; ma=2592000
+      Cache-Control:
+      - no-cache, no-store, max-age=0, must-revalidate
+      Content-Disposition:
+      - attachment; filename="response.bin"; filename*=UTF-8''response.bin
+      Content-Security-Policy:
+      - require-trusted-types-for 'script';report-uri /_/LabsTailwindUi/cspreport
+      Content-Type:
+      - application/json; charset=utf-8
+      Cross-Origin-Opener-Policy:
+      - same-origin
+      Cross-Origin-Resource-Policy:
+      - same-site
+      Date:
+      - Wed, 21 Jan 2026 02:47:33 GMT
+      Expires:
+      - Mon, 01 Jan 1990 00:00:00 GMT
+      P3P:
+      - CP="This is not a P3P policy! See g.co/p3phelp for more info."
+      Permissions-Policy:
+      - ch-ua-arch=*, ch-ua-bitness=*, ch-ua-full-version=*, ch-ua-full-version-list=*,
+        ch-ua-model=*, ch-ua-wow64=*, ch-ua-form-factors=*, ch-ua-platform=*, ch-ua-platform-version=*
+      Pragma:
+      - no-cache
+      Server:
+      - ESF
+      Set-Cookie:
+      - NID=SCRUBBED; expires=Thu, 23-Jul-2026 02:47:33 GMT; path=/; domain=.google.com;
+        HttpOnly
+      - SIDCC=SCRUBBED; expires=Thu, 21-Jan-2027 02:47:33 GMT; path=/; domain=.google.com;
+        priority=high
+      - __Secure-1PSIDCC=SCRUBBED; expires=Thu, 21-Jan-2027 02:47:33 GMT; path=/;
+        domain=.google.com; Secure; HttpOnly; priority=high
+      - __Secure-3PSIDCC=SCRUBBED; expires=Thu, 21-Jan-2027 02:47:33 GMT; path=/;
+        domain=.google.com; Secure; HttpOnly; priority=high; SameSite=none
+      - SIDCC=SCRUBBED; expires=Thu, 21-Jan-2027 02:47:33 GMT; path=/; domain=.google.com;
+        priority=high
+      - __Secure-1PSIDCC=SCRUBBED; expires=Thu, 21-Jan-2027 02:47:33 GMT; path=/;
+        domain=.google.com; Secure; HttpOnly; priority=high
+      - __Secure-3PSIDCC=SCRUBBED; expires=Thu, 21-Jan-2027 02:47:33 GMT; path=/;
+        domain=.google.com; Secure; HttpOnly; priority=high; SameSite=none
+      Transfer-Encoding:
+      - chunked
+      Vary:
+      - Sec-Fetch-Dest, Sec-Fetch-Mode, Sec-Fetch-Site
+      X-Content-Type-Options:
+      - nosniff
+      X-Frame-Options:
+      - SAMEORIGIN
+      X-XSS-Protection:
+      - '0'
+      content-length:
+      - '361'
+    status:
+      code: 200
+      message: OK
+- request:
     body: f.req=%5B%5B%5B%22WWINqb%22%2C%22%5B%5B%5C%22fc9cc125-fc20-439b-9f3d-d801c5b0de38%5C%22%5D%2C%5B2%5D%5D%22%2Cnull%2C%22generic%22%5D%5D%5D&at=SCRUBBED_CSRF%3A1768963653481&
     headers:
       Accept:

@@ -65,6 +65,8 @@ from .exceptions import (
     DecodingError,
     # Network
     NetworkError,
+    # Idempotency (T7.B2)
+    NonIdempotentRetryError,
     # Domain: Notebooks
     NotebookError,
     NotebookLimitError,
@@ -178,6 +180,8 @@ __all__ = [
     "RateLimitError",
     "ServerError",
     "ClientError",
+    # Idempotency (T7.B2)
+    "NonIdempotentRetryError",
     # Domain Exceptions: Notebooks
     "NotebookError",
     "NotebookNotFoundError",

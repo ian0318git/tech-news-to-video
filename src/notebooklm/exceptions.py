@@ -55,6 +55,8 @@ __all__ = [
     "ServerError",
     "ClientError",
     "RPCTimeoutError",
+    # Idempotency (T7.B2)
+    "NonIdempotentRetryError",
     # Domain: Notebooks
     "NotebookError",
     "NotebookNotFoundError",
@@ -465,6 +467,25 @@ class RPCTimeoutError(NetworkError):
             original_error=original_error,
         )
         self.timeout_seconds = timeout_seconds
+
+
+# =============================================================================
+# Idempotency (T7.B2)
+# =============================================================================
+
+
+class NonIdempotentRetryError(NotebookLMError):
+    """Raised when an opt-in idempotent call cannot guarantee single-write semantics.
+
+    Some create RPCs (notably ``SourcesAPI.add_text``) lack a reliable
+    server-side dedupe key, so a probe-then-retry strategy cannot
+    guarantee single-write semantics under transport failures. Callers
+    that opt in via ``idempotent=True`` get this error rather than a
+    silent duplicate-resource on retry.
+
+    See ``docs/python-api.md#idempotency`` for guidance on building
+    idempotent text-source workflows.
+    """
 
 
 # =============================================================================

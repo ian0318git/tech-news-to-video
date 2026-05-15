@@ -15,9 +15,17 @@ import httpx
 
 from ._core import ClientCore
 from ._env import get_base_url
+from ._idempotency import idempotent_create
 from ._url_utils import is_youtube_url
 from .auth import authuser_query, format_authuser_value
-from .exceptions import AuthError, NetworkError, RateLimitError, ServerError, ValidationError
+from .exceptions import (
+    AuthError,
+    NetworkError,
+    NonIdempotentRetryError,
+    RateLimitError,
+    ServerError,
+    ValidationError,
+)
 from .rpc import RPCError, RPCMethod, get_upload_url
 from .rpc.types import SourceStatus
 from .types import (
@@ -473,32 +481,62 @@ class SourcesAPI:
         """
         logger.debug("Adding URL source to notebook %s: %s", notebook_id, url[:80])
         video_id = self._extract_youtube_video_id(url)
-        # Preserve transport-level signals so callers can act on the specific
-        # type (AuthError → re-login, RateLimitError → back-off with retry_after,
-        # ServerError → transient-retry). Only the generic RPCError catch wraps
-        # into SourceAddError with the underlying cause attached. Mirrors the
-        # propagation contract in _register_file_source (#474, #407).
-        try:
-            if video_id:
-                result = await self._add_youtube_source(notebook_id, url)
-            else:
-                # Warn if URL looks like YouTube but we couldn't extract video ID
-                if is_youtube_url(url):
-                    logger.warning(
-                        "URL appears to be YouTube but no video ID found: %s. "
-                        "Adding as web page - content may be incomplete. "
-                        "If this is a video URL, please report this as a bug.",
-                        url[:100],
-                    )
-                result = await self._add_url_source(notebook_id, url)
-        except (AuthError, RateLimitError, ServerError):
-            raise
-        except RPCError as e:
-            raise SourceAddError(url, cause=e) from e
+        # Warn if URL looks like YouTube but we couldn't extract video ID
+        if not video_id and is_youtube_url(url):
+            logger.warning(
+                "URL appears to be YouTube but no video ID found: %s. "
+                "Adding as web page - content may be incomplete. "
+                "If this is a video URL, please report this as a bug.",
+                url[:100],
+            )
 
-        if result is None:
-            raise SourceAddError(url, message=f"API returned no data for URL: {url}")
-        source = Source.from_api_response(result)
+        async def _create() -> Source:
+            # Preserve transport-level signals so callers can act on the specific
+            # type (AuthError → re-login, RateLimitError → back-off with retry_after,
+            # ServerError → transient-retry). RateLimitError, ServerError, and
+            # NetworkError must propagate so ``idempotent_create`` can catch
+            # them and run the probe; AuthError continues to propagate to the
+            # caller (auth failure cannot have committed the write). Only the
+            # generic RPCError catch wraps into SourceAddError with the
+            # underlying cause attached. Mirrors the propagation contract in
+            # _register_file_source (#474, #407).
+            try:
+                if video_id:
+                    result = await self._add_youtube_source(notebook_id, url)
+                else:
+                    result = await self._add_url_source(notebook_id, url)
+            except (AuthError, RateLimitError, ServerError, NetworkError):
+                raise
+            except RPCError as e:
+                raise SourceAddError(url, cause=e) from e
+
+            if result is None:
+                raise SourceAddError(url, message=f"API returned no data for URL: {url}")
+            return Source.from_api_response(result)
+
+        async def _probe() -> Source | None:
+            # T7.B2: after a transport failure on ADD_SOURCE, list the
+            # notebook's sources and check whether one with this exact URL
+            # already exists. Best-effort — if listing fails, treat as
+            # no-match so the wrapper retries the create.
+            try:
+                sources = await self.list(notebook_id)
+            except Exception:
+                logger.debug(
+                    "add_url: probe list() failed; treating as no match",
+                    exc_info=True,
+                )
+                return None
+            for s in sources:
+                if s.url == url:
+                    return s
+            return None
+
+        source = await idempotent_create(
+            _create,
+            _probe,
+            label=f"sources.add_url[{url[:40]}]",
+        )
 
         if wait:
             return await self.wait_until_ready(notebook_id, source.id, timeout=wait_timeout)
@@ -512,6 +550,8 @@ class SourcesAPI:
         content: str,
         wait: bool = False,
         wait_timeout: float = 120.0,
+        *,
+        idempotent: bool = False,
     ) -> Source:
         """Add a text source (copied text) to a notebook.
 
@@ -521,10 +561,34 @@ class SourcesAPI:
             content: Text content.
             wait: If True, wait for source to be ready before returning.
             wait_timeout: Maximum seconds to wait if wait=True (default: 120).
+            idempotent: T7.B2 — opt-in safety flag that REFUSES the call
+                rather than risk silent duplication on retry. Text sources
+                lack a reliable server-side dedupe key (titles non-unique;
+                content not exposed in the source list), so the
+                probe-then-retry pattern used by ``add_url`` cannot be
+                applied here. When True, raises
+                :class:`NonIdempotentRetryError` immediately. Default
+                ``False`` preserves historical behavior (the underlying
+                ``_perform_authed_post`` 5xx / 429 / network retry loop
+                still runs and can duplicate the resource on a retry that
+                follows a server-side commit). For idempotent text imports,
+                embed a UUID in the title and dedupe client-side. See
+                ``docs/python-api.md#idempotency``.
 
         Returns:
             The created Source object. If wait=False, status may be PROCESSING.
+
+        Raises:
+            NonIdempotentRetryError: When ``idempotent=True``.
         """
+        if idempotent:
+            raise NonIdempotentRetryError(
+                "add_text cannot be marked idempotent: text sources have no "
+                "reliable server-side dedupe key (titles non-unique, content "
+                "not exposed). For idempotent text imports, embed a UUID in "
+                "the title and dedupe client-side. See "
+                "docs/python-api.md#idempotency."
+            )
         logger.debug("Adding text source to notebook %s: %s", notebook_id, title)
         params = [
             [[None, [title, content], None, None, None, None, None, None]],
@@ -1170,7 +1234,13 @@ class SourcesAPI:
         return bool(video_id and re.match(r"^[a-zA-Z0-9_-]+$", video_id))
 
     async def _add_youtube_source(self, notebook_id: str, url: str) -> Any:
-        """Add a YouTube video as a source."""
+        """Add a YouTube video as a source.
+
+        ``disable_internal_retries=True`` (T7.B2): ADD_SOURCE is a
+        mutating RPC that may have committed server-side even if the
+        client sees a 5xx / network error. The probe-then-retry loop
+        in ``add_url`` owns recovery via ``idempotent_create``.
+        """
         params = [
             [[None, None, None, None, None, None, None, [url], None, None, 1]],
             notebook_id,
@@ -1187,10 +1257,15 @@ class SourcesAPI:
             params,
             source_path=f"/notebook/{notebook_id}",
             allow_null=False,
+            disable_internal_retries=True,
         )
 
     async def _add_url_source(self, notebook_id: str, url: str) -> Any:
-        """Add a regular URL as a source."""
+        """Add a regular URL as a source.
+
+        ``disable_internal_retries=True`` (T7.B2): see
+        ``_add_youtube_source`` for the rationale.
+        """
         params = [
             [[None, None, [url], None, None, None, None, None]],
             notebook_id,
@@ -1202,6 +1277,7 @@ class SourcesAPI:
             RPCMethod.ADD_SOURCE,
             params,
             source_path=f"/notebook/{notebook_id}",
+            disable_internal_retries=True,
         )
 
     async def _register_file_source(self, notebook_id: str, filename: str) -> str:

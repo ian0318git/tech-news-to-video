@@ -52,7 +52,13 @@ def _set_account_limit(api: NotebooksAPI, limit: int | None) -> AsyncMock:
 class TestCreateNotebookQuotaDetection:
     @pytest.mark.asyncio
     async def test_create_uses_canonical_payload(self):
+        # T7.B2: ``create`` now snapshots the notebook list as a baseline
+        # before issuing CREATE_NOTEBOOK so the probe-then-retry wrapper
+        # can detect a server-side commit on a transient transport
+        # failure. Stub ``list`` so the canonical-payload assertion only
+        # observes the CREATE_NOTEBOOK call.
         api = _make_api()
+        api.list = AsyncMock(return_value=[])  # baseline empty
         api._core.rpc_call.return_value = [
             "Daily News",
             None,
@@ -68,6 +74,7 @@ class TestCreateNotebookQuotaDetection:
         api._core.rpc_call.assert_awaited_once_with(
             RPCMethod.CREATE_NOTEBOOK,
             build_create_notebook_params("Daily News"),
+            disable_internal_retries=True,
         )
 
     @pytest.mark.asyncio
@@ -86,7 +93,9 @@ class TestCreateNotebookQuotaDetection:
         assert exc_info.value.original_error is original
         assert "499/500" in str(exc_info.value)
         account_limits.assert_awaited_once()
-        api.list.assert_awaited_once()
+        # T7.B2: ``create`` calls ``list`` twice on an RPC failure path:
+        # once for the baseline snapshot, once for the quota check.
+        assert api.list.await_count == 2
 
     @pytest.mark.asyncio
     async def test_create_invalid_argument_at_paid_limit_raises_limit_error(self):
@@ -156,7 +165,10 @@ class TestCreateNotebookQuotaDetection:
 
         assert exc_info.value is original
         api._get_account_limits.assert_not_awaited()
-        api.list.assert_not_awaited()
+        # T7.B2: baseline list runs once before CREATE_NOTEBOOK; no
+        # quota-check list because the RPC code (13) is not the
+        # quota-exhausted code (3).
+        assert api.list.await_count == 1
 
     @pytest.mark.asyncio
     async def test_non_create_method_preserves_rpc_error_without_listing(self):
@@ -173,7 +185,9 @@ class TestCreateNotebookQuotaDetection:
 
         assert exc_info.value is original
         api._get_account_limits.assert_not_awaited()
-        api.list.assert_not_awaited()
+        # T7.B2: baseline list runs once before CREATE_NOTEBOOK; no
+        # quota-check list because the failing method isn't CREATE_NOTEBOOK.
+        assert api.list.await_count == 1
 
     @pytest.mark.asyncio
     async def test_shared_notebooks_do_not_trigger_owned_quota_error(self):
@@ -202,7 +216,9 @@ class TestCreateNotebookQuotaDetection:
             await api.create("Settings Fails")
 
         assert exc_info.value is original
-        api.list.assert_not_awaited()
+        # T7.B2: only the baseline list runs; the quota-check list is
+        # skipped because account-limit lookup itself failed.
+        assert api.list.await_count == 1
 
     @pytest.mark.asyncio
     async def test_account_limit_rpc_error_preserves_original_create_error_without_listing(self):
@@ -218,7 +234,8 @@ class TestCreateNotebookQuotaDetection:
             await api.create("Settings RPC Fails")
 
         assert exc_info.value is original
-        api.list.assert_not_awaited()
+        # T7.B2: only the baseline list runs.
+        assert api.list.await_count == 1
 
     @pytest.mark.asyncio
     async def test_missing_account_limit_preserves_original_create_error_without_listing(self):
@@ -232,7 +249,8 @@ class TestCreateNotebookQuotaDetection:
             await api.create("No Limit")
 
         assert exc_info.value is original
-        api.list.assert_not_awaited()
+        # T7.B2: only the baseline list runs.
+        assert api.list.await_count == 1
 
     @pytest.mark.asyncio
     async def test_list_failure_preserves_original_create_error(self):

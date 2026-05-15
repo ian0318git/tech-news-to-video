@@ -88,6 +88,12 @@ class TestCreateNotebook:
         httpx_mock: HTTPXMock,
         build_rpc_response,
     ):
+        # T7.B2: ``create`` snapshots the notebook list before issuing
+        # CREATE_NOTEBOOK so the probe-then-retry wrapper can detect a
+        # server-side commit on a transport failure. Stub the baseline
+        # list response first; then the create response.
+        baseline_list = build_rpc_response(RPCMethod.LIST_NOTEBOOKS, [[]])
+        httpx_mock.add_response(content=baseline_list.encode())
         response = build_rpc_response(
             RPCMethod.CREATE_NOTEBOOK,
             [
@@ -115,6 +121,9 @@ class TestCreateNotebook:
         httpx_mock: HTTPXMock,
         build_rpc_response,
     ):
+        # T7.B2: see ``test_create_notebook`` for baseline-list rationale.
+        baseline_list = build_rpc_response(RPCMethod.LIST_NOTEBOOKS, [[]])
+        httpx_mock.add_response(content=baseline_list.encode())
         response = build_rpc_response(
             RPCMethod.CREATE_NOTEBOOK,
             ["Test Title", [], "id", "📓", None, [None, None, None, None, None, [1704067200, 0]]],
@@ -124,8 +133,15 @@ class TestCreateNotebook:
         async with NotebookLMClient(auth_tokens) as client:
             await client.notebooks.create("Test Title")
 
-        request = httpx_mock.get_request()
-        assert RPCMethod.CREATE_NOTEBOOK.value in str(request.url)
+        # The create request is the second one; assert it carries the
+        # CREATE_NOTEBOOK rpcid AND the title we passed in.
+        requests = httpx_mock.get_requests()
+        create_requests = [r for r in requests if RPCMethod.CREATE_NOTEBOOK.value in str(r.url)]
+        assert len(create_requests) == 1
+        body = create_requests[0].content.decode()
+        assert "Test+Title" in body or "Test%20Title" in body, (
+            f"CREATE_NOTEBOOK request body did not contain url-encoded 'Test Title': {body[:200]}"
+        )
 
 
 class TestGetNotebook:

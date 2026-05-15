@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from ._core import ClientCore
 from ._env import get_base_url
+from ._idempotency import idempotent_create
 from ._settings import build_get_user_settings_params, extract_account_limits
 from .exceptions import NotebookLimitError, NotebookNotFoundError, RPCError
 from .rpc import RPCMethod, safe_index
@@ -74,17 +75,90 @@ class NotebooksAPI:
 
         Returns:
             The created Notebook object.
+
+        Idempotency:
+            T7.B2 — wraps the underlying CREATE_NOTEBOOK RPC in a
+            probe-then-retry loop. On a transient transport failure
+            (5xx / 429 / network), the wrapper lists notebooks and
+            checks whether a new notebook with the requested title
+            appeared since the call started. If exactly one match is
+            found, that notebook is returned without re-issuing the
+            create. If zero matches, the create is retried. If more
+            than one matches, the wrapper raises an :class:`RPCError`
+            because the situation is ambiguous (concurrent creates by
+            other clients) and the caller must intervene.
         """
         logger.debug("Creating notebook: %s", title)
         params = build_create_notebook_params(title)
+
+        # Capture the baseline notebook IDs *before* the create so the
+        # probe can distinguish a notebook that landed during this
+        # call from a pre-existing notebook with the same title. The
+        # baseline is best-effort — if listing fails (e.g. transient
+        # 5xx), we fall back to an empty baseline so a brand-new
+        # account behaves correctly.
+        #
+        # Edge case: when the baseline fetch fails AND a pre-existing
+        # notebook with the same title already exists, the probe cannot
+        # tell that notebook apart from one that just landed. The
+        # ambiguous-probe guard only fires when >1 matches appear, so
+        # a single pre-existing same-titled notebook would be returned
+        # as if it were freshly created. This is a doubly-exceptional
+        # scenario (baseline list failure + title collision) and is
+        # accepted as a known limitation; callers needing strict
+        # uniqueness should embed a UUID in the title.
         try:
-            result = await self._core.rpc_call(RPCMethod.CREATE_NOTEBOOK, params)
-        except RPCError as exc:
-            await self._raise_quota_error_if_detected(exc)
-            raise
-        notebook = Notebook.from_api_response(result)
-        logger.debug("Created notebook: %s", notebook.id)
-        return notebook
+            baseline_ids = {nb.id for nb in await self.list()}
+        except Exception:
+            logger.debug(
+                "create: baseline list() failed; falling back to empty baseline",
+                exc_info=True,
+            )
+            baseline_ids = set()
+
+        async def _create() -> Notebook:
+            try:
+                result = await self._core.rpc_call(
+                    RPCMethod.CREATE_NOTEBOOK,
+                    params,
+                    disable_internal_retries=True,
+                )
+            except RPCError as exc:
+                await self._raise_quota_error_if_detected(exc)
+                raise
+            notebook = Notebook.from_api_response(result)
+            logger.debug("Created notebook: %s", notebook.id)
+            return notebook
+
+        async def _probe() -> Notebook | None:
+            try:
+                current = await self.list()
+            except Exception:
+                logger.debug(
+                    "create: probe list() failed; treating as no match",
+                    exc_info=True,
+                )
+                return None
+            matches = [nb for nb in current if nb.id not in baseline_ids and nb.title == title]
+            if len(matches) == 1:
+                return matches[0]
+            if len(matches) > 1:
+                # Ambiguous: more than one new notebook with this title
+                # appeared during the call. We cannot safely pick one;
+                # surface the situation so the caller can resolve it.
+                raise RPCError(
+                    f"Cannot disambiguate notebook with title {title!r}: "
+                    f"probe found {len(matches)} new notebooks with this title "
+                    "after a transport failure. Resolve manually before retrying.",
+                    method_id=RPCMethod.CREATE_NOTEBOOK.value,
+                )
+            return None
+
+        return await idempotent_create(
+            _create,
+            _probe,
+            label=f"notebooks.create[{title!r}]",
+        )
 
     async def _raise_quota_error_if_detected(self, error: RPCError) -> None:
         """Convert CREATE_NOTEBOOK invalid-argument failures into quota errors."""

@@ -1670,4 +1670,105 @@ interactions:
     status:
       code: 200
       message: OK
+- request:
+    body: f.req=%5B%5B%5B%22CCqFvf%22%2C%22%5B%5C%22VCR%20Test%20Notebook%5C%22%2Cnull%2Cnull%2C%5B2%5D%2C%5B1%5D%5D%22%2Cnull%2C%22generic%22%5D%5D%5D&at=SCRUBBED_CSRF%3A1768963652873&
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '190'
+      Content-Type:
+      - application/x-www-form-urlencoded;charset=UTF-8
+      Cookie:
+      - NID=SCRUBBED; SID=SCRUBBED; __Secure-1PSID=SCRUBBED; __Secure-3PSID=SCRUBBED;
+        HSID=SCRUBBED; SSID=SCRUBBED; APISID=SCRUBBED; SAPISID=SCRUBBED; __Secure-1PAPISID=SCRUBBED;
+        __Secure-3PAPISID=SCRUBBED; __Secure-1PSIDTS=SCRUBBED; __Secure-3PSIDTS=SCRUBBED;
+        OSID=SCRUBBED; __Secure-OSID=SCRUBBED; SIDCC=SCRUBBED; __Secure-1PSIDCC=SCRUBBED;
+        __Secure-3PSIDCC=SCRUBBED
+      Host:
+      - notebooklm.google.com
+      User-Agent:
+      - python-httpx/0.28.1
+    method: POST
+    uri: https://notebooklm.google.com/_/LabsTailwindUi/data/batchexecute?rpcids=CCqFvf&source-path=%2F&f.sid=SCRUBBED&rt=c
+  response:
+    body:
+      string: ')]}''
+
+
+        318
+
+        [["wrb.fr","CCqFvf","[\"VCR Test Notebook\",null,\"afefc562-f8d1-41ec-a5d5-c197efdf52e1\",null,null,[1,false,true,null,null,null,1,null,null,null,null,null,false],null,null,null,null,null,[[\"6b8bc782-7624-47cd-a5ef-8679165c076f\"]]]",null,null,null,"generic"],["di",319],["af.httprm",319,"-4580901401196270382",10]]
+
+        25
+
+        [["e",4,null,null,354]]
+
+        '
+    headers:
+      Accept-CH:
+      - Sec-CH-UA-Arch, Sec-CH-UA-Bitness, Sec-CH-UA-Full-Version, Sec-CH-UA-Full-Version-List,
+        Sec-CH-UA-Model, Sec-CH-UA-WoW64, Sec-CH-UA-Form-Factors, Sec-CH-UA-Platform,
+        Sec-CH-UA-Platform-Version
+      Alt-Svc:
+      - h3=":443"; ma=2592000,h3-29=":443"; ma=2592000
+      Cache-Control:
+      - no-cache, no-store, max-age=0, must-revalidate
+      Content-Disposition:
+      - attachment; filename="response.bin"; filename*=UTF-8''response.bin
+      Content-Security-Policy:
+      - require-trusted-types-for 'script';report-uri /_/LabsTailwindUi/cspreport
+      Content-Type:
+      - application/json; charset=utf-8
+      Cross-Origin-Opener-Policy:
+      - same-origin
+      Cross-Origin-Resource-Policy:
+      - same-site
+      Date:
+      - Wed, 21 Jan 2026 02:47:33 GMT
+      Expires:
+      - Mon, 01 Jan 1990 00:00:00 GMT
+      P3P:
+      - CP="This is not a P3P policy! See g.co/p3phelp for more info."
+      Permissions-Policy:
+      - ch-ua-arch=*, ch-ua-bitness=*, ch-ua-full-version=*, ch-ua-full-version-list=*,
+        ch-ua-model=*, ch-ua-wow64=*, ch-ua-form-factors=*, ch-ua-platform=*, ch-ua-platform-version=*
+      Pragma:
+      - no-cache
+      Server:
+      - ESF
+      Set-Cookie:
+      - NID=SCRUBBED; expires=Thu, 23-Jul-2026 02:47:33 GMT; path=/; domain=.google.com;
+        HttpOnly
+      - SIDCC=SCRUBBED; expires=Thu, 21-Jan-2027 02:47:33 GMT; path=/; domain=.google.com;
+        priority=high
+      - __Secure-1PSIDCC=SCRUBBED; expires=Thu, 21-Jan-2027 02:47:33 GMT; path=/;
+        domain=.google.com; Secure; HttpOnly; priority=high
+      - __Secure-3PSIDCC=SCRUBBED; expires=Thu, 21-Jan-2027 02:47:33 GMT; path=/;
+        domain=.google.com; Secure; HttpOnly; priority=high; SameSite=none
+      - SIDCC=SCRUBBED; expires=Thu, 21-Jan-2027 02:47:33 GMT; path=/; domain=.google.com;
+        priority=high
+      - __Secure-1PSIDCC=SCRUBBED; expires=Thu, 21-Jan-2027 02:47:33 GMT; path=/;
+        domain=.google.com; Secure; HttpOnly; priority=high
+      - __Secure-3PSIDCC=SCRUBBED; expires=Thu, 21-Jan-2027 02:47:33 GMT; path=/;
+        domain=.google.com; Secure; HttpOnly; priority=high; SameSite=none
+      Transfer-Encoding:
+      - chunked
+      Vary:
+      - Sec-Fetch-Dest, Sec-Fetch-Mode, Sec-Fetch-Site
+      X-Content-Type-Options:
+      - nosniff
+      X-Frame-Options:
+      - SAMEORIGIN
+      X-XSS-Protection:
+      - '0'
+      content-length:
+      - '354'
+    status:
+      code: 200
+      message: OK
 version: 1
