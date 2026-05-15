@@ -32,10 +32,21 @@ from vcr_config import notebooklm_vcr
 # Skip all tests in this module if cassettes are not available
 pytestmark = [pytest.mark.vcr, skip_no_cassettes]
 
-# Use same env vars as e2e tests for consistency
-# These only matter during recording - replay uses recorded responses
+# Use same env vars as e2e tests for consistency.
+#
+# These only matter during recording for endpoints whose matcher ignores the
+# request body (most batchexecute calls). For body-aware matchers
+# — notably ``freq`` on the streaming-chat endpoint (T8.A2) — replay also
+# needs to send the SAME notebook_id that was recorded, because the matcher
+# compares slot 7 of the decoded ``f.req`` envelope. We therefore default
+# ``MUTABLE_NOTEBOOK_ID`` to the canonical Tier-8 generation notebook UUID
+# used to record the chat cassettes (T8.B2); recording-time runs override
+# this with the real env var.
 READONLY_NOTEBOOK_ID = os.environ.get("NOTEBOOKLM_READ_ONLY_NOTEBOOK_ID", "")
-MUTABLE_NOTEBOOK_ID = os.environ.get("NOTEBOOKLM_GENERATION_NOTEBOOK_ID", "")
+MUTABLE_NOTEBOOK_ID = os.environ.get(
+    "NOTEBOOKLM_GENERATION_NOTEBOOK_ID",
+    "bb00c9e3-656c-4fd2-b890-2b71e1cf3814",
+)
 
 
 # =============================================================================
@@ -531,12 +542,6 @@ class TestChatAPI:
 
     @pytest.mark.vcr
     @pytest.mark.asyncio
-    @pytest.mark.xfail(
-        reason="T8.B2 re-record: chat_ask.yaml predates the f.req body matcher "
-        "and carries a stale 5-param shape (C3). This xfail must be removed in "
-        "the same PR that re-records chat_ask.yaml against the freq matcher.",
-        strict=False,
-    )
     @notebooklm_vcr.use_cassette(
         "chat_ask.yaml",
         # Opt this streaming-chat test in to the ``freq`` body matcher (T8.A2).
@@ -559,7 +564,13 @@ class TestChatAPI:
 
     @pytest.mark.vcr
     @pytest.mark.asyncio
-    @notebooklm_vcr.use_cassette("chat_ask_with_references.yaml")
+    @notebooklm_vcr.use_cassette(
+        "chat_ask_with_references.yaml",
+        # Opt-in to the ``freq`` body matcher (T8.A2) so the streaming-chat
+        # POST is disambiguated by its decoded ``f.req`` payload rather than
+        # by replay-order. See ``test_ask`` above for the full rationale.
+        match_on=["method", "scheme", "host", "port", "path", "freq"],
+    )
     async def test_ask_with_references(self):
         """Ask a question that generates references."""
         async with vcr_client() as client:

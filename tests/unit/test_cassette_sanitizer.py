@@ -376,9 +376,8 @@ def test_python_guard_repo_allowlist_is_explicit_basename_list() -> None:
     # ``example_httpbin_{get,post}.yaml`` are NOT in this required-set anymore —
     # they were deleted in T8.B7 (the audit's I-misc origin-IP leak was in
     # illustrative VCR fixtures, not real NotebookLM cassettes).
-    for required in (
-        "artifacts_revise_slide.yaml",
-        "chat_ask.yaml",
-        "chat_ask_with_references.yaml",
-    ):
+    # ``chat_ask.yaml`` + ``chat_ask_with_references.yaml`` are NOT in this
+    # required-set anymore — they were re-recorded in T8.B2 against the
+    # current 9-param streaming-chat builder (C3 stale-shape regression).
+    for required in ("artifacts_revise_slide.yaml",):
         assert required in entries, f"missing required allowlist entry: {required}"

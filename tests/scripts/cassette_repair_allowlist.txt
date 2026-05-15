@@ -36,17 +36,18 @@
 example_batchexecute_pattern.yaml
 example_scrubbed_cookies.yaml
 
-# --- spec-explicit entries (3 total; 2 also in the /ogw/ group) -----------
-# ``sources_add_file.yaml`` was previously in this list and the /ogw/ group;
-# it was re-scrubbed in T8.B4 (I17 upload tokens) and its avatar URLs were
-# collapsed in the same pass, so it is removed from both groupings.
+# --- spec-explicit entries (1 total; also in the /ogw/ group) ------------
+# ``sources_add_file.yaml`` was removed in T8.B4 (I17 upload tokens re-scrub,
+# /ogw/ avatar URLs collapsed in the same pass).
+# ``chat_ask.yaml`` + ``chat_ask_with_references.yaml`` were removed in T8.B2
+# — both were re-recorded against the current 9-param streaming-chat builder
+# (src/notebooklm/_chat.py:459-469) so they no longer need the allowlist
+# escape hatch.
 artifacts_revise_slide.yaml
-chat_ask.yaml
-chat_ask_with_references.yaml
 
-# --- /ogw/ avatar URL group (61 entries unique to this group;
-# 2 more cassettes — chat_ask, chat_ask_with_references — also contain
-# ``/ogw/`` and are already listed in the spec-explicit group above) -------
+# --- /ogw/ avatar URL group (61 entries; no spec-explicit cassettes overlap
+# with this group anymore — sources_add_file was repaired in T8.B4 and
+# chat_ask cassettes were re-recorded in T8.B2) ---------------------------
 artifacts_delete.yaml
 artifacts_download_data_table.yaml
 artifacts_download_flashcards.yaml

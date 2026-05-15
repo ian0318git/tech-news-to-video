@@ -77,10 +77,10 @@ AUDIT_REPAIR_LIST: dict[str, str] = {
     "artifacts_revise_slide.yaml": (
         "Phase 2 T8.B1 will fix (C2: f.req=SCRUBBED destroyed payload)"
     ),
-    "chat_ask.yaml": ("Phase 2 T8.B2 will fix (C3: stale chat-ask shape / shape drift)"),
-    "chat_ask_with_references.yaml": (
-        "Phase 2 T8.B2 will fix (C3: stale chat-ask shape / shape drift)"
-    ),
+    # chat_ask.yaml + chat_ask_with_references.yaml were repaired in T8.B2 —
+    # re-recorded against the current 9-param streaming-chat builder
+    # (src/notebooklm/_chat.py:459-469) with the ``freq`` body matcher
+    # opted in per-cassette in tests/integration/test_vcr_comprehensive.py.
     # sources_add_file.yaml was repaired in T8.B4 — upload tokens (I17)
     # scrubbed in place. sources_add_drive.yaml +
     # sources_check_freshness_drive.yaml were repaired in T8.B5 — Drive AONS
