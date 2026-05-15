@@ -108,10 +108,10 @@ jobs:
           echo "::warning::Continuing so the non-browser test matrix can run."
         fi
 
-    - name: Assert cassettes are sanitized (T5.E, T8.A5a)
-      # Windows gate retained pending T8.A5b (cross-platform CI wiring).
-      if: runner.os != 'Windows'
-      shell: bash
+    - name: Assert cassettes are sanitized (T5.E, T8.A5a, T8.A5b)
+      # Runs on all matrix entries (ubuntu, macos, windows × 5 Python versions).
+      # The legacy bash gate was lifted in T8.A5b after T8.A5a replaced the
+      # shell script with a portable Python invocation.
       run: uv run python tests/scripts/check_cassettes_clean.py
 
     - name: Run tests with coverage
