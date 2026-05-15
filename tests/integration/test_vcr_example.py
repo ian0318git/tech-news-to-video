@@ -13,8 +13,10 @@ Usage:
     # Replay mode (default, uses recorded cassettes):
     pytest tests/integration/test_vcr_example.py -v
 
-Note: Cassettes are gitignored by default. To share recorded cassettes,
-verify they're properly scrubbed and commit them explicitly.
+Note: Cassettes are committed to the repo after security review (see
+.gitignore for the policy). Verify sensitive data is scrubbed
+(``uv run python tests/scripts/check_cassettes_clean.py``) before
+committing a new or re-recorded cassette.
 
 Note: These tests are automatically skipped if cassettes are not available.
 """
@@ -38,7 +40,7 @@ class TestVCRScrubbing:
     """Tests verifying sensitive data scrubbing."""
 
     @pytest.mark.vcr
-    @notebooklm_vcr.use_cassette("example_scrubbed_cookies.yaml")
+    @notebooklm_vcr.use_cassette("examples/example_scrubbed_cookies.yaml")
     @pytest.mark.asyncio
     async def test_cookies_are_scrubbed(self):
         """Verify sensitive cookies are scrubbed from cassettes.
@@ -70,7 +72,7 @@ class TestVCRWithNotebookLMPatterns:
     """
 
     @pytest.mark.vcr
-    @notebooklm_vcr.use_cassette("example_batchexecute_pattern.yaml")
+    @notebooklm_vcr.use_cassette("examples/example_batchexecute_pattern.yaml")
     @pytest.mark.asyncio
     async def test_batchexecute_style_request(self):
         """Simulate the batchexecute request pattern used by notebooklm-py.
