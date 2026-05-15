@@ -32,6 +32,10 @@ import pytest
 from notebooklm import NotebookLMClient
 from notebooklm.rpc import RPCMethod
 
+# T8.D11 — mock-transport cancel-during-create tests; no HTTP, no cassette.
+# Opt out of the tier-enforcement hook in tests/integration/conftest.py.
+pytestmark = pytest.mark.allow_no_vcr
+
 
 def _wrb_response(rpc_id: str, payload) -> str:
     """Single-RPC batchexecute response body in ``)]}}\\n<len>\\n<chunk>\\n`` form."""

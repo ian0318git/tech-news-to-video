@@ -44,6 +44,10 @@ from notebooklm import (
 )
 from notebooklm.rpc import RPCMethod
 
+# T8.D11 — mock-transport idempotency tests; no HTTP, no cassette. Opt out
+# of the tier-enforcement hook in tests/integration/conftest.py.
+pytestmark = pytest.mark.allow_no_vcr
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

@@ -105,14 +105,50 @@ _T8_A1_XFAIL_NODEIDS = frozenset(
 )
 
 
-def pytest_collection_modifyitems(config, items):
-    """Auto-apply xfail to T8.A1-surfaced cassette-drift failures.
+def _has_use_cassette_decorator(item) -> bool:
+    """Detect ``@notebooklm_vcr.use_cassette(...)`` on a test callable.
 
-    Adding ``rpcids`` to the default VCR matcher (T8.A1) surfaces cassettes
-    whose recorded rpc-call order doesn't match live call order. Re-recording
-    is phase-2 work (T8.B*); until then, mark these tests xfail so CI stays
-    green and the phase-2 PRs that re-record each cassette can simply remove
-    the entry from ``_T8_A1_XFAIL_NODEIDS``.
+    ``VCR.use_cassette`` returns a ``CassetteContextDecorator``; applying it
+    as a decorator wraps the test in a ``wrapt.FunctionWrapper`` whose
+    ``_self_wrapper`` is a bound method on the ``CassetteContextDecorator``.
+    We detect that wrapper class by name (``CassetteContextDecorator``) so
+    the check stays robust if vcrpy ever moves the class — and so the check
+    does not require importing ``vcr`` in this module.
+
+    Walks ``__wrapped__`` to handle stacked decorators (e.g.
+    ``@pytest.mark.parametrize`` on top of ``@notebooklm_vcr.use_cassette``).
+    """
+    func = getattr(item, "function", None)
+    seen: set[int] = set()
+    while func is not None and id(func) not in seen:
+        seen.add(id(func))
+        wrapper = getattr(func, "_self_wrapper", None)
+        if wrapper is not None:
+            owner = getattr(wrapper, "__self__", None)
+            if owner is not None and type(owner).__name__ == "CassetteContextDecorator":
+                return True
+        func = getattr(func, "__wrapped__", None)
+    return False
+
+
+def pytest_collection_modifyitems(config, items):
+    """Auto-apply xfail to T8.A1-surfaced cassette-drift failures, then
+    enforce the integration tier-VCR rule (T8.D11).
+
+    **T8.A1 xfail layer.** Adding ``rpcids`` to the default VCR matcher
+    surfaces cassettes whose recorded rpc-call order doesn't match live call
+    order. Re-recording is phase-2 work (T8.B*); until then, mark these
+    tests xfail so CI stays green and the phase-2 PRs that re-record each
+    cassette can simply remove the entry from ``_T8_A1_XFAIL_NODEIDS``.
+
+    **T8.D11 tier-enforcement layer.** After xfail-tagging, every collected
+    test under ``tests/integration/`` MUST be VCR-tier: it must carry
+    ``@pytest.mark.vcr``, be decorated with ``@notebooklm_vcr.use_cassette``,
+    or explicitly opt out with ``@pytest.mark.allow_no_vcr`` (for mock-only
+    or no-network tests that legitimately live under ``tests/integration/``
+    — e.g. ``test_skill_packaging.py``, ``concurrency/test_*``). Violations
+    raise ``pytest.UsageError`` so the test suite refuses to collect rather
+    than silently letting a new mock test slip into the integration tier.
     """
     marker = pytest.mark.xfail(
         reason="T8.A1 matcher tightening surfaced cassette drift; phase-2 T8.B* re-records",
@@ -121,6 +157,28 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if item.nodeid in _T8_A1_XFAIL_NODEIDS:
             item.add_marker(marker)
+
+    # T8.D11 — tier enforcement.
+    violations: list[str] = []
+    for item in items:
+        nodeid = item.nodeid
+        if not nodeid.startswith("tests/integration/"):
+            continue
+        if item.get_closest_marker("vcr") is not None:
+            continue
+        if item.get_closest_marker("allow_no_vcr") is not None:
+            continue
+        if _has_use_cassette_decorator(item):
+            continue
+        violations.append(nodeid)
+    if violations:
+        joined = "\n  ".join(violations)
+        raise pytest.UsageError(
+            "tests/integration/ tests must be VCR-tier. Add "
+            "@pytest.mark.vcr, @notebooklm_vcr.use_cassette, or — for "
+            "mock-only tests — @pytest.mark.allow_no_vcr. Violations:\n  "
+            f"{joined}"
+        )
 
 
 # =============================================================================

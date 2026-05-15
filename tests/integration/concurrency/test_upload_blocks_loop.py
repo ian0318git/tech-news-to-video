@@ -66,6 +66,10 @@ import pytest
 
 from notebooklm._sources import SourcesAPI
 
+# T8.D11 — mock-based loop-blocking detection tests; no HTTP, no cassette.
+# Opt out of the tier-enforcement hook in tests/integration/conftest.py.
+pytestmark = pytest.mark.allow_no_vcr
+
 # How long the injected synchronous ``.read`` blocks for. 200 ms is well
 # above the asyncio scheduler resolution and comfortably above CI jitter,
 # but short enough to keep the test fast.

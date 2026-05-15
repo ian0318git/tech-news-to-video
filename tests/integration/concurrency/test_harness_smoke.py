@@ -50,6 +50,11 @@ from notebooklm.rpc import RPCMethod
 
 from .conftest import ConcurrentMockTransport
 
+# T8.D11 — concurrency-harness smoke tests against a mock transport; no
+# HTTP, no cassette. Opt out of the tier-enforcement hook in
+# tests/integration/conftest.py.
+pytestmark = pytest.mark.allow_no_vcr
+
 
 def _make_auth() -> AuthTokens:
     """Synthetic auth tokens — values don't matter, the mock transport

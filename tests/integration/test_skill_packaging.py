@@ -7,6 +7,10 @@ from pathlib import Path
 
 import pytest
 
+# T8.D11 — wheel-build smoke test; no HTTP, no cassette. Opt out of the
+# tier-enforcement hook in tests/integration/conftest.py.
+pytestmark = pytest.mark.allow_no_vcr
+
 
 def test_wheel_includes_root_skill_content(tmp_path):
     """The built wheel should carry the canonical repo agent docs into package data."""

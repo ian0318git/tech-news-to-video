@@ -31,6 +31,10 @@ import pytest
 from notebooklm._core import ClientCore
 from notebooklm.auth import AuthTokens
 
+# T8.D11 — async-cancellation propagation tests with no HTTP, no cassette.
+# Opt out of the tier-enforcement hook in tests/integration/conftest.py.
+pytestmark = pytest.mark.allow_no_vcr
+
 # Event-wait deadlines: tight enough to fail fast on a regression that
 # hangs, generous enough not to flake on a slow CI runner. Every
 # event-wait below resolves in <100ms locally.

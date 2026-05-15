@@ -61,6 +61,10 @@ import pytest
 
 from notebooklm import NotebookLMClient
 
+# T8.D11 — mock-transport concurrency tests; no HTTP, no cassette. Opt out
+# of the tier-enforcement hook in tests/integration/conftest.py.
+pytestmark = pytest.mark.allow_no_vcr
+
 # ---------------------------------------------------------------------------
 # Test 1 — TOCTOU: validated FD must survive a path-swap between validation
 # and upload-open.

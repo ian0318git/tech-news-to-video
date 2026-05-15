@@ -30,6 +30,10 @@ import pytest
 from notebooklm import NotebookLMClient
 from notebooklm.types import ConnectionLimits
 
+# T8.D11 — pool-config + patch-based tuning tests; no HTTP, no cassette.
+# Opt out of the tier-enforcement hook in tests/integration/conftest.py.
+pytestmark = pytest.mark.allow_no_vcr
+
 
 def test_connection_limits_dataclass_defaults() -> None:
     """The defaults match the audit's recommendation for typical fan-out."""

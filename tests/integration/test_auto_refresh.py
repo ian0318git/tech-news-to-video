@@ -10,6 +10,10 @@ from notebooklm import NotebookLMClient
 from notebooklm.auth import AuthTokens
 from notebooklm.rpc import RPCError
 
+# T8.D11 — mock-based refresh-callback wiring tests; no HTTP, no cassette.
+# Opt out of the tier-enforcement hook in tests/integration/conftest.py.
+pytestmark = pytest.mark.allow_no_vcr
+
 
 class TestAutoRefreshIntegration:
     @pytest.mark.asyncio

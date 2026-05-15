@@ -46,6 +46,10 @@ from notebooklm import NotebookLMClient
 
 from .helpers import with_simulated_cancel
 
+# T8.D11 — mock-transport cancellation tests; no HTTP, no cassette. Opt out
+# of the tier-enforcement hook in tests/integration/conftest.py.
+pytestmark = pytest.mark.allow_no_vcr
+
 UPLOAD_URL = "https://example.test/scotty/upload-session-abc123"
 
 

@@ -64,6 +64,10 @@ import pytest
 from notebooklm._artifacts import ArtifactsAPI
 from notebooklm.types import ArtifactDownloadError
 
+# T8.D11 — mock-based loop-blocking detection tests; no HTTP, no cassette.
+# Opt out of the tier-enforcement hook in tests/integration/conftest.py.
+pytestmark = pytest.mark.allow_no_vcr
+
 # A "slow filesystem" or "slow auth store" simulation. 200 ms is well
 # above any plausible scheduler hiccup on CI and far above the
 # ``MAX_GAP_MS`` assertion bound, so a regression where the call

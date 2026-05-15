@@ -23,6 +23,10 @@ from notebooklm._notebooks import NotebooksAPI
 from notebooklm.exceptions import UnknownRPCMethodError
 from notebooklm.rpc import RPCMethod
 
+# T8.D11 — mock-only drift tests; no HTTP, no cassette. Opt out of the
+# tier-enforcement hook in tests/integration/conftest.py.
+pytestmark = pytest.mark.allow_no_vcr
+
 
 def _make_api(rpc_return):
     api = NotebooksAPI.__new__(NotebooksAPI)

@@ -23,6 +23,10 @@ import pytest
 
 from notebooklm import NotebookLMClient
 
+# T8.D11 — mock-based __aexit__ arbitration tests; no HTTP, no cassette.
+# Opt out of the tier-enforcement hook in tests/integration/conftest.py.
+pytestmark = pytest.mark.allow_no_vcr
+
 
 @pytest.fixture(autouse=True)
 def _stub_open(monkeypatch: pytest.MonkeyPatch) -> None:
