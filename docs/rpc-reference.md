@@ -1,12 +1,16 @@
 # RPC & UI Reference
 
 **Status:** Active
-**Last Updated:** 2026-05-09
+**Last Updated:** 2026-05-14
 **Source of Truth:** `src/notebooklm/rpc/types.py`
 **Purpose:** Complete reference for RPC methods, UI selectors, and payload structures
 
 > **Note:** Payload structures extracted from actual implementation in `src/notebooklm/`.
-> Each payload includes a reference to its source file.
+> Each payload includes a reference to its source file. The CREATE_ARTIFACT
+> payloads below were re-verified against the live builders in `_artifacts.py`
+> on 2026-05-14 (AUDIO, VIDEO_EXPLAINER, VIDEO_BRIEF, VIDEO_CINEMATIC,
+> STUDY_GUIDE, BRIEFING_DOC, BLOG_POST, MIND_MAP, QUIZ, FLASHCARDS,
+> INFOGRAPHIC, SLIDE_DECK, DATA_TABLE).
 
 ---
 
@@ -539,6 +543,46 @@ params = [
 **Source:** `_artifacts.py::generate_video()`
 
 ```python
+# Build the inner video config; style_prompt is appended ONLY when set
+# (which the builder allows only for video_style=VideoStyle.CUSTOM).
+video_config = [
+    source_ids_double,
+    language,             # "en"
+    instructions,
+    None,
+    format_code,          # 1=EXPLAINER, 2=BRIEF, 3=CINEMATIC
+    style_code,           # 1=AUTO_SELECT, 2=CUSTOM, 3=CLASSIC, 4=WHITEBOARD, ...
+]
+if style_prompt:          # Optional 7th element; CUSTOM style only
+    video_config.append(style_prompt)
+
+params = [
+    [2],
+    notebook_id,
+    [
+        None,                         # [0]
+        None,                         # [1]
+        3,                            # [2]: ArtifactTypeCode.VIDEO
+        source_ids_triple,            # [3]
+        None,                         # [4]
+        None,                         # [5]
+        None,                         # [6]
+        None,                         # [7]
+        [None, None, video_config],   # [8]
+    ],
+]
+```
+
+#### Cinematic Video Overview (Type 3, format=3)
+
+**Source:** `_artifacts.py::generate_cinematic_video()`
+
+Cinematic videos use AI-generated documentary footage (Veo 3) instead of
+slide-deck animations. They share the standard video RPC (Type 3) but omit
+`style_code` and never accept `style_prompt`. Requires a Google AI Ultra
+subscription.
+
+```python
 params = [
     [2],
     notebook_id,
@@ -559,8 +603,7 @@ params = [
                 language,             # "en"
                 instructions,
                 None,
-                format_code,          # 1=EXPLAINER, 2=BRIEF
-                style_code,           # 1=AUTO, 2=CUSTOM, 3=CLASSIC, 4=WHITEBOARD, etc.
+                3,                    # VideoFormat.CINEMATIC
             ],
         ],                            # [8]
     ],
@@ -675,7 +718,10 @@ params = [
 
 ```python
 # Orientation: 1=LANDSCAPE, 2=PORTRAIT, 3=SQUARE
-# Detail: 1=CONCISE, 2=STANDARD, 3=DETAILED
+# Detail:      1=CONCISE, 2=STANDARD, 3=DETAILED
+# Style:       InfographicStyle enum (1=AUTO_SELECT, 2=SKETCH_NOTE,
+#              3=PROFESSIONAL, 4=BENTO_GRID, 5=EDITORIAL, ...).
+#              See rpc/types.py::InfographicStyle for the full list.
 
 params = [
     [2],
@@ -686,13 +732,14 @@ params = [
         7,                            # [2]: ArtifactTypeCode.INFOGRAPHIC
         source_ids_triple,            # [3]
         None, None, None, None, None, None, None, None, None, None,  # [4-13]
-        [
-            None,
-            [instructions, language, None, orientation_code, detail_code],
-        ],                            # [14]
+        [[instructions, language, None, orientation_code, detail_code, style_code]],  # [14]
     ],
 ]
 ```
+
+**Note:** Position [14] wraps the config in a single-element list (`[[...]]`),
+not `[None, [...]]`. The 6th tuple element `style_code` was added with the
+infographic style preset feature; pass `None` to let the backend auto-select.
 
 #### Slide Deck (Type 8)
 
@@ -1404,11 +1451,13 @@ await rpc_call(
 )
 
 # Response includes a string like:
-# "NOTEBOOKLM_TIER_STANDARD"
-# "NOTEBOOKLM_TIER_PRO"
-# "NOTEBOOKLM_TIER_PRO_CONSUMER_USER"
-# "NOTEBOOKLM_TIER_PRO_DASHER_END_USER"
+# "NOTEBOOKLM_TIER_STANDARD"           - Free tier
+# "NOTEBOOKLM_TIER_PLUS"               - Google AI Plus
+# "NOTEBOOKLM_TIER_PRO"                - Google AI Pro
+# "NOTEBOOKLM_TIER_PRO_DASHER_END_USER"- Google Workspace Pro (Dasher domain)
+# "NOTEBOOKLM_TIER_ULTRA"              - Google AI Ultra
 #
+# Source of truth: src/notebooklm/_settings.py::_TIER_PLAN_NAMES
 # Treat this as internal account metadata. Use GET_USER_SETTINGS limits for
 # notebook/source quota decisions.
 ```
@@ -1548,12 +1597,16 @@ Note: Mind Maps are NOT shareable (they don't have public URLs).
 
 ```python
 # share_options: [1] for public, [0] for private
-# artifact_id is optional - used to generate a deep-link URL to that specific artifact
-params = [
-    share_options,  # 0: [1] for public link, [0] for private
-    notebook_id,    # 1: Notebook ID
-    artifact_id,    # 2: Optional - artifact ID for deep-link URL
-]
+# Payload shape is conditional on artifact_id:
+#   - Without artifact_id: 2-tuple [share_options, notebook_id]
+#   - With artifact_id (truthy): 3-tuple [share_options, notebook_id, artifact_id]
+# Sending a third positional element when artifact_id is None/empty changes the
+# wire payload, so callers MUST omit it rather than pass null.
+share_options = [1] if public else [0]
+if artifact_id:
+    params = [share_options, notebook_id, artifact_id]
+else:
+    params = [share_options, notebook_id]
 
 # Called with source_path:
 await rpc_call(
