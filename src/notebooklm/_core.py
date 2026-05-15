@@ -63,6 +63,14 @@ DEFAULT_CONNECT_TIMEOUT = 10.0  # Connection establishment timeout
 # Minimum keepalive interval to avoid accidentally rate-limiting accounts.google.com
 DEFAULT_KEEPALIVE_MIN_INTERVAL = 60.0
 
+# Default ceiling on concurrent in-flight ``SourcesAPI.add_file`` uploads.
+# Each in-flight upload holds one open file descriptor for the duration of
+# the upload, so the cap is also an FD-exhaustion guard (see T7.D3 /
+# audit §23). Sized for typical interactive workloads; tune higher for
+# batch ingestion pipelines that ingest dozens of files in parallel and
+# have headroom in the process FD limit (``ulimit -n``).
+DEFAULT_MAX_CONCURRENT_UPLOADS = 4
+
 # Auth error detection patterns (case-insensitive)
 # Upper bound on Retry-After wait. Caps both integer-seconds and HTTP-date forms
 # so a malicious or buggy server can't force a multi-hour pause.
@@ -289,6 +297,7 @@ class ClientCore:
         rate_limit_max_retries: int = 0,
         server_error_max_retries: int = 3,
         limits: "ConnectionLimits | None" = None,
+        max_concurrent_uploads: int | None = DEFAULT_MAX_CONCURRENT_UPLOADS,
     ):
         """Initialize the core client.
 
@@ -334,10 +343,22 @@ class ClientCore:
                 explicit ``ConnectionLimits(...)`` to widen the pool for
                 heavy batch workloads (e.g. FastAPI/Django services that
                 share one client across many concurrent requests).
+            max_concurrent_uploads: Ceiling on simultaneous in-flight
+                ``SourcesAPI.add_file`` uploads. Defaults to
+                ``DEFAULT_MAX_CONCURRENT_UPLOADS`` (4). ``None`` resolves to
+                the default — unbounded uploads are intentionally rejected
+                because each in-flight upload holds one open file
+                descriptor for the duration of the upload, and an
+                unbounded fan-out exhausts the per-process FD limit (audit
+                §23 / T7.D3). Must be ``>= 1`` when supplied. Independent
+                of the RPC connection pool because uploads use their own
+                ``httpx.AsyncClient`` (Scotty endpoint) and don't share
+                the RPC pool.
 
         Raises:
             ValueError: If ``keepalive`` or ``keepalive_min_interval`` is not a
-                positive finite number.
+                positive finite number, or if ``max_concurrent_uploads`` is
+                a non-positive integer.
         """
         # Lazy import to break the types.py -> _core.py cycle.
         from .types import ConnectionLimits
@@ -356,6 +377,27 @@ class ClientCore:
                 f"server_error_max_retries must be >= 0, got {server_error_max_retries}"
             )
         self._server_error_max_retries = server_error_max_retries
+        # ``None`` resolves to the default (``DEFAULT_MAX_CONCURRENT_UPLOADS``)
+        # rather than meaning "unbounded" — the FD-exhaustion guard is the
+        # whole point of the knob; an unbounded fan-out of ``add_file`` would
+        # exhaust the per-process FD limit before the upload semaphore could
+        # save us (audit §23 / T7.D3). Reject ``<= 0`` loudly at construction
+        # rather than allowing a silently-misconfigured pipeline.
+        if max_concurrent_uploads is None:
+            self._max_concurrent_uploads = DEFAULT_MAX_CONCURRENT_UPLOADS
+        else:
+            if max_concurrent_uploads < 1:
+                raise ValueError(
+                    f"max_concurrent_uploads must be >= 1, got {max_concurrent_uploads!r}"
+                )
+            self._max_concurrent_uploads = max_concurrent_uploads
+        # Lazily-created (``asyncio.Semaphore()`` needs a running loop in
+        # some Python versions, and ``ClientCore`` can be constructed
+        # outside one). Use ``get_upload_semaphore()`` to fetch the live
+        # semaphore on demand. Per-instance — never module-global — so two
+        # ``NotebookLMClient`` instances in the same process have
+        # independent upload budgets.
+        self._upload_semaphore: asyncio.Semaphore | None = None
         self._refresh_lock: asyncio.Lock | None = asyncio.Lock() if refresh_callback else None
         self._refresh_task: asyncio.Task[AuthTokens] | None = None
         self._http_client: httpx.AsyncClient | None = None
@@ -473,6 +515,40 @@ class ClientCore:
         async with self._reqid_lock:
             self._reqid_counter_value += step
             return self._reqid_counter_value
+
+    def get_upload_semaphore(self) -> asyncio.Semaphore:
+        """Return the per-instance upload semaphore, creating it on first use.
+
+        The semaphore caps the number of in-flight ``SourcesAPI.add_file``
+        uploads at ``max_concurrent_uploads`` (default
+        ``DEFAULT_MAX_CONCURRENT_UPLOADS``). Each in-flight upload holds
+        one open file descriptor for its duration, so the cap is also an
+        FD-exhaustion guard (audit §23 / T7.D3).
+
+        Scope of the cap:
+          - The ``async with`` block in ``add_file`` covers FD-open,
+            the two pre-upload RPCs (``_register_file_source`` and
+            ``_start_resumable_upload``), and the streaming upload. The
+            semaphore therefore also serializes those two RPCs — a side
+            effect of the FD guard, not a separate quota.
+          - The cap applies to the *blocking* ``add_file`` call. On
+            post-finalize cancel (T7.C3), the shielded background
+            ``finalize_task`` continues running with the FD still open
+            after ``add_file``'s ``async with`` exits, so the
+            instantaneous open-FD count can briefly exceed
+            ``max_concurrent_uploads`` by the number of concurrently
+            draining background tasks.
+
+        Lazy construction is required because ``asyncio.Semaphore()`` in
+        some Python versions binds to the running event loop at creation
+        time, and ``ClientCore`` can be constructed outside any loop.
+        Callers must invoke this from inside the loop where the upload
+        will run — typically inside the ``async with`` block of
+        ``add_file``.
+        """
+        if self._upload_semaphore is None:
+            self._upload_semaphore = asyncio.Semaphore(self._max_concurrent_uploads)
+        return self._upload_semaphore
 
     async def open(self) -> None:
         """Open the HTTP client connection.

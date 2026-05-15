@@ -31,7 +31,12 @@ if TYPE_CHECKING:
 
 from ._artifacts import ArtifactsAPI
 from ._chat import ChatAPI
-from ._core import DEFAULT_KEEPALIVE_MIN_INTERVAL, DEFAULT_TIMEOUT, ClientCore
+from ._core import (
+    DEFAULT_KEEPALIVE_MIN_INTERVAL,
+    DEFAULT_MAX_CONCURRENT_UPLOADS,
+    DEFAULT_TIMEOUT,
+    ClientCore,
+)
 from ._env import get_base_url
 from ._notebooks import NotebooksAPI
 from ._notes import NotesAPI
@@ -91,6 +96,7 @@ class NotebookLMClient:
         rate_limit_max_retries: int = 0,
         server_error_max_retries: int = 3,
         limits: "ConnectionLimits | None" = None,
+        max_concurrent_uploads: int | None = DEFAULT_MAX_CONCURRENT_UPLOADS,
     ):
         """Initialize the NotebookLM client.
 
@@ -122,6 +128,18 @@ class NotebookLMClient:
                 max_keepalive_connections=50, keepalive_expiry=30.0s). Widen
                 for heavy batch workloads (FastAPI/Django services sharing one
                 client across many concurrent requests).
+            max_concurrent_uploads: Ceiling on simultaneous in-flight
+                ``client.sources.add_file`` uploads. Defaults to ``4``. Each
+                in-flight upload holds one open file descriptor for the
+                duration of the upload, so the cap doubles as an
+                FD-exhaustion guard against fan-out callers that would
+                otherwise open dozens of files concurrently and exhaust
+                the per-process FD limit (audit §23 / T7.D3). ``None``
+                resolves to the default — unbounded uploads are
+                intentionally rejected. Must be ``>= 1`` when supplied.
+                Independent of the RPC pool sizing (uploads use their own
+                ``httpx.AsyncClient`` against the Scotty endpoint and
+                don't share the RPC connection pool).
         """
         # Normalize the effective storage path onto the auth object so every
         # downstream code path (refresh_auth, ClientCore.close on-close save,
@@ -147,6 +165,7 @@ class NotebookLMClient:
             rate_limit_max_retries=rate_limit_max_retries,
             server_error_max_retries=server_error_max_retries,
             limits=limits,
+            max_concurrent_uploads=max_concurrent_uploads,
         )
 
         # Initialize sub-client APIs.
@@ -216,6 +235,7 @@ class NotebookLMClient:
         rate_limit_max_retries: int = 0,
         server_error_max_retries: int = 3,
         limits: "ConnectionLimits | None" = None,
+        max_concurrent_uploads: int | None = DEFAULT_MAX_CONCURRENT_UPLOADS,
     ) -> "NotebookLMClient":
         """Create a client from Playwright storage state file.
 
@@ -241,6 +261,11 @@ class NotebookLMClient:
                 max_keepalive_connections=50, keepalive_expiry=30.0s). Widen
                 for heavy batch workloads (FastAPI/Django services sharing one
                 client across many concurrent requests).
+            max_concurrent_uploads: Ceiling on simultaneous in-flight file
+                uploads via ``client.sources.add_file``. Defaults to ``4``.
+                ``None`` resolves to the default. See :class:`NotebookLMClient`
+                for full semantics (FD-exhaustion guard, independence from
+                the RPC pool).
 
         Returns:
             NotebookLMClient instance (not yet connected).
@@ -275,6 +300,7 @@ class NotebookLMClient:
             rate_limit_max_retries=rate_limit_max_retries,
             server_error_max_retries=server_error_max_retries,
             limits=limits,
+            max_concurrent_uploads=max_concurrent_uploads,
         )
 
     async def refresh_auth(self) -> AuthTokens:

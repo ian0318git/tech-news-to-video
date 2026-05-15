@@ -3,12 +3,13 @@
 import asyncio
 import builtins
 import logging
+import os
 import re
 import warnings
 from dataclasses import replace
 from pathlib import Path
 from time import monotonic
-from typing import Any, Literal
+from typing import IO, Any, Literal
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -665,6 +666,20 @@ class SourcesAPI:
            (the file-add RPC has no title slot, so a follow-up
            ``UPDATE_SOURCE`` is the only way to set one).
 
+        Concurrency / FD lifecycle (T7.D3 / audit §23):
+            The upload section runs under
+            ``ClientCore.get_upload_semaphore()`` which bounds simultaneous
+            in-flight uploads at ``max_concurrent_uploads`` (default 4).
+            Each in-flight upload holds **one open file descriptor** for
+            the duration of the upload, so the cap doubles as an
+            FD-exhaustion guard. The file is opened ONCE during validation
+            and the resulting FD is held across the size-check, RPC
+            registration, upload-session start, and streamed body POST —
+            closing the TOCTOU window where the path could have been
+            replaced between two separate ``open()`` calls. A
+            ``try``/``with`` guarantees the FD is released on every exit
+            path, including ``CancelledError``.
+
         Args:
             notebook_id: The notebook ID.
             file_path: Path to the file to upload.
@@ -729,24 +744,87 @@ class SourcesAPI:
 
         file_path = Path(file_path).resolve()
 
+        # Cheap pre-check. The real existence + regular-file check is
+        # ``open()`` itself (errors with ``FileNotFoundError`` / ``IsADirectoryError``);
+        # these probes give a clearer up-front error AND short-circuit
+        # before we acquire the upload semaphore. They can't replace
+        # the FD-level check below because the file can be swapped between
+        # these probes and the ``open()``; that's the TOCTOU the FD-hold
+        # fix closes.
         if not file_path.exists():
             raise FileNotFoundError(f"File not found: {file_path}")
-
         if not file_path.is_file():
             raise ValidationError(f"Not a regular file: {file_path}")
 
         filename = file_path.name
-        # Get file size without loading into memory
-        file_size = file_path.stat().st_size
 
-        # Step 1: Register source intent with RPC → get SOURCE_ID
-        source_id = await self._register_file_source(notebook_id, filename)
+        # Step 0–3 run under the upload semaphore so a fan-out caller can't
+        # hold more than ``max_concurrent_uploads`` open FDs at once. The
+        # semaphore is per-instance; see ClientCore.get_upload_semaphore.
+        upload_sem = self._core.get_upload_semaphore()
+        async with upload_sem:
+            # Open the file ONCE here. The FD lives across:
+            #   - the os.fstat() size check (so the size we send to
+            #     ``_start_resumable_upload`` matches the bytes we will
+            #     actually stream),
+            #   - the two RPC calls (registration + upload-session start),
+            #   - the streamed body POST inside ``_upload_file_streaming``.
+            # A racing rename/replace of the path between any of these
+            # points cannot swap the FD's underlying inode out from under
+            # us — closing the TOCTOU window the pre-T7.D3 implementation
+            # had between its ``stat()``-based size probe and the second
+            # ``open()`` inside the streaming helper (audit §23).
+            #
+            # FD ownership handoff:
+            # ``add_file`` opens the FD here and closes it on any
+            # exception raised by the size check OR the two RPCs (the
+            # ``except BaseException`` branch below). The moment
+            # ``_upload_file_streaming`` is invoked, ownership transfers
+            # to the streaming helper, which arranges close-on-done via
+            # ``add_done_callback`` on the shielded finalize task. The
+            # transfer is necessary because T7.C3 keeps the shielded
+            # POST running in the background after a post-finalize
+            # cancel — if ``add_file`` closed the FD here, the background
+            # POST would read from a closed FD and abort, breaking the
+            # T7.C3 dangling-session guarantee.
+            # noqa SIM115: a ``with open(...)`` would close the FD on
+            # exit of the block, but ``_upload_file_streaming`` takes
+            # ownership of the FD via its shielded done-callback (see
+            # the FD-handoff comment above). We close locally only when
+            # the handoff never happens (``handed_off=False`` branch in
+            # the ``finally`` below).
+            file_obj = open(file_path, "rb")  # noqa: SIM115
+            handed_off = False
+            try:
+                # ``os.fstat(fd.fileno())`` reads inode metadata via the
+                # FD itself, not the path — even if the path has been
+                # relinked since ``open()``, this returns the inode we're
+                # about to upload.
+                file_size = os.fstat(file_obj.fileno()).st_size
 
-        # Step 2: Start resumable upload with the SOURCE_ID from step 1
-        upload_url = await self._start_resumable_upload(notebook_id, filename, file_size, source_id)
+                # Step 1: Register source intent with RPC → get SOURCE_ID
+                source_id = await self._register_file_source(notebook_id, filename)
 
-        # Step 3: Stream upload file content (memory-efficient)
-        await self._upload_file_streaming(upload_url, file_path)
+                # Step 2: Start resumable upload with the SOURCE_ID from step 1
+                upload_url = await self._start_resumable_upload(
+                    notebook_id, filename, file_size, source_id
+                )
+
+                # Step 3: Stream upload file content (memory-efficient).
+                # Ownership of ``file_obj`` transfers to
+                # ``_upload_file_streaming`` here — the helper closes it
+                # on shielded-task completion (success, error, or the
+                # post-finalize cancel branch). ``handed_off=True``
+                # prevents the local ``finally`` from double-closing.
+                handed_off = True
+                await self._upload_file_streaming(upload_url, file_obj, filename=filename)
+            finally:
+                # Close locally ONLY if ownership never transferred —
+                # i.e. ``_upload_file_streaming`` was never invoked
+                # (size-check or RPC raised). After hand-off the
+                # streaming helper owns the close.
+                if not handed_off:
+                    file_obj.close()
 
         # Step 4: Ensure the source is registered server-side BEFORE renaming.
         # The UPDATE_SOURCE RPC silently no-ops against an unregistered source
@@ -1425,11 +1503,36 @@ class SourcesAPI:
 
             return upload_url
 
-    async def _upload_file_streaming(self, upload_url: str, file_path: Path) -> None:
+    async def _upload_file_streaming(
+        self,
+        upload_url: str,
+        file_obj: IO[bytes] | Path,
+        *,
+        filename: str | None = None,
+    ) -> None:
         """Stream upload file content to the resumable upload URL.
 
         Uses streaming to avoid loading the entire file into memory,
         which is important for large PDFs and documents.
+
+        File-descriptor contract (T7.D3 / audit §23):
+          When called from ``add_file`` (the production path), ``file_obj``
+          is an already-open ``IO[bytes]`` and this helper TAKES OWNERSHIP
+          of the FD lifecycle: a done-callback on the shielded finalize
+          task closes the FD when streaming completes — success, error,
+          OR after the post-finalize background-drain branch from the
+          cancellation contract below. Ownership transfer is required
+          because the shielded background task may outlive the caller's
+          ``add_file`` invocation under post-finalize cancel; if the
+          caller closed the FD on cancel, the still-running background
+          POST would read from a closed FD and abort, breaking the
+          T7.C3 dangling-session guarantee.
+
+          A legacy ``Path`` argument is still accepted; the helper opens
+          + closes the FD itself in that branch. ``add_file`` never
+          takes that path — the Path branch exists only for the
+          existing direct-call unit tests in
+          ``tests/unit/test_sources_upload.py``.
 
         Cancellation contract (T7.C3 / audit §9):
           - The finalize POST is wrapped in ``asyncio.shield``. If a
@@ -1449,74 +1552,149 @@ class SourcesAPI:
 
         Args:
             upload_url: The resumable upload URL from _start_resumable_upload.
-            file_path: Path to the file to upload.
+            file_obj: An open binary file object positioned at the bytes to
+                upload, or (legacy) a ``Path`` the helper will open itself.
+                When ``add_file`` is the caller, this is always the open
+                FD and OWNERSHIP TRANSFERS to this helper (see
+                file-descriptor contract above). Passing a ``Path`` is
+                only supported for direct unit tests that bypass
+                ``add_file``.
+            filename: Optional filename used for diagnostic logging.
+                Defaults to ``"<file>"`` when not supplied.
         """
-        base_url = get_base_url()
-        auth_route = format_authuser_value(
-            self._core.auth.authuser,
-            self._core.auth.account_email,
-        )
-        headers = {
-            "Accept": "*/*",
-            "Content-Type": "application/x-www-form-urlencoded;charset=utf-8",
-            "x-goog-authuser": auth_route,
-            "Origin": base_url,
-            "Referer": f"{base_url}/",
-            "x-goog-upload-command": "upload, finalize",
-            "x-goog-upload-offset": "0",
-        }
+        # Discriminate: caller passed an open FD (the T7.D3 add_file path),
+        # or a Path (legacy direct-call test path — opens locally). The
+        # ``add_file`` callsite always takes the FD branch; the Path branch
+        # exists only so the existing _upload_file_streaming unit tests
+        # don't need to set up their own ``open()`` machinery.
+        path_fallback: Path | None = file_obj if isinstance(file_obj, Path) else None
+        # The "donecallback wired" sentinel — flipped to True only AFTER
+        # ``add_done_callback`` registers the FD-close hook on
+        # ``finalize_task``. If the function raises BEFORE that flip,
+        # we synchronously close the FD ourselves so a caller that
+        # transferred ownership doesn't leak.
+        close_wired = False
+        try:
+            base_url = get_base_url()
+            auth_route = format_authuser_value(
+                self._core.auth.authuser,
+                self._core.auth.account_email,
+            )
+            headers = {
+                "Accept": "*/*",
+                "Content-Type": "application/x-www-form-urlencoded;charset=utf-8",
+                "x-goog-authuser": auth_route,
+                "Origin": base_url,
+                "Referer": f"{base_url}/",
+                "x-goog-upload-command": "upload, finalize",
+                "x-goog-upload-offset": "0",
+            }
+            diag_name = filename or (path_fallback.name if path_fallback is not None else "<file>")
+            logger.debug("Streaming upload to %s for %s", upload_url, diag_name)
 
-        # Stream the file content instead of loading it all into memory
-        async def file_stream():
-            with open(file_path, "rb") as f:
-                while chunk := f.read(65536):  # 64KB chunks
+            # Stream the file content instead of loading it all into memory.
+            # When the caller passed an FD, we read directly from it (single
+            # open() per add_file call). When the caller passed a Path
+            # (legacy direct-call), we open here as a one-off helper whose
+            # ``with`` closes the locally-opened FD when the generator ends.
+            async def file_stream():
+                if path_fallback is not None:
+                    with open(path_fallback, "rb") as f:
+                        while chunk := f.read(65536):  # 64KB chunks
+                            yield chunk
+                    return
+                # FD path: caller transferred ownership to this helper; we
+                # do NOT use a ``with`` here — the FD is closed by the
+                # done-callback on ``finalize_task`` below so the shielded
+                # background task can still read from it under post-finalize
+                # cancel.
+                assert not isinstance(file_obj, Path)  # narrowed by branch above
+                while chunk := file_obj.read(65536):  # 64KB chunks
                     yield chunk
 
-        # `finalize_started` flips after the local ``httpx.AsyncClient``
-        # context enters and immediately before ``client.post(...)``. There
-        # is no ``await`` between the flip and the POST, so asyncio cannot
-        # deliver a cancel in that window — once the flag is True, the
-        # request is effectively in flight. On cancel we discriminate:
-        #   - True  → shield is keeping the in-flight POST alive; just re-raise.
-        #   - False → no POST went out, so fire a best-effort Scotty cancel.
-        finalize_started = False
+            # `finalize_started` flips after the local ``httpx.AsyncClient``
+            # context enters and immediately before ``client.post(...)``. There
+            # is no ``await`` between the flip and the POST, so asyncio cannot
+            # deliver a cancel in that window — once the flag is True, the
+            # request is effectively in flight. On cancel we discriminate:
+            #   - True  → shield is keeping the in-flight POST alive; just re-raise.
+            #   - False → no POST went out, so fire a best-effort Scotty cancel.
+            finalize_started = False
 
-        async def _do_finalize() -> None:
-            nonlocal finalize_started
-            # See _start_resumable_upload: pass the live cookie jar so
-            # httpx scopes cookies per Domain attribute. Scotty validates
-            # OSID against host and rejects foreign-host cookies. (#373)
-            async with httpx.AsyncClient(
-                timeout=httpx.Timeout(10.0, read=300.0),
-                cookies=self._core.get_http_client().cookies,
-            ) as client:
-                finalize_started = True
-                response = await client.post(upload_url, headers=headers, content=file_stream())
-                response.raise_for_status()
+            async def _do_finalize() -> None:
+                nonlocal finalize_started
+                # See _start_resumable_upload: pass the live cookie jar so
+                # httpx scopes cookies per Domain attribute. Scotty validates
+                # OSID against host and rejects foreign-host cookies. (#373)
+                async with httpx.AsyncClient(
+                    timeout=httpx.Timeout(10.0, read=300.0),
+                    cookies=self._core.get_http_client().cookies,
+                ) as client:
+                    finalize_started = True
+                    response = await client.post(upload_url, headers=headers, content=file_stream())
+                    response.raise_for_status()
 
-        def _log_finalize_exc(t: asyncio.Task[None]) -> None:
-            # On post-finalize cancel, ``finalize_task`` keeps running in the
-            # background. Without this callback, an unawaited exception
-            # (e.g. server 5xx) would surface as a noisy
-            # "Task exception was never retrieved" asyncio warning.
-            if not t.cancelled() and (exc := t.exception()) is not None:
-                logger.debug("Background finalize POST failed: %r", exc)
+            def _on_finalize_done(t: asyncio.Task[None]) -> None:
+                # Close the FD owned-by-this-helper (T7.D3 ownership transfer).
+                # Fires whether the task completed normally, raised, or was
+                # cancelled — including the post-finalize background-drain
+                # branch where the caller is long gone. The Path-branch
+                # closes its FD inside the generator's ``with`` block and
+                # does NOT need this hook.
+                if path_fallback is None:
+                    # path_fallback is None ⇔ file_obj is not a Path (see
+                    # line 1545 where path_fallback is derived).
+                    try:
+                        file_obj.close()  # type: ignore[union-attr]
+                    except Exception as close_exc:  # noqa: BLE001 — defensive
+                        # Already-closed / detached FD: harmless. Log at debug
+                        # so a real misconfiguration is still discoverable.
+                        logger.debug("Caller FD close in finalize-done failed: %r", close_exc)
+                # On post-finalize cancel, ``finalize_task`` keeps running in
+                # the background. Without this callback, an unawaited
+                # exception (e.g. server 5xx) would surface as a noisy
+                # "Task exception was never retrieved" asyncio warning.
+                if not t.cancelled() and (exc := t.exception()) is not None:
+                    logger.debug("Background finalize POST failed: %r", exc)
 
-        finalize_task = asyncio.create_task(_do_finalize())
-        finalize_task.add_done_callback(_log_finalize_exc)
-        try:
-            await asyncio.shield(finalize_task)
-        except asyncio.CancelledError:
-            if not finalize_started:
-                # Pre-finalize cancel: the POST never went out. Cancel the
-                # still-setting-up inner task and fire a best-effort
-                # Scotty cancel so the resumable upload session doesn't
-                # dangle until the server's GC sweeps it.
-                finalize_task.cancel()
-                asyncio.create_task(self._cancel_upload_session(upload_url, base_url, auth_route))
-            # Post-finalize cancel: asyncio.shield is keeping the inner
-            # task alive; let it run to completion in the background, then
-            # propagate the cancel as the caller requested.
+            finalize_task = asyncio.create_task(_do_finalize())
+            finalize_task.add_done_callback(_on_finalize_done)
+            # FD-close is now wired to fire on task completion. Even if the
+            # ``await asyncio.shield(...)`` below raises, the done-callback
+            # will close the caller-owned FD when the (possibly cancelled,
+            # possibly shielded-into-the-background) task transitions to
+            # done. From this point we no longer need the synchronous
+            # ``finally`` fallback.
+            close_wired = True
+            try:
+                await asyncio.shield(finalize_task)
+            except asyncio.CancelledError:
+                if not finalize_started:
+                    # Pre-finalize cancel: the POST never went out. Cancel
+                    # the still-setting-up inner task and fire a best-effort
+                    # Scotty cancel so the resumable upload session doesn't
+                    # dangle until the server's GC sweeps it.
+                    finalize_task.cancel()
+                    asyncio.create_task(
+                        self._cancel_upload_session(upload_url, base_url, auth_route)
+                    )
+                # Post-finalize cancel: asyncio.shield is keeping the inner
+                # task alive; let it run to completion in the background,
+                # then propagate the cancel as the caller requested.
+                raise
+        except BaseException:
+            # Pre-task-creation raise (or pre-``add_done_callback`` raise):
+            # nothing else will close the caller-owned FD. Do it
+            # synchronously so a transferred FD doesn't leak. Once the
+            # done-callback is wired (``close_wired=True``), the task's
+            # done-callback handles close on every termination path,
+            # so we skip the local close to avoid double-close.
+            if not close_wired and path_fallback is None:
+                # path_fallback is None ⇔ file_obj is not a Path.
+                try:
+                    file_obj.close()  # type: ignore[union-attr]
+                except Exception as close_exc:  # noqa: BLE001 — defensive
+                    logger.debug("Caller FD close on pre-wire exception failed: %r", close_exc)
             raise
 
     async def _cancel_upload_session(self, upload_url: str, base_url: str, auth_route: str) -> None:
