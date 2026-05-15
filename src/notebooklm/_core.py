@@ -1004,6 +1004,16 @@ class ClientCore:
         401s on the same client triggers exactly one token refresh. The lock
         protects task-creation only; the await on the task itself happens
         outside the lock so other callers can join.
+
+        The join is wrapped in :func:`asyncio.shield` (T7.C1, audit §4) so
+        that a caller cancelled while waiting — e.g. via
+        ``asyncio.wait_for(..., timeout=...)`` — unwinds locally without
+        propagating the ``CancelledError`` into the *shared* refresh task.
+        Without the shield, one cancelled waiter would cancel the
+        underlying task, taking down every sibling joined to the same
+        single-flight refresh. The slot at ``self._refresh_task`` is left
+        intact across the cancellation and is replaced only on the next
+        refresh wave once the current task transitions to ``done()``.
         """
         assert self._refresh_callback is not None
         assert self._refresh_lock is not None
@@ -1017,7 +1027,7 @@ class ClientCore:
                 self._refresh_task = asyncio.create_task(coro)
                 refresh_task = self._refresh_task
 
-        await refresh_task
+        await asyncio.shield(refresh_task)
 
     async def query_post(
         self,
