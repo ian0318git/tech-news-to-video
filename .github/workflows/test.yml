@@ -108,10 +108,11 @@ jobs:
           echo "::warning::Continuing so the non-browser test matrix can run."
         fi
 
-    - name: Assert cassettes are sanitized (T5.E)
+    - name: Assert cassettes are sanitized (T5.E, T8.A5a)
+      # Windows gate retained pending T8.A5b (cross-platform CI wiring).
       if: runner.os != 'Windows'
       shell: bash
-      run: ./tests/check_cassettes_clean.sh
+      run: uv run python tests/scripts/check_cassettes_clean.py
 
     - name: Run tests with coverage
       # Emit coverage.json so the per-file floor check below can read it

@@ -1,0 +1,115 @@
+# Repair allowlist — cassettes the Tier 8 phase-1 audit flagged for phase-2 repair.
+#
+# Entries are cassette basenames (one per line).  Blank lines and comment
+# lines (starting with ``#``) are ignored.
+#
+# Cassettes listed here are SKIPPED by ``tests/scripts/check_cassettes_clean.py``
+# unless the tool is invoked with ``--strict``.  This lets the guard be wired
+# into CI as a non-blocking step today while phase-2 cassette re-recording
+# catches up; the ``--strict`` flag will be flipped on once all entries below
+# are repaired and this file is empty / deleted.
+#
+# Two groupings (a cassette flagged for *both* reasons appears only once):
+#
+# 1. Spec-explicit entries — cassettes the audit named for repair on grounds
+#    other than ``/ogw/`` avatar URLs alone (display-name leaks, upload-token
+#    leaks, Drive-token leaks, etc.).
+#
+# 2. ``/ogw/`` avatar URL group — cassettes that embed
+#    ``lh3.googleusercontent.com/ogw/<token>`` avatar URLs.  These get scrubbed
+#    by T8.A6a; until that scrubber lands and the cassettes are re-recorded,
+#    they are allow-listed in lockstep.
+#
+# When phase-2 lands the corresponding scrubber, re-record the cassette and
+# remove its entry from this list.  Do NOT delete the file outright — the
+# guard tolerates an empty file and an empty file makes the eventual
+# ``--strict`` flip a no-op.
+
+# --- illustrative documentation fixtures (not real recordings) -------------
+# These two files are committed as illustrative examples of the cassette
+# format, not real recorded sessions.  They contain YAML strings that
+# happen to end on a closing double-quote immediately after the canonical
+# ``SCRUBBED`` placeholder (``HSID=SCRUBBED"``), and the line-by-line
+# guard captures the trailing ``"`` as part of the cookie value — making
+# it look like a leak.  The cassettes themselves are clean; the line
+# boundary is a YAML-serialization artifact.
+example_batchexecute_pattern.yaml
+example_scrubbed_cookies.yaml
+
+# --- spec-explicit entries (10 total; 6 also in the /ogw/ group) -----------
+artifacts_revise_slide.yaml
+chat_ask.yaml
+chat_ask_with_references.yaml
+example_httpbin_get.yaml
+example_httpbin_post.yaml
+sharing_get_status.yaml
+sharing_set_public.yaml
+sources_add_drive.yaml
+sources_add_file.yaml
+sources_check_freshness_drive.yaml
+
+# --- /ogw/ avatar URL group (61 entries unique to this group;
+# 6 more cassettes — chat_ask, chat_ask_with_references, sharing_get_status,
+# sharing_set_public, sources_add_drive, sources_add_file — also contain
+# ``/ogw/`` and are already listed in the spec-explicit group above) --------
+artifacts_delete.yaml
+artifacts_download_data_table.yaml
+artifacts_download_flashcards.yaml
+artifacts_download_flashcards_markdown.yaml
+artifacts_download_mind_map.yaml
+artifacts_download_quiz.yaml
+artifacts_download_quiz_markdown.yaml
+artifacts_download_report.yaml
+artifacts_export_report.yaml
+artifacts_generate_flashcards.yaml
+artifacts_generate_quiz.yaml
+artifacts_generate_report.yaml
+artifacts_generate_study_guide.yaml
+artifacts_list.yaml
+artifacts_list_audio.yaml
+artifacts_list_data_tables.yaml
+artifacts_list_flashcards.yaml
+artifacts_list_infographics.yaml
+artifacts_list_quizzes.yaml
+artifacts_list_reports.yaml
+artifacts_list_slide_decks.yaml
+artifacts_list_video.yaml
+artifacts_rename.yaml
+artifacts_suggest_reports.yaml
+chat_get_history.yaml
+notebooks_create.yaml
+notebooks_delete.yaml
+notebooks_get.yaml
+notebooks_get_description.yaml
+notebooks_get_raw.yaml
+notebooks_get_summary.yaml
+notebooks_list.yaml
+notebooks_remove_from_recent.yaml
+notebooks_rename.yaml
+notes_create.yaml
+notes_create_and_update.yaml
+notes_delete.yaml
+notes_list_mind_maps.yaml
+real_api_get_notebook.yaml
+real_api_list_artifacts.yaml
+real_api_list_audio.yaml
+real_api_list_mind_maps.yaml
+real_api_list_notebooks.yaml
+real_api_list_quizzes.yaml
+real_api_list_reports.yaml
+real_api_list_sources.yaml
+research_import_sources.yaml
+research_poll.yaml
+research_start_deep.yaml
+research_start_fast.yaml
+settings_get_output_language.yaml
+settings_set_output_language.yaml
+sources_add_text.yaml
+sources_add_url.yaml
+sources_check_freshness.yaml
+sources_delete.yaml
+sources_get_fulltext.yaml
+sources_get_guide.yaml
+sources_list.yaml
+sources_refresh.yaml
+sources_rename.yaml

@@ -1,51 +1,49 @@
-"""Tests for the cassette sanitizer in ``tests/vcr_config.py``.
+"""Tests for the cassette sanitizer and the Python guard tool.
 
-These tests cover PR-T5.E:
+Coverage map:
 
-1. Structural display-name scrub (JSON-key-anchored) — positive + negative.
-2. Regression: a legitimate two-Capitalized-word source title in cassette-style
-   JSON is NOT scrubbed (the broad ``>[A-Z][a-z]+\\s[A-Z][a-z]+<`` regex that
-   we deliberately avoided).
-3. Broadened email scrub — positive + negative + idempotency on
-   ``SCRUBBED_EMAIL@example.com``.
-4. The ``tests/check_cassettes_clean.sh`` script exits 0 on clean cassettes and
-   exits 1 when a leak is injected.
+1. Structural display-name scrub (PR-T5.E) — positive + negative cases on
+   ``tests/vcr_config.scrub_string``.
+2. Two-Capitalized-word source title regression — confirms we don't reintroduce
+   the broad ``>[A-Z][a-z]+\\s[A-Z][a-z]+<`` pattern that would clobber legit
+   fixture content.
+3. Broadened email scrub (PR-T5.E) — positive + idempotency.
+4. The Python guard ``tests/scripts/check_cassettes_clean.py`` (T8.A5a):
+   - exits 0 on clean cassettes
+   - exits 1 on email / cookie-header / JSON-key / storage_state leaks
+   - explicit ``SCRUB_PLACEHOLDERS`` allowlist (NOT a "starts with S"
+     heuristic) — closes I7
+   - accepts the ``SCRUBBED`` sentinel in all three cookie shapes
+   - honors the repair allowlist by default; ``--strict`` disables it
+   - emits ``file:line`` for every leak
+   - exits 0 when no cassettes are found at all
+
+The legacy bash-script-driven tests on PR #477 were retired here in lockstep
+with the deletion of ``tests/check_cassettes_clean.sh``.
 """
 
 from __future__ import annotations
 
-import shutil
-import stat
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
-# ``tests/vcr_config.py`` lives directly under ``tests/`` (not in a package).
-# Other test modules add it to ``sys.path``; we follow the same convention.
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TESTS_DIR = REPO_ROOT / "tests"
+# ``tests/vcr_config.py`` lives directly under ``tests/`` (not in a package).
+# Other test modules add it to ``sys.path``; we follow the same convention.
 sys.path.insert(0, str(TESTS_DIR))
 
 from vcr_config import scrub_string  # noqa: E402
 
-SCRIPT_PATH = TESTS_DIR / "check_cassettes_clean.sh"
-
-# The shell-script-driven subprocess tests need a POSIX shell + GNU grep.
-# Windows CI runners have git-bash but POSIX-quoting + grep ``-rnE`` semantics
-# don't round-trip cleanly there (path separators, line endings). The shell
-# script is also skipped in CI on Windows (see ``.github/workflows/test.yml``),
-# so we skip the matching subprocess tests here.
-_skip_on_windows = pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="check_cassettes_clean.sh is a POSIX shell script; the Windows CI"
-    " step is gated off and we skip its driver tests in lockstep.",
-)
+GUARD_SCRIPT = TESTS_DIR / "scripts" / "check_cassettes_clean.py"
+REGRESSION_FIXTURE = TESTS_DIR / "fixtures" / "bad_cassettes" / "bad_sid_starting_with_s.yaml"
 
 
 # ---------------------------------------------------------------------------
-# Structural display-name scrub
+# Structural display-name scrub (PR-T5.E)
 # ---------------------------------------------------------------------------
 
 
@@ -98,10 +96,6 @@ def test_structural_display_name_no_match_on_substring_keys() -> None:
 
     - ``displayNamespace`` — extra trailing characters before the closing quote
     - ``userDisplayName`` — extra leading characters after the opening quote
-
-    Confirms the anchor is exact-key on both sides, not a substring match.
-    (Claude review on PR #477, #6 — earlier docstring claimed
-    ``userDisplayName`` would still match, which was wrong.)
     """
     extra_trailing = '{"displayNamespace":"keep-me"}'
     extra_leading = '{"userDisplayName":"Alice Example"}'
@@ -131,7 +125,7 @@ def test_two_capital_word_in_html_text_not_scrubbed() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Broadened email scrub
+# Broadened email scrub (PR-T5.E)
 # ---------------------------------------------------------------------------
 
 
@@ -160,12 +154,7 @@ def test_broadened_email_scrub_positive(provider: str) -> None:
 
 @pytest.mark.parametrize("provider", _EMAIL_PROVIDERS)
 def test_broadened_email_scrub_unquoted_context(provider: str) -> None:
-    """Unquoted emails in raw HTML/JS contexts get scrubbed too.
-
-    Addresses gemini-code-assist review feedback on PR #477: the legacy
-    unquoted-context fallback was Gmail-only; it now covers the full provider
-    list, mirroring the JSON-quoted pattern.
-    """
+    """Unquoted emails in raw HTML/JS contexts get scrubbed too."""
     text = f'<a href="mailto:alice.example+tag@{provider}.com">Mail me</a>'
     scrubbed = scrub_string(text)
     assert provider not in scrubbed
@@ -188,154 +177,207 @@ def test_email_scrub_negative_unrelated_text() -> None:
 
 
 # ---------------------------------------------------------------------------
-# CI grep guard script: clean vs. leak cases
+# Python guard tool: ``tests/scripts/check_cassettes_clean.py`` (T8.A5a)
 #
-# All tests below shell out to ``bash`` + ``grep -rnE``; we skip them on
-# Windows in lockstep with the CI workflow (``runner.os != 'Windows'`` on the
-# guard step in .github/workflows/test.yml).
+# The guard is invoked as a subprocess so we exercise the real CLI entry
+# point — including argparse wiring, exit codes, and stdout/stderr.  It is
+# cross-platform pure-Python, so unlike the previous bash-script-driven
+# tests these run on Windows too.
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
-def fake_repo(tmp_path: Path) -> Path:
-    """Build a minimal repo-shaped tmpdir containing only the guard script and
-    a ``tests/cassettes/`` directory the script will scan.
-
-    The script falls back to plain ``grep -rnE`` outside a git work tree, so we
-    do NOT need to run ``git init`` here — we just need ``tests/cassettes/`` to
-    exist and the script to be executable.
-    """
-    (tmp_path / "tests" / "cassettes").mkdir(parents=True)
-    dest = tmp_path / "tests" / "check_cassettes_clean.sh"
-    shutil.copy2(SCRIPT_PATH, dest)
-    dest.chmod(dest.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-    return tmp_path
-
-
-def _run_guard(repo: Path) -> subprocess.CompletedProcess[str]:
+def _run_guard(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    """Invoke the guard with explicit args.  Returns the completed process."""
     return subprocess.run(
-        ["bash", str(repo / "tests" / "check_cassettes_clean.sh")],
-        cwd=str(repo),
+        [sys.executable, str(GUARD_SCRIPT), *args],
+        cwd=str(cwd) if cwd is not None else None,
         capture_output=True,
         text=True,
         check=False,
     )
 
 
-@_skip_on_windows
-def test_guard_script_exits_zero_on_clean_cassettes(fake_repo: Path) -> None:
-    cassette = fake_repo / "tests" / "cassettes" / "clean.yaml"
+def test_python_guard_exits_zero_on_clean_cassette(tmp_path: Path) -> None:
+    """A cassette containing only canonical placeholders passes the guard."""
+    cassette = tmp_path / "clean.yaml"
     cassette.write_text(
-        # Already-scrubbed sample content — no real PII, no real cookies.
-        '{"email":"SCRUBBED_EMAIL@example.com","SID":"SCRUBBED"}\n',
-    )
-    result = _run_guard(fake_repo)
-    assert result.returncode == 0, result.stderr
-    assert "OK: cassettes are sanitized" in result.stdout
-
-
-@_skip_on_windows
-def test_guard_script_exits_one_on_email_leak(fake_repo: Path) -> None:
-    cassette = fake_repo / "tests" / "cassettes" / "leak.yaml"
-    cassette.write_text('{"email":"realname@gmail.com"}\n')
-    result = _run_guard(fake_repo)
-    assert result.returncode == 1
-    assert "unsanitized email" in result.stderr
-
-
-@_skip_on_windows
-def test_guard_script_exits_one_on_cookie_json_key_leak(fake_repo: Path) -> None:
-    """Shape B — JSON dict with the cookie name as a top-level key."""
-    cassette = fake_repo / "tests" / "cassettes" / "leak.yaml"
-    # Cookie value starts with something other than 'S' so it is NOT the
-    # canonical "SCRUBBED" sentinel; the guard regex requires ``[^S][^"]+``.
-    cassette.write_text('{"SAPISID": "abcdef1234567890"}\n')
-    result = _run_guard(fake_repo)
-    assert result.returncode == 1
-    assert "JSON-key" in result.stderr or "cookie" in result.stderr
-
-
-@_skip_on_windows
-def test_guard_script_exits_one_on_cookie_header_leak(fake_repo: Path) -> None:
-    """Shape A — HTTP ``Cookie:`` / ``Set-Cookie:`` header form."""
-    cassette = fake_repo / "tests" / "cassettes" / "leak.yaml"
-    cassette.write_text("Set-Cookie: SID=abc1234567xyz; Path=/\n")
-    result = _run_guard(fake_repo)
-    assert result.returncode == 1
-    assert "cookie header" in result.stderr
-
-
-@_skip_on_windows
-def test_guard_script_exits_one_on_storage_state_leak_name_first(fake_repo: Path) -> None:
-    """Shape C — Playwright ``storage_state.json``, ``name`` before ``value``."""
-    cassette = fake_repo / "tests" / "cassettes" / "leak.yaml"
-    cassette.write_text(
-        '{"name":"SID","value":"abc1234567","domain":".google.com"}\n',
-    )
-    result = _run_guard(fake_repo)
-    assert result.returncode == 1
-    assert "storage_state" in result.stderr
-
-
-@_skip_on_windows
-def test_guard_script_exits_one_on_storage_state_leak_value_first(fake_repo: Path) -> None:
-    """Shape C — Playwright ``storage_state.json``, ``value`` before ``name``."""
-    cassette = fake_repo / "tests" / "cassettes" / "leak.yaml"
-    cassette.write_text(
-        '{"value":"abc1234567","name":"__Secure-1PSID","domain":".google.com"}\n',
-    )
-    result = _run_guard(fake_repo)
-    assert result.returncode == 1
-    assert "storage_state" in result.stderr
-
-
-@_skip_on_windows
-def test_guard_script_catches_single_char_cookie_leak(fake_repo: Path) -> None:
-    """A 1-character cookie value (``"SID": "x"``) still trips the guard.
-
-    Earlier the cookie-value regex was ``[^S][^"]+`` which required two-or-more
-    characters; a single-character non-scrubbed leak slipped through. The
-    regex was tightened to ``[^S"][^"]*`` (Claude review on PR #477, #7).
-    """
-    cassette = fake_repo / "tests" / "cassettes" / "leak.yaml"
-    cassette.write_text('{"SID": "x"}\n')
-    result = _run_guard(fake_repo)
-    assert result.returncode == 1
-
-
-@_skip_on_windows
-def test_guard_script_exits_zero_when_cassettes_directory_missing(tmp_path: Path) -> None:
-    """Fresh checkouts with no recorded cassettes must not fail the guard.
-
-    Addresses gemini-code-assist review feedback on PR #477.
-    """
-    dest = tmp_path / "tests" / "check_cassettes_clean.sh"
-    dest.parent.mkdir()
-    shutil.copy2(SCRIPT_PATH, dest)
-    dest.chmod(dest.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-    # NOTE: deliberately do NOT create tests/cassettes/.
-    result = subprocess.run(
-        ["bash", str(dest)],
-        cwd=str(tmp_path),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr
-    assert "no cassettes" in result.stdout
-
-
-@_skip_on_windows
-def test_guard_script_allows_scrubbed_cookie_sentinel(fake_repo: Path) -> None:
-    """All three cookie shapes with the ``SCRUBBED`` sentinel must NOT trip the guard."""
-    cassette = fake_repo / "tests" / "cassettes" / "ok.yaml"
-    cassette.write_text(
-        # Shape B — JSON dict, cookie name as key
-        '{"SID": "SCRUBBED", "__Secure-1PSID": "SCRUBBED"}\n'
-        # Shape A — HTTP header
+        '{"email":"SCRUBBED_EMAIL@example.com","SID":"SCRUBBED"}\n'
         "Set-Cookie: SID=SCRUBBED; Path=/\n"
-        # Shape C — Playwright storage_state
-        '{"name":"SAPISID","value":"SCRUBBED","domain":".google.com"}\n',
     )
-    result = _run_guard(fake_repo)
-    assert result.returncode == 0, result.stderr
+    result = _run_guard(str(cassette))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Summary: 1 cassettes scanned" in result.stdout
+    assert "0 leaks found" in result.stdout
+
+
+def test_python_guard_exits_one_on_email_leak(tmp_path: Path) -> None:
+    """A cassette with an unscrubbed real-provider email trips the guard."""
+    cassette = tmp_path / "leak_email.yaml"
+    cassette.write_text('{"email":"realname@gmail.com"}\n')
+    result = _run_guard(str(cassette))
+    assert result.returncode == 1
+    assert "Leak (email)" in result.stdout
+    assert "realname@gmail.com" in result.stdout
+    # Line:column format — the leak was on line 1.
+    assert ":1:" in result.stdout
+
+
+def test_python_guard_exits_one_on_cookie_header_leak(tmp_path: Path) -> None:
+    """Shape A — ``Set-Cookie: SID=value`` header with a real value."""
+    cassette = tmp_path / "leak_header.yaml"
+    cassette.write_text("Set-Cookie: SAPISID=abcdef1234567890; Path=/\n")
+    result = _run_guard(str(cassette))
+    assert result.returncode == 1
+    assert "Leak (cookie header)" in result.stdout
+
+
+def test_python_guard_exits_one_on_cookie_json_key_leak(tmp_path: Path) -> None:
+    """Shape B — JSON dict with cookie name as top-level key."""
+    cassette = tmp_path / "leak_json.yaml"
+    cassette.write_text('{"SAPISID": "abcdef1234567890"}\n')
+    result = _run_guard(str(cassette))
+    assert result.returncode == 1
+    assert "Leak (JSON key)" in result.stdout
+
+
+def test_python_guard_exits_one_on_storage_state_name_first(tmp_path: Path) -> None:
+    """Shape C — Playwright storage_state.json, ``name`` before ``value``."""
+    cassette = tmp_path / "leak_ss.yaml"
+    cassette.write_text('{"name":"SID","value":"abc1234567","domain":".google.com"}\n')
+    result = _run_guard(str(cassette))
+    assert result.returncode == 1
+    assert "Leak (storage_state (name-first))" in result.stdout
+
+
+def test_python_guard_exits_one_on_storage_state_value_first(tmp_path: Path) -> None:
+    """Shape C — Playwright storage_state.json, ``value`` before ``name``."""
+    cassette = tmp_path / "leak_ssv.yaml"
+    cassette.write_text('{"value":"abc1234567","name":"__Secure-1PSID","domain":".google.com"}\n')
+    result = _run_guard(str(cassette))
+    assert result.returncode == 1
+    assert "Leak (storage_state (value-first))" in result.stdout
+
+
+def test_python_guard_catches_sid_starting_with_s(tmp_path: Path) -> None:
+    """Regression for I7 — a real cookie value starting with ``S`` is a leak.
+
+    The old bash guard's ``[^S"][^"]*`` capture rejected any value whose
+    first byte was ``S``, which silently allowed a real session token that
+    happened to start with ``S`` (~1/62 chance for base64).  The new Python
+    guard uses an explicit ``SCRUB_PLACEHOLDERS`` allowlist instead, so this
+    fixture (with ``SID=Sx7K9pQ2_realsessiontoken``) trips the guard.
+
+    The fixture lives under ``tests/fixtures/bad_cassettes/`` precisely so
+    the regression assertion has a real on-disk artifact to point at, not
+    just a tmp_path-only synthetic string.
+    """
+    assert REGRESSION_FIXTURE.is_file(), (
+        "Regression fixture missing — see tests/fixtures/bad_cassettes/bad_sid_starting_with_s.yaml"
+    )
+    result = _run_guard(str(REGRESSION_FIXTURE))
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "Leak (cookie header)" in result.stdout
+    # The leaked value must actually appear in the output, otherwise the
+    # operator has no way to find it.
+    assert "Sx7K9pQ2_realsessiontoken" in result.stdout
+
+
+def test_python_guard_allows_scrubbed_cookie_sentinel(tmp_path: Path) -> None:
+    """All three cookie shapes carrying the ``SCRUBBED`` sentinel pass."""
+    cassette = tmp_path / "ok.yaml"
+    cassette.write_text(
+        '{"SID": "SCRUBBED", "__Secure-1PSID": "SCRUBBED"}\n'
+        "Set-Cookie: SID=SCRUBBED; Path=/\n"
+        '{"name":"SAPISID","value":"SCRUBBED","domain":".google.com"}\n'
+    )
+    result = _run_guard(str(cassette))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "0 leaks found" in result.stdout
+
+
+def test_python_guard_emits_file_line_for_every_leak(tmp_path: Path) -> None:
+    """Each leak is reported as ``<path>:<line>: [<label>] <excerpt>``.
+
+    The bash guard reported file:line by virtue of ``grep -n``; the Python
+    guard does the same so a developer can jump to the offending interaction.
+    """
+    cassette = tmp_path / "multi.yaml"
+    cassette.write_text(
+        'line 1 ok\n{"email":"a@gmail.com"}\nline 3 ok\nSet-Cookie: SID=Real_tokenA; Path=/\n'
+    )
+    result = _run_guard(str(cassette))
+    assert result.returncode == 1
+    # Line 2 — email leak
+    assert f"{cassette}:2:" in result.stdout or "multi.yaml:2:" in result.stdout
+    # Line 4 — cookie header leak
+    assert "multi.yaml:4:" in result.stdout or f"{cassette}:4:" in result.stdout
+
+
+def test_python_guard_skips_allowlisted_basename(tmp_path: Path) -> None:
+    """A cassette whose basename is in the allowlist is skipped by default."""
+    cassette = tmp_path / "leak_in_allowlist.yaml"
+    cassette.write_text('{"email":"realname@gmail.com"}\n')
+    allowlist = tmp_path / "allowlist.txt"
+    allowlist.write_text("# header comment\nleak_in_allowlist.yaml\n")
+    result = _run_guard("--allowlist", str(allowlist), str(cassette))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "1 allow-listed" in result.stdout
+    # Nothing was scanned.
+    assert "0 cassettes scanned" in result.stdout
+
+
+def test_python_guard_strict_flag_disables_allowlist(tmp_path: Path) -> None:
+    """``--strict`` re-arms the guard against allow-listed cassettes."""
+    cassette = tmp_path / "leak_in_allowlist.yaml"
+    cassette.write_text('{"email":"realname@gmail.com"}\n')
+    allowlist = tmp_path / "allowlist.txt"
+    allowlist.write_text("leak_in_allowlist.yaml\n")
+    result = _run_guard(
+        "--strict",
+        "--allowlist",
+        str(allowlist),
+        str(cassette),
+    )
+    assert result.returncode == 1
+    assert "Leak (email)" in result.stdout
+
+
+def test_python_guard_exits_zero_when_no_cassettes_found(tmp_path: Path) -> None:
+    """An empty cassette directory is a valid clean state (matches bash)."""
+    empty_dir = tmp_path / "empty"
+    empty_dir.mkdir()
+    result = _run_guard(str(empty_dir))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "OK: no cassettes to scan" in result.stdout
+
+
+def test_python_guard_repo_allowlist_is_explicit_basename_list() -> None:
+    """The repo-level repair allowlist is a literal basename list (no globs).
+
+    Sanity check that the allowlist shipped in this PR exists, is non-empty,
+    and contains the spec-explicit entries.  Future authors changing the file
+    must keep these entries unless they're also removing the corresponding
+    cassette.
+    """
+    allowlist = TESTS_DIR / "scripts" / "cassette_repair_allowlist.txt"
+    assert allowlist.is_file()
+    entries = {
+        line.strip()
+        for line in allowlist.read_text().splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    }
+    # Spec-explicit entries that must always be in the allowlist while
+    # phase-2 repair is outstanding.
+    for required in (
+        "artifacts_revise_slide.yaml",
+        "chat_ask.yaml",
+        "chat_ask_with_references.yaml",
+        "sharing_get_status.yaml",
+        "sharing_set_public.yaml",
+        "sources_add_file.yaml",
+        "sources_add_drive.yaml",
+        "sources_check_freshness_drive.yaml",
+        "example_httpbin_get.yaml",
+        "example_httpbin_post.yaml",
+    ):
+        assert required in entries, f"missing required allowlist entry: {required}"
