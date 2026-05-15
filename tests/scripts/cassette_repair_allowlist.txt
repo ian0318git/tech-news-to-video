@@ -36,18 +36,16 @@
 example_batchexecute_pattern.yaml
 example_scrubbed_cookies.yaml
 
-# --- spec-explicit entries (6 total; all also in the /ogw/ group) ----------
+# --- spec-explicit entries (4 total; 3 also in the /ogw/ group) -----------
 artifacts_revise_slide.yaml
 chat_ask.yaml
 chat_ask_with_references.yaml
-sources_add_drive.yaml
 sources_add_file.yaml
-sources_check_freshness_drive.yaml
 
 # --- /ogw/ avatar URL group (61 entries unique to this group;
-# 4 more cassettes — chat_ask, chat_ask_with_references, sources_add_drive,
-# sources_add_file — also contain ``/ogw/`` and are already listed in the
-# spec-explicit group above) ------------------------------------------------
+# 3 more cassettes — chat_ask, chat_ask_with_references, sources_add_file —
+# also contain ``/ogw/`` and are already listed in the spec-explicit group
+# above) -------------------------------------------------------------------
 artifacts_delete.yaml
 artifacts_download_data_table.yaml
 artifacts_download_flashcards.yaml

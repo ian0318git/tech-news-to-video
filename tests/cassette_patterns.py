@@ -333,7 +333,12 @@ DISPLAY_NAME_FALSE_POSITIVES: frozenset[str] = frozenset(
         "Google Sans",
         "Google Sans Text",
         "Google Sans Arabic",
+        "Google Sans Japanese",
+        "Google Sans Korean",
+        "Google Sans Simplified Chinese",
         "Google Sans Traditional Chinese",
+        # Browser user-agent brand surfaced in Sec-CH-UA HTML responses.
+        "Microsoft Edge",
         # Account UI page title (not a person's name).
         "Account Information",
         # Artifact / notebook titles produced by the test corpus.

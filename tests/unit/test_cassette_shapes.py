@@ -82,11 +82,9 @@ AUDIT_REPAIR_LIST: dict[str, str] = {
         "Phase 2 T8.B2 will fix (C3: stale chat-ask shape / shape drift)"
     ),
     "sources_add_file.yaml": ("Phase 2 T8.B4 will fix (I17: upload tokens unscrubbed)"),
-    "sources_add_drive.yaml": ("Phase 2 T8.B5 will fix (I17: Drive AONS tokens unscrubbed)"),
-    "sources_check_freshness_drive.yaml": (
-        "Phase 2 T8.B5 will fix (I17: Drive AONS tokens unscrubbed)"
-    ),
-    # example_httpbin_{get,post}.yaml were deleted in T8.B7 (PR #NNN) — the
+    # sources_add_drive.yaml + sources_check_freshness_drive.yaml were
+    # repaired in T8.B5 (this PR) — Drive AONS tokens scrubbed in place.
+    # example_httpbin_{get,post}.yaml were deleted in T8.B7 — the
     # I-misc origin-IP leak was in illustrative VCR examples, not real
     # NotebookLM cassettes. The example tests in test_vcr_example.py that
     # used them were also removed in the same PR.
@@ -153,7 +151,12 @@ DISPLAY_NAME_FALSE_POSITIVES = frozenset(
         '\\"Google Sans\\"',
         '\\"Google Sans Text\\"',
         '\\"Google Sans Arabic\\"',
+        '\\"Google Sans Japanese\\"',
+        '\\"Google Sans Korean\\"',
+        '\\"Google Sans Simplified Chinese\\"',
         '\\"Google Sans Traditional Chinese\\"',
+        # Browser user-agent brand surfaced in Sec-CH-UA HTML responses.
+        '\\"Microsoft Edge\\"',
         # Account UI page title (not a person's name).
         '\\"Account Information\\"',
         # Artifact / notebook titles produced by the test corpus.
