@@ -1,5 +1,7 @@
 # Installation
 
+**Last Updated:** 2026-05-14
+
 This is the canonical installation guide for `notebooklm-py`. The README has a quickstart; everything else lives here.
 
 **Contents**
@@ -150,7 +152,7 @@ uv tool install "notebooklm-py[browser]"
 <!-- not mirrored: end-user post-install verify (Persona B); contributors run the test suite instead -->
 ```bash
 notebooklm --version              # → 0.4.x
-notebooklm login                  # opens Chromium; press ENTER after sign-in
+notebooklm login                  # opens Chromium for Google sign-in
 notebooklm auth check --test      # confirms auth roundtrip, with explicit success message
 ```
 
@@ -209,7 +211,7 @@ print(notebooklm.__version__)
    notebooklm auth check --test    # verifies the cookies still authenticate against Google
    ```
 
-**Why no extras:** reduces the install surface to 3 deps (`httpx`, `click`, `rich`); avoids 200+ MB Chromium download in CI images.
+**Why no extras:** reduces the install surface to 4 deps (`httpx`, `click`, `rich`, `filelock`); avoids 200+ MB Chromium download in CI images.
 
 For runtime configuration (env vars, profiles, parallel agents), see [configuration.md#headless-and-ci-environments](configuration.md#headless-and-ci-environments).
 
@@ -276,7 +278,7 @@ Source of truth: `pyproject.toml` `[project.optional-dependencies]`.
 
 | Extra | What it adds | When you need it | pip command | uv (in your project) |
 |---|---|---|---|---|
-| (none) | `httpx`, `click`, `rich` | All RPC operations, all CLI commands except `login`. Suffices when you ship a `storage_state.json`. | `pip install notebooklm-py` | `uv add notebooklm-py` |
+| (none) | `httpx`, `click`, `rich`, `filelock` | All RPC operations, all CLI commands except `login`. Suffices when you ship a `storage_state.json`. | `pip install notebooklm-py` | `uv add notebooklm-py` |
 | `browser` | `playwright>=1.40.0` | `notebooklm login` (interactive). | `pip install "notebooklm-py[browser]"` | `uv add "notebooklm-py[browser]"` |
 | `cookies` | `rookiepy>=0.1.0` | `notebooklm login --browser-cookies <browser>`, `notebooklm auth inspect`. | `pip install "notebooklm-py[cookies]"` | `uv add "notebooklm-py[cookies]"` |
 | `markdown` | `markdownify>=0.14.1` | `notebooklm source fulltext -f markdown`. | `pip install "notebooklm-py[markdown]"` | `uv add "notebooklm-py[markdown]"` |
@@ -309,7 +311,7 @@ Works without `sudo` if you're root or have passwordless sudo. Otherwise `sudo p
 
 <!-- not mirrored: end-user first-login walkthrough; contributors typically reuse an existing storage_state.json -->
 ```bash
-notebooklm login                       # opens Chromium, you sign in to Google, press ENTER
+notebooklm login                       # opens Chromium for Google sign-in
 notebooklm auth check --test           # verify
 ```
 
