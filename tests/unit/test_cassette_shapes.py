@@ -101,7 +101,11 @@ def _has_ogw_avatar(cassette: Path) -> bool:
     the xfail goes away.
     """
     try:
-        return "/ogw/" in cassette.read_text()
+        # Explicit UTF-8 — cassettes routinely carry emoji bytes in
+        # notebook/artifact titles. Default Python text mode uses the
+        # platform encoding (cp1252 on Windows), which can't decode the
+        # 4-byte UTF-8 emoji sequences.
+        return "/ogw/" in cassette.read_text(encoding="utf-8")
     except OSError:
         return False
 
@@ -354,7 +358,11 @@ def _load_cassette(path: Path) -> tuple[dict[str, Any], str]:
     inside escaped JSON-string payloads (the parsed structure would lose the
     escape characters in the regex).
     """
-    raw = path.read_text()
+    # Explicit UTF-8 — cassettes routinely carry emoji bytes in notebook /
+    # artifact titles. Default Python text mode uses the platform encoding
+    # (cp1252 on Windows), which can't decode the 4-byte UTF-8 emoji
+    # sequences.
+    raw = path.read_text(encoding="utf-8")
     data = yaml.safe_load(raw) or {}
     return data, raw
 

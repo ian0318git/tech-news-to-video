@@ -363,7 +363,7 @@ def test_python_guard_repo_allowlist_is_explicit_basename_list() -> None:
     assert allowlist.is_file()
     entries = {
         line.strip()
-        for line in allowlist.read_text().splitlines()
+        for line in allowlist.read_text(encoding="utf-8").splitlines()
         if line.strip() and not line.strip().startswith("#")
     }
     # Spec-explicit entries that must always be in the allowlist while
