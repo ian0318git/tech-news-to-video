@@ -102,8 +102,8 @@ auth = AuthTokens(
 )
 client = NotebookLMClient(auth)
 
-# AuthTokens also supports profiles
-auth = AuthTokens.from_storage(profile="work")
+# AuthTokens also supports profiles (from_storage is async)
+auth = await AuthTokens.from_storage(profile="work")
 ```
 
 **Building a storage state from existing browser cookies (`[cookies]` extra):**
@@ -314,11 +314,10 @@ print(url)
 | Method | Parameters | Returns | Description |
 |--------|------------|---------|-------------|
 | `list(notebook_id)` | `notebook_id: str` | `list[Source]` | List sources |
-| `get(notebook_id, source_id)` | `str, str` | `Source` | Get source details |
+| `get(notebook_id, source_id)` | `str, str` | `Source \| None` | Get source details (returns None if not found) |
 | `get_fulltext(notebook_id, source_id, *, output_format="text")` | `str, str, *, output_format: Literal["text", "markdown"]` | `SourceFulltext` | Get full content; `"markdown"` requires the optional `markdownify` extra |
 | `get_guide(notebook_id, source_id)` | `str, str` | `dict` | Get AI-generated summary and keywords |
-| `add_url(notebook_id, url)` | `str, str` | `Source` | Add URL source |
-| `add_youtube(notebook_id, url)` | `str, str` | `Source` | Add YouTube video |
+| `add_url(notebook_id, url)` | `str, str` | `Source` | Add URL source (autodetects YouTube URLs and routes them appropriately) |
 | `add_text(notebook_id, title, content)` | `str, str, str` | `Source` | Add text content |
 | `add_file(notebook_id, path, mime_type=None)` | `str, Path, str` | `Source` | Upload file |
 | `add_drive(notebook_id, file_id, title, mime_type)` | `str, str, str, str` | `Source` | Add Google Drive doc |
@@ -329,9 +328,11 @@ print(url)
 
 **Example:**
 ```python
+from pathlib import Path
+
 # Add various source types
 await client.sources.add_url(nb_id, "https://example.com/article")
-await client.sources.add_youtube(nb_id, "https://youtube.com/watch?v=...")
+await client.sources.add_url(nb_id, "https://youtube.com/watch?v=...")  # YouTube URLs autodetected
 await client.sources.add_text(nb_id, "My Notes", "Content here...")
 await client.sources.add_file(nb_id, Path("./document.pdf"))
 
@@ -367,7 +368,7 @@ print(f"Keywords: {guide['keywords']}")
 | Method | Parameters | Returns | Description |
 |--------|------------|---------|-------------|
 | `list(notebook_id, type=None)` | `str, int` | `list[Artifact]` | List artifacts |
-| `get(notebook_id, artifact_id)` | `str, str` | `Artifact` | Get artifact details |
+| `get(notebook_id, artifact_id)` | `str, str` | `Artifact \| None` | Get artifact details (returns None if not found) |
 | `delete(notebook_id, artifact_id)` | `str, str` | `bool` | Delete artifact |
 | `rename(notebook_id, artifact_id, new_title)` | `str, str, str` | `None` | Rename artifact |
 | `poll_status(notebook_id, task_id)` | `str, str` | `GenerationStatus` | Check generation status |
@@ -514,6 +515,16 @@ result = await client.artifacts.export(
 **Generation Methods:**
 
 ```python
+from notebooklm import (
+    AudioFormat,
+    AudioLength,
+    VideoFormat,
+    VideoStyle,
+    ReportFormat,
+    QuizQuantity,
+    QuizDifficulty,
+)
+
 # Audio (podcast)
 status = await client.artifacts.generate_audio(
     notebook_id,
@@ -529,7 +540,7 @@ status = await client.artifacts.generate_video(
     notebook_id,
     source_ids=None,
     instructions="...",
-    video_format=VideoFormat.EXPLAINER,  # EXPLAINER, BRIEF
+    video_format=VideoFormat.EXPLAINER,  # EXPLAINER, BRIEF, CINEMATIC
     video_style=VideoStyle.AUTO_SELECT,  # AUTO_SELECT, CLASSIC, WHITEBOARD, KAWAII, ANIME, etc.
     language="en"
 )
@@ -582,7 +593,7 @@ else:
 | Method | Parameters | Returns | Description |
 |--------|------------|---------|-------------|
 | `ask(notebook_id, question, ...)` | `str, str, ...` | `AskResult` | Ask a question |
-| `configure(notebook_id, ...)` | `str, ...` | `bool` | Set chat persona |
+| `configure(notebook_id, ...)` | `str, ...` | `None` | Set chat persona |
 | `get_history(notebook_id, limit=100, conversation_id=None)` | `str, int, str` | `list[tuple[str, str]]` | Get Q&A pairs from most recent conversation |
 | `get_conversation_id(notebook_id)` | `str` | `str \| None` | Get most recent conversation ID from server |
 
@@ -598,6 +609,8 @@ async def ask(
 
 **Example:**
 ```python
+from notebooklm import ChatGoal, ChatResponseLength
+
 # Ask questions (uses all sources)
 result = await client.chat.ask(nb_id, "What are the main themes?")
 print(result.answer)
@@ -635,7 +648,7 @@ await client.chat.configure(
 
 | Method | Parameters | Returns | Description |
 |--------|------------|---------|-------------|
-| `start(notebook_id, query, source, mode)` | `str, str, str="web", str="fast"` | `dict` | Start research (mode: "fast" or "deep") |
+| `start(notebook_id, query, source, mode)` | `str, str, str="web", str="fast"` | `dict \| None` | Start research (mode: "fast" or "deep"); raises `ValidationError` on invalid source/mode |
 | `poll(notebook_id)` | `str` | `dict` | Check research status |
 | `import_sources(notebook_id, task_id, sources)` | `str, str, list` | `list[dict]` | Import findings |
 
@@ -647,10 +660,11 @@ async def start(
     query: str,
     source: str = "web",   # "web" or "drive"
     mode: str = "fast",    # "fast" or "deep" (deep only for web)
-) -> dict:
+) -> dict | None:
     """
-    Returns: {"task_id": str, "report_id": str, "notebook_id": str, "query": str, "mode": str}
-    Raises: ValueError if source/mode combination is invalid
+    Returns: {"task_id": str, "report_id": str, "notebook_id": str, "query": str, "mode": str},
+        or None if the RPC returns an empty/unexpected payload
+    Raises: ValidationError if source/mode combination is invalid
     """
 
 async def poll(notebook_id: str) -> dict:
@@ -670,14 +684,20 @@ async def import_sources(notebook_id: str, task_id: str, sources: list[dict]) ->
 ```python
 # Start fast web research (default)
 result = await client.research.start(nb_id, "AI safety regulations")
+if result is None:
+    raise RuntimeError("Research start returned None")
 task_id = result["task_id"]
 
 # Start deep web research
 result = await client.research.start(nb_id, "quantum computing", source="web", mode="deep")
+if result is None:
+    raise RuntimeError("Research start returned None")
 task_id = result["task_id"]
 
 # Start fast Drive research
 result = await client.research.start(nb_id, "project docs", source="drive", mode="fast")
+if result is None:
+    raise RuntimeError("Research start returned None")
 
 # Poll until complete
 import asyncio
@@ -779,7 +799,7 @@ print(f"Language set to: {result}")
 |--------|------------|---------|-------------|
 | `get_status(notebook_id)` | `str` | `ShareStatus` | Get current sharing configuration |
 | `set_public(notebook_id, public)` | `str, bool` | `ShareStatus` | Enable/disable public link sharing |
-| `set_view_level(notebook_id, level)` | `str, ShareViewLevel` | `None` | Set what viewers can access |
+| `set_view_level(notebook_id, level)` | `str, ShareViewLevel` | `ShareStatus` | Set what viewers can access |
 | `add_user(notebook_id, email, permission, notify, welcome_message)` | `str, str, SharePermission, bool, str` | `ShareStatus` | Share with a user |
 | `update_user(notebook_id, email, permission)` | `str, str, SharePermission` | `ShareStatus` | Update user's permission |
 | `remove_user(notebook_id, email)` | `str, str` | `ShareStatus` | Remove user's access |
@@ -1107,6 +1127,7 @@ class AudioLength(Enum):
 class VideoFormat(Enum):
     EXPLAINER = 1
     BRIEF = 2
+    CINEMATIC = 3
 
 class VideoStyle(Enum):
     AUTO_SELECT = 1
@@ -1138,11 +1159,11 @@ class QuizDifficulty(Enum):
 ### Reports
 
 ```python
-class ReportFormat(Enum):
-    BRIEFING_DOC = 1
-    STUDY_GUIDE = 2
-    BLOG_POST = 3
-    CUSTOM = 4
+class ReportFormat(str, Enum):
+    BRIEFING_DOC = "briefing_doc"
+    STUDY_GUIDE = "study_guide"
+    BLOG_POST = "blog_post"
+    CUSTOM = "custom"
 ```
 
 ### Infographics
@@ -1218,6 +1239,7 @@ class SourceType(str, Enum):
     MARKDOWN = "markdown"
     DOCX = "docx"
     CSV = "csv"
+    EPUB = "epub"
     IMAGE = "image"
     MEDIA = "media"
     UNKNOWN = "unknown"
@@ -1310,11 +1332,12 @@ For undocumented features, you can make raw RPC calls:
 from notebooklm.rpc import RPCMethod
 
 async with await NotebookLMClient.from_storage() as client:
-    # Access the core client for raw RPC
+    # Access the core client for raw RPC. Each RPCMethod member has its own
+    # params shape (a nested list) and `source_path`; mirror the call sites in
+    # the higher-level APIs (e.g. _notebooks.py for CREATE_NOTEBOOK) when in doubt.
     result = await client._core.rpc_call(
-        RPCMethod.SOME_METHOD,
-        params=[...],
-        source_path="/notebook/123"
+        RPCMethod.CREATE_NOTEBOOK,
+        params=["My Notebook", None, None, [2], [1]],
     )
 ```
 
