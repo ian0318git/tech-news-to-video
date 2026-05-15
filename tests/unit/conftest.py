@@ -8,9 +8,34 @@ test directory to ``sys.path`` so the sibling import works.
 from contextlib import asynccontextmanager
 
 import httpx
+import pytest
 
 from notebooklm._core import ClientCore
 from notebooklm.auth import AuthTokens
+
+
+@pytest.fixture
+def auth_tokens():
+    """Create test authentication tokens for unit tests.
+
+    Overrides the root-level fixture (single-cookie) with the full Tier 1
+    cookie set so httpx_mock-based tests previously living in
+    ``tests/integration/`` (moved to ``tests/unit/`` in T8.D5) can keep
+    asserting on per-cookie wire values (e.g. ``SID=test_sid``,
+    ``HSID=test_hsid``) without modification. The root fixture remains the
+    canonical minimal jar for tests that don't inspect cookie headers.
+    """
+    return AuthTokens(
+        cookies={
+            "SID": "test_sid",
+            "HSID": "test_hsid",
+            "SSID": "test_ssid",
+            "APISID": "test_apisid",
+            "SAPISID": "test_sapisid",
+        },
+        csrf_token="test_csrf_token",
+        session_id="test_session_id",
+    )
 
 
 @asynccontextmanager
