@@ -563,7 +563,7 @@ notebooklm auth check --json
 **Checks performed:**
 1. Storage file exists and is readable
 2. JSON structure is valid
-3. Required cookies (SID) are present
+3. Required cookies (`SID` + `__Secure-1PSIDTS`) are present (the Tier 1 `MINIMUM_REQUIRED_COOKIES` set; either `OSID` or the `APISID`+`SAPISID` pair is also needed for the secondary-binding check — see [auth-keepalive.md](auth-keepalive.md) §3.5)
 4. Cookie domains are correct (.google.com vs regional)
 5. (With `--test`) Token fetch succeeds
 
@@ -692,6 +692,20 @@ For `-s` and `-a` the active notebook is resolved with the same precedence the c
 
 **Print-only by design:** the command never writes to your shell config; you decide where the script lands. This keeps the install path discoverable and avoids surprising shutdowns of existing completion setups.
 
+### Source: `add` — `--follow-symlinks` security gate
+
+File-source uploads reject symlinks by default. If the path you pass (or any ancestor directory) is a symbolic link, `source add` refuses the upload rather than silently following it — a workspace symlink could otherwise exfiltrate the file it points at (e.g. `~/Downloads/foo.pdf -> /etc/passwd`). Pass `--follow-symlinks` to opt in explicitly.
+
+```bash
+# Default — symlink rejected with: "Path is a symlink; pass --follow-symlinks to follow it explicitly."
+notebooklm source add ./link-to-doc.pdf --type file
+
+# Opt-in: resolve the symlink, then upload the resolved target
+notebooklm source add ./link-to-doc.pdf --type file --follow-symlinks
+```
+
+The same gate applies on the explicit `--type file` path (no auto-detect), so typing the source type as `file` does not bypass the check.
+
 ### Source: `add` — `--mime-type` deprecation
 
 The `--mime-type` flag on `notebooklm source add` (file-source path) is a
@@ -736,15 +750,17 @@ notebooklm source add-research [query] [OPTIONS]
 - `--timeout SECONDS` - Retry budget for `--import-all` when the IMPORT_RESEARCH RPC times out (default: 1800). Mirrors `research wait --timeout`. Has no effect without `--import-all`.
 - `--prompt-file PATH` - Read query from a file (or `-` for stdin) instead of the positional argument
 
+> **Note:** `--mode deep` is only supported with `--from web` (the default). Combining `--mode deep --from drive` is rejected by the backend with `ValidationError("Deep Research only supports Web sources.")` — for Drive, stick with `--mode fast`.
+
 **Examples:**
 ```bash
 # Fast web research (blocking)
 notebooklm source add-research "Quantum computing basics"
 
-# Deep research into Google Drive
-notebooklm source add-research "Project Alpha" --from drive --mode deep
+# Drive research (fast mode only — Drive does not support --mode deep)
+notebooklm source add-research "Project Alpha" --from drive
 
-# Non-blocking deep research for agent workflows
+# Non-blocking deep research for agent workflows (web only — see note above)
 notebooklm source add-research "AI safety papers" --mode deep --no-wait
 
 # Import only cited sources for tighter relevance
