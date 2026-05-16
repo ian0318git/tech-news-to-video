@@ -9,6 +9,7 @@ invariant down so the load-bearing init order can't silently come back.
 from __future__ import annotations
 
 import ast
+import importlib
 import json
 from collections import Counter
 from pathlib import Path
@@ -56,6 +57,14 @@ _ARTIFACT_SERVICE_MODULES = [
     "_artifact_polling.py",
 ]
 
+_SOURCE_SERVICE_MODULES = [
+    "_source_listing.py",
+    "_source_polling.py",
+    "_source_add.py",
+    "_source_upload.py",
+    "_source_content.py",
+]
+
 _FORBIDDEN_ARTIFACT_SERVICE_RUNTIME_IMPORT_NAMES = {
     "NotebookLMClient",
     "ClientCore",
@@ -67,6 +76,21 @@ _FORBIDDEN_ARTIFACT_SERVICE_RUNTIME_IMPORT_MODULES = {
     "_core",
     "client",
     "notebooklm._artifacts",
+    "notebooklm._core",
+    "notebooklm.client",
+}
+
+_FORBIDDEN_SOURCE_SERVICE_RUNTIME_IMPORT_NAMES = {
+    "NotebookLMClient",
+    "ClientCore",
+    "SourcesAPI",
+}
+
+_FORBIDDEN_SOURCE_SERVICE_RUNTIME_IMPORT_MODULES = {
+    "_sources",
+    "_core",
+    "client",
+    "notebooklm._sources",
     "notebooklm._core",
     "notebooklm.client",
 }
@@ -235,7 +259,14 @@ def _is_type_checking_guard(node: ast.AST) -> bool:
 
 
 class _RuntimeImportVisitor(ast.NodeVisitor):
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        forbidden_names: set[str],
+        forbidden_modules: set[str],
+    ) -> None:
+        self._forbidden_names = forbidden_names
+        self._forbidden_modules = forbidden_modules
         self.forbidden: list[str] = []
 
     def visit_If(self, node: ast.If) -> None:
@@ -245,25 +276,72 @@ class _RuntimeImportVisitor(ast.NodeVisitor):
             return
         self.generic_visit(node)
 
+    @staticmethod
+    def _is_dunder_name(name: str) -> bool:
+        return name.startswith("__") and name.endswith("__")
+
+    @classmethod
+    def _is_forbidden_module_reference(cls, name: str, forbidden_modules: set[str]) -> bool:
+        if not name:
+            return False
+
+        if any(cls._is_dunder_name(part) for part in name.split(".")):
+            return False
+
+        for forbidden_module in forbidden_modules:
+            if cls._is_dunder_name(forbidden_module):
+                continue
+            if name == forbidden_module or name.startswith(f"{forbidden_module}."):
+                return True
+
+        return False
+
     def visit_Import(self, node: ast.Import) -> None:
         self.forbidden.extend(
             alias.name
             for alias in node.names
-            if alias.name in _FORBIDDEN_ARTIFACT_SERVICE_RUNTIME_IMPORT_MODULES
+            if self._is_forbidden_module_reference(alias.name, self._forbidden_modules)
         )
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         module = node.module or ""
-        if module in _FORBIDDEN_ARTIFACT_SERVICE_RUNTIME_IMPORT_MODULES:
+        if self._is_forbidden_module_reference(module, self._forbidden_modules):
             self.forbidden.extend(f"{module}.{alias.name}" for alias in node.names)
             return
 
         self.forbidden.extend(
             alias.name
             for alias in node.names
-            if alias.name in _FORBIDDEN_ARTIFACT_SERVICE_RUNTIME_IMPORT_NAMES
-            or alias.name in _FORBIDDEN_ARTIFACT_SERVICE_RUNTIME_IMPORT_MODULES
+            if alias.name in self._forbidden_names
+            or self._is_forbidden_module_reference(alias.name, self._forbidden_modules)
         )
+
+
+def test_runtime_import_visitor_detects_nested_forbidden_modules() -> None:
+    """The import-boundary guard must catch nested forbidden module paths."""
+    tree = ast.parse(
+        """
+import notebooklm._sources.utils
+import http.client
+from notebooklm._sources.utils import SourceParser
+from notebooklm import _sources
+from . import _sources as relative_sources
+from __future__ import annotations
+"""
+    )
+    visitor = _RuntimeImportVisitor(
+        forbidden_names=set(),
+        forbidden_modules={"_sources", "notebooklm._sources", "__future__"},
+    )
+
+    visitor.visit(tree)
+
+    assert visitor.forbidden == [
+        "notebooklm._sources.utils",
+        "notebooklm._sources.utils.SourceParser",
+        "_sources",
+        "_sources",
+    ]
 
 
 def test_artifact_service_modules_do_not_runtime_import_facades_or_core() -> None:
@@ -271,7 +349,32 @@ def test_artifact_service_modules_do_not_runtime_import_facades_or_core() -> Non
     forbidden_by_module: dict[str, list[str]] = {}
     for module_name in _ARTIFACT_SERVICE_MODULES:
         tree = ast.parse((SRC_ROOT / module_name).read_text(encoding="utf-8"))
-        visitor = _RuntimeImportVisitor()
+        visitor = _RuntimeImportVisitor(
+            forbidden_names=_FORBIDDEN_ARTIFACT_SERVICE_RUNTIME_IMPORT_NAMES,
+            forbidden_modules=_FORBIDDEN_ARTIFACT_SERVICE_RUNTIME_IMPORT_MODULES,
+        )
+        visitor.visit(tree)
+        if visitor.forbidden:
+            forbidden_by_module[module_name] = visitor.forbidden
+
+    assert forbidden_by_module == {}
+
+
+def test_source_service_modules_import_cleanly() -> None:
+    """Source service skeletons must be import-safe before behavior moves."""
+    for module_name in _SOURCE_SERVICE_MODULES:
+        importlib.import_module(f"notebooklm.{module_name.removesuffix('.py')}")
+
+
+def test_source_service_modules_do_not_runtime_import_facades_or_core() -> None:
+    """Guard future source service extraction modules against facade/core imports."""
+    forbidden_by_module: dict[str, list[str]] = {}
+    for module_name in _SOURCE_SERVICE_MODULES:
+        tree = ast.parse((SRC_ROOT / module_name).read_text(encoding="utf-8"))
+        visitor = _RuntimeImportVisitor(
+            forbidden_names=_FORBIDDEN_SOURCE_SERVICE_RUNTIME_IMPORT_NAMES,
+            forbidden_modules=_FORBIDDEN_SOURCE_SERVICE_RUNTIME_IMPORT_MODULES,
+        )
         visitor.visit(tree)
         if visitor.forbidden:
             forbidden_by_module[module_name] = visitor.forbidden
