@@ -361,7 +361,7 @@ class ResearchAPI:
                 :meth:`start` and held onto the returned ``task_id`` should
                 pass it here on every subsequent ``poll`` to remove
                 ambiguity. The ``None`` default will be removed in a future
-                major release (Tier 8).
+                major release.
 
         Returns:
             Dictionary representing the parsed research task for the
@@ -493,7 +493,7 @@ class ResearchAPI:
                 }
             )
 
-        # Task-id discriminator (T7.F3): when supplied, filter parsed_tasks
+        # Task-id discriminator: when supplied, filter parsed_tasks
         # down to the matched task so callers iterating ``tasks`` don't see
         # un-asked-for siblings. When omitted but multiple tasks are in
         # flight, surface the latent cross-wire hazard via a
@@ -555,7 +555,7 @@ class ResearchAPI:
         if not sources:
             return []
 
-        # T7.F3: per-source ``research_task_id`` must match the caller's
+        # Per-source ``research_task_id`` must match the caller's
         # ``task_id`` when both are present. A mismatch is the wire-crossing
         # bug — importing under the wrong task would mis-attribute
         # provenance. We do this scan BEFORE the multi-task batch check so

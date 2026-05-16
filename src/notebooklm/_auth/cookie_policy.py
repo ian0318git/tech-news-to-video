@@ -27,7 +27,7 @@ _EXTRACTION_HINT = (
 # Tier 2 fires per cookie-load; a single CLI run can hit it 2-3 times across
 # the four loader entry points. One warning per process is enough signal.
 #
-# Dedupe contract (T7.G7): best-effort under threads, exactly-once on a single
+# Dedupe contract: best-effort under threads, exactly-once on a single
 # event loop. The check-then-set at the call site (``_validate_required_cookies``
 # below) reads ``_SECONDARY_BINDING_WARNED`` and sets it to ``True`` in a single
 # synchronous block with no intervening ``await``. The asyncio scheduler can
@@ -111,7 +111,7 @@ def _validate_required_cookies(
 
 # Cookie domains we extract / accept by default.
 #
-# Empirical justification (T5.G): traced cassettes
+# Empirical justification: traced cassettes
 # (``tests/cassettes/*.yaml``) and the live auth-refresh path. Only the
 # following domains are actually exercised during login + token refresh +
 # source-add + chat-ask flows:
@@ -127,17 +127,22 @@ def _validate_required_cookies(
 # YouTube / Docs / Mail / myaccount cookies do NOT appear in any traced
 # flow. They are now :data:`OPTIONAL_COOKIE_DOMAINS` — opted in via
 # ``notebooklm login --include-domains=...``. This narrows the blast
-# radius if ``storage_state.json`` is ever leaked (synthesis K15).
+# radius if ``storage_state.json`` is ever leaked.
 #
 # REQUIRED is also fed verbatim to ``rookiepy.load(domains=...)`` by
 # ``_login_with_browser_cookies`` (via
 # :func:`notebooklm.cli.session._build_google_cookie_domains`); adding a
 # domain here automatically extends what we ask the browser for at login.
-# This is the single load-bearing T5.G control: blast-radius reduction
-# is enforced at extraction time (what rookiepy returns), not at the
-# runtime gate, which stays permissive over the REQUIRED ∪ OPTIONAL
-# union so that ``--include-domains=...`` cookies survive downstream
-# filters (see :func:`_is_allowed_cookie_domain`).
+#
+# This frozenset is the single chokepoint for the cookie-domain
+# narrowing security control: extraction is restricted to
+# ``REQUIRED_COOKIE_DOMAINS`` so that a stolen ``storage_state.json``
+# cannot pivot the attacker into sibling Google products that we do not
+# need (YouTube, Mail, etc.). Enforcement happens at extraction time
+# (what ``rookiepy`` returns); the runtime gate stays permissive over
+# the ``REQUIRED ∪ OPTIONAL`` union so that ``--include-domains=...``
+# opt-ins survive downstream filters (see
+# :func:`_is_allowed_cookie_domain`).
 REQUIRED_COOKIE_DOMAINS: frozenset[str] = frozenset(
     {
         ".google.com",
@@ -335,12 +340,13 @@ def _is_allowed_auth_domain(domain: str) -> bool:
     The previous strict / broad split (#334 / fea8315) created an asymmetry
     where ``save_cookies_to_storage`` would persist cookies that the next
     extraction would silently drop. Issue #360 collapsed both filters into
-    this single policy. T5.G narrows the *extraction* surface (rookiepy
-    only requests :data:`REQUIRED_COOKIE_DOMAINS` by default, so YouTube
-    cookies are never written to ``storage_state.json`` unless the user
-    opts in via ``--include-domains=youtube``); the runtime gate stays
-    permissive over the full :data:`ALLOWED_COOKIE_DOMAINS` union so that
-    opted-in cookies survive the downstream filters.
+    this single policy. The cookie-domain narrowing control restricts the
+    *extraction* surface: ``rookiepy`` only requests
+    :data:`REQUIRED_COOKIE_DOMAINS` by default, so YouTube cookies are
+    never written to ``storage_state.json`` unless the user opts in via
+    ``--include-domains=youtube``. The runtime gate stays permissive over
+    the full :data:`ALLOWED_COOKIE_DOMAINS` union so that opted-in cookies
+    survive the downstream filters.
 
     Args:
         domain: Cookie domain to check (e.g., '.google.com', '.google.com.sg')
@@ -397,7 +403,7 @@ def _is_allowed_cookie_domain(domain: str) -> bool:
     The leading-dot suffix check ensures lookalikes like ``evil-google.com``
     are rejected.
 
-    Note (T5.G): the runtime gate consults the
+    Note: the runtime gate consults the
     :data:`ALLOWED_COOKIE_DOMAINS` union (REQUIRED ∪ OPTIONAL). The
     blast-radius reduction is enforced at **extraction time** —
     ``_build_google_cookie_domains`` defaults to
@@ -417,7 +423,7 @@ def _is_allowed_cookie_domain(domain: str) -> bool:
     """
     # Exact match against the union of REQUIRED + OPTIONAL. Anything that
     # could have been validly opted in via ``--include-domains`` at
-    # extraction time must pass this gate at runtime (T5.G).
+    # extraction time must pass this gate at runtime.
     if domain in ALLOWED_COOKIE_DOMAINS:
         return True
 

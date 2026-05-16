@@ -354,11 +354,11 @@ emails, and other sensitive patterns before the cassette hits disk. Verify
 the result with the cassette guard before committing:
 
 ```bash
-# Current guard (a Python replacement is landing in the Tier 8 arc)
+# Current guard (a Python replacement is planned)
 tests/check_cassettes_clean.sh
 ```
 
-#### Synthetic error cassettes (T8.E10)
+#### Synthetic error cassettes
 
 > [!WARNING]
 > **Error cassettes generated through this plumbing are SYNTHETIC.** They
@@ -389,8 +389,9 @@ The plumbing has three opt-in layers:
    build the filename so reviewers can tell synthetic shapes apart from
    real recordings at a glance.
 
-Example recording session (this is the workflow T8.E4 will use to record
-the actual error cassettes — T8.E10 itself ships only the plumbing):
+Example recording session (this is the workflow a maintainer uses to
+record the actual error cassettes — the transport-wrapper module itself
+ships only the plumbing):
 
 ```bash
 NOTEBOOKLM_VCR_RECORD=1 \

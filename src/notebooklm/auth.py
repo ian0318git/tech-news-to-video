@@ -345,7 +345,7 @@ class AuthTokens:
         # ``save_cookies_to_storage`` performs atomic-replace + fsync + flock
         # under a synchronous file lock; offload to a worker thread so a
         # slow filesystem (network FS, encrypted home, fcntl contention)
-        # can't freeze the event loop. T7.D1 / audit §6.
+        # can't freeze the event loop.
         post_save_snapshot = snapshot_cookie_jar(jar)
         save_result = await asyncio.to_thread(
             save_cookies_to_storage,
@@ -621,7 +621,7 @@ _REFRESH_LOCKS_BY_LOOP: "weakref.WeakKeyDictionary[Any, dict[Path | None, asynci
 )
 _REFRESH_GENERATIONS: dict[str, int] = {}
 
-# In-flight ``asyncio.Future`` registry for refresh-cmd coalescing (T7.F4).
+# In-flight ``asyncio.Future`` registry for refresh-cmd coalescing.
 #
 # Same-loop concurrent callers that both encounter auth-expiry coalesce on a
 # single in-flight subprocess by sharing a per-resolved-storage-path
@@ -630,8 +630,8 @@ _REFRESH_GENERATIONS: dict[str, int] = {}
 # ``_REFRESH_GENERATIONS`` counter guarded by ``_REFRESH_STATE_LOCK``.
 #
 # The strong-ref ``_REFRESH_INFLIGHT_TASKS`` set keeps the shielded subprocess
-# Tasks alive so the asyncio GC does not collect them (audit C4 lesson). The
-# task self-removes via ``add_done_callback(set.discard)`` once settled.
+# Tasks alive so the asyncio GC does not collect them. The task self-removes
+# via ``add_done_callback(set.discard)`` once settled.
 _REFRESH_INFLIGHT_BY_LOOP: "weakref.WeakKeyDictionary[Any, dict[str, asyncio.Future[None]]]" = (
     weakref.WeakKeyDictionary()
 )
@@ -664,7 +664,7 @@ async def _coalesced_run_refresh_cmd(
 
     Same-loop concurrent callers that hit this function while a refresh is
     in flight will await the same underlying ``asyncio.Future`` rather than
-    spawning their own subprocess (T7.F4 audit §27 — failure #2).
+    spawning their own subprocess.
 
     Cancel-safety design:
 
@@ -673,12 +673,13 @@ async def _coalesced_run_refresh_cmd(
       survives cancellation of any individual awaiter.
     - Each awaiter wraps the future in ``asyncio.shield`` so local
       cancellation of the awaiter does NOT cancel the shared subprocess —
-      mirrors the ``ClientCore._await_refresh`` pattern from T7.C1.
+      mirrors the ``ClientCore._await_refresh`` pattern used for the RPC
+      refresh path.
     - The caller in ``_fetch_tokens_with_refresh`` keeps re-awaiting the
       shielded future under the per-loop asyncio lock so the lock is not
-      released until the subprocess settles. This prevents the audit §27
-      failure #2 (lock released mid-subprocess → second caller spawns
-      duplicate subprocess).
+      released until the subprocess settles. This prevents a duplicate
+      subprocess from being spawned if the lock is released mid-refresh
+      and a second caller observes a partially-completed state.
     """
     loop = asyncio.get_running_loop()
     registry = _get_inflight_registry()
@@ -693,9 +694,9 @@ async def _coalesced_run_refresh_cmd(
 
     if leader:
         task = asyncio.create_task(_run_refresh_cmd(resolved_storage_path, profile))
-        # Strong-ref pattern (audit C4): without ``add_done_callback`` the
-        # task can be collected by the asyncio GC before completion if no
-        # awaiter is holding a reference.
+        # Strong-ref pattern: without ``add_done_callback`` the task can be
+        # collected by the asyncio GC before completion if no awaiter is
+        # holding a reference.
         _REFRESH_INFLIGHT_TASKS.add(task)
         task.add_done_callback(_REFRESH_INFLIGHT_TASKS.discard)
 
@@ -940,12 +941,11 @@ async def _fetch_tokens_with_refresh(
         refresh_token = _REFRESH_ATTEMPTED_CONTEXT.set(True)
         try:
             async with _get_refresh_lock(refresh_storage_path):
-                # T7.F4: bump generation ONLY after the subprocess succeeds
-                # AND storage is reloaded (per spec acceptance criterion). The
-                # previous implementation bumped the generation eagerly BEFORE
-                # ``_run_refresh_cmd`` — when the subprocess failed, the
-                # phantom bump made concurrent waiters short-circuit and
-                # proceed with stale storage (audit §27 failure #1).
+                # Bump generation ONLY after the subprocess succeeds AND
+                # storage is reloaded. An earlier implementation bumped the
+                # generation eagerly BEFORE ``_run_refresh_cmd`` — when the
+                # subprocess failed, the phantom bump made concurrent waiters
+                # short-circuit and proceed with stale storage.
                 #
                 # Re-check under the sync state lock so the read is atomic
                 # ACROSS event loops. The per-loop asyncio lock only
@@ -959,14 +959,14 @@ async def _fetch_tokens_with_refresh(
                     # reload the freshly-written storage.
                     should_run_refresh = current_generation <= refresh_generation
                 if should_run_refresh:
-                    # T7.F4: cancel-safety — drive the subprocess through the
-                    # shared in-flight future. Same-loop concurrent callers
-                    # coalesce on the same subprocess. If THIS caller is
-                    # cancelled while the subprocess is in flight, we keep
-                    # awaiting the shielded future so the asyncio lock is
-                    # NOT released until the subprocess settles (audit §27
-                    # failure #2: lock released mid-subprocess →
-                    # duplicate concurrent refresh).
+                    # Cancel-safety: drive the subprocess through the shared
+                    # in-flight future. Same-loop concurrent callers coalesce
+                    # on the same subprocess. If THIS caller is cancelled
+                    # while the subprocess is in flight, we keep awaiting the
+                    # shielded future so the asyncio lock is NOT released
+                    # until the subprocess settles — otherwise a second
+                    # caller could spawn a duplicate concurrent refresh by
+                    # observing the mid-flight lock release.
                     caller_cancelled = False
                     subprocess_exc: BaseException | None = None
                     while True:
@@ -1005,7 +1005,7 @@ async def _fetch_tokens_with_refresh(
                             break
 
                     if subprocess_exc is not None:
-                        # T7.F4: subprocess failed — DO NOT bump generation.
+                        # Subprocess failed — DO NOT bump generation.
                         # Concurrent / subsequent waiters re-attempt the
                         # refresh instead of short-circuiting on a phantom
                         # bump.
@@ -1015,7 +1015,7 @@ async def _fetch_tokens_with_refresh(
                             raise asyncio.CancelledError() from subprocess_exc
                         raise subprocess_exc
 
-                    # T7.F4: subprocess succeeded AND we're about to reload
+                    # Subprocess succeeded AND we're about to reload
                     # storage. Bump the generation now so other callers
                     # (any loop) see the success and skip their own
                     # subprocess. The bump is atomic across loops via
@@ -1596,6 +1596,6 @@ async def fetch_tokens_with_domains(
         snapshot = post_refresh_snapshot
     # Offload the blocking storage save to a worker thread so the
     # atomic-replace + fsync + flock can't stall the event loop on
-    # slow filesystems. T7.D1 / audit §27.
+    # slow filesystems.
     await asyncio.to_thread(save_cookies_to_storage, jar, path, original_snapshot=snapshot)
     return csrf, session_id

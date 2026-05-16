@@ -333,8 +333,8 @@ class SourcesAPI:
             content: Text content.
             wait: If True, wait for source to be ready before returning.
             wait_timeout: Maximum seconds to wait if wait=True (default: 120).
-            idempotent: T7.B2 — opt-in safety flag that REFUSES the call
-                rather than risk silent duplication on retry. Text sources
+            idempotent: Opt-in safety flag that REFUSES the call rather
+                than risk silent duplication on retry. Text sources
                 lack a reliable server-side dedupe key (titles non-unique;
                 content not exposed in the source list), so the
                 probe-then-retry pattern used by ``add_url`` cannot be
@@ -386,7 +386,7 @@ class SourcesAPI:
            (the file-add RPC has no title slot, so a follow-up
            ``UPDATE_SOURCE`` is the only way to set one).
 
-        Concurrency / FD lifecycle (T7.D3 / audit §23):
+        Concurrency / FD lifecycle:
             The upload section runs under
             ``ClientCore.get_upload_semaphore()`` which bounds simultaneous
             in-flight uploads at ``max_concurrent_uploads`` (default 4).
@@ -738,7 +738,7 @@ class SourcesAPI:
     async def _add_youtube_source(self, notebook_id: str, url: str) -> Any:
         """Add a YouTube video as a source.
 
-        ``disable_internal_retries=True`` (T7.B2): ADD_SOURCE is a
+        ``disable_internal_retries=True``: ADD_SOURCE is a
         mutating RPC that may have committed server-side even if the
         client sees a 5xx / network error. The probe-then-retry loop
         in ``add_url`` owns recovery via ``idempotent_create``.
@@ -757,7 +757,7 @@ class SourcesAPI:
     async def _add_url_source(self, notebook_id: str, url: str) -> Any:
         """Add a regular URL as a source.
 
-        ``disable_internal_retries=True`` (T7.B2): see
+        ``disable_internal_retries=True``: see
         ``_add_youtube_source`` for the rationale.
         """
         return await self._adder.add_url_source(
@@ -806,7 +806,7 @@ class SourcesAPI:
         Uses streaming to avoid loading the entire file into memory,
         which is important for large PDFs and documents.
 
-        File-descriptor contract (T7.D3 / audit §23):
+        File-descriptor contract:
           When called from ``add_file`` (the production path), ``file_obj``
           is an already-open ``IO[bytes]`` and this helper TAKES OWNERSHIP
           of the FD lifecycle: a done-callback on the shielded finalize
@@ -817,7 +817,7 @@ class SourcesAPI:
           ``add_file`` invocation under post-finalize cancel; if the
           caller closed the FD on cancel, the still-running background
           POST would read from a closed FD and abort, breaking the
-          T7.C3 dangling-session guarantee.
+          dangling-session guarantee.
 
           A legacy ``Path`` argument is still accepted; the helper opens
           + closes the FD itself in that branch. ``add_file`` never
@@ -825,7 +825,7 @@ class SourcesAPI:
           existing direct-call unit tests in
           ``tests/unit/test_sources_upload.py``.
 
-        Cancellation contract (T7.C3 / audit §9):
+        Cancellation contract:
           - The finalize POST is wrapped in ``asyncio.shield``. If a
             ``CancelledError`` arrives while the finalize POST is in
             flight, the inner Task keeps running so the server-side
