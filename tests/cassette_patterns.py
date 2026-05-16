@@ -4,19 +4,20 @@ This module is the single source of truth for what counts as sensitive in a
 recorded HTTP cassette and for cassette-byte-count surgery. It exports two
 complementary halves:
 
-1. **Sanitization registry (T8.A4 — audit findings I6, I7).** A canonical
+1. **Sanitization registry.** A canonical
    list of regex (pattern, replacement) pairs covering Google session
    cookies, ``__Secure-*`` / ``__Host-*`` cookies, WIZ_global_data token
    fields, email addresses, and Playwright ``storage_state`` cookie objects;
    a single ``scrub_string`` entry point that applies them; and an
    ``is_clean`` validator that judges cookie-value cleanliness via exact-
-   match membership in ``SCRUB_PLACEHOLDERS`` (closing I7's "starts with S"
-   character-class hole). Before this consolidation the same patterns lived
-   as an inline ``SENSITIVE_PATTERNS`` list in :mod:`tests.vcr_config` and
-   were duplicated piecemeal in ``tests/check_cassettes_clean.sh`` — that
-   drift risk is what audit finding I6 named.
+   match membership in ``SCRUB_PLACEHOLDERS`` (closing a previous
+   "starts with S" character-class hole). Before this consolidation the
+   same patterns lived as an inline ``SENSITIVE_PATTERNS`` list in
+   :mod:`tests.vcr_config` and were duplicated piecemeal in
+   ``tests/check_cassettes_clean.sh`` — that drift risk is what motivated
+   the consolidation.
 
-2. **Chunked-response byte-count re-derivation (T8.D7).** The
+2. **Chunked-response byte-count re-derivation.** The
    :func:`recompute_chunk_prefix` helper walks an XSSI-framed batchexecute
    body and rewrites every digit-only ``<count>`` header to match the actual
    byte-length of the immediately-following payload line. After scrubbing
@@ -31,7 +32,7 @@ Why both halves live here, not split into two modules:
 - ``vcr_config.py`` is loaded for every VCR-decorated test, but its public
   surface is intentionally narrow (the VCR object + matchers). Scrub-time
   string surgery is a separate concern and benefits from being importable
-  on its own (the T8.B6 bulk re-scrub script in ``scripts/`` imports both
+  on its own (the bulk re-scrub script in ``scripts/`` imports both
   ``scrub_string`` AND ``recompute_chunk_prefix`` directly).
 - Decoder tolerance behavior in ``src/notebooklm/rpc/decoder.py`` (still
   parses the JSON on byte-count mismatch, now logging at DEBUG rather
@@ -52,10 +53,10 @@ Exports
 - :data:`SENSITIVE_PATTERNS`  ordered (regex, replacement) registry
 - :func:`scrub_string`        single sanitization entry point
 - :func:`is_clean`            validator returning ``(ok, leaks)``
-- :func:`recompute_chunk_prefix`  XSSI byte-count re-derivation (T8.D7)
+- :func:`recompute_chunk_prefix`  XSSI byte-count re-derivation
 
-Upload + Drive token coverage (T8.A6b — audit finding I17)
-----------------------------------------------------------
+Upload + Drive token coverage
+-----------------------------
 The registry below extends the canonical cookie/CSRF/email coverage with
 scrubbers for Google's resumable-upload and Drive integration paths:
 
@@ -71,22 +72,23 @@ scrubbers for Google's resumable-upload and Drive integration paths:
   are NotebookLM-internal identifiers and matching them would corrupt
   cassette replay.
 
-Display-name + avatar coverage (T8.A6a — audit finding C4 + /ogw/ group)
-------------------------------------------------------------------------
+Display-name + avatar coverage
+------------------------------
 The registry below also covers two display/identity leak shapes that the
-A4 structured scrubbers miss because the data is double-encoded inside a
+core structured scrubbers miss because the data is double-encoded inside a
 WRB-payload JSON string:
 
 * **Escaped JSON display-name literals.** Google's sharing RPCs emit owner
   metadata as positional list elements inside a stringified WRB payload —
   the display name surfaces as ``\\"First Last\\"`` rather than a
-  structured ``"displayName": "..."`` key. The A4 patterns key-anchor on
-  the outer JSON key, so they never fire on the inner double-encoded form.
-  The A6a pattern anchors on the escape-quote shape ``\\"...\\"`` and
-  carries an explicit false-positive allowlist (font families, UI titles,
-  artifact/notebook names produced by the test corpus) so that legitimate
-  two-Capitalized-word fixture content is preserved. This false-positive
-  list is the load-bearing safety net — a broad
+  structured ``"displayName": "..."`` key. The core structured patterns
+  key-anchor on the outer JSON key, so they never fire on the inner
+  double-encoded form. The display-name pattern anchors on the
+  escape-quote shape ``\\"...\\"`` and carries an explicit false-positive
+  allowlist (font families, UI titles, artifact/notebook names produced
+  by the test corpus) so that legitimate two-Capitalized-word fixture
+  content is preserved. This false-positive list is the load-bearing
+  safety net — a broad
   ``>[A-Z][a-z]+\\s[A-Z][a-z]+<`` regex without it would corrupt source-
   rename and artifact-list cassettes during replay.
 * **lh3.googleusercontent.com avatar URLs.** Both the ``/a/`` and ``/ogw/``
@@ -100,7 +102,7 @@ from __future__ import annotations
 import re
 
 # =============================================================================
-# Chunked-response byte-count re-derivation (T8.D7)
+# Chunked-response byte-count re-derivation
 # =============================================================================
 
 # XSSI anti-hijack prefix used by Google batchexecute responses.
@@ -300,12 +302,12 @@ SCRUB_PLACEHOLDERS: frozenset[str] = frozenset(
         # ``SCRUBBED_EMAIL@example.com`` is the rendered form of the email
         # replacement; ``is_clean`` checks the full token, so we list it too.
         "SCRUBBED_EMAIL@example.com",
-        # T8.A6b — upload + Drive token placeholders (audit I17).
+        # upload + Drive token placeholders.
         "SCRUBBED_UPLOAD_ID",
         "SCRUBBED_UPLOAD_URL",
         "SCRUBBED_AONS",
         "SCRUBBED_DRIVE_FILE_ID",
-        # T8.A6a — avatar URL placeholder (audit C4 + /ogw/ group). The
+        # avatar URL placeholder (audit C4 + /ogw/ group). The
         # display-name escaped-literal scrubber reuses the existing
         # ``SCRUBBED_NAME`` sentinel from A4 (section 6) so a cassette can
         # carry just one canonical replacement string for human names.
@@ -315,7 +317,7 @@ SCRUB_PLACEHOLDERS: frozenset[str] = frozenset(
 
 
 # =============================================================================
-# Display-name false-positive allowlist (T8.A6a)
+# Display-name false-positive allowlist
 # =============================================================================
 # Two-Capitalized-word strings that LOOK like human display names but are
 # legitimate UI / font-family / artifact / notebook titles produced during
@@ -325,7 +327,7 @@ SCRUB_PLACEHOLDERS: frozenset[str] = frozenset(
 # being corrupted during replay.
 #
 # This list intentionally mirrors ``DISPLAY_NAME_FALSE_POSITIVES`` in
-# ``tests/unit/test_cassette_shapes.py`` (T8.A3). The two lists are NOT
+# ``tests/unit/test_cassette_shapes.py``. The two lists are NOT
 # imported from each other to keep ``cassette_patterns.py`` a leaf module —
 # the shape-lint module already depends on this registry, and a back-edge
 # would create a cycle. New entries must be added to BOTH lists. The unit
@@ -392,9 +394,9 @@ def _cookie_header_replacer(name: str) -> tuple[str, str]:
 # =============================================================================
 # The list is order-sensitive: earlier patterns run first. Each entry is a
 # ``(regex, replacement)`` pair consumed by :func:`re.sub` in :func:`scrub_string`
-# below. All replacements are static strings today; tasks T8.A6a/T8.A6b will
-# introduce context-aware (callable) replacements when display-name and Drive-
-# file-ID scrubbers land.
+# below. Most replacements are static strings; display-name and Drive-file-ID
+# scrubbers use context-aware (callable) replacements where exact-match
+# allowlists or surrounding context need to be consulted.
 SENSITIVE_PATTERNS: list[tuple[str, str]] = [
     # -------------------------------------------------------------------------
     # 1. Cookie-header form: "Name=Value; ..."
@@ -492,7 +494,7 @@ SENSITIVE_PATTERNS: list[tuple[str, str]] = [
         r"\1SCRUBBED\2",
     ),
     # -------------------------------------------------------------------------
-    # 9. Upload tokens (T8.A6b — audit I17)
+    # 9. Upload tokens
     # -------------------------------------------------------------------------
     # X-GUploader-UploadID response header line. The token is a long random
     # string that uniquely identifies a resumable-upload session.
@@ -514,14 +516,14 @@ SENSITIVE_PATTERNS: list[tuple[str, str]] = [
     # full upload URL above).
     (r"upload_id=[A-Za-z0-9_\-]+", "upload_id=SCRUBBED_UPLOAD_ID"),
     # -------------------------------------------------------------------------
-    # 10. Drive AONS tokens (T8.A6b — audit I17)
+    # 10. Drive AONS tokens
     # -------------------------------------------------------------------------
     # AONS-prefixed strings are Drive permission/ACL tokens. The 20-char tail
     # threshold avoids matching short literal "AONS" mentions in code or
     # documentation while catching real tokens (which are typically 50+ chars).
     (r"AONS[A-Za-z0-9_\-]{20,}", "SCRUBBED_AONS"),
     # -------------------------------------------------------------------------
-    # 11. Drive file IDs (T8.A6b — audit I17) — context-aware ONLY
+    # 11. Drive file IDs — context-aware ONLY
     # -------------------------------------------------------------------------
     # Match ONLY inside Drive contexts: a ``"file_id": "..."`` JSON key or a
     # ``/drive/v3/files/<id>`` URL path. Bare 33-44 char strings elsewhere
@@ -536,7 +538,7 @@ SENSITIVE_PATTERNS: list[tuple[str, str]] = [
         r"\1SCRUBBED_DRIVE_FILE_ID",
     ),
     # -------------------------------------------------------------------------
-    # 12. Escaped JSON display-name literals (T8.A6a — audit C4)
+    # 12. Escaped JSON display-name literals
     # -------------------------------------------------------------------------
     # Owner display names surface inside Google's sharing RPCs as positional
     # list elements inside a stringified WRB payload, e.g.
@@ -560,7 +562,7 @@ SENSITIVE_PATTERNS: list[tuple[str, str]] = [
         r'\\"SCRUBBED_NAME\\"',
     ),
     # -------------------------------------------------------------------------
-    # 13. lh3.googleusercontent.com avatar URLs (T8.A6a — audit /ogw/ group)
+    # 13. lh3.googleusercontent.com avatar URLs (both /a/ and /ogw/ paths)
     # -------------------------------------------------------------------------
     # Both the ``/a/`` and ``/ogw/`` path forms embed per-user avatar
     # tokens. The character class includes ``=`` and ``-`` because the URL
@@ -641,7 +643,7 @@ _DETECT_TOKEN_FIELDS: list[tuple[str, re.Pattern[str]]] = [
 # Compiled detection-only pattern for emails (no replacement string baked in).
 _DETECT_EMAIL = re.compile(_EMAIL_PATTERN_BASE)
 
-# T8.A6b — upload + Drive token detectors (audit I17).
+# upload + Drive token detectors (audit I17).
 #
 # Each entry is (label, regex) where the regex's group(1) captures the value
 # that must match a known scrub placeholder. The regexes deliberately accept
@@ -672,7 +674,7 @@ _DETECT_UPLOAD_DRIVE_FIELDS: list[tuple[str, re.Pattern[str]]] = [
 # NOT match — so any match here is a leak).
 _DETECT_UPLOAD_URL = re.compile(r"https://notebooklm\.google\.com/upload/_/\?[^\"\s]*upload_id=")
 
-# T8.A6a — escaped JSON display-name literal detector (audit C4).
+# escaped JSON display-name literal detector (audit C4).
 #
 # Matches ``\"First Last\"`` inside a double-encoded JSON string. The
 # false-positive allowlist is consulted at the call site in ``is_clean``
@@ -682,7 +684,7 @@ _DETECT_UPLOAD_URL = re.compile(r"https://notebooklm\.google\.com/upload/_/\?[^\
 # directly.
 _DETECT_DISPLAY_NAME_ESCAPED = re.compile(r'\\"([A-Z][a-z]+(?: [A-Z][a-z]+)+)\\"')
 
-# T8.A6a — avatar URL detector (audit /ogw/ group). The pattern matches
+# avatar URL detector (audit /ogw/ group). The pattern matches
 # both ``/a/`` and ``/ogw/`` path forms. The scrubber collapses the entire
 # URL to ``SCRUBBED_AVATAR_URL``, so any match here is by definition a
 # leak (the placeholder string doesn't itself contain ``lh3.``).
@@ -708,7 +710,7 @@ def is_clean(text: str) -> tuple[bool, list[str]]:
     ``(ok, leaks)`` where ``ok`` is ``True`` iff ``leaks`` is empty. Each leak
     string is a human-readable description suitable for printing in CI output.
 
-    Display-name + avatar coverage (T8.A6a)
+    Display-name + avatar coverage
     ---------------------------------------
     Escaped display-name literals (``\\"First Last\\"`` inside double-
     encoded WRB payloads) and ``lh3.googleusercontent.com/(a|ogw)/`` avatar
@@ -755,20 +757,20 @@ def is_clean(text: str) -> tuple[bool, list[str]]:
             if value not in SCRUB_PLACEHOLDERS:
                 leaks.append(f"Leak ({label}): {value!r}")
 
-    # --- 4. T8.A6b — upload + Drive token fields ---------------------------
+    # --- 4. Upload + Drive token fields ------------------------------------
     for label, regex in _DETECT_UPLOAD_DRIVE_FIELDS:
         for match in regex.finditer(text):
             value = match.group(1)
             if value not in SCRUB_PLACEHOLDERS:
                 leaks.append(f"Leak ({label}): {value!r}")
 
-    # --- 5. T8.A6b — full upload URL --------------------------------------
+    # --- 5. Full upload URL -----------------------------------------------
     # The scrubber collapses the entire URL to ``SCRUBBED_UPLOAD_URL``, so any
     # match of the raw URL form here is by definition a leak.
     for match in _DETECT_UPLOAD_URL.finditer(text):
         leaks.append(f"Leak (upload URL): {match.group(0)!r}")
 
-    # --- 6. T8.A6a — escaped display-name literals -------------------------
+    # --- 6. Escaped display-name literals ----------------------------------
     # The false-positive allowlist (font families, UI titles, artifact /
     # notebook names) is consulted here rather than baked into the regex so
     # the detector stays simple and the allowlist remains observable.
@@ -778,7 +780,7 @@ def is_clean(text: str) -> tuple[bool, list[str]]:
             continue
         leaks.append(f"Leak (escaped display name): {match.group(0)!r}")
 
-    # --- 7. T8.A6a — avatar URLs ------------------------------------------
+    # --- 7. Avatar URLs ---------------------------------------------------
     # The scrubber collapses the whole URL to ``SCRUBBED_AVATAR_URL``, so any
     # match of the raw URL form here is by definition a leak.
     for match in _DETECT_AVATAR_URL.finditer(text):
@@ -788,12 +790,12 @@ def is_clean(text: str) -> tuple[bool, list[str]]:
 
 
 # =============================================================================
-# T8.E10 — Synthetic error-response builders for VCR recording
+# Synthetic error-response builders for VCR recording
 # =============================================================================
 #
-# These helpers exist so that T8.E4 (and any future error-shape cassette PRs)
-# can generate cassettes whose responses match the shapes our client's
-# exception mapping in ``src/notebooklm/_core.py`` keys on:
+# These helpers exist so error-shape cassettes can be generated whose
+# responses match the shapes our client's exception mapping in
+# ``src/notebooklm/_core.py`` keys on:
 #
 #   - HTTP 429  -> ``_TransportRateLimited`` -> ``RateLimitError``
 #   - HTTP 5xx  -> ``_TransportServerError`` -> ``ServerError``
@@ -812,8 +814,8 @@ VALID_ERROR_MODES: frozenset[str] = frozenset(
     {ERROR_MODE_RATE_LIMIT, ERROR_MODE_SERVER, ERROR_MODE_EXPIRED_CSRF}
 )
 
-# Filename prefix that T8.E4 (and any future error-cassette PR) MUST apply to
-# cassettes generated through this plumbing. The prefix is mechanical: it lets a
+# Filename prefix that error-cassette generators MUST apply to cassettes
+# produced through this plumbing. The prefix is mechanical: it lets a
 # reader of ``tests/cassettes/`` distinguish synthetic error shapes from real
 # recordings at a glance, without having to open the YAML.
 SYNTHETIC_ERROR_CASSETTE_PREFIX = "error_synthetic_"

@@ -834,7 +834,7 @@ class TestWithClientDecorator:
         missing file was incorrectly showing 'Not logged in' because the
         with_client decorator caught all FileNotFoundError as auth errors.
 
-        After T1.G, ``with_client`` routes body errors through ``handle_errors``,
+        After the with_client refactor, ``with_client`` routes body errors through ``handle_errors``,
         so an unexpected FileNotFoundError surfaces as an UNEXPECTED_ERROR
         (exit 2) — still NOT an auth error.
         """
@@ -1034,7 +1034,7 @@ class TestRunAsync:
         """Calling run_async from inside a running loop raises a CLI-shaped
         RuntimeError and does NOT leak a 'coroutine was never awaited' warning.
 
-        T7.G4: the guard wraps ``asyncio.run`` and explicitly closes the
+        The nested-loop guard wraps ``asyncio.run`` and explicitly closes the
         coroutine before re-raising so callers see the helpful message,
         not the noisy RuntimeWarning.
         """

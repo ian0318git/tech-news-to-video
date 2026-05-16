@@ -1,4 +1,4 @@
-"""Regression test for T7.H3 — configurable upload timeouts.
+"""Regression test for the configurable upload timeouts.
 
 Audit item #20 (`thread-safety-concurrency-audit.md` §20):
 Pre-fix, the resumable-upload `_start_resumable_upload` helper and the
@@ -8,7 +8,7 @@ finalize POST in `_upload_file_streaming` instantiated
 finalize). Callers uploading very large files on slow networks (or
 testing with deliberately short timeouts) had no way to override.
 
-Post-fix (T7.H3): `NotebookLMClient.__init__` / `from_storage` accept
+Post-fix: `NotebookLMClient.__init__` / `from_storage` accept
 `upload_timeout: httpx.Timeout | None = None`, threaded to
 `SourcesAPI`, and used at both hardcoded sites. ``None`` (default)
 preserves the original hardcoded values for back-compat — defaults
@@ -29,10 +29,8 @@ import pytest
 
 from notebooklm import NotebookLMClient
 
-# Mock-only tests (no real HTTP, no cassette) — opt out of the T8.D11
-# tier-enforcement hook in ``tests/integration/conftest.py``. Marker
-# was missed when this file landed (PR #618 T7.H3 merged the same day
-# as PR #622 T8.D11 tier-enforcement).
+# Mock-only tests (no real HTTP, no cassette) — opt out of the
+# integration-tree enforcement hook in ``tests/integration/conftest.py``.
 pytestmark = pytest.mark.allow_no_vcr
 
 

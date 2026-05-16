@@ -1,6 +1,6 @@
-"""Tests for ``notebooklm use`` fail-closed verification (PR T3.D).
+"""Tests for ``notebooklm use`` fail-closed verification (PR).
 
-Before PR T3.D, ``notebooklm use <id>`` persisted the supplied notebook ID to
+Before PR, ``notebooklm use <id>`` persisted the supplied notebook ID to
 ``context.json`` *even when the existence check failed* — either because the
 RPC errored, or because the server returned a degenerate "empty notebook"
 payload for an unknown ID. The result was poisoned saved state that broke
@@ -77,7 +77,7 @@ class TestNotebookNotFoundIsRPCError:
 
     def test_inherits_from_rpc_error(self):
         # ``except RPCError`` at higher layers must still match — this is the
-        # whole point of widening the base class in T3.D.
+        # whole point of widening the base class in the fail-closed fix.
         assert issubclass(NotebookNotFoundError, RPCError)
 
     def test_carries_notebook_id(self):

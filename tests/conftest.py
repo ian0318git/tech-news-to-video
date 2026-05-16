@@ -42,7 +42,7 @@ def _reset_poke_state():
 
 @pytest.fixture(autouse=True)
 def _synthetic_error_mode(request, monkeypatch):
-    """T8.E10 — opt a test into ``NOTEBOOKLM_VCR_RECORD_ERRORS=<mode>``.
+    """opt a test into ``NOTEBOOKLM_VCR_RECORD_ERRORS=<mode>``.
 
     When a test (or its enclosing module/class) carries
     ``@pytest.mark.synthetic_error("429"|"5xx"|"expired_csrf")``, this fixture
@@ -121,10 +121,10 @@ def pytest_configure(config):
     )
     config.addinivalue_line(
         "markers",
-        "synthetic_error(mode): T8.E10 — opts a test into "
+        "synthetic_error(mode): opts a test into "
         "NOTEBOOKLM_VCR_RECORD_ERRORS=<mode> for the duration of the test. "
-        "Used by T8.E4 (and any future error-cassette PR) to record cassettes "
-        "with synthetic error shapes. Mode must be one of: 429, 5xx, expired_csrf.",
+        "Used by error-cassette recording to produce cassettes with "
+        "synthetic error shapes. Mode must be one of: 429, 5xx, expired_csrf.",
     )
     # Disable Rich/Click formatting in tests to avoid ANSI escape codes in output
     # This ensures consistent test assertions regardless of -s flag

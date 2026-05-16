@@ -1,9 +1,9 @@
-"""Tests for the T5.G cookie-domain blast-radius split.
+"""Tests for the cookie-domain blast-radius split.
 
 Pins the two-layer contract:
 
 * ``REQUIRED_COOKIE_DOMAINS`` is the default *extraction* set fed to
-  rookiepy. This is the load-bearing T5.G control: sibling-product
+  rookiepy. This is the canonical enforcement point: sibling-product
   cookies (YouTube, etc.) never reach ``storage_state.json`` unless
   the user opts in via ``--include-domains`` on
   ``notebooklm login`` / ``notebooklm auth refresh`` /
@@ -103,7 +103,7 @@ class TestRuntimeGate:
     """
 
     def test_runtime_gate_accepts_youtube_for_opt_in(self):
-        """T5.G contract: the runtime gate accepts every OPTIONAL domain.
+        """Contract: the runtime gate accepts every OPTIONAL domain.
 
         If it rejected ``.youtube.com`` here, ``--include-domains=youtube``
         cookies would be extracted by rookiepy and then immediately
@@ -160,7 +160,7 @@ class TestBuildGoogleCookieDomains:
         assert not (OPTIONAL_COOKIE_DOMAINS & domains)
 
     def test_include_optional_returns_union(self):
-        """``include_optional=True`` restores the pre-T5.G broad set."""
+        """``include_optional=True`` restores the previous broad set."""
         domains = set(_build_google_cookie_domains(include_optional=True))
         assert REQUIRED_COOKIE_DOMAINS.issubset(domains)
         assert OPTIONAL_COOKIE_DOMAINS.issubset(domains)
@@ -256,7 +256,7 @@ class TestResolveOptionalCookieDomains:
 class TestBlastRadiusExtractor:
     """Blast-radius reduction is enforced at extraction time, not runtime.
 
-    T5.G plan: rookiepy is asked only for ``REQUIRED_COOKIE_DOMAINS`` by
+    Contract: rookiepy is asked only for ``REQUIRED_COOKIE_DOMAINS`` by
     default. Sibling-product cookies (YouTube) therefore never enter
     ``storage_state.json`` unless the user explicitly opts in. The
     downstream runtime gate is permissive over the full union so
@@ -341,7 +341,7 @@ class TestBlastRadiusExtractor:
         assert {".youtube.com"} <= kept_domains, (
             "convert_rookiepy_cookies_to_storage_state must keep YouTube "
             "cookies once they have been extracted; the runtime gate is "
-            "permissive over the union (T5.G)."
+            "permissive over the union."
         )
         assert any(c["name"] == "LOGIN_INFO" for c in storage_state["cookies"])
 
@@ -363,12 +363,12 @@ class TestBlastRadiusExtractor:
         for domain in (".youtube.com", "youtube.com", "accounts.youtube.com"):
             assert _is_allowed_auth_domain(domain) is True, (
                 f"_is_allowed_auth_domain({domain!r}) must accept the domain so "
-                "opted-in cookies survive every downstream filter (T5.G)."
+                "opted-in cookies survive every downstream filter."
             )
 
 
 class TestTokenVerificationStillWorksAfterMinimumSet:
-    """Token-verification regression test (load-bearing per T5.G plan).
+    """Token-verification regression test (load-bearing for the cookie-domain split).
 
     Asserts that a storage_state.json built from the minimum REQUIRED set
     still satisfies the auth-jar construction path — i.e. the same flow

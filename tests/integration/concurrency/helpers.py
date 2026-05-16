@@ -12,8 +12,8 @@ Helpers
     is supposed to be serialized (a lock, a per-resource queue, a
     per-conversation guard), asserts that no two ``enter`` events
     occur without an intervening ``exit``. Used by Phase 2 tests for
-    `_refresh_lock`, the conversation-cache lock (T7.F1), the
-    per-task polling dedupe leader (T7.E2), etc.
+    `_refresh_lock`, the conversation-cache lock, the
+    per-task polling dedupe leader, etc.
 
 ``assert_unique_outputs(make_coro, n_concurrent)``
     Asserts N concurrent invocations of an async callable produce N
@@ -23,8 +23,8 @@ Helpers
 ``with_simulated_cancel(coro, delay, *, label=None)``
     Creates a task from ``coro`` and schedules ``task.cancel()`` after
     ``delay`` seconds. Returns the task's result, or the captured
-    exception (including ``CancelledError``). Used by Phase 2 tests
-    for `asyncio.shield` regressions (T7.C1, T7.C2, T7.C3, T7.C4):
+    exception (including ``CancelledError``). Used by tests for
+    `asyncio.shield` regressions across the concurrency-hardening work:
     cancel one waiter mid-flight, assert sibling work survives.
 
 Non-helpers

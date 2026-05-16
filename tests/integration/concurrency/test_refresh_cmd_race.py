@@ -1,8 +1,8 @@
-"""T7.F4 — refresh-cmd generation race + cancel safety.
+"""refresh-cmd generation race + cancel safety.
 
 Regression test for the two failure modes at ``src/notebooklm/auth.py``:
 
-1. **Failed refresh marked successful (audit §27)**:
+1. **Failed refresh marked successful**:
    ``_fetch_tokens_with_refresh()`` previously bumped ``_REFRESH_GENERATIONS``
    *before* awaiting ``_run_refresh_cmd()``. If the subprocess raised, the
    bump remained — concurrent waiters then observed the bumped generation
@@ -22,8 +22,7 @@ the rare race — the relaxed invariant is captured in
 ``tests/unit/test_refresh_lock_registry.py``
 ``test_two_loops_at_most_two_refreshes``.
 
-Acceptance (per
-``.sisyphus/plans/tier-7-thread-safety-concurrency/phase-2-wave-4.md#T7.F4``):
+Acceptance criteria:
 
     Two callers triggering refresh concurrently while ``_run_refresh_cmd``
     fails on the first; assert the second still sees a refresh attempt
@@ -44,10 +43,8 @@ import pytest
 
 from notebooklm import auth as auth_mod
 
-# Mock-only tests (no real HTTP, no cassette) — opt out of the T8.D11
-# tier-enforcement hook in ``tests/integration/conftest.py``. Marker
-# was missed when this file landed (PR #621 T7.F4 merged the same day
-# as PR #622 T8.D11 tier-enforcement).
+# Mock-only tests (no real HTTP, no cassette) — opt out of the
+# integration-tree enforcement hook in ``tests/integration/conftest.py``.
 pytestmark = pytest.mark.allow_no_vcr
 
 
@@ -418,7 +415,7 @@ async def test_waiter_cancellation_does_not_kill_inflight_subprocess(monkeypatch
     assert csrf == "csrf-token"
     assert sid == "session-id"
 
-    # Critical assertion 3 — audit §27 failure #2: no second subprocess
+    # Critical assertion 3 — no second subprocess
     # may run CONCURRENTLY with the in-flight one. If the leader's
     # cancellation released the lock mid-subprocess, a second caller
     # would acquire it and start a duplicate subprocess overlapping

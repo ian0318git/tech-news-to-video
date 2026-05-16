@@ -52,7 +52,7 @@ def _set_account_limit(api: NotebooksAPI, limit: int | None) -> AsyncMock:
 class TestCreateNotebookQuotaDetection:
     @pytest.mark.asyncio
     async def test_create_uses_canonical_payload(self):
-        # T7.B2: ``create`` now snapshots the notebook list as a baseline
+        # ``create`` now snapshots the notebook list as a baseline
         # before issuing CREATE_NOTEBOOK so the probe-then-retry wrapper
         # can detect a server-side commit on a transient transport
         # failure. Stub ``list`` so the canonical-payload assertion only
@@ -93,7 +93,7 @@ class TestCreateNotebookQuotaDetection:
         assert exc_info.value.original_error is original
         assert "499/500" in str(exc_info.value)
         account_limits.assert_awaited_once()
-        # T7.B2: ``create`` calls ``list`` twice on an RPC failure path:
+        # ``create`` calls ``list`` twice on an RPC failure path:
         # once for the baseline snapshot, once for the quota check.
         assert api.list.await_count == 2
 
@@ -165,7 +165,7 @@ class TestCreateNotebookQuotaDetection:
 
         assert exc_info.value is original
         api._get_account_limits.assert_not_awaited()
-        # T7.B2: baseline list runs once before CREATE_NOTEBOOK; no
+        # baseline list runs once before CREATE_NOTEBOOK; no
         # quota-check list because the RPC code (13) is not the
         # quota-exhausted code (3).
         assert api.list.await_count == 1
@@ -185,7 +185,7 @@ class TestCreateNotebookQuotaDetection:
 
         assert exc_info.value is original
         api._get_account_limits.assert_not_awaited()
-        # T7.B2: baseline list runs once before CREATE_NOTEBOOK; no
+        # baseline list runs once before CREATE_NOTEBOOK; no
         # quota-check list because the failing method isn't CREATE_NOTEBOOK.
         assert api.list.await_count == 1
 
@@ -216,7 +216,7 @@ class TestCreateNotebookQuotaDetection:
             await api.create("Settings Fails")
 
         assert exc_info.value is original
-        # T7.B2: only the baseline list runs; the quota-check list is
+        # only the baseline list runs; the quota-check list is
         # skipped because account-limit lookup itself failed.
         assert api.list.await_count == 1
 
@@ -234,7 +234,7 @@ class TestCreateNotebookQuotaDetection:
             await api.create("Settings RPC Fails")
 
         assert exc_info.value is original
-        # T7.B2: only the baseline list runs.
+        # only the baseline list runs.
         assert api.list.await_count == 1
 
     @pytest.mark.asyncio
@@ -249,7 +249,7 @@ class TestCreateNotebookQuotaDetection:
             await api.create("No Limit")
 
         assert exc_info.value is original
-        # T7.B2: only the baseline list runs.
+        # only the baseline list runs.
         assert api.list.await_count == 1
 
     @pytest.mark.asyncio
@@ -298,10 +298,10 @@ class TestCreateNotebookQuotaDetection:
 
 
 class TestGetNotebookFailsClosed:
-    """``NotebooksAPI.get`` raises ``NotebookNotFoundError`` on degenerate responses (T3.D).
+    """``NotebooksAPI.get`` raises ``NotebookNotFoundError`` on degenerate responses.
 
     The NotebookLM backend returns a *parseable but empty* payload for unknown
-    notebook IDs rather than a typed error. Pre-T3.D, ``get()`` happily returned
+    notebook IDs rather than a typed error. Pre-fix, ``get()`` happily returned
     ``Notebook(id="", title="")`` and the CLI ``use`` command persisted that as
     saved state. The post-fix contract: detect the degenerate shape and raise.
     """
@@ -378,7 +378,7 @@ class TestGetNotebookFailsClosed:
         assert notebook.title == "Title Only"
 
     def test_notebook_not_found_error_is_rpc_error(self):
-        """``NotebookNotFoundError`` must be catchable as ``RPCError`` (T3.D contract)."""
+        """``NotebookNotFoundError`` must be catchable as ``RPCError``."""
         assert issubclass(NotebookNotFoundError, RPCError)
         err = NotebookNotFoundError("nb_x", method_id="rwIQyf")
         assert err.notebook_id == "nb_x"

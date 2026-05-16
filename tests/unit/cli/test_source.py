@@ -308,7 +308,7 @@ class TestSourceAdd:
             assert result.exit_code == 0
 
     def test_source_add_file_with_mime_type_emits_deprecation(self, runner, mock_auth, tmp_path):
-        """T6.E: ``--mime-type`` on the file-source path is a no-op; warn user.
+        """``--mime-type`` on the file-source path is a no-op; warn user.
 
         The Drive path keeps ``--mime-type`` as a live, functional option, so
         the deprecation echo MUST be gated on ``detected_type == 'file'`` and
@@ -1010,7 +1010,7 @@ class TestSourceAddDrive:
             assert result.exit_code == 0
 
     def test_source_add_drive_mime_type_no_deprecation_warning(self, runner, mock_auth):
-        """T6.E regression guard: Drive ``--mime-type`` MUST stay deprecation-free.
+        """Regression guard: Drive ``--mime-type`` MUST stay deprecation-free.
 
         The Drive ``--mime-type`` flag is live — it selects the ``DriveMimeType``
         value the API consumes (``google-doc``/``google-slides``/

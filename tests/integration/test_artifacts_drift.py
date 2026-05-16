@@ -1,6 +1,6 @@
-"""Schema-drift tests for ``_parse_generation_result`` (PR T1.B1).
+"""Schema-drift tests for ``_parse_generation_result`` (PR).
 
-These tests pin down the contract that PR T1.B1 establishes:
+These tests pin down the contract that PR establishes:
 
 * ``_parse_generation_result`` accepts ``method_id`` as a keyword argument and
   threads it through ``safe_index`` so drift diagnostics know which RPC failed.
@@ -29,7 +29,7 @@ from notebooklm._artifacts import ArtifactsAPI
 from notebooklm.exceptions import UnknownRPCMethodError
 from notebooklm.rpc import RPCMethod
 
-# T8.D11 — mock-only drift tests; no HTTP, no cassette. Opt out of the
+# mock-only drift tests; no HTTP, no cassette. Opt out of the
 # tier-enforcement hook in tests/integration/conftest.py.
 pytestmark = pytest.mark.allow_no_vcr
 

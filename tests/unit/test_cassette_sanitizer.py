@@ -2,13 +2,13 @@
 
 Coverage map:
 
-1. Structural display-name scrub (PR-T5.E) — positive + negative cases on
+1. Structural display-name scrub — positive + negative cases on
    ``tests/vcr_config.scrub_string``.
 2. Two-Capitalized-word source title regression — confirms we don't reintroduce
    the broad ``>[A-Z][a-z]+\\s[A-Z][a-z]+<`` pattern that would clobber legit
    fixture content.
-3. Broadened email scrub (PR-T5.E) — positive + idempotency.
-4. The Python guard ``tests/scripts/check_cassettes_clean.py`` (T8.A5a):
+3. Broadened email scrub — positive + idempotency.
+4. The Python guard ``tests/scripts/check_cassettes_clean.py``:
    - exits 0 on clean cassettes
    - exits 1 on email / cookie-header / JSON-key / storage_state leaks
    - explicit ``SCRUB_PLACEHOLDERS`` allowlist (NOT a "starts with S"
@@ -43,7 +43,7 @@ REGRESSION_FIXTURE = TESTS_DIR / "fixtures" / "bad_cassettes" / "bad_sid_startin
 
 
 # ---------------------------------------------------------------------------
-# Structural display-name scrub (PR-T5.E)
+# Structural display-name scrub
 # ---------------------------------------------------------------------------
 
 
@@ -125,7 +125,7 @@ def test_two_capital_word_in_html_text_not_scrubbed() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Broadened email scrub (PR-T5.E)
+# Broadened email scrub
 # ---------------------------------------------------------------------------
 
 
@@ -177,7 +177,7 @@ def test_email_scrub_negative_unrelated_text() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Python guard tool: ``tests/scripts/check_cassettes_clean.py`` (T8.A5a)
+# Python guard tool: ``tests/scripts/check_cassettes_clean.py``
 #
 # The guard is invoked as a subprocess so we exercise the real CLI entry
 # point — including argparse wiring, exit codes, and stdout/stderr.  It is
@@ -367,24 +367,24 @@ def test_python_guard_repo_allowlist_is_explicit_basename_list() -> None:
         if line.strip() and not line.strip().startswith("#")
     }
     # Spec-explicit entries that must always be in the allowlist while
-    # phase-2 repair is outstanding.
-    # ``sources_add_file.yaml`` is NOT in this required-set anymore — it was
-    # repaired in T8.B4 (the audit's I17 upload-token leak scrubbed in place).
-    # ``sources_add_drive.yaml`` + ``sources_check_freshness_drive.yaml`` are
-    # NOT in this required-set anymore — they were repaired in T8.B5 (the
-    # audit's I17 Drive AONS-token leak scrubbed in place).
-    # ``example_httpbin_{get,post}.yaml`` are NOT in this required-set anymore —
-    # they were deleted in T8.B7 (the audit's I-misc origin-IP leak was in
-    # illustrative VCR fixtures, not real NotebookLM cassettes).
+    # cassette repair is outstanding.
+    # ``sources_add_file.yaml`` is NOT in this required-set anymore — it
+    # was repaired (upload-token leak scrubbed in place).
+    # ``sources_add_drive.yaml`` + ``sources_check_freshness_drive.yaml``
+    # are NOT in this required-set anymore — they were repaired (Drive
+    # AONS-token leak scrubbed in place).
+    # ``example_httpbin_{get,post}.yaml`` are NOT in this required-set
+    # anymore — they were deleted (the origin-IP leak was in illustrative
+    # VCR fixtures, not real NotebookLM cassettes).
     # ``chat_ask.yaml`` + ``chat_ask_with_references.yaml`` are NOT in this
-    # required-set anymore — they were re-recorded in T8.B2 against the
-    # current 9-param streaming-chat builder (C3 stale-shape regression).
-    # ``artifacts_revise_slide.yaml`` is NOT in this required-set anymore —
-    # it was repaired in T8.B1 (re-recorded so f.req carries a real
-    # urlencoded JSON payload with only sensitive scalars scrubbed inside).
-    # ``sharing_get_status.yaml`` + ``sharing_set_public.yaml`` are NOT in
-    # this required-set anymore — they were re-scrubbed in T8.B3.
-    # With all phase-2 cassette repairs landed, this loop has nothing to
-    # assert; future regressions would re-introduce entries here.
+    # required-set anymore — they were re-recorded against the current
+    # 9-param streaming-chat builder (stale-shape regression).
+    # ``artifacts_revise_slide.yaml`` is NOT in this required-set anymore
+    # — it was repaired (re-recorded so f.req carries a real urlencoded
+    # JSON payload with only sensitive scalars scrubbed inside).
+    # ``sharing_get_status.yaml`` + ``sharing_set_public.yaml`` are NOT
+    # in this required-set anymore — they were re-scrubbed.
+    # With all cassette repairs landed, this loop has nothing to assert;
+    # future regressions would re-introduce entries here.
     for required in ():
         assert required in entries, f"missing required allowlist entry: {required}"

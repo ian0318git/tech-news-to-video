@@ -56,9 +56,9 @@ class TestArtifactListByType:
         For INFOGRAPHIC and DATA_TABLE we additionally assert the rendered
         JSON output exposes the parsed ``type_id`` matching the requested
         filter — proving the parser, not just the transport, agrees on the
-        kind. T8.C6 / audit-I21.
+        kind.
         """
-        # T8.C6: only the INFOGRAPHIC + DATA_TABLE rows opt into ``--json``.
+        # only the INFOGRAPHIC + DATA_TABLE rows opt into ``--json``.
         # The other rows stay on the table renderer to preserve their
         # historical (xfail-masked) call sequence — the ``--json`` path
         # makes an extra ``notebooks.get()`` RPC for the table header that

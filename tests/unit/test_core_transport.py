@@ -1,4 +1,4 @@
-"""Parity tests for the shared transport pipeline (T2.C).
+"""Parity tests for the shared transport pipeline.
 
 Pins down the behavior of :meth:`ClientCore._perform_authed_post` (and the
 chat-side :meth:`ClientCore.query_post`) extracted from ``_rpc_call_impl``:
@@ -669,7 +669,7 @@ async def test_query_post_timeout_after_budget_keeps_timeout_message(monkeypatch
 
 @pytest.mark.asyncio
 async def test_rpc_call_happy_path_url_and_body_unchanged(monkeypatch):
-    """After the T2.C extraction, ``rpc_call`` must produce the same outgoing
+    """After the rpc_call extraction, ``rpc_call`` must produce the same outgoing
     ``(url, body)`` as pre-extraction for the happy path."""
     core = _make_core()
     await core.open()
@@ -701,7 +701,7 @@ async def test_rpc_call_happy_path_url_and_body_unchanged(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# server_error_max_retries — 5xx + network with exponential backoff (T3.A)
+# server_error_max_retries — 5xx + network with exponential backoff
 # ---------------------------------------------------------------------------
 
 

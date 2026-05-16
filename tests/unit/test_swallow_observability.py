@@ -1,7 +1,4 @@
-"""Tests for Phase 1 T3 — categorized observability at 12 swallowed-exception sites.
-
-See .sisyphus/plans/phase-1-implementation.md for the inventory and rationale.
-"""
+"""Tests for categorized observability at 12 swallowed-exception sites."""
 
 from __future__ import annotations
 
@@ -95,7 +92,7 @@ def test_qa_pairs_warns_on_unguarded_shape(caplog):
 
     # Got at least the question (answer is empty due to except)
     assert pairs == [("what?", "")]
-    # After T8.D2b, _chat._extract_next_turn_content delegates to safe_index,
+    # After the fix, _chat._extract_next_turn_content delegates to safe_index,
     # which emits its own canonical "safe_index drift" warning (rather than
     # the older _chat-specific "schema drift" wording). Accept either so
     # this test survives future helper renames.
@@ -110,7 +107,7 @@ def test_qa_pairs_warns_on_unguarded_shape(caplog):
 async def test_summary_warns_on_indexerror_drift(caplog, monkeypatch):
     """_notebooks.py: summary extraction warns when result[0][0][0] raises.
 
-    Tier-1 T1.B2 migrated this site to ``safe_index``; the warning message
+    This site was migrated to ``safe_index``; the warning message
     now comes from ``notebooklm.rpc._safe_index`` and carries the call-site
     label ``source='_notebooks.get_summary'`` instead of the notebook id.
     """
@@ -179,7 +176,7 @@ async def test_description_partial_summary_logs_debug(caplog):
 def test_migration_config_unparseable_logs_debug(caplog, tmp_path, monkeypatch):
     """migration.py — unparseable migration config logs at DEBUG.
 
-    After T3.E the lock-protected ``atomic_update_json`` surfaces the
+    After the fix the lock-protected ``atomic_update_json`` surfaces the
     parse failure as a ``json.JSONDecodeError`` which the helper catches
     and reports as "Migration config update failed".
     """
@@ -250,7 +247,7 @@ def _file_contains_best_effort_after_except(filepath: Path, except_line: int) ->
 # (relative-to-SRC_ROOT path, except-line). Lines refer to the `except ...:`
 # statement; the helper scans the 4 lines following it for `# best-effort:`.
 # Note: the previous ``cli/helpers.py:596`` site (``set_current_notebook``'s
-# best-effort rewrite-from-scratch) was retired in T3.E — that branch now
+# best-effort rewrite-from-scratch) was retired — that branch now
 # uses :func:`notebooklm._atomic_io.atomic_update_json` with explicit
 # JSONDecodeError handling that re-runs the mutator on an empty dict.
 _SILENT_SITES = [

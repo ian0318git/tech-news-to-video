@@ -1,7 +1,7 @@
 """Tests for ``scripts/check_coverage_thresholds.py``.
 
-Covers both the original Phase-1 drift check and the T6.C per-file floor
-extension. The script is imported via spec-loading rather than ``from
+Covers both the original drift check and the per-file floor extension.
+The script is imported via spec-loading rather than ``from
 scripts.check_coverage_thresholds import main`` because ``scripts/`` is not
 a package in this repo.
 """
@@ -79,7 +79,7 @@ def test_original_drift_mismatch_fails(tmp_path, capsys, script):
 
 
 # ---------------------------------------------------------------------------
-# T6.C — per-file floor enforcement
+# per-file floor enforcement
 # ---------------------------------------------------------------------------
 
 

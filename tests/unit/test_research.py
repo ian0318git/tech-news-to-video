@@ -511,7 +511,7 @@ class TestResearch:
         httpx_mock.add_response(content=response_body.encode(), method="POST")
 
         async with NotebookLMClient(auth_tokens) as client:
-            # T7.F3: poll() without task_id when >1 task is in flight is the
+            # poll() without task_id when >1 task is in flight is the
             # ambiguous case — pin that the DeprecationWarning fires on this
             # exact path so a future change can't silently drop it.
             with pytest.warns(DeprecationWarning, match="task_id"):
@@ -674,7 +674,7 @@ class TestResearch:
                     "research_task_id": "report_123",
                 },
             ]
-            # T7.F3: caller's task_id must match the source's research_task_id.
+            # caller's task_id must match the source's research_task_id.
             # For deep research the authoritative id on the wire is the
             # report_id, which is what ``poll`` propagates onto each source.
             result = await client.research.import_sources(
@@ -709,7 +709,7 @@ class TestResearch:
 
         Two distinct failure modes both refuse the batch:
         - At least one source's ``research_task_id`` differs from the caller's
-          ``task_id`` (T7.F3 check; raises :class:`ResearchTaskMismatchError`).
+          ``task_id`` (raises :class:`ResearchTaskMismatchError`).
         - All sources match the caller's ``task_id`` but disagree among
           themselves (legacy multi-task batch check; raises plain
           :class:`ValidationError`). Hard to construct in practice because
@@ -735,7 +735,7 @@ class TestResearch:
             ]
             # Caller passes task_id="report_123": the first source matches,
             # but the second source's research_task_id="report_456" mismatches
-            # and trips the T7.F3 per-source check.
+            # and trips the per-source task-id check.
             with pytest.raises(ResearchTaskMismatchError) as exc_info:
                 await client.research.import_sources(
                     notebook_id="nb_123",
@@ -783,7 +783,7 @@ class TestResearch:
                     "research_task_id": "report_123",
                 },
             ]
-            # T7.F3: caller's task_id matches the sources' research_task_id.
+            # caller's task_id matches the sources' research_task_id.
             result = await client.research.import_sources(
                 notebook_id="nb_123",
                 task_id="report_123",
@@ -946,7 +946,7 @@ class TestResearch:
             sources_with_urls = [s for s in sources if s.get("url")]
             assert len(sources_with_urls) == 2
 
-            # T7.F3: for deep research the authoritative id on the wire is
+            # for deep research the authoritative id on the wire is
             # the report_id returned by ``poll`` (and stamped onto each
             # source as ``research_task_id``), not the ``task_id`` returned
             # by ``start``. Pass the poll-derived id so the per-source

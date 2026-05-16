@@ -1,4 +1,4 @@
-"""Regression tests for T7.B2 — probe-then-retry idempotency for create RPCs.
+"""Regression tests for the probe-then-retry idempotency for create RPCs.
 
 Audit item #2 (`thread-safety-concurrency-audit.md` §2):
 Pre-fix, mutating create RPCs (CREATE_NOTEBOOK, ADD_SOURCE) ran inside
@@ -6,7 +6,7 @@ Pre-fix, mutating create RPCs (CREATE_NOTEBOOK, ADD_SOURCE) ran inside
 between server-side commit and client-side response triggered a naive
 re-POST that duplicated the resource.
 
-Post-fix (T7.B2):
+Post-fix:
 - Per-call ``disable_internal_retries`` flag suppresses the inner retry
   loop for declared mutating create RPCs.
 - An API-layer ``_idempotency.idempotent_create`` wrapper owns
@@ -44,7 +44,7 @@ from notebooklm import (
 )
 from notebooklm.rpc import RPCMethod
 
-# T8.D11 — mock-transport idempotency tests; no HTTP, no cassette. Opt out
+# mock-transport idempotency tests; no HTTP, no cassette. Opt out
 # of the tier-enforcement hook in tests/integration/conftest.py.
 pytestmark = pytest.mark.allow_no_vcr
 
@@ -163,8 +163,8 @@ def _rpc_id_in_request(request: httpx.Request) -> str | None:
 async def test_notebooks_create_idempotent_on_5xx_retry(auth_tokens) -> None:
     """A 5xx on CREATE_NOTEBOOK followed by a probe finding the title returns the existing notebook.
 
-    Before T7.B2: the inner retry loop would re-POST CREATE_NOTEBOOK and
-    duplicate the notebook. After T7.B2: the create RPC fires once, the
+    Before the fix: the inner retry loop would re-POST CREATE_NOTEBOOK and
+    duplicate the notebook. After the fix: the create RPC fires once, the
     probe (LIST_NOTEBOOKS) returns the new notebook, and we return it
     without re-issuing the create.
     """

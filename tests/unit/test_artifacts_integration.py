@@ -1056,7 +1056,7 @@ class TestArtifactErrorPaths:
         """Test RPC error handling for HTTP 500.
 
         Uses ``server_error_max_retries=0`` to exercise the immediate-raise
-        path; T3.A adds bounded exponential-backoff retries for 5xx by
+        path; the retry-policy fix adds bounded exponential-backoff retries for 5xx by
         default, but the error-shape contract on exhaustion is what this test
         pins down.
         """
@@ -1338,7 +1338,7 @@ class TestListMindMapErrorHandling:
         httpx_mock.add_response(content=list_response.encode())
 
         async with NotebookLMClient(auth_tokens) as client:
-            # After T6.F, ArtifactsAPI reaches mind maps through the
+            # After the mind-map relocation, ArtifactsAPI reaches mind maps through the
             # shared ``_mind_map`` module rather than an injected
             # NotesAPI. Patch the primitive at its consumer-side import.
             with patch(
@@ -1584,7 +1584,7 @@ class TestGenerateMindMapParsing:
         from notebooklm.types import Note
 
         async with NotebookLMClient(auth_tokens) as client:
-            # After T6.F, mind-map persistence is driven through
+            # After the mind-map relocation, mind-map persistence is driven through
             # ``_mind_map.create_note`` rather than ``NotesAPI.create``.
             with patch(
                 "notebooklm._artifacts._mind_map.create_note",

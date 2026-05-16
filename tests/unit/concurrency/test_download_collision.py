@@ -1,9 +1,9 @@
-"""Regression test for T7.B1 — concurrent download temp-file collision.
+"""Regression test for the concurrent download temp-file collision.
 
 Audit item #1 (`thread-safety-concurrency-audit.md` §1):
 Pre-fix, two concurrent `_download_url(...)` calls targeting the same
 `output_path` shared a single `<output>.tmp` file, interleaving bytes
-and racing on `temp_file.rename(output_file)`. Post-fix (T7.B1), each
+and racing on `temp_file.rename(output_file)`. Post-fix, each
 call uses `tempfile.mkstemp(...)` for a unique temp path and commits
 via `os.replace`, so concurrent writers cannot corrupt the final file.
 

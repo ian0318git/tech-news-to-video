@@ -1,4 +1,4 @@
-"""Symlink hardening for `notebooklm source add` file uploads (PR-T5.C).
+"""Symlink hardening for `notebooklm source add` file uploads.
 
 The CLI must reject symlinked paths unless the user explicitly opts in via
 ``--follow-symlinks``. This guards against the footgun where a workspace
@@ -112,7 +112,7 @@ def _invoke(runner: CliRunner, mock_client: MagicMock, argv: list[str]):
 
 
 class TestAutoDetectFilePath:
-    """Auto-detect (no ``--type``) branch — the original PR-T5.C surface."""
+    """Auto-detect (no ``--type``) branch — the original PR surface."""
 
     def test_plain_regular_file_uploads(self, runner, mock_auth, tmp_path: Path) -> None:
         """A non-symlinked file passes the gate and is uploaded.

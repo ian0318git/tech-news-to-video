@@ -629,7 +629,7 @@ class TestChatAskErrorHandling:
         )
 
         # ``server_error_max_retries=0`` pins the original immediate-raise
-        # contract; T3.A's default retries 5xx + RequestError 3x.
+        # contract; the default retries 5xx + RequestError 3x.
         async with NotebookLMClient(auth_tokens, server_error_max_retries=0) as client:
             with pytest.raises(NetworkError, match="timed out"):
                 await client.chat.ask(
@@ -646,7 +646,7 @@ class TestChatAskErrorHandling:
     ):
         """Test ask() raises ChatError on httpx.HTTPStatusError.
 
-        After T2.D, the chat path uses ``core.query_post`` which routes
+        After the chat-path refactor, the chat path uses ``core.query_post`` which routes
         through the shared transport pipeline. Auth-shaped statuses (400/401/
         403) go through the refresh path before surfacing; this test uses
         500 to exercise the plain ``HTTPStatusError → ChatError`` mapping

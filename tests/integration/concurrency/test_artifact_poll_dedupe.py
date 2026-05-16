@@ -1,6 +1,6 @@
-"""T7.E2 — leader/follower polling dedupe for ``wait_for_completion``.
+"""leader/follower polling dedupe for ``wait_for_completion``.
 
-Regression test for the audit §21 finding: when N callers concurrently
+Regression test for poll-dedup: when N callers concurrently
 invoke ``ArtifactsAPI.wait_for_completion`` for the *same* ``(notebook_id,
 task_id)``, each runs its own poll loop and issues N independent
 ``LIST_ARTIFACTS`` requests per polling tick — wasteful at best and a
@@ -49,7 +49,7 @@ from notebooklm import NotebookLMClient
 from notebooklm.auth import AuthTokens
 from notebooklm.types import GenerationStatus
 
-# T8.D11 — mock-transport concurrency tests; no HTTP, no cassette. Opt out
+# mock-transport concurrency tests; no HTTP, no cassette. Opt out
 # of the tier-enforcement hook in tests/integration/conftest.py.
 pytestmark = pytest.mark.allow_no_vcr
 

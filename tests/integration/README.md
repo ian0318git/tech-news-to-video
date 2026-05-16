@@ -8,7 +8,7 @@ cassettes in `tests/cassettes/`.
 To keep the tier honest — i.e. to keep "integration" from quietly slipping
 back into "unit with extra ceremony" — every test collected under
 `tests/integration/` MUST satisfy one of these three rules. The
-`pytest_collection_modifyitems` hook in `conftest.py` (T8.D11) raises
+`pytest_collection_modifyitems` hook in `conftest.py` raises
 `pytest.UsageError` at collection time if none of them holds, so a violation
 fails CI immediately rather than degrading the tier silently.
 
@@ -63,7 +63,7 @@ not a default.
   cassettes are present on disk.
 - `@notebooklm_vcr.use_cassette("cassette_name.yaml")` pins a specific
   cassette to a specific test. Always pair with `@pytest.mark.vcr` (a)
-  for self-documentation and (b) so the T8.D4
+  for self-documentation and (b) so the
   `_disable_keepalive_poke_for_vcr` autouse fixture activates — that
   fixture reads the marker, not the wrapper.
 

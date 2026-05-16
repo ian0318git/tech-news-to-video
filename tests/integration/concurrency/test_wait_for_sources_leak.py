@@ -1,4 +1,4 @@
-"""Regression test for T7.E1 — cancel sibling pollers on first failure.
+"""Regression test for the cancel sibling pollers on first failure.
 
 Audit item §5: ``SourcesAPI.wait_for_sources`` fanned out to ``wait_until_ready``
 calls with a bare ``asyncio.gather(*coroutines)``. When one source poll raised
@@ -14,7 +14,7 @@ Post-fix:
   ``await asyncio.gather(*tasks, return_exceptions=True)`` before re-raising.
 - The public signature is unchanged.
 
-Acceptance invariant (per plan §T7.E1):
+Acceptance invariant:
   invoke ``wait_for_sources(nb, ["bad-id", "slow-id"])`` against a mock that
   errors ``bad-id`` immediately and would poll ``slow-id`` for 60 s; assert the
   slow poll is fully cancelled (its ``CancelledError`` handler has executed)
@@ -33,7 +33,7 @@ import pytest
 from notebooklm import NotebookLMClient
 from notebooklm.types import Source, SourceProcessingError
 
-# T8.D11 — mock-based wait-for-sources cancellation tests; no HTTP, no
+# mock-based wait-for-sources cancellation tests; no HTTP, no
 # cassette. Opt out of the tier-enforcement hook in tests/integration/conftest.py.
 pytestmark = pytest.mark.allow_no_vcr
 
@@ -44,7 +44,7 @@ async def test_wait_for_sources_cancels_sibling_on_first_failure(auth_tokens):
 
     Bare ``asyncio.gather(*coros)`` cancels siblings on first exception but does
     NOT await them; ``gather`` returns before the cancelled siblings reach their
-    ``except CancelledError`` blocks. T7.E1 makes ``wait_for_sources`` await the
+    ``except CancelledError`` blocks. The fix makes ``wait_for_sources`` await the
     drained siblings before re-raising, so the slow task's cancellation handler
     runs synchronously with respect to the caller.
     """

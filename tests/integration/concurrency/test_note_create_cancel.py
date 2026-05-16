@@ -1,4 +1,4 @@
-"""Regression test for T7.C4 — shield UPDATE_NOTE finalize, cleanup on cancel.
+"""Regression test for the shield UPDATE_NOTE finalize, cleanup on cancel.
 
 Audit item §28: ``_mind_map.create_note`` issued CREATE_NOTE then UPDATE_NOTE
 back-to-back. A cancellation arriving after CREATE_NOTE returned but before
@@ -12,7 +12,7 @@ Post-fix:
   DELETE_NOTE fires via ``asyncio.create_task`` (NOT awaited — re-raise must
   not block on cleanup), then the cancellation re-raises.
 
-Acceptance invariant (per plan §T7.C4):
+Acceptance invariant:
   cancel mid-flight after CREATE_NOTE returns but before UPDATE_NOTE
   completes; assert either
     (a) both succeed (shield wins — UPDATE_NOTE finished within the shielded
@@ -32,7 +32,7 @@ import pytest
 from notebooklm import NotebookLMClient
 from notebooklm.rpc import RPCMethod
 
-# T8.D11 — mock-transport cancel-during-create tests; no HTTP, no cassette.
+# mock-transport cancel-during-create tests; no HTTP, no cassette.
 # Opt out of the tier-enforcement hook in tests/integration/conftest.py.
 pytestmark = pytest.mark.allow_no_vcr
 
@@ -120,7 +120,7 @@ class _NoteCancelTransport(httpx.AsyncBaseTransport):
 async def test_cancel_during_update_note_shields_or_cleans_up(auth_tokens) -> None:
     """Cancel after CREATE_NOTE / before UPDATE_NOTE completes.
 
-    The acceptance invariant from the T7.C4 plan: assert EITHER both writes
+    The acceptance invariant from the plan: assert EITHER both writes
     succeed (shield wins) OR a DELETE_NOTE cleanup task fired on the
     transport. Either branch proves the orphan-note bug is gone.
     """

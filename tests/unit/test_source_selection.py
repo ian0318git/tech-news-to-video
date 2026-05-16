@@ -24,7 +24,7 @@ from notebooklm.rpc import InfographicStyle, VideoFormat, VideoStyle
 def mock_core():
     """Create a mock ClientCore.
 
-    After Tier-2 T2.D, ``ChatAPI.ask`` goes through ``core.query_post`` and
+    After , ``ChatAPI.ask`` goes through ``core.query_post`` and
     ``core.next_reqid`` instead of the legacy direct ``post`` / counter
     mutation. Tests that need to assert on URL or body now drive
     ``query_post`` via its ``build_request`` factory rather than poking the
@@ -105,7 +105,7 @@ def mock_core():
 def mock_notes_api():
     """Placeholder for the legacy ``ArtifactsAPI(core, notes_api)`` signature.
 
-    After T6.F, ``ArtifactsAPI`` no longer reads ``notes_api`` (it consumes
+    After the mind-map relocation, ``ArtifactsAPI`` no longer reads ``notes_api`` (it consumes
     the shared ``_mind_map`` module directly). The arg is still accepted for
     backward compatibility and immediately discarded inside ``__init__``, so
     this fixture intentionally returns a bare mock — no method stubs, since
@@ -602,7 +602,7 @@ class TestArtifactsSourceSelection:
         # Verify get_source_ids was called
         mock_core.get_source_ids.assert_called_once_with("nb_123")
 
-        # After T6.F, ``generate_mind_map`` also drives the CREATE_NOTE +
+        # After the mind-map relocation, ``generate_mind_map`` also drives the CREATE_NOTE +
         # UPDATE_NOTE calls itself (previously delegated to NotesAPI), so
         # rpc_call is invoked three times. The source-encoding assertion
         # targets the GENERATE_MIND_MAP call specifically.

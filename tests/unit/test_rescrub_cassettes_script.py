@@ -1,4 +1,4 @@
-"""Unit tests for ``scripts/rescrub-cassettes.py`` (T8.B6).
+"""Unit tests for ``scripts/rescrub-cassettes.py``.
 
 These tests build synthetic "bad" cassettes that contain the exact leak
 shapes the script is meant to clean — an ``/ogw/`` avatar URL plus a
@@ -78,7 +78,7 @@ def _build_bad_cassette(path: Path) -> None:
       shrinks by exactly the captured-token length per occurrence.
     * Interaction 1 — chunked XSSI batchexecute response. The first chunk
       embeds an avatar URL inside a stringified WRB payload (the same
-      shape T8.A6a was designed to catch). The byte-count prefix is set
+      shape the display-name scrubber was designed to catch). The byte-count prefix is set
       to the PRE-scrub payload length, so a script that only substitutes
       but doesn't re-derive counts will leave a stale prefix and the
       shape-lint byte-count assertion would later fail.

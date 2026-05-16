@@ -1122,9 +1122,9 @@ class TestUseCommand:
         assert "nb_full_id_123" in result.output or "Resolved Notebook" in result.output
 
     def test_use_without_auth_fails_closed(self, runner, mock_context_file):
-        """'use' fails closed (exit 1) when no auth is available — fix for T3.D.
+        """'use' fails closed (exit 1) when no auth is available.
 
-        Pre-T3.D behavior persisted unverified IDs after auth failure, poisoning
+        Previously, behavior persisted unverified IDs after auth failure, poisoning
         saved state for downstream commands. The new contract: refuse to write
         context.json and emit a clear "run notebooklm login" message.
         """
@@ -1256,7 +1256,7 @@ class TestUseAuthAwareError:
     """When `notebooklm use <id>` hits an `AuthError` (e.g. expired SID
     cookies), the catch must surface the typed "run notebooklm login" UX
     from `helpers.handle_auth_error` rather than the generic "Could not
-    verify ... Pass --force" catch-all (audit row I13).
+    verify ... Pass --force" catch-all.
     """
 
     def test_use_auth_error_suggests_notebooklm_login(self, runner, mock_auth, mock_context_file):
@@ -1533,7 +1533,7 @@ class TestAuthCheckCommand:
     def test_auth_check_storage_not_found_json(self, runner, mock_storage_path):
         """Test auth check --json when storage file doesn't exist.
 
-        Per T1.F: failure paths in --json mode must exit nonzero so automation
+        Spec: failure paths in --json mode must exit nonzero so automation
         can fail-fast on `notebooklm auth check --json`.
         """
         if mock_storage_path.exists():
@@ -1560,7 +1560,7 @@ class TestAuthCheckCommand:
     def test_auth_check_invalid_json_output(self, runner, mock_storage_path):
         """Test auth check --json when storage contains invalid JSON.
 
-        Per T1.F: failure paths in --json mode must exit nonzero.
+        Spec: failure paths in --json mode must exit nonzero.
         """
         mock_storage_path.write_text("not valid json at all")
 
@@ -1636,7 +1636,7 @@ class TestAuthCheckCommand:
         in ``auth.py`` raise on absence, and ``auth check`` reports the raised
         ``ValueError`` so users see the new diagnostic.
 
-        T1.F closes the previous exit-code gap: ``auth check --json`` now exits
+        The fix closes the previous exit-code gap: ``auth check --json`` now exits
         nonzero whenever it reports ``status="error"``.
         """
         storage_data = {
@@ -1902,9 +1902,9 @@ class TestLoginLanguageSync:
 
 class TestSessionEdgeCases:
     def test_use_handles_api_error_fails_closed(self, runner, mock_auth, mock_context_file):
-        """'use' fails closed when the API errors — fix for T3.D.
+        """'use' fails closed when the API errors.
 
-        Pre-T3.D: an exception during ``client.notebooks.get`` was swallowed
+        Previously: an exception during ``client.notebooks.get`` was swallowed
         and the unverified ID was persisted with a "Warning" tag, poisoning
         downstream commands. New contract: exit 1, leave context.json untouched.
         """

@@ -32,14 +32,14 @@ When to use VCR vs pytest-httpx:
 Sanitization
 ------------
 Scrub patterns and the byte-count re-derivation helper both live in
-:mod:`tests.cassette_patterns` (T8.A4 + T8.D7). This module deliberately holds
+:mod:`tests.cassette_patterns`. This module deliberately holds
 NO regex literals so we can never drift between "what the recorder scrubs" and
 "what the cassette guard inspects". :func:`scrub_request` / :func:`scrub_response`
 here are thin wrappers that delegate to
 :func:`tests.cassette_patterns.scrub_string` and
 :func:`tests.cassette_patterns.recompute_chunk_prefix`.
 
-Keepalive-poke disable (T8.D4)
+Keepalive-poke disable
 ------------------------------
 Every test that carries ``@pytest.mark.vcr`` (directly or via a module-level
 ``pytestmark``) automatically runs with
@@ -96,7 +96,7 @@ synthetic_error_cassette_name = _cassette_patterns.synthetic_error_cassette_name
 SYNTHETIC_ERROR_CASSETTE_PREFIX = _cassette_patterns.SYNTHETIC_ERROR_CASSETTE_PREFIX
 VALID_ERROR_MODES = _cassette_patterns.VALID_ERROR_MODES
 
-# T8.E10 — env var name shared with ``src/notebooklm/_core.py``. Kept in sync
+# env var name shared with ``src/notebooklm/_core.py``. Kept in sync
 # as a local copy so the VCR-only replay path (which does not import
 # ``notebooklm._core``) can still parse the env var without dragging the
 # production module in. The unit tests in ``tests/unit/test_vcr_config.py``
@@ -168,7 +168,7 @@ def scrub_request(request: Any) -> Any:
 
 
 def _substitute_synthetic_error(response: dict[str, Any]) -> dict[str, Any]:
-    """T8.E10 — defense-in-depth synthetic-error substitution.
+    """defense-in-depth synthetic-error substitution.
 
     When ``NOTEBOOKLM_VCR_RECORD_ERRORS`` resolves to a valid mode (see
     :data:`VALID_ERROR_MODES`), rewrite the response shape to the canonical
@@ -223,13 +223,13 @@ def scrub_response(response: dict[str, Any]) -> dict[str, Any]:
     no-op on bodies that don't look chunked, so it's safe to call
     unconditionally.
 
-    T8.E10: when ``NOTEBOOKLM_VCR_RECORD_ERRORS`` is set to a valid mode,
+    Synthetic-error recording: when ``NOTEBOOKLM_VCR_RECORD_ERRORS`` is set to a valid mode,
     :func:`_substitute_synthetic_error` runs FIRST so that downstream scrub
     steps see the canonical synthetic shape rather than whatever the wire
     produced (the transport wrapper in ``_core.py`` normally already
     substituted, but this pass closes the loop for VCR-only test paths).
     """
-    # T8.E10 — synthetic-error substitution (no-op when env var unset).
+    # synthetic-error substitution (no-op when env var unset).
     response = _substitute_synthetic_error(response)
 
     # Scrub response body
@@ -240,14 +240,14 @@ def scrub_response(response: dict[str, Any]) -> dict[str, Any]:
             try:
                 decoded = content.decode("utf-8")
                 scrubbed = scrub_string(decoded)
-                # Re-derive chunk byte-counts after scrubbing (T8.D7).
+                # Re-derive chunk byte-counts after scrubbing.
                 rederived = recompute_chunk_prefix(scrubbed)
                 body["string"] = rederived.encode("utf-8")
             except UnicodeDecodeError:
                 pass  # Binary content (audio, images), skip scrubbing
         else:
             scrubbed = scrub_string(content)
-            # Re-derive chunk byte-counts after scrubbing (T8.D7).
+            # Re-derive chunk byte-counts after scrubbing.
             rederived = recompute_chunk_prefix(scrubbed)
             body["string"] = rederived
 

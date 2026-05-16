@@ -1,4 +1,4 @@
-"""Regression test for T7.B3 — httpx connection-pool tuning via ConnectionLimits.
+"""Regression test for the httpx connection-pool tuning via ConnectionLimits.
 
 Audit item #3 (`thread-safety-concurrency-audit.md` §3, also §19):
 Pre-fix, `ClientCore.open()` instantiated `httpx.AsyncClient(...)` with
@@ -7,7 +7,7 @@ Heavy fan-out workloads (FastAPI services sharing a client across many
 concurrent requests, large `wait_for_sources` batches) tripped
 `httpx.PoolTimeout`.
 
-Post-fix (T7.B3): a stable `ConnectionLimits` dataclass on
+Post-fix: a stable `ConnectionLimits` dataclass on
 `notebooklm.types` exposes pool tuning, defaults to
 `max_connections=100, max_keepalive_connections=50,
 keepalive_expiry=30.0`, and is plumbed through `ClientCore.__init__`
@@ -30,7 +30,7 @@ import pytest
 from notebooklm import NotebookLMClient
 from notebooklm.types import ConnectionLimits
 
-# T8.D11 — pool-config + patch-based tuning tests; no HTTP, no cassette.
+# pool-config + patch-based tuning tests; no HTTP, no cassette.
 # Opt out of the tier-enforcement hook in tests/integration/conftest.py.
 pytestmark = pytest.mark.allow_no_vcr
 

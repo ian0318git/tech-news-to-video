@@ -1,8 +1,8 @@
-"""Phase 3 P3.5 / T7.H2 — 429 retry budget on ``ClientCore.rpc_call``.
+"""429 retry budget on ``ClientCore.rpc_call``.
 
-T7.H2 raises the ``rate_limit_max_retries`` default from ``0`` to ``3``
-and adds capped exponential backoff as the sleep fallback when 429
-arrives without a parseable ``Retry-After`` header (audit §11). Setting
+The rate-limit fix raises the ``rate_limit_max_retries`` default from
+``0`` to ``3`` and adds capped exponential backoff as the sleep fallback
+when 429 arrives without a parseable ``Retry-After`` header. Setting
 ``rate_limit_max_retries=0`` still restores raise-immediately behavior.
 """
 
@@ -111,9 +111,9 @@ async def test_rate_limit_no_retry_if_disabled(auth_tokens):
 
 @pytest.mark.asyncio
 async def test_rate_limit_exp_backoff_fallback_without_header(auth_tokens):
-    """No Retry-After header → fall back to capped exponential backoff (T7.H2).
+    """No Retry-After header → fall back to capped exponential backoff.
 
-    Pre-T7.H2, a 429 without ``Retry-After`` raised immediately even with
+    Pre-fix, a 429 without ``Retry-After`` raised immediately even with
     budget>0. Audit §11 widened the retry circle: when the header is
     missing, the loop sleeps for ``min(2 ** attempt, 30)`` seconds with
     ±20% jitter and retries until the budget is exhausted, matching the
