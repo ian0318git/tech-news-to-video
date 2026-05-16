@@ -5,8 +5,8 @@ retrieving conversation history.
 """
 
 import asyncio
+import contextlib
 import logging
-import uuid
 import weakref
 from typing import Any
 
@@ -159,20 +159,42 @@ class ChatAPI:
             question: The question to ask.
             source_ids: Specific source IDs to query. If None, uses all sources.
             conversation_id: Existing conversation ID for follow-up questions.
+                Omit (or pass ``None``) to continue the user's current
+                conversation on this notebook (or create one if none
+                exists) — matching the web UI's default behavior.
 
         Returns:
-            AskResult with answer, conversation_id, and turn info.
+            AskResult with answer, server-recorded conversation_id, and
+            turn info. For new conversations the conversation_id is
+            fetched via ``hPTbtc`` post-ask (issue #659).
+
+        Raises:
+            ChatError: For a new conversation, if ``hPTbtc`` returns no
+                conversation_id after the ask (the server failed to record
+                the turn, or the API shape drifted). The full answer text
+                is logged at ERROR level before the raise so it survives
+                in the audit trail.
+            NetworkError / ChatError: If the post-ask ``hPTbtc`` round-trip
+                itself fails (transient network or auth issue). Same
+                logging contract — answer is logged before the raise.
 
         Example:
-            # New conversation
+            # New conversation — SDK fetches the real id post-ask via hPTbtc.
             result = await client.chat.ask(notebook_id, "What is machine learning?")
 
-            # Follow-up
+            # Follow-up — pass the real, hPTbtc-fetched conversation_id back.
             result = await client.chat.ask(
                 notebook_id,
                 "How does it differ from deep learning?",
                 conversation_id=result.conversation_id
             )
+
+        Note:
+            Repeated ``ask()`` calls without ``conversation_id`` all extend
+            the same most-recent conversation. To force a fresh
+            conversation, no public API exists yet — this would require a
+            dedicated ``create conversation`` RPC that has not been
+            reverse-engineered. See issue #659.
         """
         logger.debug(
             "Asking question in notebook %s (conversation=%s)",
@@ -183,30 +205,36 @@ class ChatAPI:
             source_ids = await self._core.get_source_ids(notebook_id)
 
         is_new_conversation = conversation_id is None
-        if is_new_conversation:
-            conversation_id = str(uuid.uuid4())
-        assert conversation_id is not None  # Type narrowing for mypy
 
-        # Hold the per-``conversation_id`` lock across history-build, the
-        # network round-trip, and the cache append (audit §10 / T7.F1).
-        # Without this, two ``asyncio.gather``'d follow-ups on the same
-        # conversation read identical pre-update history at the top, both
-        # POST that history, and the server sees two follow-ups both
-        # claiming to be turn N+1. New conversations use a fresh UUID so
-        # the lookup is uncontested — the overhead is a no-op
-        # ``WeakValueDictionary`` insert + a single uncontested
-        # ``asyncio.Lock`` acquire.
-        async with self._get_conversation_lock(conversation_id):
+        # Acquire the per-conversation lock only for follow-ups (audit §10 /
+        # T7.F1). Two concurrent gather'd follow-ups on the same conversation
+        # would otherwise read identical pre-update history, both POST it, and
+        # the server would see two follow-ups both claiming to be turn N+1.
+        # New conversations skip the lock entirely: there is no caller-supplied
+        # id to lock on yet, and parallel null-asks all attach to the same
+        # server-current conversation anyway (verified live), so post-ask
+        # hPTbtc fetches will agree on the conversation_id.
+        lock_cm: contextlib.AbstractAsyncContextManager[Any]
+        if is_new_conversation:
+            lock_cm = contextlib.nullcontext()
+        else:
+            assert conversation_id is not None  # narrowed by is_new_conversation
+            lock_cm = self._get_conversation_lock(conversation_id)
+
+        async with lock_cm:
             if is_new_conversation:
                 conversation_history = None
             else:
+                # Re-assert: mypy loses the narrowing across the lock-setup
+                # block above, even though ``is_new_conversation`` is False
+                # here so ``conversation_id`` must be non-None.
+                assert conversation_id is not None
                 conversation_history = self._build_conversation_history(conversation_id)
-            # Rebind to non-Optional locals so the build_request closure below
-            # carries the narrowed types — mypy doesn't propagate flow-narrowing
-            # of ``conversation_id`` / ``source_ids`` through a nested-function
-            # capture. ``_build_chat_request`` declares both as non-Optional, so
-            # the closure capture would otherwise be a latent type error.
-            active_conversation_id: str = conversation_id
+            # Capture into closure-local variables so the nested ``build_request``
+            # closure carries explicit types — mypy doesn't propagate flow
+            # narrowing through nested-function captures, and the wire
+            # builder accepts ``conversation_id: str | None``.
+            active_conversation_id: str | None = conversation_id
             active_source_ids: list[str] = source_ids
 
             # Mint the request-id under the asyncio-safe counter helper so two
@@ -242,14 +270,71 @@ class ChatAPI:
                 if reqid_token is not None:
                     reset_request_id(reqid_token)
 
-            answer_text, references, server_conv_id = self._parse_ask_response_with_references(
+            # ``_parse_ask_response_with_references`` returns a third tuple
+            # element historically called ``server_conv_id``. Live API tests
+            # (issue #659) proved that field is a per-stream/per-query id,
+            # not a real conversation_id: querying ``khqZz`` with it returns
+            # 0 turns, and passing it back as ``params[4]`` for a follow-up
+            # produces a ghost turn the server does not register. We discard
+            # it here and fetch the real id via ``hPTbtc`` below.
+            answer_text, references, _ignored_stream_id = self._parse_ask_response_with_references(
                 response.text
             )
-            # Prefer the conversation ID returned by the server over our locally
-            # generated UUID, so that get_conversation_id() and
-            # get_conversation_turns() stay in sync.
-            if server_conv_id:
-                conversation_id = server_conv_id
+
+            if is_new_conversation:
+                # The real conversation_id is not present anywhere in the
+                # streamed chat response. The only way to recover it is to
+                # query ``hPTbtc`` (GET_LAST_CONVERSATION_ID), which returns
+                # the user's current conversation for this notebook — i.e.
+                # the one our null-at-params[4] ask just attached to.
+                #
+                # Wrap the call in try/except so that if hPTbtc itself fails
+                # (network, auth, etc.), we log the answer text before
+                # surfacing the exception — otherwise the caller loses an
+                # answer they already paid for.
+                try:
+                    real_conversation_id = await self.get_conversation_id(notebook_id)
+                except (ChatError, NetworkError):
+                    logger.error(
+                        "Chat ask succeeded but post-ask get_conversation_id "
+                        "failed. Answer (%d chars, may be truncated): %r",
+                        len(answer_text or ""),
+                        (answer_text or "")[:500],
+                    )
+                    raise
+                if real_conversation_id is None:
+                    if answer_text:
+                        # Server returned an answer but hPTbtc has no id.
+                        # The conversation may have been recorded but is
+                        # invisible to hPTbtc, OR the API shape drifted.
+                        # Log the answer so it survives the raise.
+                        logger.error(
+                            "Server returned a non-empty answer but hPTbtc "
+                            "returned no conversation_id (%d chars). Answer "
+                            "preview: %r",
+                            len(answer_text),
+                            answer_text[:500],
+                        )
+                    raise ChatError(
+                        "Server did not register a conversation for this ask "
+                        "(hPTbtc returned no id). The response may have been "
+                        "empty, or the API shape may have changed. Please file "
+                        "an issue at https://github.com/teng-lin/notebooklm-py/issues."
+                    )
+                conversation_id = real_conversation_id
+            # Follow-up: keep the caller-supplied id. (We used to rebind to
+            # ``server_conv_id`` here, but that field is a stream id not a
+            # conv_id — see comment above.)
+            #
+            # Known limitation (deferred): concurrent ``asyncio.gather``'d
+            # new-conversation asks on the same notebook can race on the
+            # local cache because both resolve to the same hPTbtc id and
+            # both read empty turns before writing turn_number=1. The
+            # server side is fine (it attaches both turns to the same
+            # conversation). Fixing this requires a notebook-scoped lock
+            # for new-conversation asks; tracked separately.
+
+            assert conversation_id is not None  # narrowed by the branches above
 
             turns = self._core.get_cached_conversation(conversation_id)
             if answer_text:
@@ -323,9 +408,23 @@ class ChatAPI:
                     for conv in group:
                         if isinstance(conv, list) and conv and isinstance(conv[0], str):
                             return conv[0]
-            logger.debug(
-                "No conversation ID found in response (API structure may have changed): %s",
-                raw,
+            # Promoted from DEBUG to WARNING (per Gemini review on PR #667):
+            # the response shape is the actionable diagnostic when callers
+            # (notably ``ChatAPI.ask`` post-issue-#659) raise ChatError on a
+            # ``None`` return. Truncate to keep log volume bounded; the
+            # ``repr`` keeps the shape visible (lists vs. dicts vs. ints).
+            logger.warning(
+                "hPTbtc returned an unexpected response shape; no "
+                "conversation_id extracted (notebook=%s, raw=%r)",
+                notebook_id,
+                repr(raw)[:500],
+            )
+        elif raw is not None:
+            logger.warning(
+                "hPTbtc returned a non-list, non-empty response (notebook=%s, type=%s, raw=%r)",
+                notebook_id,
+                type(raw).__name__,
+                repr(raw)[:500],
             )
         return None
 
@@ -525,7 +624,7 @@ class ChatAPI:
         question: str,
         source_ids: list[str],
         conversation_history: list | None,
-        conversation_id: str,
+        conversation_id: str | None,
         reqid: int,
     ) -> tuple[str, str, dict[str, str]]:
         """Compatibility wrapper for streamed-chat request construction."""

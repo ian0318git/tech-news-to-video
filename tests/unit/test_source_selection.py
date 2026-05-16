@@ -33,7 +33,24 @@ def mock_core():
     from notebooklm._core import _AuthSnapshot
 
     core = MagicMock()
-    core.rpc_call = AsyncMock()
+
+    # ``ChatAPI.get_conversation_id`` uses ``core.rpc_call`` with the
+    # ``hPTbtc`` (GET_LAST_CONVERSATION_ID) method. Issue #659: after a
+    # new-conversation ask, ``ChatAPI.ask`` calls this to recover the real
+    # conversation_id. Route only that method to a hPTbtc-shaped reply;
+    # every other RPC honors ``mock_core.rpc_call.return_value`` so the
+    # artifact tests in this module (which set ``return_value`` per call)
+    # are unaffected.
+    from notebooklm.rpc import RPCMethod as _RPC
+
+    core.rpc_call = AsyncMock(return_value=MagicMock())
+
+    async def _rpc_call_dispatch(method, params, *, source_path=None, allow_null=False):
+        if method == _RPC.GET_LAST_CONVERSATION_ID:
+            return [[["mock-core-conv-id"]]]
+        return core.rpc_call.return_value
+
+    core.rpc_call.side_effect = _rpc_call_dispatch
     core.get_source_ids = AsyncMock(return_value=[])
     core.auth = MagicMock()
     core.auth.csrf_token = "test_csrf"
@@ -63,7 +80,19 @@ def mock_core():
         url, body, headers = build_request(snapshot)
         core._last_chat_request = {"url": url, "body": body, "headers": headers}
         resp = MagicMock()
-        inner = json.dumps([["Default answer long enough to be valid.", None, None, None, [1]]])
+        # ``first[2][0]`` carries the server-assigned conversation_id; new
+        # conversations require this slot (issue #659).
+        inner = json.dumps(
+            [
+                [
+                    "Default answer long enough to be valid.",
+                    None,
+                    ["server-source-selection-conv", 12345],
+                    None,
+                    [1],
+                ]
+            ]
+        )
         chunk = json.dumps([["wrb.fr", None, inner]])
         resp.text = f")]}}'\n{len(chunk)}\n{chunk}\n"
         return resp
