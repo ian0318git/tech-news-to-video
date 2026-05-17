@@ -31,10 +31,25 @@ from __future__ import annotations
 
 import ast
 import pathlib
+from collections.abc import Iterator
 
 import pytest
 
 CLI_ROOT = pathlib.Path(__file__).resolve().parents[2] / "src" / "notebooklm" / "cli"
+OPTIONS_PATH = CLI_ROOT / "options.py"
+COMPLETION_CALLBACKS = {
+    "_complete_artifacts",
+    "_complete_notebooks",
+    "_complete_sources",
+    "_resolve_notebook_for_completion",
+}
+COMPLETION_FORBIDDEN_SYMBOLS = {
+    "NotebookLMClient",
+    "get_auth_tokens",
+    "run_async",
+}
+FUNCTION_DEF_TYPES = (ast.FunctionDef, ast.AsyncFunctionDef)
+BLOCK_DEF_TYPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
 
 
 def _is_private_segment(seg: str) -> bool:
@@ -43,6 +58,11 @@ def _is_private_segment(seg: str) -> bool:
     Empty strings and dunders (``__version__``) are not private.
     """
     return bool(seg) and seg.startswith("_") and not seg.startswith("__")
+
+
+def _is_dunder_name(name: str) -> bool:
+    """True for double-underscore names that are intentionally public."""
+    return name.startswith("__") and name.endswith("__")
 
 
 def _has_private_segment(parts: list[str]) -> bool:
@@ -123,6 +143,83 @@ def _violations(tree: ast.AST) -> list[str]:  # noqa: C901 - flat dispatch on im
     return bad
 
 
+def _iter_block_body_nodes(block: ast.AST) -> Iterator[ast.AST]:
+    """Yield nodes from a block signature/body without descending into nested blocks."""
+
+    def walk(node: ast.AST, *, is_root: bool = False) -> Iterator[ast.AST]:
+        if not is_root and isinstance(node, BLOCK_DEF_TYPES):
+            return
+        if not is_root:
+            yield node
+        for child in ast.iter_child_nodes(node):
+            yield from walk(child)
+
+    yield from walk(block, is_root=True)
+
+
+def _has_forbidden_completion_boundary(parts: list[str]) -> bool:
+    """Match forbidden names on exact dotted prefixes or final symbol names."""
+    dotted_matches = (
+        ".".join(parts[:index]) in COMPLETION_FORBIDDEN_SYMBOLS
+        for index in range(1, len(parts) + 1)
+    )
+    return any(dotted_matches) or bool(parts and parts[-1] in COMPLETION_FORBIDDEN_SYMBOLS)
+
+
+def _completion_boundary_violations(tree: ast.AST) -> tuple[set[str], list[str]]:
+    forbidden_names = set(COMPLETION_FORBIDDEN_SYMBOLS)
+    import_offenders: list[str] = []
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            module_parts = (node.module or "").split(".") if node.module else []
+            module_forbidden = _has_forbidden_completion_boundary(module_parts)
+            for alias in node.names:
+                if _is_dunder_name(alias.name):
+                    continue
+                if not module_forbidden and alias.name not in COMPLETION_FORBIDDEN_SYMBOLS:
+                    continue
+                alias_name = alias.asname or alias.name
+                forbidden_names.add(alias_name)
+                import_offenders.append(f"import: {alias.name}")
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                parts = alias.name.split(".")
+                if any(_is_dunder_name(part) for part in parts):
+                    continue
+                if not _has_forbidden_completion_boundary(parts):
+                    continue
+                if alias.asname:
+                    forbidden_names.add(alias.asname)
+                elif len(parts) == 1:
+                    forbidden_names.add(alias.name)
+                import_offenders.append(f"import: {alias.name}")
+
+    check_targets: list[tuple[str, ast.AST]] = [("<module>", tree)]
+    for node in ast.walk(tree):
+        if isinstance(node, FUNCTION_DEF_TYPES):
+            check_targets.append((node.name, node))
+        elif isinstance(node, ast.ClassDef):
+            check_targets.append((f"class {node.name}", node))
+
+    top_level_functions = {node.name for node in tree.body if isinstance(node, FUNCTION_DEF_TYPES)}
+    missing_callbacks = COMPLETION_CALLBACKS - top_level_functions
+
+    offenders = list(import_offenders)
+    for context_name, block_node in sorted(check_targets, key=lambda item: item[0]):
+        for node in _iter_block_body_nodes(block_node):
+            if isinstance(node, ast.Name) and node.id in forbidden_names:
+                offenders.append(f"{context_name}: {node.id}")
+            elif (
+                isinstance(node, ast.Attribute)
+                and node.attr in COMPLETION_FORBIDDEN_SYMBOLS
+                and not _is_dunder_name(node.attr)
+            ):
+                offenders.append(f"{context_name}: .{node.attr}")
+
+    return missing_callbacks, offenders
+
+
 def test_no_private_module_imports_in_cli():
     offenders: list[tuple[str, list[str]]] = []
     for path in sorted(CLI_ROOT.rglob("*.py")):
@@ -136,6 +233,101 @@ def test_no_private_module_imports_in_cli():
         "Promote needed symbols to a public module (config/urls/log/research/types) "
         f"and import from there.\nOffenders: {offenders}"
     )
+
+
+def test_options_completion_callbacks_stay_on_completion_provider_boundary() -> None:
+    """Keep live completion auth/client/runtime work out of ``cli.options``."""
+    tree = ast.parse(OPTIONS_PATH.read_text(encoding="utf-8"))
+    missing_callbacks, offenders = _completion_boundary_violations(tree)
+    assert not missing_callbacks, (
+        "Expected top-level completion callbacks missing from cli.options: "
+        f"{sorted(missing_callbacks)}"
+    )
+
+    assert not offenders, (
+        "cli.options must delegate completion live auth/client/runtime work to "
+        "cli.completion instead of constructing clients, loading auth, or running "
+        f"async work directly: {offenders}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (
+            "from notebooklm import NotebookLMClient as Client\n"
+            "def _complete_artifacts():\n"
+            "    return Client\n",
+            ["import: NotebookLMClient", "_complete_artifacts: Client"],
+        ),
+        (
+            "import run_async as runner\ndef _complete_notebooks():\n    return runner\n",
+            ["import: run_async", "_complete_notebooks: runner"],
+        ),
+        (
+            "import pkg.run_async\ndef _complete_sources():\n    return None\n",
+            ["import: pkg.run_async"],
+        ),
+        (
+            "from .runtime import run_async as runner\n"
+            "def _complete_sources():\n"
+            "    return runner\n",
+            ["import: run_async", "_complete_sources: runner"],
+        ),
+        (
+            "class Provider:\n"
+            "    client = NotebookLMClient\n"
+            "def _resolve_notebook_for_completion():\n"
+            "    return None\n",
+            ["class Provider: NotebookLMClient"],
+        ),
+        (
+            "@run_async\n"
+            "def _complete_artifacts(client: NotebookLMClient = None) -> NotebookLMClient:\n"
+            "    return client\n",
+            [
+                "_complete_artifacts: run_async",
+                "_complete_artifacts: NotebookLMClient",
+            ],
+        ),
+        (
+            "class Provider(NotebookLMClient):\n"
+            "    pass\n"
+            "def _resolve_notebook_for_completion():\n"
+            "    return None\n",
+            ["class Provider: NotebookLMClient"],
+        ),
+    ],
+)
+def test_completion_boundary_detects_import_and_block_shapes(
+    source: str, expected: list[str]
+) -> None:
+    """Self-check the AST guardrail paths used by the live options.py test."""
+    _, offenders = _completion_boundary_violations(ast.parse(source))
+
+    assert set(offenders) == set(expected), f"Expected {expected}, got {offenders}"
+
+
+def test_completion_boundary_reports_missing_callbacks() -> None:
+    missing_callbacks, _ = _completion_boundary_violations(ast.parse(""))
+
+    assert missing_callbacks == COMPLETION_CALLBACKS
+
+
+def test_completion_boundary_ignores_dunder_imports() -> None:
+    _, offenders = _completion_boundary_violations(
+        ast.parse("from notebooklm import __version__\n")
+    )
+
+    assert offenders == []
+
+
+def test_completion_boundary_allows_standard_library_and_safe_relative_imports() -> None:
+    _, offenders = _completion_boundary_violations(
+        ast.parse("import pathlib\nfrom collections import abc\nfrom .completion import complete\n")
+    )
+
+    assert offenders == []
 
 
 @pytest.mark.parametrize(
