@@ -9,6 +9,7 @@ jobs:
   build-and-publish:
     name: Build and publish to PyPI
     runs-on: ubuntu-latest
+    environment: release
     permissions:
       id-token: write
       contents: read
@@ -39,6 +40,16 @@ jobs:
     - name: Build package
       run: |
         python -m build
+
+    - name: Install built wheel + dev extras in a clean venv
+      run: |
+        python -m venv smoke-venv
+        WHEEL=$(ls dist/notebooklm_py-*.whl)
+        smoke-venv/bin/pip install "${WHEEL}[dev]"
+        smoke-venv/bin/python -c "import notebooklm; print(notebooklm.__version__)"
+
+    - name: Run unit tests against wheel
+      run: smoke-venv/bin/pytest tests/unit -q --no-cov -x
 
     - name: Publish to PyPI
       uses: pypa/gh-action-pypi-publish@release/v1
