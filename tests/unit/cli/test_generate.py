@@ -8,7 +8,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from click.testing import CliRunner
 
-from notebooklm.cli.generate import _format_status_message, _status_with_elapsed
+from notebooklm.cli.services.artifact_generation import (
+    RETRY_MAX_DELAY,
+    _format_status_message,
+    _status_with_elapsed,
+    calculate_backoff_delay,
+    generate_with_retry,
+)
 from notebooklm.notebooklm_cli import cli
 from notebooklm.rpc.types import ReportFormat
 
@@ -19,6 +25,7 @@ from .conftest import create_mock_client, patch_client_for_module
 # tests target the module's attribute set (``console``, helpers) rather than
 # the Click Group sitting at the same dotted path.
 generate_module = importlib.import_module("notebooklm.cli.generate")
+artifact_generation_module = importlib.import_module("notebooklm.cli.services.artifact_generation")
 
 
 @pytest.fixture
@@ -1131,30 +1138,22 @@ class TestCalculateBackoffDelay:
 
     def test_initial_delay(self):
         """Test that first attempt uses initial delay."""
-        from notebooklm.cli.generate import calculate_backoff_delay
-
         delay = calculate_backoff_delay(0, initial_delay=60.0)
         assert delay == 60.0
 
     def test_exponential_backoff(self):
         """Test that delay increases exponentially."""
-        from notebooklm.cli.generate import calculate_backoff_delay
-
         assert calculate_backoff_delay(0, initial_delay=60.0) == 60.0
         assert calculate_backoff_delay(1, initial_delay=60.0) == 120.0
         assert calculate_backoff_delay(2, initial_delay=60.0) == 240.0
 
     def test_max_delay_cap(self):
         """Test that delay is capped at max_delay."""
-        from notebooklm.cli.generate import calculate_backoff_delay
-
         delay = calculate_backoff_delay(10, initial_delay=60.0, max_delay=300.0)
         assert delay == 300.0
 
     def test_custom_multiplier(self):
         """Test custom backoff multiplier."""
-        from notebooklm.cli.generate import calculate_backoff_delay
-
         delay = calculate_backoff_delay(1, initial_delay=10.0, multiplier=3.0)
         assert delay == 30.0
 
@@ -1165,7 +1164,6 @@ class TestGenerateWithRetry:
     @pytest.mark.asyncio
     async def test_no_retry_on_success(self):
         """Test that successful generation doesn't trigger retry."""
-        from notebooklm.cli.generate import generate_with_retry
         from notebooklm.types import GenerationStatus
 
         success_result = GenerationStatus(
@@ -1181,7 +1179,6 @@ class TestGenerateWithRetry:
     @pytest.mark.asyncio
     async def test_retry_on_rate_limit(self):
         """Test that rate limit triggers retry."""
-        from notebooklm.cli.generate import generate_with_retry
         from notebooklm.types import GenerationStatus
 
         rate_limited = GenerationStatus(
@@ -1204,7 +1201,6 @@ class TestGenerateWithRetry:
     @pytest.mark.asyncio
     async def test_retry_exhausted(self):
         """Test that all retries being exhausted returns last result."""
-        from notebooklm.cli.generate import generate_with_retry
         from notebooklm.types import GenerationStatus
 
         rate_limited = GenerationStatus(
@@ -1223,7 +1219,6 @@ class TestGenerateWithRetry:
     @pytest.mark.asyncio
     async def test_no_retry_when_max_retries_zero(self):
         """Test that max_retries=0 means no retry attempts."""
-        from notebooklm.cli.generate import generate_with_retry
         from notebooklm.types import GenerationStatus
 
         rate_limited = GenerationStatus(
@@ -1241,7 +1236,6 @@ class TestGenerateWithRetry:
     @pytest.mark.asyncio
     async def test_retry_delays_increase_exponentially(self):
         """Verify delays follow exponential backoff pattern (60s, 120s, 240s)."""
-        from notebooklm.cli.generate import generate_with_retry
         from notebooklm.types import GenerationStatus
 
         rate_limited = GenerationStatus(
@@ -1261,7 +1255,6 @@ class TestGenerateWithRetry:
     @pytest.mark.asyncio
     async def test_retry_delay_caps_at_max(self):
         """Verify delay caps at 300s even with many retries."""
-        from notebooklm.cli.generate import RETRY_MAX_DELAY, generate_with_retry
         from notebooklm.types import GenerationStatus
 
         rate_limited = GenerationStatus(
@@ -1513,9 +1506,7 @@ class TestOutputGenerationStatusDirect:
     """Direct tests for _output_generation_status() covering uncovered branches."""
 
     def setup_method(self):
-        import importlib
-
-        self.generate_module = importlib.import_module("notebooklm.cli.generate")
+        self.generate_module = artifact_generation_module
 
     def _make_status(
         self, *, is_complete=False, is_failed=False, task_id=None, url=None, error=None
@@ -1590,6 +1581,13 @@ class TestOutputGenerationStatusDirect:
             self.generate_module._output_generation_status(status, "audio", json_output=False)
         mock_console.print.assert_called_once_with("[red]Failed:[/red] Transcription error")
 
+    def test_text_failed_no_error_message(self):
+        """Text failed output falls back to Unknown error when error is None."""
+        status = self._make_status(is_failed=True, error=None)
+        with patch.object(self.generate_module, "console") as mock_console:
+            self.generate_module._output_generation_status(status, "audio", json_output=False)
+        mock_console.print.assert_called_once_with("[red]Failed:[/red] Unknown error")
+
     def test_text_pending_with_task_id(self):
         """Line 268: Text output for pending status shows task_id."""
         status = self._make_status(task_id="task_789")
@@ -1618,9 +1616,7 @@ class TestExtractTaskIdDirect:
     """Direct tests for _extract_task_id() covering list path."""
 
     def setup_method(self):
-        import importlib
-
-        self.generate_module = importlib.import_module("notebooklm.cli.generate")
+        self.generate_module = artifact_generation_module
 
     def test_extract_from_list_first_string(self):
         """Lines 231-232: list where first element is a string."""
@@ -2066,11 +2062,8 @@ class TestGenerateWithRetryConsoleOutput:
     @pytest.mark.asyncio
     async def test_retry_shows_console_message_when_not_json(self):
         """Line 111: console.print shown during retry when json_output=False."""
-        import importlib
 
         from notebooklm.types import GenerationStatus
-
-        generate_module = importlib.import_module("notebooklm.cli.generate")
 
         rate_limited = GenerationStatus(
             task_id="", status="failed", error="Rate limited", error_code="USER_DISPLAYABLE_ERROR"
@@ -2081,10 +2074,10 @@ class TestGenerateWithRetryConsoleOutput:
         generate_fn = AsyncMock(side_effect=[rate_limited, success_result])
 
         with (
-            patch.object(generate_module, "console") as mock_console,
+            patch.object(artifact_generation_module, "console") as mock_console,
             patch("asyncio.sleep", new_callable=AsyncMock),
         ):
-            result = await generate_module.generate_with_retry(
+            result = await artifact_generation_module.generate_with_retry(
                 generate_fn, max_retries=1, artifact_type="audio", json_output=False
             )
 
@@ -2159,6 +2152,41 @@ class TestHandleGenerationResultListPathAndWait:
         assert result.exit_code == 0
         mock_client.artifacts.wait_for_completion.assert_called_once()
 
+    def test_dict_result_prefers_artifact_id_for_wait(self, runner, mock_auth):
+        """Dict generation-start results preserve artifact_id-first wait semantics."""
+        from notebooklm.types import GenerationStatus
+
+        completed_status = GenerationStatus(
+            task_id="artifact_wait_id",
+            status="completed",
+            error=None,
+            error_code=None,
+            url="https://example.com/audio.mp3",
+        )
+
+        with patch_client_for_module("generate") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.artifacts.generate_audio = AsyncMock(
+                return_value={
+                    "artifact_id": "artifact_wait_id",
+                    "task_id": "task_wait_id",
+                    "status": "processing",
+                }
+            )
+            mock_client.artifacts.wait_for_completion = AsyncMock(return_value=completed_status)
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["generate", "audio", "-n", "nb_123", "--wait"])
+
+        assert result.exit_code == 0, result.output
+        mock_client.artifacts.wait_for_completion.assert_awaited_once()
+        args = mock_client.artifacts.wait_for_completion.await_args.args
+        assert args[:2] == ("nb_123", "artifact_wait_id")
+
 
 class TestOutputMindMapNonDictMindMap:
     """Test _output_mind_map_result when mind_map value is not a dict (line 985->else)."""
@@ -2211,7 +2239,7 @@ class TestStatusWithElapsed:
         """Under --json the helper must NOT call console.status (stdout stays JSON)."""
 
         async def _exercise() -> None:
-            with patch.object(generate_module.console, "status") as mock_status:
+            with patch.object(artifact_generation_module.console, "status") as mock_status:
                 async with _status_with_elapsed("audio", json_output=True):
                     pass
                 assert not mock_status.called, "console.status must not be invoked under --json"
@@ -2325,7 +2353,7 @@ class TestGenerateWaitSigintResumeHint:
         """
 
         async def _exercise() -> None:
-            with patch.object(generate_module.console, "status") as mock_status:
+            with patch.object(artifact_generation_module.console, "status") as mock_status:
                 mock_status.return_value.__enter__ = MagicMock(return_value=MagicMock())
                 mock_status.return_value.__exit__ = MagicMock(return_value=False)
                 with pytest.raises(KeyboardInterrupt):
