@@ -38,7 +38,6 @@ from .helpers import (
     display_research_sources,
     emit_status,
     get_source_type_display,
-    import_research_sources,
     json_output_response,
     read_stdin_text,
     require_notebook,
@@ -55,6 +54,7 @@ from .options import (
     prompt_file_option,
     wait_polling_options,
 )
+from .research_import import import_research_sources
 from .services import source_add as source_add_service
 from .services import source_clean as source_clean_service
 
