@@ -61,7 +61,7 @@ def _extract_query_param(url: str, key: str) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# authuser= URL parameter (audit C2/M1)
+# authuser= URL parameter
 # ---------------------------------------------------------------------------
 
 
