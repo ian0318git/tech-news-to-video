@@ -8,8 +8,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from filelock import Timeout
 
 import notebooklm.cli._encoding as encoding_module
+import notebooklm.cli.context as context_module
+import notebooklm.cli.rendering as rendering_module
 from notebooklm import Artifact
 from notebooklm.cli.helpers import (
     clear_context,
@@ -109,6 +112,7 @@ class TestGetArtifactTypeDisplay:
         # Unknown types return "Unknown (<kind>)" format
         display = get_artifact_type_display(art)
         assert "Unknown" in display
+        assert repr(art.kind) not in display
 
     def test_report_subtype_briefing_doc(self):
         # report_subtype is computed from title
@@ -207,9 +211,8 @@ class TestCliNameToArtifactType:
     def test_all_returns_none(self):
         assert cli_name_to_artifact_type("all") is None
 
-    def test_invalid_type_raises_keyerror(self):
-        with pytest.raises(KeyError):
-            cli_name_to_artifact_type("invalid-type")
+    def test_invalid_type_returns_none(self):
+        assert cli_name_to_artifact_type("invalid-type") is None
 
 
 # =============================================================================
@@ -247,6 +250,13 @@ class TestJsonOutputResponse:
         assert "中文笔记本" in captured.out
         assert "🚀" in captured.out
         assert "\\u" not in captured.out
+
+    def test_rendering_module_outputs_valid_json(self, capsys):
+        rendering_module.json_output_response({"test": "value"})
+
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        assert data["test"] == "value"
 
 
 class TestJsonErrorResponse:
@@ -309,6 +319,13 @@ class TestContextManagement:
             result = get_current_notebook()
             assert result == "nb_test123"
 
+    def test_context_module_uses_own_get_context_path(self, tmp_path):
+        context_file = tmp_path / "context.json"
+        with patch("notebooklm.cli.context.get_context_path", return_value=context_file):
+            context_module.set_current_notebook("nb_test123", title="Test Notebook")
+            result = context_module.get_current_notebook()
+            assert result == "nb_test123"
+
     def test_set_notebook_with_all_fields(self, tmp_path):
         context_file = tmp_path / "context.json"
         with patch("notebooklm.cli.helpers.get_context_path", return_value=context_file):
@@ -335,6 +352,7 @@ class TestContextManagement:
                 {
                     "notebook_id": "test",
                     "conversation_id": "conv",
+                    "future_context_field": "clear me too",
                     "account": {"authuser": 1, "email": "bob@example.com"},
                 }
             )
@@ -392,6 +410,51 @@ class TestContextManagement:
         with patch("notebooklm.cli.helpers.get_context_path", return_value=context_file):
             result = get_current_notebook()
             assert result is None
+
+    def test_get_notebook_non_object_json(self, tmp_path, caplog):
+        context_file = tmp_path / "context.json"
+        context_file.write_text("[]")
+        with (
+            patch("notebooklm.cli.helpers.get_context_path", return_value=context_file),
+            caplog.at_level("WARNING", logger="notebooklm.cli.context"),
+        ):
+            result = get_current_notebook()
+            assert result is None
+        assert "expected JSON object, got list []" in caplog.text
+
+    def test_clear_context_lock_timeout_returns_false(self, tmp_path, caplog):
+        context_file = tmp_path / "context.json"
+        context_file.write_text('{"notebook_id": "test"}')
+        with (
+            patch("notebooklm.cli.helpers.get_context_path", return_value=context_file),
+            patch(
+                "notebooklm.cli.context.FileLock",
+                side_effect=Timeout(str(context_file.with_suffix(".json.lock"))),
+            ),
+            caplog.at_level("WARNING", logger="notebooklm.cli.context"),
+        ):
+            assert clear_context() is False
+
+        assert context_file.exists()
+        assert "lock is contended" in caplog.text
+
+    def test_set_current_notebook_recovers_non_object_json(self, tmp_path):
+        context_file = tmp_path / "context.json"
+        context_file.write_text("[]")
+        with patch("notebooklm.cli.helpers.get_context_path", return_value=context_file):
+            set_current_notebook("nb_new", title="New Notebook")
+
+        data = json.loads(context_file.read_text())
+        assert data["notebook_id"] == "nb_new"
+        assert data["title"] == "New Notebook"
+
+    def test_set_current_conversation_recovers_non_object_json(self, tmp_path):
+        context_file = tmp_path / "context.json"
+        context_file.write_text("[]")
+        with patch("notebooklm.cli.helpers.get_context_path", return_value=context_file):
+            set_current_conversation("conv_456")
+
+        assert json.loads(context_file.read_text()) == {"conversation_id": "conv_456"}
 
     def test_set_current_notebook_clears_conversation_on_switch(self, tmp_path):
         context_file = tmp_path / "context.json"
@@ -729,6 +792,17 @@ class TestDisplayReport:
 
         with patch("notebooklm.cli.helpers.console") as mock_console:
             display_report(report, max_chars=1000)
+
+        assert mock_console.print.call_count == 2
+        assert mock_console.print.call_args_list[0].args[0] == "\n[bold]Report:[/bold]"
+        assert mock_console.print.call_args_list[1].args[0] == report
+        assert mock_console.print.call_args_list[1].kwargs["markup"] is False
+
+    def test_rendering_module_prints_markdown_as_literal_text(self):
+        report = "See [NotebookLM](https://example.com) and [1]"
+
+        with patch("notebooklm.cli.rendering.console") as mock_console:
+            rendering_module.display_report(report, max_chars=1000)
 
         assert mock_console.print.call_count == 2
         assert mock_console.print.call_args_list[0].args[0] == "\n[bold]Report:[/bold]"
