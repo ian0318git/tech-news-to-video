@@ -29,6 +29,15 @@ MAX_RETRY_AFTER_SECONDS = 300
 # read loop can read it without creating an import cycle through ``_core``.
 MAX_RPC_RESPONSE_BYTES = 50 * 1024 * 1024
 
+# Headers that must NOT survive onto a Response rebuilt from already-decoded
+# body bytes. ``content-encoding`` would make ``httpx.Response.__init__``
+# re-run the gzip/brotli/zstd decoder on bytes that ``aiter_bytes()`` already
+# decoded once, raising ``DecodingError: Error -3 ... incorrect header check``.
+# ``content-length`` advertises the compressed size from the wire and no
+# longer matches the decoded buffer we hand to the rebuilt Response. Compared
+# against ``key.lower()`` so case variants from the wire all match.
+_STRIP_HEADERS_ON_REBUFFER = frozenset({"content-encoding", "content-length"})
+
 
 def _parse_retry_after(value: str | None) -> int | None:
     """Parse RFC 7231 Retry-After: integer-seconds OR HTTP-date.
@@ -175,9 +184,22 @@ async def _stream_post_with_size_cap(
         # (``_core_rpc.py`` decode path) can use ``.text`` / ``.content``
         # without dealing with stream state. The request handle is carried
         # over so log/repr surfaces still point at the originating request.
+        #
+        # ``response.aiter_bytes()`` above yields already-decoded body chunks,
+        # so the buffered payload is plain bytes. Filter out
+        # ``content-encoding`` (and the now-mismatched ``content-length``) via
+        # a dict comprehension — ``httpx.Headers`` inherits from
+        # :class:`collections.abc.Mapping`, NOT ``MutableMapping``, so we
+        # avoid relying on ``.pop()`` (which is not part of the documented
+        # contract and could change across the ``>=0.27,<0.29`` httpx pin).
+        # ``httpx.Response(headers=...)`` accepts a plain ``dict`` of
+        # ``str -> str`` so this is the documented input shape.
+        rebuilt_headers = {
+            k: v for k, v in response.headers.items() if k.lower() not in _STRIP_HEADERS_ON_REBUFFER
+        }
         return httpx.Response(
             status_code=response.status_code,
-            headers=response.headers,
+            headers=rebuilt_headers,
             content=bytes(buffer),
             request=response.request,
         )
