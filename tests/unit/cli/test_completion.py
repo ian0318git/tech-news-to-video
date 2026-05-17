@@ -206,6 +206,34 @@ class TestCompleteNotebooks:
 
         assert items == []
 
+    def test_skips_malformed_rows_without_dropping_valid_notebooks(self):
+        """A bad notebook row should not discard the rest of the completions."""
+        from notebooklm.cli import options
+
+        async def fake_list():
+            return [
+                object(),
+                _Stub("nb_good_1", "Good One"),
+                _Stub("other", "Other Notebook"),
+                type("BadTitle", (), {"id": "nb_good_2", "title": None})(),
+            ]
+
+        fake_client = AsyncMock()
+        fake_client.__aenter__.return_value = fake_client
+        fake_client.__aexit__.return_value = None
+        fake_client.notebooks.list = AsyncMock(side_effect=fake_list)
+
+        with (
+            patch("notebooklm.cli.helpers.get_auth_tokens", return_value=object()),
+            patch("notebooklm.client.NotebookLMClient", return_value=fake_client),
+        ):
+            items = options._complete_notebooks(ctx=None, param=None, incomplete="nb_good")
+
+        assert [(item.value, item.help) for item in items] == [
+            ("nb_good_1", "Good One"),
+            ("nb_good_2", ""),
+        ]
+
     def test_caps_results_at_50(self):
         """The completer must cap the result list at 50 to keep the shell
         snappy on profiles with hundreds of notebooks.
@@ -227,6 +255,139 @@ class TestCompleteNotebooks:
             items = options._complete_notebooks(ctx=None, param=None, incomplete="nb_")
 
         assert len(items) == 50
+
+
+class TestCompletionProviderSilentFailures:
+    """Provider-level failure paths stay invisible to shell completion."""
+
+    def test_missing_auth_returns_empty_without_output(self, capsys):
+        from notebooklm.cli.completion import CompletionProvider
+
+        provider = CompletionProvider()
+        with patch(
+            "notebooklm.cli.helpers.get_auth_tokens",
+            side_effect=FileNotFoundError("no auth"),
+        ):
+            items = provider.complete_notebooks(ctx=None, incomplete="nb_")
+
+        captured = capsys.readouterr()
+        assert items == []
+        assert captured.out == ""
+        assert captured.err == ""
+
+    def test_corrupt_context_falls_back_to_env_without_output(self, capsys):
+        from notebooklm.cli.completion import CompletionProvider
+
+        class BrokenCtx:
+            parent = None
+
+            @property
+            def params(self):
+                raise RuntimeError("bad context")
+
+        provider = CompletionProvider(
+            current_notebook_loader=lambda: pytest.fail("context should not load"),
+        )
+        with patch.dict(os.environ, {"NOTEBOOKLM_NOTEBOOK": "nb_from_env"}):
+            notebook_id = provider.resolve_notebook(ctx=BrokenCtx())
+
+        captured = capsys.readouterr()
+        assert notebook_id == "nb_from_env"
+        assert captured.out == ""
+        assert captured.err == ""
+
+    def test_corrupt_context_falls_back_to_current_notebook_without_output(self, capsys):
+        from notebooklm.cli.completion import CompletionProvider
+
+        class BrokenCtx:
+            parent = None
+
+            @property
+            def params(self):
+                raise RuntimeError("bad context")
+
+        provider = CompletionProvider(current_notebook_loader=lambda: "nb_from_context")
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("NOTEBOOKLM_NOTEBOOK", None)
+            notebook_id = provider.resolve_notebook(ctx=BrokenCtx())
+
+        captured = capsys.readouterr()
+        assert notebook_id == "nb_from_context"
+        assert captured.out == ""
+        assert captured.err == ""
+
+    def test_no_active_notebook_returns_empty_without_output(self, capsys):
+        from notebooklm.cli.completion import CompletionProvider
+
+        provider = CompletionProvider(current_notebook_loader=lambda: None)
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("NOTEBOOKLM_NOTEBOOK", None)
+            items = provider.complete_artifacts(ctx=None, incomplete="art_")
+
+        captured = capsys.readouterr()
+        assert items == []
+        assert captured.out == ""
+        assert captured.err == ""
+
+    def test_client_factory_error_returns_empty_without_output(self, capsys):
+        from notebooklm.cli.completion import CompletionProvider
+
+        def broken_client(_auth):
+            raise RuntimeError("client unavailable")
+
+        provider = CompletionProvider(
+            auth_loader=lambda _ctx: object(), client_factory=broken_client
+        )
+
+        items = provider.complete_notebooks(ctx=None, incomplete="nb_")
+
+        captured = capsys.readouterr()
+        assert items == []
+        assert captured.out == ""
+        assert captured.err == ""
+
+    def test_listing_error_returns_empty_without_output(self, capsys):
+        from notebooklm.cli.completion import CompletionProvider
+
+        async def fake_list(_nb_id):
+            raise RuntimeError("offline")
+
+        fake_client = AsyncMock()
+        fake_client.__aenter__.return_value = fake_client
+        fake_client.__aexit__.return_value = None
+        fake_client.sources.list = AsyncMock(side_effect=fake_list)
+
+        provider = CompletionProvider(
+            auth_loader=lambda _ctx: object(),
+            client_factory=lambda _auth: fake_client,
+            notebook_resolver=lambda _ctx: "nb_x",
+        )
+
+        items = provider.complete_sources(ctx=None, incomplete="src_")
+
+        captured = capsys.readouterr()
+        assert items == []
+        assert captured.out == ""
+        assert captured.err == ""
+
+    def test_async_runner_error_returns_empty_without_output(self, capsys):
+        from notebooklm.cli.completion import CompletionProvider
+
+        def broken_runner(_awaitable):
+            raise RuntimeError("event loop unavailable")
+
+        provider = CompletionProvider(
+            auth_loader=lambda _ctx: object(),
+            async_runner=broken_runner,
+            notebook_resolver=lambda _ctx: "nb_x",
+        )
+
+        items = provider.complete_artifacts(ctx=None, incomplete="art_")
+
+        captured = capsys.readouterr()
+        assert items == []
+        assert captured.out == ""
+        assert captured.err == ""
 
 
 # ---------------------------------------------------------------------------
@@ -382,6 +543,8 @@ class TestCompleteSourcesAndArtifacts:
 
         ids = [it.value for it in items]
         assert ids == ["src_001", "src_002"]
+        helps = [it.help for it in items]
+        assert helps == ["First", "Second"]
 
     def test_complete_artifacts_filters_by_prefix(self):
         """Same shape as ``test_complete_sources_filters_by_prefix`` but for
@@ -410,6 +573,50 @@ class TestCompleteSourcesAndArtifacts:
 
         ids = [it.value for it in items]
         assert ids == ["art_aaa", "art_aac"]
+        helps = [it.help for it in items]
+        assert helps == ["Audio", "Audio 2"]
+
+    def test_complete_sources_caps_results_at_50(self):
+        """Source completion keeps the same 50-row shell safety cap."""
+        from notebooklm.cli import options
+
+        async def fake_list(_nb_id):
+            return [_Stub(f"src_{i:03d}", f"Source {i}") for i in range(100)]
+
+        fake_client = AsyncMock()
+        fake_client.__aenter__.return_value = fake_client
+        fake_client.__aexit__.return_value = None
+        fake_client.sources.list = AsyncMock(side_effect=fake_list)
+
+        with (
+            patch.object(options, "_resolve_notebook_for_completion", return_value="nb_x"),
+            patch("notebooklm.cli.helpers.get_auth_tokens", return_value=object()),
+            patch("notebooklm.client.NotebookLMClient", return_value=fake_client),
+        ):
+            items = options._complete_sources(ctx=None, param=None, incomplete="src_")
+
+        assert len(items) == 50
+
+    def test_complete_artifacts_caps_results_at_50(self):
+        """Artifact completion keeps the same 50-row shell safety cap."""
+        from notebooklm.cli import options
+
+        async def fake_list(_nb_id):
+            return [_Stub(f"art_{i:03d}", f"Artifact {i}") for i in range(100)]
+
+        fake_client = AsyncMock()
+        fake_client.__aenter__.return_value = fake_client
+        fake_client.__aexit__.return_value = None
+        fake_client.artifacts.list = AsyncMock(side_effect=fake_list)
+
+        with (
+            patch.object(options, "_resolve_notebook_for_completion", return_value="nb_x"),
+            patch("notebooklm.cli.helpers.get_auth_tokens", return_value=object()),
+            patch("notebooklm.client.NotebookLMClient", return_value=fake_client),
+        ):
+            items = options._complete_artifacts(ctx=None, param=None, incomplete="art_")
+
+        assert len(items) == 50
 
     def test_complete_sources_swallows_listing_error(self):
         """An exception raised during ``sources.list(...)`` must NOT escape
