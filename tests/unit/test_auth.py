@@ -833,6 +833,69 @@ class TestExtractSessionIdRedirect:
             extract_session_id_from_html(html)
 
 
+class TestFinalUrlScrubbing:
+    """Auth-error messages must strip query + fragment from final_url interpolations.
+
+    Auth-handshake URLs frequently carry credential-shaped query params
+    (``f.sid=...``, ``continue=...``, ``access_token=...``). Without
+    sanitization these would leak into every drift-error message and the
+    associated log line.
+    """
+
+    def test_final_url_stripped(self):
+        """CSRF drift error must NOT include query params from final_url."""
+        # No WIZ_global_data → drift path; URL is not an accounts.google.com
+        # redirect so we get the "shape changed" raise that interpolates
+        # final_url into the message.
+        html = "<html><body>not a notebooklm page</body></html>"
+        final_url = "https://x.example/y?continue=foo&f.sid=bar#access_token=frag"
+
+        with pytest.raises(ValueError) as excinfo:
+            extract_csrf_from_html(html, final_url)
+
+        message = str(excinfo.value)
+        assert "continue=foo" not in message
+        assert "f.sid=bar" not in message
+        assert "access_token=frag" not in message
+        # The scheme/netloc/path triple should still appear so operators can
+        # identify the failing endpoint.
+        assert "https://x.example/y" in message
+
+    def test_final_url_stripped_session_id_path(self):
+        """Session-ID drift error must NOT include query params from final_url."""
+        html = "<html><body>not a notebooklm page</body></html>"
+        final_url = "https://x.example/y?continue=foo&f.sid=bar#access_token=frag"
+
+        with pytest.raises(ValueError) as excinfo:
+            extract_session_id_from_html(html, final_url)
+
+        message = str(excinfo.value)
+        assert "continue=foo" not in message
+        assert "f.sid=bar" not in message
+        assert "access_token=frag" not in message
+        assert "https://x.example/y" in message
+
+    def test_final_url_stripped_userinfo(self):
+        """URL userinfo (``https://TOKEN@host/...``) must NOT leak.
+
+        ``urlparse(...).netloc`` preserves the userinfo component, so a naive
+        reconstruction from ``scheme://netloc/path`` would surface tokens
+        carried in the ``user[:password]@`` position. ``_safe_url`` rebuilds
+        from ``hostname`` + port instead.
+        """
+        html = "<html><body>not a notebooklm page</body></html>"
+        # Token embedded as userinfo — the most adversarial leak vector.
+        final_url = "https://SECRET_TOKEN_USERINFO@x.example:8443/y?q=1"
+
+        with pytest.raises(ValueError) as excinfo:
+            extract_csrf_from_html(html, final_url)
+
+        message = str(excinfo.value)
+        assert "SECRET_TOKEN_USERINFO" not in message
+        # Port is preserved so operators can still identify the endpoint.
+        assert "https://x.example:8443/y" in message
+
+
 class TestExtractCookiesEdgeCases:
     """Test cookie extraction edge cases."""
 
@@ -926,6 +989,42 @@ class TestFetchTokens:
         cookies = {"SID": "expired_sid", "__Secure-1PSIDTS": "test_1psidts"}
         with pytest.raises(ValueError, match="Authentication expired"):
             await fetch_tokens(cookies)
+
+    @pytest.mark.asyncio
+    async def test_fetch_tokens_redirect_to_login_strips_query_and_fragment(self, monkeypatch):
+        """Redirect error must not expose query params or fragments from final_url."""
+
+        async def fake_poke_session(client, storage_path):
+            return None
+
+        class FakeAsyncClient:
+            def __init__(self, *args, **kwargs):
+                self.cookies = httpx.Cookies()
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            async def get(self, *args, **kwargs):
+                request = httpx.Request(
+                    "GET",
+                    "https://accounts.google.com/signin?continue=foo&f.sid=bar#access_token=frag",
+                )
+                return httpx.Response(200, content=b"<html>Login</html>", request=request)
+
+        monkeypatch.setattr(auth_module, "_poke_session", fake_poke_session)
+        monkeypatch.setattr(auth_module.httpx, "AsyncClient", FakeAsyncClient)
+
+        with pytest.raises(ValueError) as excinfo:
+            await auth_module._fetch_tokens_with_jar(httpx.Cookies(), storage_path=None)
+
+        message = str(excinfo.value)
+        assert "continue=foo" not in message
+        assert "f.sid=bar" not in message
+        assert "access_token=frag" not in message
+        assert "https://accounts.google.com/signin" in message
 
     @pytest.mark.asyncio
     async def test_fetch_tokens_sends_cookies_on_account_redirect(self, httpx_mock: HTTPXMock):

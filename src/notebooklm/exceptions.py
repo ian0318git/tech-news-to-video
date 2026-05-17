@@ -19,6 +19,7 @@ import re
 from typing import Any
 
 from ._env import DEFAULT_BASE_URL, get_base_url
+from ._logging import scrub_secrets
 
 
 def _truncate_response_preview(raw: str | None) -> str | None:
@@ -346,12 +347,22 @@ class AuthExtractionError(RPCError):
         message: str | None = None,
     ):
         self.key = key
-        # Slice before substituting so we don't run the regex over a multi-MB
-        # response body just to throw away most of it. A 5x headroom over
-        # PREVIEW_LENGTH guarantees we still have enough non-whitespace
-        # characters left after collapsing runs of whitespace, even on heavily
-        # indented HTML where ~80% of the prefix may be indentation.
-        head = payload_preview[: self.PREVIEW_LENGTH * 5]
+        # Two-stage slice with the scrub in the middle, so we bound regex work
+        # without giving up boundary-straddle safety:
+        #
+        # 1. Pre-slice to a generous 10x cap. Bounds the scrub at O(2000 chars)
+        #    instead of O(len(payload)) — a multi-MB HTML body would otherwise
+        #    cost ~7 regex passes over the whole thing just to throw most away.
+        # 2. Scrub the slice. A secret straddling the 10x boundary is
+        #    theoretically possible but the 2000-char window gives ~19x more
+        #    slack than the 5x preview limit, so any realistic ``f.sid=``,
+        #    ``Bearer ...``, or ``Set-Cookie:`` value fits well inside.
+        # 3. Re-slice to 5x. The scrub already neutralized anything that would
+        #    have leaked from the 5x cut, including secrets that originally
+        #    straddled the 5x boundary inside the 10x window.
+        pre_sliced = payload_preview[: self.PREVIEW_LENGTH * 10]
+        scrubbed = scrub_secrets(pre_sliced)
+        head = scrubbed[: self.PREVIEW_LENGTH * 5]
         # Collapse runs of whitespace so the preview stays compact and useful
         # even when the upstream HTML is heavily indented or contains newlines.
         collapsed = re.sub(r"\s+", " ", head).strip()
