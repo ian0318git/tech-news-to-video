@@ -26,6 +26,18 @@ pytestmark = pytest.mark.characterization
 class TestChatAPI:
     """Characterization tests for the ChatAPI."""
 
+    def test_chat_cache_is_distinct_per_client_instance(self, auth_tokens):
+        # Pins the per-tenant isolation contract: two NotebookLMClient
+        # instances must never share a conversation cache, or follow-up
+        # turns from one tenant could leak into the other's outgoing
+        # history payload. The default ``ChatAPI(conversation_cache=None)``
+        # factory path constructs a fresh ``ConversationCache`` per
+        # instance — this test would have caught a regression where
+        # someone made the default a class-level singleton.
+        client_a = NotebookLMClient(auth_tokens)
+        client_b = NotebookLMClient(auth_tokens)
+        assert client_a.chat._cache is not client_b.chat._cache
+
     @pytest.mark.asyncio
     async def test_get_conversation_id(
         self,
@@ -1310,8 +1322,8 @@ class TestBuildConversationHistory:
     def test_build_conversation_history_returns_list_when_turns_cached(self, auth_tokens):
         """Test _build_conversation_history returns history list when turns exist."""
         client = NotebookLMClient(auth_tokens)
-        # Manually cache a turn
-        client._core.cache_conversation_turn(
+        # Manually cache a turn on the chat sub-client (cache moved off ClientCore).
+        client.chat._cache.cache_conversation_turn(
             "test-conv", "What is AI?", "AI is artificial intelligence.", 1
         )
         result = client.chat._build_conversation_history("test-conv")
