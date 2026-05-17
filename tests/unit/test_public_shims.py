@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import ast
+import enum
 import importlib
 import logging
 import warnings
+from pathlib import Path
 from types import ModuleType
 from unittest.mock import AsyncMock
 
@@ -217,6 +220,190 @@ _REEXPORTED_RPC_ENUMS = [
     "VideoStyle",
 ]
 
+_FROZEN_TYPES_ALL = [
+    "CitedSourceSelection",
+    "ConnectionLimits",
+    "ClientMetricsSnapshot",
+    "RpcTelemetryEvent",
+    "Notebook",
+    "NotebookDescription",
+    "NotebookMetadata",
+    "SuggestedTopic",
+    "Source",
+    "SourceFulltext",
+    "SourceSummary",
+    "Artifact",
+    "GenerationStatus",
+    "ReportSuggestion",
+    "Note",
+    "ConversationTurn",
+    "ChatReference",
+    "AskResult",
+    "ChatMode",
+    "SharedUser",
+    "ShareStatus",
+    "SourceError",
+    "SourceAddError",
+    "SourceProcessingError",
+    "SourceTimeoutError",
+    "SourceNotFoundError",
+    "ArtifactError",
+    "ArtifactNotFoundError",
+    "ArtifactNotReadyError",
+    "ArtifactParseError",
+    "ArtifactDownloadError",
+    "UnknownTypeWarning",
+    "SourceType",
+    "ArtifactType",
+    "ArtifactStatus",
+    "AudioFormat",
+    "AudioLength",
+    "VideoFormat",
+    "VideoStyle",
+    "QuizQuantity",
+    "QuizDifficulty",
+    "InfographicOrientation",
+    "InfographicDetail",
+    "InfographicStyle",
+    "SlideDeckFormat",
+    "SlideDeckLength",
+    "ReportFormat",
+    "ChatGoal",
+    "ChatResponseLength",
+    "DriveMimeType",
+    "ExportType",
+    "SourceStatus",
+    "ShareAccess",
+    "ShareViewLevel",
+    "SharePermission",
+    "artifact_status_to_str",
+    "source_status_to_str",
+]
+
+_TOP_LEVEL_TYPE_EXPORTS = [
+    "AccountLimits",
+    "AccountTier",
+    "Artifact",
+    "ArtifactType",
+    "AskResult",
+    "AudioFormat",
+    "AudioLength",
+    "ChatGoal",
+    "ChatMode",
+    "ChatReference",
+    "ChatResponseLength",
+    "CitedSourceSelection",
+    "ClientMetricsSnapshot",
+    "ConnectionLimits",
+    "ConversationTurn",
+    "DriveMimeType",
+    "ExportType",
+    "GenerationStatus",
+    "InfographicDetail",
+    "InfographicOrientation",
+    "InfographicStyle",
+    "Note",
+    "Notebook",
+    "NotebookDescription",
+    "NotebookMetadata",
+    "QuizDifficulty",
+    "QuizQuantity",
+    "ReportFormat",
+    "ReportSuggestion",
+    "RpcTelemetryEvent",
+    "ShareAccess",
+    "SharedUser",
+    "SharePermission",
+    "ShareStatus",
+    "ShareViewLevel",
+    "SlideDeckFormat",
+    "SlideDeckLength",
+    "Source",
+    "SourceFulltext",
+    "SourceStatus",
+    "SourceSummary",
+    "SourceType",
+    "SuggestedTopic",
+    "UnknownTypeWarning",
+    "VideoFormat",
+    "VideoStyle",
+]
+
+_TYPES_EXCEPTION_REEXPORTS = [
+    "SourceError",
+    "SourceAddError",
+    "SourceProcessingError",
+    "SourceTimeoutError",
+    "SourceNotFoundError",
+    "ArtifactError",
+    "ArtifactNotFoundError",
+    "ArtifactNotReadyError",
+    "ArtifactParseError",
+    "ArtifactDownloadError",
+]
+
+_TOP_LEVEL_EXCEPTION_EXPORTS = [
+    "ArtifactDownloadError",
+    "ArtifactError",
+    "ArtifactNotFoundError",
+    "ArtifactNotReadyError",
+    "ArtifactParseError",
+    "AuthError",
+    "AuthExtractionError",
+    "ChatError",
+    "ClientError",
+    "ConfigurationError",
+    "DecodingError",
+    "NetworkError",
+    "NonIdempotentRetryError",
+    "NotebookError",
+    "NotebookLimitError",
+    "NotebookLMError",
+    "NotebookNotFoundError",
+    "RateLimitError",
+    "ResearchTaskMismatchError",
+    "RPCError",
+    "RPCTimeoutError",
+    "ServerError",
+    "SourceAddError",
+    "SourceError",
+    "SourceNotFoundError",
+    "SourceProcessingError",
+    "SourceTimeoutError",
+    "UnknownRPCMethodError",
+    "ValidationError",
+]
+
+_TYPES_PRIVATE_HELPER_SEAMS = [
+    "_SOURCE_TYPE_COMPAT_MAP",
+    "_datetime_from_timestamp",
+    "_extract_artifact_url",
+    "_extract_audio_artifact_url",
+    "_extract_infographic_artifact_url",
+    "_extract_slide_deck_artifact_url",
+    "_extract_source_created_at",
+    "_extract_source_url",
+    "_extract_video_artifact_url",
+    "_is_valid_artifact_url",
+    "_warned_artifact_types",
+    "_warned_source_types",
+]
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _iter_types_private_helper_import_files() -> list[Path]:
+    """Return first-party Python files that may import private notebooklm.types seams."""
+    roots = (
+        _PROJECT_ROOT / "src" / "notebooklm",
+        _PROJECT_ROOT / "tests" / "unit",
+    )
+    paths: list[Path] = []
+    for root in roots:
+        assert root.exists(), f"tracked private seam scan root disappeared: {root}"
+        paths.extend(path for path in root.rglob("*.py") if "__pycache__" not in path.parts)
+    return sorted(paths)
+
 
 @pytest.mark.parametrize("enum_name", _REEXPORTED_RPC_ENUMS)
 def test_rpc_enum_reexports_are_identical(enum_name: str) -> None:
@@ -232,6 +419,199 @@ def test_rpc_enum_reexports_are_identical(enum_name: str) -> None:
     )
 
 
+def test_types_all_contract_is_frozen_in_order() -> None:
+    """T13 type moves must preserve the exact public types.__all__ ordering."""
+    import notebooklm.types as public_types
+
+    assert list(public_types.__all__) == _FROZEN_TYPES_ALL
+    for name in _FROZEN_TYPES_ALL:
+        assert hasattr(public_types, name), f"notebooklm.types.__all__ misses {name!r}"
+
+
+@pytest.mark.parametrize("name", _TOP_LEVEL_TYPE_EXPORTS)
+def test_top_level_type_exports_are_identity_reexports(name: str) -> None:
+    """Top-level type exports must remain identical to notebooklm.types objects."""
+    import notebooklm
+    import notebooklm.types as public_types
+
+    assert name in notebooklm.__all__, f"notebooklm.__all__ dropped {name!r}"
+    assert getattr(notebooklm, name) is getattr(public_types, name)
+
+
+@pytest.mark.parametrize("name", _TYPES_EXCEPTION_REEXPORTS)
+def test_types_exception_reexports_are_canonical_identities(name: str) -> None:
+    """notebooklm.types exception compatibility aliases point at exceptions.py."""
+    import notebooklm.exceptions as canonical
+    import notebooklm.types as public_types
+
+    assert getattr(public_types, name) is getattr(canonical, name)
+
+
+@pytest.mark.parametrize("name", _TOP_LEVEL_EXCEPTION_EXPORTS)
+def test_top_level_exception_reexports_are_canonical_identities(name: str) -> None:
+    """Top-level exception exports point directly at exceptions.py canonical classes."""
+    import notebooklm
+    import notebooklm.exceptions as canonical
+
+    assert name in notebooklm.__all__, f"notebooklm.__all__ dropped {name!r}"
+    assert getattr(notebooklm, name) is getattr(canonical, name)
+
+
+def test_rpc_helper_reexports_are_canonical_identities() -> None:
+    """Status helper re-exports must stay identical to rpc.types helpers."""
+    import notebooklm.rpc.types as rpc_types
+    import notebooklm.types as public_types
+
+    assert public_types.artifact_status_to_str is rpc_types.artifact_status_to_str
+    assert public_types.source_status_to_str is rpc_types.source_status_to_str
+
+
+def test_types_non_all_facade_attributes_are_frozen() -> None:
+    """Freeze compatibility attributes that exist outside notebooklm.types.__all__."""
+    import notebooklm.rpc.types as rpc_types
+    import notebooklm.types as public_types
+
+    assert "ArtifactTypeCode" not in public_types.__all__
+    assert public_types.ArtifactTypeCode is rpc_types.ArtifactTypeCode
+    assert "StudioContentType" not in public_types.__all__
+    assert not hasattr(public_types, "StudioContentType")
+    assert "RPCMethod" not in public_types.__all__
+    assert not hasattr(public_types, "RPCMethod")
+
+
+@pytest.mark.parametrize("name", _TYPES_PRIVATE_HELPER_SEAMS)
+def test_types_private_helper_seams_remain_importable(name: str) -> None:
+    """First-party private imports from notebooklm.types stay live during T13 moves."""
+    import notebooklm.types as public_types
+
+    imported = getattr(__import__("notebooklm.types", fromlist=[name]), name)
+    assert imported is getattr(public_types, name)
+    assert name not in public_types.__all__
+
+
+def test_types_private_helper_seam_manifest_matches_first_party_imports() -> None:
+    """The private seam manifest tracks known first-party notebooklm.types imports."""
+
+    def attribute_path(node: ast.AST) -> list[str]:
+        parts: list[str] = []
+        while isinstance(node, ast.Attribute):
+            parts.append(node.attr)
+            node = node.value
+        if isinstance(node, ast.Name):
+            parts.append(node.id)
+            return list(reversed(parts))
+        return []
+
+    imported_private_names: set[str] = set()
+    for path in _iter_types_private_helper_import_files():
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        type_module_aliases: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name == "notebooklm.types" and alias.asname:
+                        type_module_aliases.add(alias.asname)
+                continue
+            if isinstance(node, ast.ImportFrom) and (
+                node.module == "notebooklm.types"
+                or (
+                    node.level > 0
+                    and node.module == "types"
+                    and path.is_relative_to(_PROJECT_ROOT / "src" / "notebooklm")
+                )
+            ):
+                imported_private_names.update(
+                    alias.name
+                    for alias in node.names
+                    if alias.name.startswith("_") and not alias.name.startswith("__")
+                )
+                continue
+            if isinstance(node, ast.ImportFrom) and (
+                (node.module == "notebooklm" and any(alias.name == "types" for alias in node.names))
+                or (
+                    node.level > 0
+                    and node.module is None
+                    and path.is_relative_to(_PROJECT_ROOT / "src" / "notebooklm")
+                )
+            ):
+                type_module_aliases.update(
+                    alias.asname or alias.name for alias in node.names if alias.name == "types"
+                )
+                continue
+            if (
+                isinstance(node, ast.Attribute)
+                and node.attr.startswith("_")
+                and not node.attr.startswith("__")
+            ):
+                qualifier = attribute_path(node.value)
+                if qualifier == ["notebooklm", "types"] or (
+                    len(qualifier) == 1 and qualifier[0] in type_module_aliases
+                ):
+                    imported_private_names.add(node.attr)
+
+    assert imported_private_names == set(_TYPES_PRIVATE_HELPER_SEAMS)
+
+
+def test_types_private_state_seams_are_live_objects(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Warning de-duplication and compat maps must remain live facade aliases."""
+    import notebooklm.types as public_types
+    from notebooklm.types import (
+        _SOURCE_TYPE_COMPAT_MAP,
+        Artifact,
+        ArtifactType,
+        Source,
+        SourceType,
+        UnknownTypeWarning,
+    )
+
+    assert _SOURCE_TYPE_COMPAT_MAP is public_types._SOURCE_TYPE_COMPAT_MAP
+    source_warnings: set[int] = set()
+    artifact_warnings: set[tuple[int | None, int | None]] = set()
+    monkeypatch.setattr(public_types, "_warned_source_types", source_warnings)
+    monkeypatch.setattr(public_types, "_warned_artifact_types", artifact_warnings)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UnknownTypeWarning)
+        assert Source(id="source", _type_code=7654321).kind is SourceType.UNKNOWN
+        assert (
+            Artifact(id="artifact", title="Artifact", _artifact_type=7654322, status=3).kind
+            is ArtifactType.UNKNOWN
+        )
+
+    assert 7654321 in source_warnings
+    assert (7654322, None) in artifact_warnings
+
+
+def test_deprecated_top_level_studio_content_type_import_warns_and_caches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """from notebooklm import StudioContentType keeps the deprecated shim contract."""
+    import notebooklm
+    from notebooklm.rpc.types import ArtifactTypeCode
+
+    monkeypatch.delitem(notebooklm.__dict__, "StudioContentType", raising=False)
+    assert "StudioContentType" in notebooklm.__all__
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", DeprecationWarning)
+        namespace: dict[str, object] = {}
+        exec("from notebooklm import StudioContentType", namespace)
+
+    assert namespace["StudioContentType"] is ArtifactTypeCode
+    assert notebooklm.__dict__["StudioContentType"] is ArtifactTypeCode
+    assert [str(warning.message) for warning in caught] == [
+        "StudioContentType is deprecated, use ArtifactType instead. Will be removed in v0.5.0."
+    ]
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", DeprecationWarning)
+        namespace = {}
+        exec("from notebooklm import StudioContentType", namespace)
+
+    assert namespace["StudioContentType"] is ArtifactTypeCode
+    assert caught == []
+
+
 def test_rpc_enum_reexport_list_matches_public_all() -> None:
     """The _REEXPORTED_RPC_ENUMS guard list must stay aligned with notebooklm.types.__all__.
 
@@ -241,13 +621,14 @@ def test_rpc_enum_reexport_list_matches_public_all() -> None:
     import notebooklm.rpc.types as rpc_types
     import notebooklm.types as public_types
 
-    # Names that appear in both __all__ and rpc.types — i.e. the actual
-    # re-exported RPC enums.
     declared = set(public_types.__all__)
     rpc_names = {name for name in dir(rpc_types) if not name.startswith("_")}
-    expected = declared & rpc_names
-    # Drop helper functions (not enums) from the comparison.
-    expected -= {"artifact_status_to_str", "source_status_to_str"}
+    expected = {
+        name
+        for name in declared & rpc_names
+        if isinstance(getattr(rpc_types, name), type)
+        and issubclass(getattr(rpc_types, name), enum.Enum)
+    }
 
     listed = set(_REEXPORTED_RPC_ENUMS)
     missing = expected - listed
@@ -458,7 +839,11 @@ def test_auth_secondary_binding_reset_syncs_to_cookie_policy(
     caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Resetting notebooklm.auth._SECONDARY_BINDING_WARNED still controls validation."""
+    """Resetting the facade warning flag controls validation.
+
+    The private module starts in the opposite state to prove the delegated
+    implementation still reads the compatibility facade's warning flag.
+    """
     import notebooklm.auth as auth
     from notebooklm._auth import cookie_policy
 
@@ -492,7 +877,7 @@ def test_auth_validation_preserves_private_warning_state(
 def test_auth_validation_uses_facade_policy_rebindings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Validation keeps auth.py monkeypatch compatibility after delegation."""
+    """Validation accepts a single cookie only when the facade policy is rebound."""
     import notebooklm.auth as auth
 
     monkeypatch.setattr(auth, "MINIMUM_REQUIRED_COOKIES", {"SID"})
