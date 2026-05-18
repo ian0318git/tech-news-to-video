@@ -1,7 +1,7 @@
 # Release Checklist
 
 **Status:** Active
-**Last Updated:** 2026-05-14
+**Last Updated:** 2026-05-17
 
 Checklist for releasing a new version of `notebooklm-py`.
 
@@ -216,6 +216,17 @@ Proceed with release preparation?
   2. Bump patch version in `pyproject.toml`
   3. Update `CHANGELOG.md` with fix
   4. Commit, push, and re-run **Publish to TestPyPI**
+
+#### How the verify chain works
+
+The **Verify Package** workflow (`.github/workflows/verify-package.yml`) exercises a published wheel in two phases so packaging bugs cannot silently fall through to a stale PyPI mirror:
+
+1. **Dep tree from `uv.lock`.** `uv sync --frozen --extra browser --extra dev --extra markdown` installs every locked dep into `.venv/` — the same canonical extras documented in `docs/installation.md`. This produces a deterministic dep tree without any TestPyPI lookups.
+2. **Wheel from the chosen index, `--no-deps`.** `uv pip install --python .venv/bin/python --no-deps --reinstall --no-cache --only-binary=:all: --index-url <testpypi|pypi> "notebooklm-py==<version>"` swaps the editable install left behind by `uv sync` for the actual published wheel. `--no-deps` is load-bearing: without it the previous `--extra-index-url https://pypi.org/simple/` fallback would mask a broken/missing TestPyPI upload by resolving an older version from PyPI. `--reinstall --no-cache --only-binary=:all:` guarantee we test the freshly-uploaded wheel and never a cached sdist. The explicit `--python .venv/bin/python` is required because `uv sync` does not seed `pip` into the project venv — a bare `source .venv/bin/activate && pip install …` would silently fall back to the runner's system pip and leave the editable install in place.
+
+The same chain runs for `source: pypi` (post-publish verification) — only the wheel index changes; the locked dep tree is identical.
+
+The `Publish to PyPI` step in `publish.yml` also opts into **PEP 740 attestations** (`attestations: true`). `pypa/gh-action-pypi-publish` generates an in-toto attestation per uploaded artifact and signs it under Trusted Publishing (OIDC, no API token); PyPI accepts and stores the attestation alongside the wheel, giving downstream consumers cryptographic proof the wheel was built by this GitHub workflow on this tagged commit. The PyPA action enables attestations by default for Trusted Publishing flows, so the explicit `attestations: true` is documentation-as-code rather than a feature flag.
 
 ---
 
