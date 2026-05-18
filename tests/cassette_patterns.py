@@ -302,6 +302,10 @@ SCRUB_PLACEHOLDERS: frozenset[str] = frozenset(
         # ``SCRUBBED_EMAIL@example.com`` is the rendered form of the email
         # replacement; ``is_clean`` checks the full token, so we list it too.
         "SCRUBBED_EMAIL@example.com",
+        # URL-encoded form for ``?authuser=`` query params. The provider-
+        # agnostic URL detector would otherwise re-flag the canonical
+        # placeholder as a leak (idempotency).
+        "authuser=SCRUBBED_EMAIL%40example.com",
         # upload + Drive token placeholders.
         "SCRUBBED_UPLOAD_ID",
         "SCRUBBED_UPLOAD_URL",
@@ -443,6 +447,17 @@ SENSITIVE_PATTERNS: list[tuple[str, str]] = [
     # JSON-quoted form. The replacement embeds ``@example.com`` so a second
     # scrub pass on already-scrubbed content is a no-op (idempotent).
     (f'"{_EMAIL_PATTERN_BASE}"', '"SCRUBBED_EMAIL@example.com"'),
+    # ``authuser=<email>`` query-param form. The client appends this to
+    # every batchexecute URL whenever ``account_email`` is set, so request
+    # URIs would otherwise leak the maintainer's email. Anchoring on
+    # ``authuser=`` (not the email's domain) scrubs Workspace / corporate
+    # addresses the provider-list pattern misses, with no false-positive
+    # risk elsewhere. The replacement keeps the ``%40`` shape so VCR
+    # matchers still see a well-formed value on replay.
+    (
+        r"authuser=[A-Za-z0-9._%+\-]+%40[A-Za-z0-9.\-]+\.[A-Za-z]{2,}",
+        "authuser=SCRUBBED_EMAIL%40example.com",
+    ),
     # Unquoted-context fallback (mailto: hrefs, raw HTML/JS chunks).
     (_EMAIL_PATTERN_BASE, "SCRUBBED_EMAIL@example.com"),
     # -------------------------------------------------------------------------
@@ -641,7 +656,15 @@ _DETECT_TOKEN_FIELDS: list[tuple[str, re.Pattern[str]]] = [
 ]
 
 # Compiled detection-only pattern for emails (no replacement string baked in).
-_DETECT_EMAIL = re.compile(_EMAIL_PATTERN_BASE)
+# Two-shape detector — mirrors the two scrubber patterns in section 5 above:
+#   1. Literal ``@`` form on the provider allowlist (JSON, mailto: hrefs).
+#   2. URL-encoded ``authuser=<email>`` query-param form for *any* domain.
+_DETECT_EMAIL = re.compile(
+    r"[A-Za-z0-9._%+\-]+@(?:"
+    + "|".join(EMAIL_PROVIDERS)
+    + r")\.com"
+    + r"|authuser=[A-Za-z0-9._%+\-]+%40[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"
+)
 
 # upload + Drive token detectors.
 #
@@ -747,8 +770,14 @@ def is_clean(text: str) -> tuple[bool, list[str]]:
                 )
 
     # --- 2. Real email addresses (any provider we redact) -------------------
+    # Skip canonical placeholders so the provider-agnostic ``authuser=``
+    # branch of ``_DETECT_EMAIL`` (which matches any TLD) doesn't re-flag
+    # the scrubbed replacement on a second pass.
     for match in _DETECT_EMAIL.finditer(text):
-        leaks.append(f"Leak (email): {match.group(0)!r}")
+        matched = match.group(0)
+        if matched in SCRUB_PLACEHOLDERS:
+            continue
+        leaks.append(f"Leak (email): {matched!r}")
 
     # --- 3. Token / ID fields that should be redacted ----------------------
     for label, regex in _DETECT_TOKEN_FIELDS:
