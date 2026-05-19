@@ -4,10 +4,9 @@ This module defines the narrow structural Protocols that later Tier-13 PRs
 will wire into concrete classes. It intentionally contains no runtime
 implementation and no import of the concrete ``ClientCore``.
 
-``Session.rpc_call`` deliberately mirrors the existing ``CoreRPCProvider``
-signature, including the transitional ``_is_retry`` parameter, so feature
-retyping can happen without changing call semantics before ``_capabilities.py``
-is deleted later in Tier 13.
+``Session.rpc_call`` deliberately mirrors the legacy feature RPC signature,
+including the transitional ``_is_retry`` parameter, so feature retyping can
+happen without changing call semantics.
 """
 
 from __future__ import annotations
@@ -22,8 +21,40 @@ from ._request_types import BuildRequest
 from .rpc.types import RPCMethod
 
 
+class AuthMetadata(Protocol):
+    """Selected-account routing metadata required by upload flows."""
+
+    @property
+    def authuser(self) -> int: ...
+
+    @property
+    def account_email(self) -> str | None: ...
+
+
+class Kernel(Protocol):
+    """Pure transport surface owned by the concrete Kernel in PR 13.2."""
+
+    async def post(
+        self,
+        url: str,
+        headers: Mapping[str, str],
+        body: bytes,
+    ) -> httpx.Response: ...
+
+    @property
+    def cookies(self) -> httpx.Cookies: ...
+
+    async def aclose(self) -> None: ...
+
+
 class Session(Protocol):
     """Orchestration surface consumed by feature APIs after Tier 13."""
+
+    @property
+    def auth(self) -> AuthMetadata: ...
+
+    @property
+    def kernel(self) -> Kernel: ...
 
     async def rpc_call(
         self,
@@ -51,21 +82,11 @@ class Session(Protocol):
 
     def operation_scope(self, label: str) -> AbstractAsyncContextManager[None]: ...
 
-
-class Kernel(Protocol):
-    """Pure transport surface owned by the concrete Kernel in PR 13.2."""
-
-    async def post(
+    def register_drain_hook(
         self,
-        url: str,
-        headers: Mapping[str, str],
-        body: bytes,
-    ) -> httpx.Response: ...
-
-    @property
-    def cookies(self) -> httpx.Cookies: ...
-
-    async def aclose(self) -> None: ...
+        name: str,
+        hook: Callable[[], Awaitable[None]],
+    ) -> None: ...
 
 
 class DrainHookRegistration(Protocol):
@@ -79,6 +100,7 @@ class DrainHookRegistration(Protocol):
 
 
 __all__ = [
+    "AuthMetadata",
     "DrainHookRegistration",
     "Kernel",
     "Session",

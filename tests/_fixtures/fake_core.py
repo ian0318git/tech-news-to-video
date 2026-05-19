@@ -1,8 +1,8 @@
 """``make_fake_core`` factory — constructor-injection substrate for sub-clients.
 
 This module provides a single entry point — :func:`make_fake_core` — that
-returns a ``FakeClientCore`` instance shaped to satisfy every narrow
-capability Protocol in :mod:`notebooklm._capabilities`. Tests pass the
+returns a ``FakeClientCore`` instance shaped to satisfy the shared
+``Session`` Protocol and explicit feature collaborators. Tests pass the
 result to a sub-client constructor (``NotebooksAPI(core=fake)``) instead
 of constructing a real ``ClientCore`` and mutating its attributes after
 the fact.
@@ -31,6 +31,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -79,12 +80,22 @@ def make_fake_core(**overrides: Any) -> FakeClientCore:
 
         return scope()
 
+    live_cookies = httpx.Cookies()
+    fake_http_client = SimpleNamespace(cookies=live_cookies)
+    auth = SimpleNamespace(authuser=0, account_email=None)
+    kernel = SimpleNamespace(
+        cookies=live_cookies,
+        get_http_client=MagicMock(return_value=fake_http_client),
+    )
+
     defaults: dict[str, Any] = {
-        # CoreRPCProvider — fresh list per call so tests can mutate without bleeding
+        "auth": auth,
+        "kernel": kernel,
+        # Session — fresh list per call so tests can mutate without bleeding
         "rpc_call": AsyncMock(side_effect=lambda *a, **kw: []),
-        # SourceListProvider
+        "transport_post": AsyncMock(),
+        # NotebookSourceLister
         "get_source_ids": AsyncMock(side_effect=lambda *a, **kw: []),
-        # CoreReqIdProvider — both the public name and the underscore alias
         "next_reqid": AsyncMock(return_value=100000),
         "_next_reqid": AsyncMock(return_value=100000),
         # Legacy ClientCore compatibility bridge
@@ -92,14 +103,14 @@ def make_fake_core(**overrides: Any) -> FakeClientCore:
         # DrainHookRegistration
         "_drain_hooks": {},
         "register_drain_hook": MagicMock(return_value=None),
-        # AuthRouteProvider — sync helpers, used during request build
+        # Auth routing — used by SourceUploadPipeline tests and compatibility paths
         "authuser": 0,
         "account_email": None,
         "authuser_query": MagicMock(return_value="authuser=0"),
         "authuser_header": MagicMock(return_value="0"),
-        # CookieJarProvider
-        "live_cookies": MagicMock(return_value=httpx.Cookies()),
-        # TransportOperationProvider — fresh token object per call so drain tracking
+        "get_http_client": MagicMock(return_value=fake_http_client),
+        "live_cookies": MagicMock(return_value=live_cookies),
+        # Legacy transport drain helpers — fresh token object per call so drain tracking
         # gets unique identities (return_value=object() would share one instance).
         # The Protocol declares the underscore-private names that ClientCore
         # exposes directly. The no-underscore aliases below are purely defensive
@@ -114,10 +125,10 @@ def make_fake_core(**overrides: Any) -> FakeClientCore:
         "begin_transport_post": AsyncMock(side_effect=lambda *a, **kw: object()),
         "begin_transport_task": AsyncMock(side_effect=lambda *a, **kw: object()),
         "finish_transport_post": AsyncMock(return_value=None),
-        # OperationScopeProvider / UploadConcurrencyProvider
+        # Session.operation_scope / upload metrics compatibility
         "operation_scope": MagicMock(side_effect=_operation_scope),
         "record_upload_queue_wait": MagicMock(return_value=None),
-        # LoopAffinityProvider — None is the silent-no-op value
+        # Session loop affinity
         "bound_loop": None,
         "assert_bound_loop": MagicMock(return_value=None),
         # Auth-route helper alias
@@ -128,6 +139,7 @@ def make_fake_core(**overrides: Any) -> FakeClientCore:
         defaults["_drain_hooks"][name] = hook
 
     defaults["register_drain_hook"] = MagicMock(side_effect=_register_drain_hook)
+    defaults["get_http_client"].return_value.cookies = live_cookies
 
     # Validate overrides early so a typo like ``rpc_cal=`` fails loudly
     # rather than landing as an unread attribute.
