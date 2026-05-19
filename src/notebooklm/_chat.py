@@ -13,6 +13,7 @@ from typing import Any, Protocol
 import httpx
 
 from ._capabilities import (
+    AuthRouteProvider,
     CoreReqIdProvider,
     CoreRPCProvider,
     LoopAffinityProvider,
@@ -35,7 +36,6 @@ from ._core import _AuthSnapshot
 from ._core_cache import ConversationCache
 from ._core_transport import _BuildRequest
 from ._logging import get_request_id, reset_request_id, set_request_id
-from ._loop_affinity import assert_bound_loop
 from .exceptions import ChatError, NetworkError, ValidationError
 from .rpc import (
     ChatGoal,
@@ -50,9 +50,9 @@ logger = logging.getLogger(__name__)
 
 class _ChatCore(
     CoreRPCProvider,
+    AuthRouteProvider,
     TransportOperationProvider,
     CoreReqIdProvider,
-    SourceListProvider,
     LoopAffinityProvider,
     Protocol,
 ):
@@ -70,9 +70,8 @@ class _ChatCore(
     ``rpc_call`` (from :class:`CoreRPCProvider`), underscore-private
     transport-operation bookkeeping (from
     :class:`TransportOperationProvider`), the shared request-id counter
-    (from :class:`CoreReqIdProvider`), the source-id enumeration helper
-    (from :class:`SourceListProvider`), and the open-time event-loop
-    reference (from :class:`LoopAffinityProvider`). The single member
+    (from :class:`CoreReqIdProvider`), and the open-time event-loop guard
+    (from :class:`LoopAffinityProvider`). The single member
     declared inline below — ``_perform_authed_post`` — is the underlying
     streaming-chat transport entry point that
     :func:`_chat_transport.chat_aware_authed_post` invokes; it does not
@@ -166,6 +165,7 @@ class ChatAPI:
         core: _ChatCore,
         *,
         conversation_cache: ConversationCache | None = None,
+        notebooks: SourceListProvider | None = None,
     ):
         """Initialize the chat API.
 
@@ -174,8 +174,16 @@ class ChatAPI:
             conversation_cache: Optional injected cache; defaults to a fresh
                 per-instance ``ConversationCache`` (chat-domain state, no
                 other consumer).
+            notebooks: Optional source-id resolver. Defaults to a
+                ``NotebooksAPI`` wrapper around ``core`` for backward
+                compatibility with tests that construct ``ChatAPI(core)``.
         """
         self._core = core
+        if notebooks is None:
+            from ._notebooks import NotebooksAPI
+
+            notebooks = NotebooksAPI(core)
+        self._notebooks = notebooks
         self._cache = conversation_cache if conversation_cache is not None else ConversationCache()
         # Per-``conversation_id`` lock that serializes follow-up asks on the
         # same conversation. Without this, two
@@ -273,14 +281,14 @@ class ChatAPI:
         # guard at ``_core_transport.py:258-262`` only catches misuse on
         # the POST itself, which is *after* the conversation lock is
         # already held — too late.
-        assert_bound_loop(self._core.bound_loop)
+        self._core.assert_bound_loop()
         logger.debug(
             "Asking question in notebook %s (conversation=%s)",
             notebook_id,
             conversation_id or "new",
         )
         if source_ids is None:
-            source_ids = await self._core.get_source_ids(notebook_id)
+            source_ids = await self._notebooks.get_source_ids(notebook_id)
 
         is_new_conversation = conversation_id is None
 

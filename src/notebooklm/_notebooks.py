@@ -199,6 +199,78 @@ class NotebooksAPI:
             disable_internal_retries=disable_internal_retries,
         )
 
+    async def get_source_ids(self, notebook_id: str) -> list[str]:
+        """Extract all source IDs from a notebook.
+
+        Fetches notebook data and extracts source IDs for use with chat and
+        artifact generation when targeting specific sources.
+
+        Args:
+            notebook_id: The notebook ID.
+
+        Returns:
+            List of source IDs. Empty list when the notebook has no sources or
+            when get_source_ids encounters a schema/validation mismatch while
+            extracting IDs.
+
+        Note:
+            RPC, auth, and network errors raised by ``get_raw()`` propagate to
+            the caller; only local source-shape validation failures are caught
+            below and converted to an empty list.
+            Source IDs are triple-nested in RPC responses: ``source[0][0]``
+            contains the ID.
+        """
+        notebook_data = await self.get_raw(notebook_id)
+
+        source_ids: list[str] = []
+        if not notebook_data or not isinstance(notebook_data, list):
+            return source_ids
+
+        # Schema-drift detection points: log WARNING at each isinstance/len
+        # guard that fails on a non-empty response (real drift surfaces here,
+        # not at the safety-net except below).
+        try:
+            if not isinstance(notebook_data[0], list):
+                # notebook_data is already known to be a non-empty list here
+                # (guarded by `if not notebook_data` above).
+                logger.warning(
+                    "get_source_ids: notebook_data[0] shape unexpected for %s "
+                    "(schema drift?). top-type=%s",
+                    notebook_id,
+                    type(notebook_data[0]).__name__,
+                )
+                return source_ids
+
+            notebook_info = notebook_data[0]
+            if not (len(notebook_info) > 1 and isinstance(notebook_info[1], list)):
+                logger.warning(
+                    "get_source_ids: notebook_info[1] not list for %s (schema drift?). len=%d",
+                    notebook_id,
+                    len(notebook_info),
+                )
+                return source_ids
+
+            sources = notebook_info[1]
+            for source in sources:
+                if not (isinstance(source, list) and source):
+                    continue
+                first = source[0]
+                if not (isinstance(first, list) and first):
+                    continue
+                sid = first[0]
+                if isinstance(sid, str):
+                    source_ids.append(sid)
+        except (IndexError, TypeError) as e:
+            # Defense-in-depth: guards above should make this unreachable.
+            logger.warning(
+                "get_source_ids: unexpected exception despite guards for %s: %s",
+                notebook_id,
+                e,
+                exc_info=True,
+            )
+
+        return source_ids
+
     async def list(self) -> list[Notebook]:
         """List all notebooks.
 
