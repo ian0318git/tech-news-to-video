@@ -7,7 +7,7 @@ from click.testing import CliRunner
 
 
 @pytest.fixture(autouse=True)
-def _disable_chromium_profile_fanout(monkeypatch):
+def _disable_chromium_profile_fanout():
     """Default: Chromium multi-user-profile discovery returns nothing in tests.
 
     The session multi-account paths (``auth inspect``, ``login --account``,
@@ -22,11 +22,18 @@ def _disable_chromium_profile_fanout(monkeypatch):
     patching ``discover_chromium_profiles`` explicitly with their own list of
     synthetic profiles — the autouse here just guarantees deterministic
     legacy-path behavior everywhere else.
+
+    D1 PR-3 migration: previously used
+    ``monkeypatch.setattr("notebooklm.cli._chromium_profiles...", ...)``
+    — the string-target form ADR-007 forbids because it silently no-ops
+    if the target relocates. Now uses ``patch(...)`` which raises
+    ``AttributeError`` on missing targets.
     """
-    monkeypatch.setattr(
+    with patch(
         "notebooklm.cli._chromium_profiles.discover_chromium_profiles",
         lambda *a, **kw: [],
-    )
+    ):
+        yield
 
 
 @pytest.fixture
@@ -45,6 +52,13 @@ def mock_auth():
     with patch("notebooklm.cli.helpers.load_auth_from_storage") as mock:
         mock.return_value = {
             "SID": "test",
+            # ``__Secure-1PSIDTS`` is required by ``MINIMUM_REQUIRED_COOKIES``
+            # in ``_auth.cookie_policy``. Tests that route through
+            # ``_validate_required_cookies`` (e.g. anything calling
+            # ``fetch_tokens_with_domains``) need both cookies present —
+            # without this, the validator raises ``ValueError`` before the
+            # CLI command body runs.
+            "__Secure-1PSIDTS": "test_1psidts",
             "HSID": "test",
             "SSID": "test",
             "APISID": "test",
@@ -319,12 +333,15 @@ def patch_main_cli_client():
 def mock_context_file(tmp_path):
     """Provide a temporary context file for testing context commands."""
     context_file = tmp_path / "context.json"
-    # Patch every current context-path seam: the helpers facade passes the
-    # resolver explicitly, while context.py and resolve.py perform call-time
-    # lookups after the helper split.
+    # Patch every current context-path seam: helpers (passes the resolver
+    # explicitly), context.py + resolve.py (call-time lookups after the
+    # helper split), and session.py (used by ``notebooklm status`` to read
+    # the persisted context payload directly — without this patch, the
+    # status command falls back to the real ``~/.notebooklm/context.json``).
     with (
         patch("notebooklm.cli.helpers.get_context_path", return_value=context_file),
         patch("notebooklm.cli.context.get_context_path", return_value=context_file),
         patch("notebooklm.cli.resolve.get_context_path", return_value=context_file),
+        patch("notebooklm.cli.session.get_context_path", return_value=context_file),
     ):
         yield context_file
