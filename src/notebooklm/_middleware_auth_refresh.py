@@ -2,10 +2,11 @@
 
 Per ADR-009 §"Chain ordering", ``AuthRefreshMiddleware`` sits just *inside*
 ``RetryMiddleware`` and just *outside* ``ErrorInjectionMiddleware``. The final
-Tier-12 chain is
-``[Drain, Metrics, Retry, AuthRefresh, ErrorInjection, Tracing]`` — PR 12.8
-inserts ``AuthRefresh`` between ``Retry`` and ``ErrorInjection`` so this
-ordering is now realized end-to-end.
+Tier-12 chain (post-PR 12.9, after ``SemaphoreMiddleware`` was inserted between
+``Metrics`` and ``Retry``) is
+``[Drain, Metrics, Semaphore, Retry, AuthRefresh, ErrorInjection, Tracing]`` —
+PR 12.8 inserts ``AuthRefresh`` between ``Retry`` and ``ErrorInjection`` so
+this ordering is now realized end-to-end.
 
 This PR lifts the **auth-refresh-once retry** loop out of
 ``AuthedTransport.perform_authed_post`` (the chain leaf). After PR 12.8 the
@@ -75,6 +76,7 @@ from typing import TYPE_CHECKING
 
 import httpx
 
+from ._core_constants import CORE_LOGGER_NAME
 from ._core_transport import _TransportAuthExpired
 from ._middleware import NextCall, RpcRequest, RpcResponse
 
@@ -144,7 +146,7 @@ class AuthRefreshMiddleware:
         self._refresh_retry_delay = refresh_retry_delay
         # See ``RetryMiddleware._resolve_sleep`` for the lazy-binding rationale.
         self._sleep = sleep
-        self._logger = logger or logging.getLogger("notebooklm._core")
+        self._logger = logger or logging.getLogger(CORE_LOGGER_NAME)
         self._metrics = metrics
 
     def _resolve_sleep(self) -> Callable[[float], Awaitable[object]]:
