@@ -516,9 +516,11 @@ def _build_rpc_executor() -> Any:
         build_request: Any,
         log_label: str,
         disable_internal_retries: bool = False,
+        rpc_method: str | None = None,
     ) -> httpx.Response:
         captured["disable_internal_retries"] = disable_internal_retries
         captured["log_label"] = log_label
+        captured["rpc_method"] = rpc_method
         return httpx.Response(200, text=")]}'\n[]")
 
     owner = MagicMock()
@@ -572,6 +574,9 @@ async def test_default_registry_preserves_today_behavior(
     )
 
     assert captured["disable_internal_retries"] is False
+    # Pin ``rpc_method`` propagation through the executor → transport seam
+    # so a regression in the kwarg threading can't slip past the suite.
+    assert captured["rpc_method"] == RPCMethod.LIST_NOTEBOOKS.name
 
 
 @pytest.mark.asyncio

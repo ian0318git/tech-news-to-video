@@ -40,7 +40,6 @@ from .rpc import (
     get_batchexecute_url,
     resolve_rpc_id,
 )
-from .types import RpcTelemetryEvent
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +60,7 @@ class RpcOwner(Protocol):
         build_request: _BuildRequest,
         log_label: str,
         disable_internal_retries: bool = False,
+        rpc_method: str | None = None,
     ) -> httpx.Response: ...
 
     async def _await_refresh(self) -> None: ...
@@ -94,8 +94,6 @@ class RpcOwner(Protocol):
     async def _finish_transport_post(self, token: Any) -> None: ...
 
     def _increment_metrics(self, **increments: int | float) -> None: ...
-
-    async def _emit_rpc_event(self, event: RpcTelemetryEvent) -> None: ...
 
 
 class RpcExecutor:
@@ -170,10 +168,19 @@ class RpcExecutor:
         method_name = getattr(method, "name", str(method))
         operation_token = await self._owner._begin_transport_post(f"RPC {method_name}")
         self._owner._increment_metrics(rpc_calls_started=1)
-        start = time.perf_counter()
+        # As of PR 12.4 the per-attempt latency counter, the
+        # ``rpc_calls_succeeded`` / ``rpc_calls_failed`` counters, and the
+        # ``emit_rpc_event`` fire live inside ``MetricsMiddleware`` (see
+        # ``_middleware_metrics.py`` + ADR-009 §"Chain ordering"). The chain
+        # is wrapped around ``_perform_authed_post``, so middleware
+        # observation covers the transport leg only — exactly what
+        # ``Session.rpc_call`` will own in Tier 13. The ``rpc_calls_started``
+        # increment + reqid + drain-token wiring stays here because those
+        # concerns live OUTSIDE the chain (they bracket the entire logical
+        # RPC including decode, not just the transport attempt).
         _reqid_token = None if get_request_id() is not None else set_request_id()
         try:
-            result = await self._owner._rpc_call_impl(
+            return await self._owner._rpc_call_impl(
                 method,
                 params,
                 source_path,
@@ -182,37 +189,6 @@ class RpcExecutor:
                 disable_internal_retries=disable_internal_retries,
                 operation_variant=operation_variant,
             )
-        except Exception as exc:
-            elapsed = time.perf_counter() - start
-            self._owner._increment_metrics(
-                rpc_calls_failed=1,
-                rpc_latency_seconds_total=elapsed,
-            )
-            await self._owner._emit_rpc_event(
-                RpcTelemetryEvent(
-                    method=method_name,
-                    status="error",
-                    elapsed_seconds=elapsed,
-                    request_id=get_request_id(),
-                    error_type=type(exc).__name__,
-                )
-            )
-            raise
-        else:
-            elapsed = time.perf_counter() - start
-            self._owner._increment_metrics(
-                rpc_calls_succeeded=1,
-                rpc_latency_seconds_total=elapsed,
-            )
-            await self._owner._emit_rpc_event(
-                RpcTelemetryEvent(
-                    method=method_name,
-                    status="success",
-                    elapsed_seconds=elapsed,
-                    request_id=get_request_id(),
-                )
-            )
-            return result
         finally:
             if _reqid_token is not None:
                 reset_request_id(_reqid_token)
@@ -276,6 +252,7 @@ class RpcExecutor:
                 build_request=_build,
                 log_label=f"RPC {method.name}",
                 disable_internal_retries=effective_disable_internal_retries,
+                rpc_method=method.name,
             )
         except _TransportAuthExpired as exc:
             # Preserve the historical raw transport exception on refresh failure.
