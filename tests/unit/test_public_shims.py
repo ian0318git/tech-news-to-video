@@ -1035,7 +1035,7 @@ def test_auth_validation_uses_facade_extraction_hint(
 
 @pytest.mark.asyncio
 async def test_client_rpc_call_delegates_keyword_for_keyword() -> None:
-    """NotebookLMClient.rpc_call is a public delegator to ClientCore.rpc_call."""
+    """NotebookLMClient.rpc_call is a public delegator to Session.rpc_call."""
     from notebooklm import NotebookLMClient
     from notebooklm.auth import AuthTokens
     from notebooklm.rpc import RPCMethod
@@ -1072,7 +1072,7 @@ async def test_client_rpc_call_delegates_keyword_for_keyword() -> None:
 
 @pytest.mark.asyncio
 async def test_client_rpc_call_forwards_default_arguments() -> None:
-    """The public delegator must preserve ClientCore.rpc_call defaults."""
+    """The public delegator must preserve Session.rpc_call defaults."""
     from notebooklm import NotebookLMClient
     from notebooklm.auth import AuthTokens
     from notebooklm.rpc import RPCMethod
