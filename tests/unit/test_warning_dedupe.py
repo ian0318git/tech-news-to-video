@@ -2,10 +2,11 @@
 
 These tests pin the **single-event-loop** case of the documented "best-effort
 under threads, exactly-once on a single loop" contract for the two module-level
-warning flags in ``notebooklm.auth``:
+warning flags re-exported on ``notebooklm.auth`` (canonical owners live on the
+``_auth`` seams since D1 PR-2 retired ``_AuthFacadeModule``):
 
-- ``_SECONDARY_BINDING_WARNED`` (auth.py)
-- ``_FLOCK_UNAVAILABLE_WARNED`` (auth.py)
+- ``_SECONDARY_BINDING_WARNED`` (canonical owner: ``_auth.cookie_policy``)
+- ``_FLOCK_UNAVAILABLE_WARNED`` (canonical owner: ``_auth.storage``)
 
 Both follow the same shape: a synchronous ``if not flag: flag = True; warn()``
 block with no ``await`` between the check and the set. The asyncio scheduler
@@ -29,6 +30,7 @@ from pathlib import Path
 
 import pytest
 
+from _fixtures import patch_auth_seam
 from notebooklm import auth as auth_module
 
 # Cookie set that passes the Tier 1 required-cookies check but lacks any
@@ -39,14 +41,27 @@ _TIER1_ONLY_COOKIES = {"SID", "__Secure-1PSIDTS"}
 
 @pytest.fixture(autouse=True)
 def _reset_warning_flags() -> Iterator[None]:
-    """Reset both module-level warning flags around each test."""
-    auth_module._SECONDARY_BINDING_WARNED = False
-    auth_module._FLOCK_UNAVAILABLE_WARNED = False
+    """Reset both warning flags on their canonical seam owners around each test.
+
+    ``conftest.py::_reset_poke_state`` already resets these flags for every
+    test in the suite; this local fixture is kept for read-in-isolation
+    clarity so a developer scanning ``test_warning_dedupe.py`` alone sees
+    the reset alongside the assertions it enables. Writing to
+    ``auth_module._SECONDARY_BINDING_WARNED`` would rebind only the auth.py
+    re-export captured at import time — after the D1 PR-2 facade retirement
+    those names are no longer write-through, so we reset the canonical
+    owners directly.
+    """
+    from notebooklm._auth import cookie_policy as _cookie_policy
+    from notebooklm._auth import storage as _auth_storage
+
+    _cookie_policy._SECONDARY_BINDING_WARNED = False
+    _auth_storage._FLOCK_UNAVAILABLE_WARNED = False
     try:
         yield
     finally:
-        auth_module._SECONDARY_BINDING_WARNED = False
-        auth_module._FLOCK_UNAVAILABLE_WARNED = False
+        _cookie_policy._SECONDARY_BINDING_WARNED = False
+        _auth_storage._FLOCK_UNAVAILABLE_WARNED = False
 
 
 def test_secondary_binding_warns_exactly_once_under_asyncio_gather(
@@ -74,7 +89,12 @@ def test_secondary_binding_warns_exactly_once_under_asyncio_gather(
         f"expected exactly one secondary-binding warning, "
         f"got {len(binding_warnings)}: {[r.getMessage() for r in binding_warnings]}"
     )
-    assert auth_module._SECONDARY_BINDING_WARNED is True
+    # Warning flag now lives on the cookie_policy seam (_AuthFacadeModule
+    # retired in D1 PR-2). Read from the owner directly rather than the
+    # auth-module re-export captured at import time.
+    from notebooklm._auth import cookie_policy as _cookie_policy
+
+    assert _cookie_policy._SECONDARY_BINDING_WARNED is True
 
 
 def test_flock_unavailable_warns_exactly_once_under_asyncio_gather(
@@ -93,7 +113,7 @@ def test_flock_unavailable_warns_exactly_once_under_asyncio_gather(
         # caller that emits the dedupe warning, and only on this state.
         yield "unavailable"
 
-    monkeypatch.setattr(auth_module, "_file_lock", fake_file_lock)
+    patch_auth_seam(monkeypatch, "_file_lock", fake_file_lock)
 
     lock_path = tmp_path / ".storage_state.json.lock"
 
@@ -117,4 +137,9 @@ def test_flock_unavailable_warns_exactly_once_under_asyncio_gather(
         f"expected exactly one flock-unavailable warning, "
         f"got {len(flock_warnings)}: {[r.getMessage() for r in flock_warnings]}"
     )
-    assert auth_module._FLOCK_UNAVAILABLE_WARNED is True
+    # Warning flag now lives on the storage seam (_AuthFacadeModule retired
+    # in D1 PR-2). Read from the owner directly rather than the auth-module
+    # re-export captured at import time.
+    from notebooklm._auth import storage as _auth_storage
+
+    assert _auth_storage._FLOCK_UNAVAILABLE_WARNED is True
