@@ -73,10 +73,11 @@ RPC Layer (rpc/)
 3. **Client Layer** (`src/notebooklm/client.py`, `_*.py`):
    - `NotebookLMClient`: Main async client with namespaced APIs
    - `_notebooks.py`, `_sources.py`, `_artifacts.py`, etc.: Domain APIs
+   - `_source_*.py`, `_artifact_*.py`: Feature-specific service logic
 
 4. **CLI Layer** (`src/notebooklm/cli/`):
    - Modular Click commands
-   - `session.py`, `notebook.py`, `source.py`, `generate.py`, etc.
+   - `cli/services/`: CLI-specific service layer
 
 ### Key Files
 
@@ -84,6 +85,7 @@ RPC Layer (rpc/)
 |------|---------|
 | `client.py` | Main `NotebookLMClient` class |
 | `_session.py` | Concrete `Session` orchestrator; HTTP client lifecycle; late-binding wrappers |
+| `_kernel.py` | Concrete `Kernel` transport core (owns `httpx.AsyncClient` + cookie jar) |
 | `_session_config.py` | `DEFAULT_*` knobs and module-level constants |
 | `_session_helpers.py` | `is_auth_error`, `AUTH_ERROR_PATTERNS`, `_resolve_keepalive_interval` |
 | `_error_injection.py` | Synthetic-error env-var resolver + startup guard |
@@ -102,44 +104,90 @@ RPC Layer (rpc/)
 | `_sources.py` | `client.sources` API |
 | `_artifacts.py` | `client.artifacts` API |
 | `_chat.py` | `client.chat` API |
+| `_research.py` | `client.research` API |
+| `_notes.py` | `client.notes` API |
+| `_sharing.py` | `client.sharing` API |
+| `_settings.py` | `client.settings` API |
+| `_note_service.py` | Service layer managing note CRUD, note-backed content generation, and sync |
+| `_mind_map.py` | Specific adapter service representing mind-maps, backed by standard notes |
+| `_artifact_downloads.py` | Asynchronous download coordinator for finished artifacts |
+| `_artifact_formatters.py` | Markdown, HTML, and plain text formatters for artifacts |
+| `_artifact_generation.py` | Extracted artifact generation payload-building service |
+| `_artifact_listing.py` | Listing and filtering operations for notebook artifacts |
+| `_artifact_polling.py` | Poll coordination service for artifact generation tasks |
+| `_source_add.py` | Core service layer for adding text, URL, or Google Drive sources |
+| `_source_content.py` | Core service layer for fetching source HTML/markdown content |
+| `_source_listing.py` | Core service layer for listing notebook sources |
+| `_source_polling.py` | Poll coordination service for active source conversions |
+| `_source_upload.py` | Concurrency-gated upload pipeline for source files |
+| `_notebook_metadata.py` | Metadata protocol schemas for sub-clients |
+| `_url_utils.py` | URL parsing and validation helpers |
+| `_sharing_manager.py` | Direct sharing management logic |
+| `_version_check.py` | Dynamic client-side version deprecation guard |
+| `_chat_notes.py` | Chat-adjacent note saving workflow adapter |
+| `_chat_protocol.py` | Internal types and interfaces for the chat client |
+| `_chat_transport.py` | Chat-specific error mapping over `AuthedTransport` |
+| `_middleware_chain.py` | Constructs the middleware chain in the canonical ADR-009 order |
+| `_middleware*.py` | Modular middleware implementations (drain, metrics, semaphore, retry, auth, error injection, tracing) |
 | `rpc/types.py` | RPC method IDs (source of truth) |
-| `auth.py` | Authentication facade — flat re-exports from `_auth/*` seams (ADR-003 Superseded: `_AuthFacadeModule` retired in D1 PR-2; tests use `tests/_fixtures.patch_auth_seam` for seam-write-through) |
+| `auth.py` | Authentication facade — flat re-exports from `_auth/*` seams (Superseded by [arch-d1-auth-side](https://github.com/teng-lin/notebooklm-py/pull/834) (#834); `_AuthFacadeModule` retired; tests use `tests/_fixtures.patch_auth_seam` for seam-write-through) |
 | `_auth/paths.py` | Storage paths and filesystem helpers |
 | `_auth/extraction.py` | Cookie/token extraction from browser sessions |
 | `_auth/headers.py` | HTTP header construction |
 | `_auth/cookies.py` | Cookie map manipulation + `_update_cookie_input` |
 | `_auth/cookie_policy.py` | Cookie-domain allowlist and policy decisions |
-| `_auth/account.py` | Account profile + multi-account switching |
-| `_auth/session.py` | Session-level dataclasses |
-| `_auth/storage.py` | Profile/state persistence on disk |
-| `_auth/keepalive.py` | Cookie keepalive + `__Secure-1PSIDTS` rotation loop |
-| `_auth/psidts_recovery.py` | Inline `__Secure-1PSIDTS` recovery for cold-start preflight (issue #865) |
-| `_auth/refresh.py` | Token refresh: external `notebooklm login` driver + coalesced runs + redaction |
-| `cli/` | CLI command modules |
 
 ### Repository Structure
 
-```
+```text
 src/notebooklm/
 ├── __init__.py                  # Public exports
 ├── client.py                    # NotebookLMClient
-├── auth.py                      # Authentication facade — flat re-exports from _auth/* (no write-through; ADR-003 Superseded)
+├── auth.py                      # Authentication facade — flat re-exports from _auth/* (Superseded by arch-d1-auth-side (#834))
 ├── types.py                     # Dataclasses
 ├── _session.py                  # Concrete Session orchestration (NotebookLMClient internals)
+├── _kernel.py                   # Concrete Kernel transport core
 ├── _session_config.py           # DEFAULT_* knobs + module-level constants
 ├── _session_helpers.py          # is_auth_error / AUTH_ERROR_PATTERNS / keepalive helpers
 ├── _error_injection.py          # Synthetic-error env-var resolver + startup guard
-├── _authed_transport.py         # HTTP client + transport-layer concerns
-├── _rpc_executor.py             # RPC call abstraction
-├── _session_auth.py             # Auth refresh seam
-├── _cookie_persistence.py       # Cookie storage seam
+├── _authed_transport.py         # Authed POST path + retry loops
+├── _rpc_executor.py             # RPC dispatch executor
+├── _session_auth.py             # AuthRefreshCoordinator (refresh task + auth-snapshot lock)
 ├── _client_metrics.py           # Telemetry / metrics seam
-├── _transport_drain.py          # In-flight drain coordinator
+├── _transport_drain.py          # In-flight transport drain coordinator
 ├── _reqid_counter.py            # Request-counter / request-id helpers
-├── _conversation_cache.py       # Conversation cache seam
+├── _conversation_cache.py       # Per-instance LRU conversation cache
 ├── _polling_registry.py         # Artifact polling helpers
+├── _cookie_persistence.py       # Cookie-jar persistence + __Secure-1PSIDTS rotation
 ├── _session_lifecycle.py        # Open/close lifecycle seam (loop affinity + keepalive task)
 ├── _session_contracts.py        # Shared session Protocols consumed by feature APIs
+├── _note_service.py             # NoteService
+├── _mind_map.py                 # NoteBackedMindMapService
+├── _artifact_downloads.py       # Artifact download coordinator
+├── _artifact_formatters.py      # Artifact formatting helpers
+├── _artifact_generation.py      # Artifact generation payload builder
+├── _artifact_listing.py         # Artifact listing helper
+├── _artifact_polling.py         # Artifact polling coordinator
+├── _source_add.py               # Source addition coordinator
+├── _source_content.py           # Source content fetcher
+├── _source_listing.py           # Source listing helper
+├── _source_polling.py           # Source polling coordinator
+├── _source_upload.py            # Gated source upload service
+├── _notebook_metadata.py        # Metadata protocols
+├── _url_utils.py                # URL validation helpers
+├── _sharing_manager.py          # Sharing management logic
+├── _version_check.py            # Deprecation version guard
+├── _chat_notes.py               # Note saving workflow adapter
+├── _chat_protocol.py            # Internal chat types
+├── _chat_transport.py           # Chat error mapping
+├── _middleware_chain.py         # Middleware chain builder
+├── _middleware_tracing.py       # Tracing middleware
+├── _middleware_metrics.py       # Metrics middleware
+├── _middleware_drain.py         # Drain middleware
+├── _middleware_error_injection.py # Error injection middleware
+├── _middleware_retry.py         # Retry middleware
+├── _middleware_auth_refresh.py  # Auth refresh middleware
+├── _middleware_semaphore.py     # Concurrency semaphore middleware
 ├── _auth/                       # Auth subpackage (forwarded through auth.py facade)
 │   ├── __init__.py
 │   ├── paths.py                 # Storage paths and filesystem helpers
@@ -159,6 +207,8 @@ src/notebooklm/
 ├── _chat.py                     # ChatAPI
 ├── _research.py                 # ResearchAPI
 ├── _notes.py                    # NotesAPI
+├── _sharing.py                  # SharingAPI
+├── _settings.py                 # SettingsAPI
 ├── notebooklm_cli.py            # Entry-point assembler — imports + registers cli/ groups
 ├── rpc/                         # RPC protocol layer
 │   ├── types.py                 # Method IDs and enums
@@ -166,7 +216,7 @@ src/notebooklm/
 │   └── decoder.py               # Response parsing
 └── cli/                         # CLI implementation
     ├── __init__.py
-    ├── helpers.py               # Shared utilities
+    ├── helpers.py               # Shared Click utilities
     ├── session.py               # login, use, status, clear
     ├── notebook.py              # list, create, delete, rename
     ├── source.py                # source add, list, delete
@@ -174,7 +224,16 @@ src/notebooklm/
     ├── generate.py              # generate audio, video, etc.
     ├── download.py              # download commands
     ├── chat.py                  # ask, configure, history
-    └── note.py                  # note commands
+    ├── note.py                  # note commands
+    ├── agent.py                 # agent show commands
+    ├── agent_templates.py       # agent prompts and configurations
+    ├── doctor.py                # diagnostic/repair tool
+    └── services/                # CLI-specific service layer (ADR-008 Click-to-service extraction)
+        ├── __init__.py
+        ├── artifact_generation.py
+        ├── login.py
+        ├── source_add.py
+        └── source_clean.py
 ```
 
 ## API Patterns
