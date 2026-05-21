@@ -11,6 +11,7 @@ import logging
 import os
 import time
 from collections.abc import Awaitable, Callable
+from contextlib import AbstractAsyncContextManager
 from functools import wraps
 from pathlib import Path
 from typing import Any, NoReturn, TypeVar, cast
@@ -181,6 +182,7 @@ def with_auth_and_errors(
     json_output: bool,
     body: Callable[[AuthTokens], Awaitable[T]],
     auth_loader: Callable[[click.Context], AuthTokens] | None = None,
+    body_error_handler: Callable[[Exception], T] | None = None,
 ) -> T:
     """Run a CLI command body with shared auth bootstrap and error handling."""
     from .error_handler import handle_errors
@@ -237,9 +239,47 @@ def with_auth_and_errors(
             result = helpers.run_async(body(auth))
         except Exception as e:
             log_result("failed", str(e))
+            if body_error_handler is not None:
+                return body_error_handler(e)
             raise
         log_result("completed")
         return result
+
+
+def run_client_workflow(
+    ctx: click.Context,
+    *,
+    command_name: str,
+    json_output: bool,
+    body: Callable[[Any], Awaitable[T]],
+    auth_loader: Callable[[click.Context], AuthTokens] | None = None,
+    client_factory: Callable[[AuthTokens], AbstractAsyncContextManager[Any]] | None = None,
+    body_error_handler: Callable[[Exception], T] | None = None,
+) -> T:
+    """Run a CLI workflow with shared auth, client lifetime, and error handling.
+
+    This is the command-level adapter for handlers that need an opened
+    ``NotebookLMClient`` rather than raw ``AuthTokens``. ``with_auth_and_errors``
+    remains the lower-level primitive for commands that intentionally manage
+    client lifetime themselves.
+    """
+    if client_factory is None:
+        from ..client import NotebookLMClient
+
+        client_factory = NotebookLMClient
+
+    async def workflow(auth: AuthTokens) -> T:
+        async with client_factory(auth) as client:
+            return await body(client)
+
+    return with_auth_and_errors(
+        ctx,
+        command_name=command_name,
+        json_output=json_output,
+        body=workflow,
+        auth_loader=auth_loader,
+        body_error_handler=body_error_handler,
+    )
 
 
 def with_client(f):

@@ -40,7 +40,7 @@ from ..paths import (
     get_path_info,
     get_storage_path,
 )
-from .auth_runtime import get_auth_tokens, handle_auth_error
+from .auth_runtime import handle_auth_error, run_client_workflow
 from .context import (
     _current_storage_override,
     clear_context,
@@ -931,62 +931,42 @@ def register_session_commands(cli):
             console.print(table)
             return
 
-        try:
-            auth = get_auth_tokens(ctx)
-        except FileNotFoundError:
-            # No auth file on disk — fail closed (don't poison context.json
-            # with an unverified ID) and route through the typed
-            # ``handle_auth_error`` UX so JSON callers get the standard
-            # ``AUTH_REQUIRED`` envelope and text callers get the rich
-            # multi-line "Run notebooklm login" walkthrough.
-            handle_auth_error(json_output)
-            return  # unreachable — handle_auth_error raises SystemExit
-        except click.ClickException:
-            raise
+        async def _get(client: NotebookLMClient):
+            # Resolve partial ID to full ID. Forward ``json_output`` so the
+            # resolver's "Matched: …" partial-ID diagnostic routes to stderr
+            # in --json mode and stdout stays pure parseable JSON for scripted
+            # callers.
+            resolved_id = await resolve_notebook_id(client, notebook_id, json_output=json_output)
+            nb = await client.notebooks.get(resolved_id)
+            return nb, resolved_id
 
-        async def _get():
-            async with NotebookLMClient(auth) as client:
-                # Resolve partial ID to full ID. Forward ``json_output`` so
-                # the resolver's "Matched: …" partial-ID diagnostic routes
-                # to stderr in --json mode and stdout stays pure parseable
-                # JSON for scripted callers.
-                resolved_id = await resolve_notebook_id(
-                    client, notebook_id, json_output=json_output
+        def _handle_use_verification_error(exc: Exception):
+            if isinstance(exc, click.ClickException):
+                # Re-raise click exceptions (from resolve_notebook_id —
+                # partial-id ambiguity or "no match"). These already exit
+                # non-zero with a clear message and never reach persistence.
+                raise exc
+            if isinstance(exc, NotebookNotFoundError):
+                # Server confirmed the notebook does not exist. Fail closed:
+                # do not persist anything to context.json.
+                _output_error(
+                    f"Error: Notebook {notebook_id!r} not found. "
+                    "Run 'notebooklm list' to see available notebooks, "
+                    "or pass --force to bypass verification.",
+                    "NOT_FOUND",
+                    json_output,
+                    1,
                 )
-                nb = await client.notebooks.get(resolved_id)
-                return nb, resolved_id
+                raise AssertionError("unreachable")
+            if isinstance(exc, AuthError):
+                # Auth expired (e.g. SID/SSID cookies stale). Route through
+                # the canonical "Run notebooklm login" UX instead of the
+                # generic verification-failed fallback.
+                handle_auth_error(json_output)
 
-        try:
-            nb, resolved_id = run_async(_get())
-        except click.ClickException:
-            # Re-raise click exceptions (from resolve_notebook_id — partial-id
-            # ambiguity or "no match"). These already exit non-zero with a
-            # clear message and never reach the persistence branch.
-            raise
-        except NotebookNotFoundError:
-            # Server confirmed the notebook does not exist. Fail closed: do
-            # not persist anything to context.json, and exit 1 with a clear
-            # error.
-            _output_error(
-                f"Error: Notebook {notebook_id!r} not found. "
-                "Run 'notebooklm list' to see available notebooks, "
-                "or pass --force to bypass verification.",
-                "NOT_FOUND",
-                json_output,
-                1,
-            )
-        except AuthError:
-            # Auth expired (e.g. SID/SSID cookies stale). Route through the
-            # typed UX so the user sees "Run notebooklm login" instead of
-            # the generic "Pass --force to persist without verification"
-            # catch-all that previously hid the real remediation.
-            # See ``helpers.handle_auth_error`` for the canonical message.
-            handle_auth_error(json_output)
-            return  # unreachable — handle_auth_error raises SystemExit
-        except Exception as exc:
-            # All other failures (network errors, RPC errors, etc.) also
-            # fail closed — we cannot confirm the notebook exists, so refuse
-            # to persist. --force is the documented escape hatch.
+            # All other failures (network errors, RPC errors, etc.) also fail
+            # closed — we cannot confirm the notebook exists, so refuse to
+            # persist. --force is the documented escape hatch.
             _output_error(
                 f"Error: Could not verify notebook {notebook_id!r}: {exc}. "
                 "Pass --force to persist without verification.",
@@ -994,6 +974,16 @@ def register_session_commands(cli):
                 json_output,
                 1,
             )
+            raise AssertionError("unreachable")
+
+        nb, resolved_id = run_client_workflow(
+            ctx,
+            command_name="session_use",
+            json_output=json_output,
+            body=_get,
+            client_factory=NotebookLMClient,
+            body_error_handler=_handle_use_verification_error,
+        )
 
         created_str = nb.created_at.strftime("%Y-%m-%d") if nb.created_at else None
         set_current_notebook(resolved_id, nb.title, nb.is_owner, created_str)

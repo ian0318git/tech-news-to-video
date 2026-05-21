@@ -94,6 +94,21 @@ def _make_click_context(verbose: int = 0) -> click.Context:
     return click.Context(run, parent=root_ctx)
 
 
+class _FakeClientManager:
+    def __init__(self, client):
+        self.client = client
+        self.entered = False
+        self.exited = False
+
+    async def __aenter__(self):
+        self.entered = True
+        return self.client
+
+    async def __aexit__(self, exc_type, exc, tb):
+        self.exited = True
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Shared primitive behavior
 # ---------------------------------------------------------------------------
@@ -160,6 +175,71 @@ def test_auth_runtime_default_auth_loader_preserves_helpers_patch_seam() -> None
 
     loader.assert_called_once_with(ctx)
     assert result is sentinel_auth
+
+
+def test_run_client_workflow_opens_client_with_loaded_auth() -> None:
+    sentinel_auth = MagicMock(name="auth")
+    sentinel_client = MagicMock(name="client")
+    manager = _FakeClientManager(sentinel_client)
+    seen: dict[str, object] = {}
+    ctx = _make_click_context()
+
+    def _loader(loader_ctx: click.Context):
+        seen["ctx"] = loader_ctx
+        return sentinel_auth
+
+    def _client_factory(auth):
+        seen["factory_auth"] = auth
+        return manager
+
+    async def _body(client):
+        seen["client"] = client
+        return "ok"
+
+    result = auth_runtime.run_client_workflow(
+        ctx,
+        command_name="run",
+        json_output=False,
+        body=_body,
+        auth_loader=_loader,
+        client_factory=_client_factory,
+    )
+
+    assert result == "ok"
+    assert seen == {
+        "ctx": ctx,
+        "factory_auth": sentinel_auth,
+        "client": sentinel_client,
+    }
+    assert manager.entered is True
+    assert manager.exited is True
+
+
+def test_run_client_workflow_body_error_handler_can_handle_body_exception() -> None:
+    sentinel_auth = MagicMock(name="auth")
+    sentinel_client = MagicMock(name="client")
+    manager = _FakeClientManager(sentinel_client)
+    ctx = _make_click_context()
+
+    async def _body(_client):
+        raise RuntimeError("body failed")
+
+    def _handle(exc: Exception) -> str:
+        return f"handled: {exc}"
+
+    result = auth_runtime.run_client_workflow(
+        ctx,
+        command_name="run",
+        json_output=False,
+        body=_body,
+        auth_loader=lambda _ctx: sentinel_auth,
+        client_factory=lambda _auth: manager,
+        body_error_handler=_handle,
+    )
+
+    assert result == "handled: body failed"
+    assert manager.entered is True
+    assert manager.exited is True
 
 
 def test_with_auth_and_errors_passes_verbose_json_to_current_handle_errors() -> None:
