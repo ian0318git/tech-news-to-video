@@ -19,6 +19,7 @@ from .context import clear_context, get_current_notebook, set_current_notebook
 from .options import list_options, notebook_option
 from .rendering import cli_print, console, json_output_response
 from .resolve import require_notebook, resolve_notebook_id
+from .services.confirming_mutation import MutationPlan, run_confirmed_mutation
 from .services.listing import ListSpec, run_list
 
 
@@ -137,14 +138,43 @@ def register_notebook_commands(cli):
 
         async def _run():
             async with NotebookLMClient(client_auth) as client:
-                # Resolve partial ID to full ID
-                resolved_id = await resolve_notebook_id(client, notebook_id)
 
-                # Confirm after resolution so user sees the full ID
-                if not yes and not click.confirm(f"Delete notebook {resolved_id}?"):
+                async def resolve_delete(client):
+                    resolved_id = await resolve_notebook_id(client, notebook_id)
+                    return {"notebook_id": resolved_id, "success": False}
+
+                async def execute_delete(client, resolved):
+                    resolved["success"] = bool(
+                        await client.notebooks.delete(resolved["notebook_id"])
+                    )
+
+                plan = MutationPlan(
+                    entity_label="notebook",
+                    resolve=resolve_delete,
+                    confirm_message="Delete notebook {resolved[notebook_id]}?",
+                    execute=execute_delete,
+                    serialize_success=lambda resolved: {
+                        "notebook_id": resolved["notebook_id"],
+                        "success": bool(resolved["success"]),
+                    },
+                    serialize_cancel=lambda resolved: {
+                        "notebook_id": resolved["notebook_id"],
+                        "success": False,
+                        "status": "cancelled",
+                    },
+                )
+                result = await run_confirmed_mutation(
+                    plan,
+                    client,
+                    yes=yes,
+                    json_output=False,
+                    confirmer=click.confirm,
+                )
+                if result.status == "cancelled":
                     return
 
-                success = await client.notebooks.delete(resolved_id)
+                resolved_id = result.resolved["notebook_id"]
+                success = bool(result.resolved["success"])
                 if success:
                     cli_print(f"[green]Deleted notebook:[/green] {resolved_id}", ctx=ctx)
                     # Clear context if we deleted the current notebook

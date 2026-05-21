@@ -677,6 +677,27 @@ class TestSourceDelete:
             assert "Deleted source" in result.output
             mock_client.sources.delete.assert_called_once_with("nb_123", "src_123")
 
+    def test_source_delete_cancelled(self, runner, mock_auth):
+        with patch_client_for_module("source") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.sources.list = AsyncMock(
+                return_value=[Source(id="src_123", title="Test Source")]
+            )
+            mock_client.sources.delete = AsyncMock(return_value=True)
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli, ["source", "delete", "src_123", "-n", "nb_123"], input="n\n"
+                )
+
+            assert result.exit_code == 0
+            assert "Delete source src_123?" in result.output
+            mock_client.sources.delete.assert_not_called()
+
     def test_source_delete_failure(self, runner, mock_auth):
         with patch_client_for_module("source") as mock_client_cls:
             mock_client = create_mock_client()

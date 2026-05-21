@@ -22,6 +22,7 @@ from .input import read_stdin_text
 from .options import json_option, notebook_option
 from .rendering import cli_print, console, json_output_response
 from .resolve import require_notebook, resolve_note_id, resolve_notebook_id
+from .services.confirming_mutation import MutationPlan, run_confirmed_mutation
 from .services.listing import ListSpec, run_list
 
 
@@ -405,51 +406,62 @@ def note_delete(ctx, note_id, notebook_id, yes, json_output, client_auth):
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
-            resolved_id = await resolve_note_id(
-                client, nb_id_resolved, note_id, json_output=json_output
-            )
 
-            # In JSON mode, refuse to prompt: ``click.confirm`` writes to
-            # stdout, which would corrupt the parseable JSON contract callers
-            # rely on (a ``subprocess.check_output(...) -> json.loads(...)``
-            # script would silently hang waiting for stdin). Surface a typed
-            # ``VALIDATION_ERROR`` JSON envelope on stdout AND exit non-zero so
-            # ``set -e`` / ``check_call`` script idioms catch the
-            # misconfiguration immediately instead of silently treating it as
-            # success (audit P1.T5).
-            #
-            # Migration: the prior shape was ``{deleted: false, error: ...}``
-            # + exit ``0``, which passed silently in scripts branching on the
-            # exit code. The new contract uses the standard typed envelope
-            # (``{error, code: "VALIDATION_ERROR", message, ...}``) + exit ``1``.
-            # See ``docs/cli-exit-codes.md`` and the BREAKING entry in
-            # ``CHANGELOG.md`` (Unreleased → Changed).
-            if json_output and not yes:
-                _output_error(
-                    "Pass --yes to confirm deletion in --json mode",
-                    code="VALIDATION_ERROR",
-                    json_output=json_output,
-                    exit_code=1,
-                    extra={"id": resolved_id, "notebook_id": nb_id_resolved},
+            async def resolve_delete(client):
+                nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
+                resolved_id = await resolve_note_id(
+                    client, nb_id_resolved, note_id, json_output=json_output
                 )
-                raise AssertionError("unreachable")  # pragma: no cover
 
-            if not yes and not click.confirm(f"Delete note {resolved_id}?"):
+                # In JSON mode, refuse to prompt: ``click.confirm`` writes to
+                # stdout, which would corrupt the parseable JSON contract callers
+                # rely on. Preserve the P1.T5 typed error + exit-1 contract.
+                if json_output and not yes:
+                    _output_error(
+                        "Pass --yes to confirm deletion in --json mode",
+                        code="VALIDATION_ERROR",
+                        json_output=json_output,
+                        exit_code=1,
+                        extra={"id": resolved_id, "notebook_id": nb_id_resolved},
+                    )
+                    raise AssertionError("unreachable")  # pragma: no cover
+
+                return {"notebook_id": nb_id_resolved, "note_id": resolved_id}
+
+            async def execute_delete(client, resolved):
+                await client.notes.delete(resolved["notebook_id"], resolved["note_id"])
+
+            plan = MutationPlan(
+                entity_label="note",
+                resolve=resolve_delete,
+                confirm_message="Delete note {resolved[note_id]}?",
+                execute=execute_delete,
+                serialize_success=lambda resolved: {
+                    "id": resolved["note_id"],
+                    "notebook_id": resolved["notebook_id"],
+                    "deleted": True,
+                },
+                serialize_cancel=lambda resolved: {
+                    "id": resolved["note_id"],
+                    "notebook_id": resolved["notebook_id"],
+                    "deleted": False,
+                    "status": "cancelled",
+                },
+            )
+            result = await run_confirmed_mutation(
+                plan,
+                client,
+                yes=yes,
+                json_output=json_output,
+                confirmer=click.confirm,
+            )
+            if result.status == "cancelled":
                 return
-
-            await client.notes.delete(nb_id_resolved, resolved_id)
 
             if json_output:
-                json_output_response(
-                    {
-                        "id": resolved_id,
-                        "notebook_id": nb_id_resolved,
-                        "deleted": True,
-                    }
-                )
                 return
 
+            resolved_id = result.resolved["note_id"]
             cli_print(f"[green]Deleted note:[/green] {resolved_id}", ctx=ctx)
 
     return _run()

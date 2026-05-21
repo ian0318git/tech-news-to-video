@@ -54,6 +54,7 @@ from .resolve import require_notebook, resolve_notebook_id, resolve_source_id, v
 from .runtime import is_quiet
 from .services import source_add as source_add_service
 from .services import source_clean as source_clean_service
+from .services.confirming_mutation import MutationPlan, run_confirmed_mutation
 from .services.listing import ListSpec, run_list
 from .services.polling import status_with_elapsed
 
@@ -539,41 +540,75 @@ def source_delete(ctx, source_id, notebook_id, yes, json_output, client_auth):
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
-            resolved_id = await _resolve_source_for_delete(
-                client, nb_id_resolved, source_id, json_output=json_output
-            )
 
-            # P1.T2 bug 1: In --json mode, never prompt — automation cannot
-            # answer an interactive confirmation and a hanging prompt is
-            # indistinguishable from a stuck command. Require --yes and emit a
-            # structured JSON error otherwise.
-            if json_output and not yes:
-                _require_yes_in_json(
-                    action="delete",
-                    extra={
-                        "source_id": resolved_id,
-                        "notebook_id": nb_id_resolved,
-                    },
+            async def resolve_delete(client):
+                nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
+                resolved_id = await _resolve_source_for_delete(
+                    client, nb_id_resolved, source_id, json_output=json_output
                 )
 
-            if not yes and not click.confirm(f"Delete source {resolved_id}?"):
-                return
+                # P1.T2 bug 1: In --json mode, never prompt — automation cannot
+                # answer an interactive confirmation and a hanging prompt is
+                # indistinguishable from a stuck command. Require --yes and emit a
+                # structured JSON error otherwise.
+                if json_output and not yes:
+                    _require_yes_in_json(
+                        action="delete",
+                        extra={
+                            "source_id": resolved_id,
+                            "notebook_id": nb_id_resolved,
+                        },
+                    )
 
-            success = await client.sources.delete(nb_id_resolved, resolved_id)
+                return {
+                    "notebook_id": nb_id_resolved,
+                    "source_id": resolved_id,
+                    "success": False,
+                }
+
+            async def execute_delete(client, resolved):
+                resolved["success"] = bool(
+                    await client.sources.delete(resolved["notebook_id"], resolved["source_id"])
+                )
+
+            def serialize_success(resolved):
+                return {
+                    "action": "delete",
+                    "source_id": resolved["source_id"],
+                    "notebook_id": resolved["notebook_id"],
+                    "success": bool(resolved["success"]),
+                    "status": "deleted" if resolved["success"] else "unknown",
+                }
+
+            plan = MutationPlan(
+                entity_label="source",
+                resolve=resolve_delete,
+                confirm_message="Delete source {resolved[source_id]}?",
+                execute=execute_delete,
+                serialize_success=serialize_success,
+                serialize_cancel=lambda resolved: {
+                    "action": "delete",
+                    "source_id": resolved["source_id"],
+                    "notebook_id": resolved["notebook_id"],
+                    "success": False,
+                    "status": "cancelled",
+                },
+            )
+            result = await run_confirmed_mutation(
+                plan,
+                client,
+                yes=yes,
+                json_output=json_output,
+                confirmer=click.confirm,
+            )
+            if result.status == "cancelled":
+                return
 
             if json_output:
-                json_output_response(
-                    {
-                        "action": "delete",
-                        "source_id": resolved_id,
-                        "notebook_id": nb_id_resolved,
-                        "success": bool(success),
-                        "status": "deleted" if success else "unknown",
-                    }
-                )
                 return
 
+            resolved_id = result.resolved["source_id"]
+            success = bool(result.resolved["success"])
             if success:
                 cli_print(f"[green]Deleted source:[/green] {resolved_id}", ctx=ctx)
             else:
@@ -594,41 +629,77 @@ def source_delete_by_title(ctx, title, notebook_id, yes, json_output, client_aut
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
-            source = await _resolve_source_by_exact_title(client, nb_id_resolved, title)
 
-            # P1.T2 bug 2: same JSON-mode confirmation contract as
-            # ``source delete``. Never prompt under --json; require --yes.
-            if json_output and not yes:
-                _require_yes_in_json(
-                    action="delete-by-title",
-                    extra={
-                        "source_id": source.id,
-                        "title": source.title,
-                        "notebook_id": nb_id_resolved,
-                    },
+            async def resolve_delete_by_title(client):
+                nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
+                source = await _resolve_source_by_exact_title(client, nb_id_resolved, title)
+
+                # P1.T2 bug 2: same JSON-mode confirmation contract as
+                # ``source delete``. Never prompt under --json; require --yes.
+                if json_output and not yes:
+                    _require_yes_in_json(
+                        action="delete-by-title",
+                        extra={
+                            "source_id": source.id,
+                            "title": source.title,
+                            "notebook_id": nb_id_resolved,
+                        },
+                    )
+
+                return {
+                    "notebook_id": nb_id_resolved,
+                    "source_id": source.id,
+                    "title": source.title,
+                    "success": False,
+                }
+
+            async def execute_delete_by_title(client, resolved):
+                resolved["success"] = bool(
+                    await client.sources.delete(resolved["notebook_id"], resolved["source_id"])
                 )
 
-            if not yes and not click.confirm(f"Delete source '{source.title}' ({source.id})?"):
-                return
+            def serialize_success(resolved):
+                return {
+                    "action": "delete-by-title",
+                    "source_id": resolved["source_id"],
+                    "title": resolved["title"],
+                    "notebook_id": resolved["notebook_id"],
+                    "success": bool(resolved["success"]),
+                    "status": "deleted" if resolved["success"] else "unknown",
+                }
 
-            success = await client.sources.delete(nb_id_resolved, source.id)
+            plan = MutationPlan(
+                entity_label="source",
+                resolve=resolve_delete_by_title,
+                confirm_message="Delete source '{resolved[title]}' ({resolved[source_id]})?",
+                execute=execute_delete_by_title,
+                serialize_success=serialize_success,
+                serialize_cancel=lambda resolved: {
+                    "action": "delete-by-title",
+                    "source_id": resolved["source_id"],
+                    "title": resolved["title"],
+                    "notebook_id": resolved["notebook_id"],
+                    "success": False,
+                    "status": "cancelled",
+                },
+            )
+            result = await run_confirmed_mutation(
+                plan,
+                client,
+                yes=yes,
+                json_output=json_output,
+                confirmer=click.confirm,
+            )
+            if result.status == "cancelled":
+                return
 
             if json_output:
-                json_output_response(
-                    {
-                        "action": "delete-by-title",
-                        "source_id": source.id,
-                        "title": source.title,
-                        "notebook_id": nb_id_resolved,
-                        "success": bool(success),
-                        "status": "deleted" if success else "unknown",
-                    }
-                )
                 return
 
+            source_id = result.resolved["source_id"]
+            success = bool(result.resolved["success"])
             if success:
-                cli_print(f"[green]Deleted source:[/green] {source.id}", ctx=ctx)
+                cli_print(f"[green]Deleted source:[/green] {source_id}", ctx=ctx)
             else:
                 cli_print("[yellow]Delete may have failed[/yellow]", ctx=ctx)
 
