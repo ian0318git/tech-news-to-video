@@ -540,6 +540,30 @@ class TestArtifactDelete:
             assert result.exit_code == 0
             assert "Deleted artifact" in result.output
 
+    def test_artifact_delete_cancelled(self, runner, mock_auth):
+        with patch_client_for_module("artifact") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.artifacts.list = AsyncMock(
+                return_value=[
+                    Artifact(id="art_123", title="Test Artifact", _artifact_type=4, status=3)
+                ]
+            )
+            mock_client.notes.list_mind_maps = AsyncMock(return_value=[])
+            mock_client.artifacts.delete = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli, ["artifact", "delete", "art_123", "-n", "nb_123"], input="n\n"
+                )
+
+            assert result.exit_code == 0
+            assert "Delete artifact art_123?" in result.output
+            mock_client.artifacts.delete.assert_not_called()
+
     def test_artifact_delete_json_output(self, runner, mock_auth):
         """`artifact delete --json` emits a structured success payload."""
         with patch_client_for_module("artifact") as mock_client_cls:
@@ -564,6 +588,35 @@ class TestArtifactDelete:
             assert result.exit_code == 0
             data = json.loads(result.output)
             assert data == {"id": "art_123", "deleted": True}
+
+    def test_artifact_delete_json_without_yes_does_not_prompt(self, runner, mock_auth):
+        """Current JSON contract treats --json as non-interactive execution."""
+        with patch_client_for_module("artifact") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.artifacts.list = AsyncMock(
+                return_value=[
+                    Artifact(id="art_123", title="Test Artifact", _artifact_type=4, status=3)
+                ]
+            )
+            mock_client.notes.list_mind_maps = AsyncMock(return_value=[])
+            mock_client.artifacts.delete = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            with (
+                patch(
+                    "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+                ) as mock_fetch,
+                patch("click.confirm") as mock_confirm,
+            ):
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli, ["artifact", "delete", "art_123", "-n", "nb_123", "--json"]
+                )
+
+            assert result.exit_code == 0
+            assert json.loads(result.output) == {"id": "art_123", "deleted": True}
+            mock_confirm.assert_not_called()
+            mock_client.artifacts.delete.assert_called_once_with("nb_123", "art_123")
 
     def test_artifact_delete_mind_map_json_output(self, runner, mock_auth):
         """`artifact delete --json` flags mind-map carve-out in the payload."""

@@ -31,6 +31,7 @@ from .resolve import (
     resolve_artifact_id,
     resolve_notebook_id,
 )
+from .services.confirming_mutation import MutationPlan, run_confirmed_mutation
 from .services.listing import ListSpec, run_list
 from .services.polling import status_with_elapsed
 
@@ -263,45 +264,74 @@ def artifact_delete(ctx, artifact_id, notebook_id, yes, json_output, client_auth
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
-            resolved_id = await resolve_artifact_id(
-                client, nb_id_resolved, artifact_id, json_output=json_output
-            )
 
-            # ``--json`` implies ``--yes`` so a script that pipes ``--json`` but
-            # forgets ``-y`` does not hang on ``click.confirm``'s stdin read
-            # (which would also clobber JSON stdout purity).
-            if not yes and not json_output and not click.confirm(f"Delete artifact {resolved_id}?"):
+            async def resolve_delete(client):
+                nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
+                resolved_id = await resolve_artifact_id(
+                    client, nb_id_resolved, artifact_id, json_output=json_output
+                )
+                return {
+                    "notebook_id": nb_id_resolved,
+                    "artifact_id": resolved_id,
+                    "kind": "artifact",
+                }
+
+            async def execute_delete(client, resolved):
+                # Check if this is a mind map (stored with notes)
+                mind_maps = await client.notes.list_mind_maps(resolved["notebook_id"])
+                for mm in mind_maps:
+                    if mm[0] == resolved["artifact_id"]:
+                        await client.notes.delete(resolved["notebook_id"], resolved["artifact_id"])
+                        resolved["kind"] = "mind_map"
+                        return
+
+                await client.artifacts.delete(resolved["notebook_id"], resolved["artifact_id"])
+
+            def serialize_success(resolved):
+                if resolved["kind"] == "mind_map":
+                    return {
+                        "id": resolved["artifact_id"],
+                        "deleted": True,
+                        "kind": "mind_map",
+                        "note": (
+                            "Mind maps are cleared, not removed. "
+                            "Google may garbage collect them later."
+                        ),
+                    }
+                return {"id": resolved["artifact_id"], "deleted": True}
+
+            plan = MutationPlan(
+                entity_label="artifact",
+                resolve=resolve_delete,
+                confirm_message="Delete artifact {resolved[artifact_id]}?",
+                execute=execute_delete,
+                serialize_success=serialize_success,
+                serialize_cancel=lambda resolved: {
+                    "id": resolved["artifact_id"],
+                    "deleted": False,
+                    "status": "cancelled",
+                },
+            )
+            result = await run_confirmed_mutation(
+                plan,
+                client,
+                yes=yes,
+                json_output=json_output,
+                confirmer=click.confirm,
+            )
+            if result.status == "cancelled":
                 return
 
-            # Check if this is a mind map (stored with notes)
-            mind_maps = await client.notes.list_mind_maps(nb_id_resolved)
-            for mm in mind_maps:
-                if mm[0] == resolved_id:
-                    await client.notes.delete(nb_id_resolved, resolved_id)
-                    if json_output:
-                        json_output_response(
-                            {
-                                "id": resolved_id,
-                                "deleted": True,
-                                "kind": "mind_map",
-                                "note": (
-                                    "Mind maps are cleared, not removed. "
-                                    "Google may garbage collect them later."
-                                ),
-                            }
-                        )
-                    else:
-                        cli_print(f"[yellow]Cleared mind map:[/yellow] {resolved_id}", ctx=ctx)
-                        cli_print(
-                            "[dim]Note: Mind maps are cleared, not removed. Google may garbage collect them later.[/dim]",
-                            ctx=ctx,
-                        )
-                    return
-
-            await client.artifacts.delete(nb_id_resolved, resolved_id)
             if json_output:
-                json_output_response({"id": resolved_id, "deleted": True})
+                return
+
+            resolved_id = result.resolved["artifact_id"]
+            if result.resolved["kind"] == "mind_map":
+                cli_print(f"[yellow]Cleared mind map:[/yellow] {resolved_id}", ctx=ctx)
+                cli_print(
+                    "[dim]Note: Mind maps are cleared, not removed. Google may garbage collect them later.[/dim]",
+                    ctx=ctx,
+                )
             else:
                 cli_print(f"[green]Deleted artifact:[/green] {resolved_id}", ctx=ctx)
 

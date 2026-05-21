@@ -509,6 +509,32 @@ class TestNotebookDelete:
             assert "Deleted notebook" in result.output
             mock_client.notebooks.delete.assert_called_once_with("nb_to_delete")
 
+    def test_notebook_delete_cancelled(self, runner, mock_auth):
+        with patch_main_cli_client() as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.notebooks.list = AsyncMock(
+                return_value=[
+                    Notebook(
+                        id="nb_to_delete",
+                        title="Test Notebook",
+                        created_at=datetime(2024, 1, 1),
+                        is_owner=True,
+                    ),
+                ]
+            )
+            mock_client.notebooks.delete = AsyncMock(return_value=True)
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(cli, ["delete", "-n", "nb_to_delete"], input="n\n")
+
+            assert result.exit_code == 0
+            assert "Delete notebook nb_to_delete?" in result.output
+            mock_client.notebooks.delete.assert_not_called()
+
     def test_notebook_delete_clears_context_if_current(self, runner, mock_auth, tmp_path):
         context_file = tmp_path / "context.json"
         context_file.write_text('{"notebook_id": "nb_to_delete"}')

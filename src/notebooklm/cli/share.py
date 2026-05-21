@@ -18,6 +18,7 @@ from .auth_runtime import with_client
 from .options import notebook_option
 from .rendering import console, json_output_response
 from .resolve import require_notebook, resolve_notebook_id
+from .services.confirming_mutation import MutationPlan, run_confirmed_mutation
 
 
 def _permission_name(perm: SharePermission) -> str:
@@ -342,21 +343,40 @@ def share_remove(ctx, email, notebook_id, yes, json_output, client_auth):
 
     async def _run():
         async with NotebookLMClient(client_auth) as client:
-            resolved_id = await resolve_notebook_id(client, nb_id, json_output=json_output)
 
-            # Confirm after resolution so user sees context
-            if not yes and not json_output:
-                if not click.confirm(f"Remove access for {email}?"):
-                    return
+            async def resolve_remove(client):
+                resolved_id = await resolve_notebook_id(client, nb_id, json_output=json_output)
+                return {"notebook_id": resolved_id, "email": email}
 
-            await client.sharing.remove_user(resolved_id, email)
+            async def execute_remove(client, resolved):
+                await client.sharing.remove_user(resolved["notebook_id"], resolved["email"])
+
+            plan = MutationPlan(
+                entity_label="share",
+                resolve=resolve_remove,
+                confirm_message="Remove access for {resolved[email]}?",
+                execute=execute_remove,
+                serialize_success=lambda resolved: {
+                    "notebook_id": resolved["notebook_id"],
+                    "removed_user": resolved["email"],
+                },
+                serialize_cancel=lambda resolved: {
+                    "notebook_id": resolved["notebook_id"],
+                    "removed_user": resolved["email"],
+                    "status": "cancelled",
+                },
+            )
+            result = await run_confirmed_mutation(
+                plan,
+                client,
+                yes=yes,
+                json_output=json_output,
+                confirmer=click.confirm,
+            )
+            if result.status == "cancelled":
+                return
 
             if json_output:
-                data = {
-                    "notebook_id": resolved_id,
-                    "removed_user": email,
-                }
-                json_output_response(data)
                 return
 
             console.print(f"[green]Removed access for {email}[/green]")

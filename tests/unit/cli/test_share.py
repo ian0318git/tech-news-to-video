@@ -233,6 +233,29 @@ class TestShareRemove:
             assert "Removed access for user@example.com" in result.output
             mock_client.sharing.remove_user.assert_called_once_with("nb_123", "user@example.com")
 
+    def test_share_remove_cancelled(self, runner, mock_auth):
+        with patch_main_cli_client() as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.notebooks.list = AsyncMock(
+                return_value=[
+                    Notebook(id="nb_123", title="Test", created_at=datetime(2024, 1, 1)),
+                ]
+            )
+            mock_client.sharing.remove_user = AsyncMock(return_value=create_mock_share_status())
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli, ["share", "remove", "user@example.com", "-n", "nb_123"], input="n\n"
+                )
+
+            assert result.exit_code == 0
+            assert "Remove access for user@example.com?" in result.output
+            mock_client.sharing.remove_user.assert_not_called()
+
     def test_share_remove_json(self, runner, mock_auth):
         with patch_main_cli_client() as mock_client_cls:
             mock_client = create_mock_client()
@@ -254,6 +277,33 @@ class TestShareRemove:
 
             assert result.exit_code == 0
             assert '"removed_user": "user@example.com"' in result.output
+
+    def test_share_remove_json_without_yes_does_not_prompt(self, runner, mock_auth):
+        with patch_main_cli_client() as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.notebooks.list = AsyncMock(
+                return_value=[
+                    Notebook(id="nb_123", title="Test", created_at=datetime(2024, 1, 1)),
+                ]
+            )
+            mock_client.sharing.remove_user = AsyncMock(return_value=create_mock_share_status())
+            mock_client_cls.return_value = mock_client
+
+            with (
+                patch(
+                    "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+                ) as mock_fetch,
+                patch("click.confirm") as mock_confirm,
+            ):
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli, ["share", "remove", "user@example.com", "-n", "nb_123", "--json"]
+                )
+
+            assert result.exit_code == 0
+            assert '"removed_user": "user@example.com"' in result.output
+            mock_confirm.assert_not_called()
+            mock_client.sharing.remove_user.assert_called_once_with("nb_123", "user@example.com")
 
 
 # =============================================================================
