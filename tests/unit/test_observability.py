@@ -81,7 +81,7 @@ async def test_rpc_metrics_event_and_correlation_scope(auth_tokens: AuthTokens) 
         return {"ok": True}
 
     with (
-        patch("notebooklm._core.decode_response", fake_decode),
+        patch("notebooklm.rpc.decode_response", fake_decode),
         correlation_id("batch-42"),
     ):
         result = await core.rpc_call(RPCMethod.GET_NOTEBOOK, ["nb_123"])
@@ -251,8 +251,8 @@ async def test_close_with_drain_closes_transport_after_timeout(auth_tokens: Auth
     async def close_transport() -> None:
         calls.append("close")
 
-    client._core.drain = drain_timeout  # type: ignore[method-assign]
-    client._core.close = close_transport  # type: ignore[method-assign]
+    client._session.drain = drain_timeout  # type: ignore[method-assign]
+    client._session.close = close_transport  # type: ignore[method-assign]
 
     with pytest.raises(TimeoutError, match="deadline"):
         await client.close(drain=True, drain_timeout=0.1)
@@ -272,8 +272,8 @@ async def test_close_with_invalid_drain_does_not_close_transport(auth_tokens: Au
     async def close_transport() -> None:
         calls.append("close")
 
-    client._core.drain = invalid_drain  # type: ignore[method-assign]
-    client._core.close = close_transport  # type: ignore[method-assign]
+    client._session.drain = invalid_drain  # type: ignore[method-assign]
+    client._session.close = close_transport  # type: ignore[method-assign]
 
     with pytest.raises(ValueError, match="bad deadline"):
         await client.close(drain=True, drain_timeout=-1.0)

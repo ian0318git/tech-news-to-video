@@ -137,7 +137,6 @@ _ALLOWLIST: frozenset[str] = frozenset(
         "tests/integration/test_side_effects_idempotency.py",
         "tests/integration/test_sources_idempotency.py",
         "tests/unit/cli/conftest.py",
-        "tests/unit/concurrency/test_close_cancellation_leak.py",
         "tests/unit/concurrency/test_download_collision.py",
         "tests/unit/test_api_coverage.py",
         "tests/unit/test_artifact_downloads.py",
@@ -153,10 +152,19 @@ _ALLOWLIST: frozenset[str] = frozenset(
         # seam-substitution pattern is extended to cover module-level
         # rotation/lock helpers.
         "tests/unit/test_auth_psidts_recovery.py",
-        "tests/unit/test_auth_session.py",
         "tests/unit/test_backoff.py",
         "tests/unit/test_chat_delete_conversation.py",
-        "tests/unit/test_client_keepalive.py",
+        # Phase 2 PR 5 migrated this file's ``asyncio.to_thread`` patch
+        # off the legacy ``notebooklm._core.asyncio.to_thread`` shim onto
+        # its canonical importing module
+        # (``notebooklm._session_lifecycle.asyncio.to_thread``, where
+        # ``ClientLifecycle.save_cookies`` sources it). The new patch
+        # target is still a string-target into the ``notebooklm.*``
+        # namespace, so the file lands on the allowlist with the rest of
+        # the stdlib-seam patchers (``test_authed_transport.py``,
+        # ``test_rpc_executor.py``, ``test_side_effects_idempotency.py``,
+        # …) until ADR-007's pattern is extended to stdlib seams.
+        "tests/unit/test_cookie_persistence.py",
         "tests/unit/test_session_lifecycle.py",
         "tests/unit/test_rpc_executor.py",
         "tests/unit/test_authed_transport.py",
@@ -182,7 +190,6 @@ _ALLOWLIST: frozenset[str] = frozenset(
         "tests/unit/test_rpc_call_public_surface.py",
         "tests/unit/test_quota_failure_detection.py",
         "tests/unit/test_rpc_overrides.py",
-        "tests/unit/test_save_lock_contract.py",
         "tests/unit/test_select_artifact.py",
         "tests/unit/test_sharing_manager.py",
         "tests/unit/test_sharing_types.py",

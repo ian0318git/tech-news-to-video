@@ -26,7 +26,7 @@ a different cancel-injection site:
 - ``__aexit__`` driven through :func:`asyncio.wait_for(timeout=0.1)` so
   the outer cancel reliably arrives while the slowed ``aclose`` is in
   flight — i.e. inside the shielded await.
-- We hold a reference to ``client._core._http_client`` captured before
+- We hold a reference to ``client._session._http_client`` captured before
   the cancel (close nulls the attribute on success) and assert
   ``http_client_ref.is_closed`` is true afterwards — proof that the
   shielded ``aclose`` in the outer ``finally`` ran to completion.
@@ -135,8 +135,11 @@ async def test_close_during_keepalive_cancel_does_not_leak_transport(
         rotate_entered.set()
         await hang_event.wait()
 
-    monkeypatch.setattr("notebooklm._core._rotate_cookies", _hanging_rotate)
-
+    # Phase 2 PR 4: inject the cookie-rotator seam directly. Prior to the
+    # injectable seam, this test monkeypatched
+    # ``notebooklm._core._rotate_cookies``; the rotator now flows through
+    # ``NotebookLMClient(..., cookie_rotator=...)`` -> ``ClientLifecycle``.
+    #
     # ``keepalive_min_interval`` clamps short intervals up to its floor
     # (default 60s). Pass ``keepalive_min_interval=0.01`` so a 0.05s
     # keepalive actually fires within the test window.
@@ -144,6 +147,7 @@ async def test_close_during_keepalive_cancel_does_not_leak_transport(
         keepalive_auth,
         keepalive=0.05,
         keepalive_min_interval=0.01,
+        cookie_rotator=_hanging_rotate,
     )
 
     # Open the client and let the keepalive loop enter ``_rotate_cookies``
@@ -153,7 +157,7 @@ async def test_close_during_keepalive_cancel_does_not_leak_transport(
         # Save the transport ref BEFORE the cancel — successful close
         # sets ``_core._http_client = None`` (inner finally), so we'd
         # have no handle otherwise.
-        http_client_ref = client._core._http_client
+        http_client_ref = client._session._http_client
         assert http_client_ref is not None, "open() must have installed a transport"
 
         # Slow down ``aclose()`` so the outer ``wait_for(timeout=0.1)``

@@ -34,23 +34,27 @@ class TestClientInitialization:
     @pytest.mark.asyncio
     async def test_client_initialization(self, auth_tokens):
         async with NotebookLMClient(auth_tokens) as client:
-            assert client._core.auth == auth_tokens
-            assert client._core._http_client is not None
+            assert client._session.auth == auth_tokens
+            assert client._session._http_client is not None
 
     @pytest.mark.asyncio
     async def test_client_context_manager_closes(self, auth_tokens):
         async with NotebookLMClient(auth_tokens) as client:
-            assert client._core._http_client is not None  # client is open
-        assert client._core._http_client is None  # closed after exit
+            assert client._session._http_client is not None  # client is open
+        assert client._session._http_client is None  # closed after exit
 
     @pytest.mark.asyncio
     async def test_close_does_not_sync_in_memory_auth_to_default_storage(self):
         auth = AuthTokens(cookies={"SID": "scratch"}, csrf_token="csrf", session_id="session")
-        core = Session(auth)
+        # Inject the cookie-saver seam directly (Phase 2 PR 4 — replaces the
+        # legacy ``_core.save_cookies_to_storage`` string-target monkeypatch
+        # with a constructor-injection seam wired through
+        # ``ClientLifecycle._cookie_saver``).
+        mock_save = MagicMock(return_value=False)
+        core = Session(auth, cookie_saver=mock_save)
         await core.open()
 
-        with patch("notebooklm._core.save_cookies_to_storage") as mock_save:
-            await core.close()
+        await core.close()
 
         mock_save.assert_not_called()
         assert core._http_client is None
@@ -58,12 +62,19 @@ class TestClientInitialization:
     @pytest.mark.asyncio
     async def test_close_closes_http_client_when_cookie_sync_fails(self, auth_tokens, tmp_path):
         auth_tokens.storage_path = tmp_path / "storage_state.json"
-        core = Session(auth_tokens)
+        # Inject a cookie-saver that raises so the test exercises the
+        # close()-handles-saver-failure path without monkeypatching the
+        # legacy ``_core.save_cookies_to_storage`` seam.
+        boom_save = MagicMock(side_effect=RuntimeError("boom"))
+        core = Session(auth_tokens, cookie_saver=boom_save)
         await core.open()
 
-        with patch("notebooklm._core.save_cookies_to_storage", side_effect=RuntimeError("boom")):
-            await core.close()
+        await core.close()
 
+        # Assert the injected saver was actually invoked — otherwise the
+        # test could pass via an early exit that never reaches the saver,
+        # silently weakening the regression guard.
+        boom_save.assert_called_once()
         assert core._http_client is None
 
     @pytest.mark.asyncio
@@ -144,7 +155,7 @@ class TestRPCCallHTTPErrors:
         # covered by ``tests/integration/concurrency/test_rate_limit_default.py``;
         # this test documents the explicit-disable contract.
         async with NotebookLMClient(auth_tokens, rate_limit_max_retries=0) as client:
-            core = client._core
+            core = client._session
 
             mock_response = MagicMock()
             mock_response.status_code = 429
@@ -162,7 +173,7 @@ class TestRPCCallHTTPErrors:
         # See ``test_rate_limit_429_with_retry_after_header`` for why this
         # pins ``rate_limit_max_retries=0``.
         async with NotebookLMClient(auth_tokens, rate_limit_max_retries=0) as client:
-            core = client._core
+            core = client._session
 
             mock_response = MagicMock()
             mock_response.status_code = 429
@@ -180,7 +191,7 @@ class TestRPCCallHTTPErrors:
         # See ``test_rate_limit_429_with_retry_after_header`` for why this
         # pins ``rate_limit_max_retries=0``.
         async with NotebookLMClient(auth_tokens, rate_limit_max_retries=0) as client:
-            core = client._core
+            core = client._session
 
             mock_response = MagicMock()
             mock_response.status_code = 429
@@ -201,7 +212,7 @@ class TestRPCCallHTTPErrors:
         # in to auto-refresh), clear the refresh callback so is_auth_error's
         # gate in rpc_call short-circuits and the status mapping runs.
         async with NotebookLMClient(auth_tokens) as client:
-            core = client._core
+            core = client._session
             core._refresh_callback = None
 
             mock_response = MagicMock()
@@ -218,7 +229,7 @@ class TestRPCCallHTTPErrors:
         # Pin ``server_error_max_retries=0`` to exercise the raise-immediately
         # mapping path. Retry/backoff behavior is covered in core transport tests.
         async with NotebookLMClient(auth_tokens, server_error_max_retries=0) as client:
-            core = client._core
+            core = client._session
 
             mock_response = MagicMock()
             mock_response.status_code = 500
@@ -234,7 +245,7 @@ class TestRPCCallHTTPErrors:
         # Network errors flow through the same retry loop as 5xx responses;
         # pin to 0 so these mapping tests don't pay backoff sleeps.
         async with NotebookLMClient(auth_tokens, server_error_max_retries=0) as client:
-            core = client._core
+            core = client._session
 
             _install_error_post(core, httpx.ConnectTimeout("connect timeout"))
             with pytest.raises(NetworkError):
@@ -243,7 +254,7 @@ class TestRPCCallHTTPErrors:
     @pytest.mark.asyncio
     async def test_read_timeout_raises_rpc_timeout_error(self, auth_tokens):
         async with NotebookLMClient(auth_tokens, server_error_max_retries=0) as client:
-            core = client._core
+            core = client._session
 
             _install_error_post(core, httpx.ReadTimeout("read timeout"))
             with pytest.raises(RPCTimeoutError):
@@ -252,7 +263,7 @@ class TestRPCCallHTTPErrors:
     @pytest.mark.asyncio
     async def test_connect_error_raises_network_error(self, auth_tokens):
         async with NotebookLMClient(auth_tokens, server_error_max_retries=0) as client:
-            core = client._core
+            core = client._session
 
             _install_error_post(core, httpx.ConnectError("connection refused"))
             with pytest.raises(NetworkError):
@@ -261,7 +272,7 @@ class TestRPCCallHTTPErrors:
     @pytest.mark.asyncio
     async def test_generic_request_error_raises_network_error(self, auth_tokens):
         async with NotebookLMClient(auth_tokens, server_error_max_retries=0) as client:
-            core = client._core
+            core = client._session
 
             _install_error_post(core, httpx.RequestError("something went wrong"))
             with pytest.raises(NetworkError):
@@ -274,7 +285,7 @@ class TestRPCCallAuthRetry:
     @pytest.mark.asyncio
     async def test_auth_retry_on_decode_rpc_error(self, auth_tokens):
         async with NotebookLMClient(auth_tokens) as client:
-            core = client._core
+            core = client._session
 
             refresh_callback = AsyncMock()
             core._refresh_callback = refresh_callback
@@ -289,7 +300,7 @@ class TestRPCCallAuthRetry:
             mock_post = AsyncMock(return_value=success_response)
             install_post_as_stream(None, core._http_client, mock_post)
             with patch(
-                "notebooklm._core.decode_response",
+                "notebooklm.rpc.decode_response",
                 side_effect=[
                     RPCError("authentication expired"),
                     ["result_data"],
@@ -312,7 +323,7 @@ class TestGetHttpClient:
     @pytest.mark.asyncio
     async def test_get_http_client_returns_client_when_initialized(self, auth_tokens):
         async with NotebookLMClient(auth_tokens) as client:
-            http_client = client._core.get_http_client()
+            http_client = client._session.get_http_client()
             assert isinstance(http_client, httpx.AsyncClient)
 
 
@@ -322,7 +333,7 @@ class TestGetSourceIds:
     @pytest.mark.asyncio
     async def test_returns_source_ids_from_nested_data(self, auth_tokens):
         async with NotebookLMClient(auth_tokens) as client:
-            core = client._core
+            core = client._session
             notebooks = client.notebooks
 
             mock_notebook_data = [
@@ -345,7 +356,7 @@ class TestGetSourceIds:
     @pytest.mark.asyncio
     async def test_returns_empty_list_when_data_is_none(self, auth_tokens):
         async with NotebookLMClient(auth_tokens) as client:
-            core = client._core
+            core = client._session
             notebooks = client.notebooks
 
             with patch.object(core, "rpc_call", new_callable=AsyncMock, return_value=None):
@@ -356,7 +367,7 @@ class TestGetSourceIds:
     @pytest.mark.asyncio
     async def test_returns_empty_list_when_data_is_empty_list(self, auth_tokens):
         async with NotebookLMClient(auth_tokens) as client:
-            core = client._core
+            core = client._session
             notebooks = client.notebooks
 
             with patch.object(core, "rpc_call", new_callable=AsyncMock, return_value=[]):
@@ -367,7 +378,7 @@ class TestGetSourceIds:
     @pytest.mark.asyncio
     async def test_returns_empty_list_when_sources_list_is_empty(self, auth_tokens):
         async with NotebookLMClient(auth_tokens) as client:
-            core = client._core
+            core = client._session
             notebooks = client.notebooks
 
             # Notebook with no sources
@@ -383,7 +394,7 @@ class TestGetSourceIds:
     @pytest.mark.asyncio
     async def test_returns_empty_list_when_data_is_not_list(self, auth_tokens):
         async with NotebookLMClient(auth_tokens) as client:
-            core = client._core
+            core = client._session
             notebooks = client.notebooks
 
             with patch.object(
@@ -396,7 +407,7 @@ class TestGetSourceIds:
     @pytest.mark.asyncio
     async def test_returns_empty_list_when_notebook_info_missing_sources(self, auth_tokens):
         async with NotebookLMClient(auth_tokens) as client:
-            core = client._core
+            core = client._session
             notebooks = client.notebooks
 
             # notebook_data[0] exists but notebook_info[1] is missing
@@ -417,7 +428,7 @@ class TestCrossDomainCookiePreservation:
     async def test_cookies_preserved_on_cross_domain_redirect(self, auth_tokens):
         """Verify cookies persist when redirecting from notebooklm to accounts.google.com."""
         async with NotebookLMClient(auth_tokens) as client:
-            core = client._core
+            core = client._session
             http_client = core._http_client
 
             # Set initial sentinel cookie in the jar
@@ -438,7 +449,7 @@ class TestCrossDomainCookiePreservation:
     async def test_update_auth_headers_merges_not_replaces(self, auth_tokens):
         """Verify update_auth_headers merges new cookies, preserving live redirect cookies."""
         async with NotebookLMClient(auth_tokens) as client:
-            core = client._core
+            core = client._session
             http_client = core._http_client
 
             # Simulate a live cookie received from accounts.google.com redirect
@@ -464,7 +475,7 @@ class TestCrossDomainCookiePreservation:
         auth_tokens.cookie_jar.set("SID", "test_sid", domain=".google.com")
 
         async with NotebookLMClient(auth_tokens) as client:
-            core = client._core
+            core = client._session
             http = core._http_client
 
             # The .googleusercontent.com cookie must remain on its original domain
@@ -476,7 +487,7 @@ class TestCrossDomainCookiePreservation:
     async def test_update_auth_headers_preserves_redirect_cookies(self, auth_tokens):
         """update_auth_headers must merge, not replace, preserving redirect cookies."""
         async with NotebookLMClient(auth_tokens) as client:
-            core = client._core
+            core = client._session
             http = core._http_client
 
             # Simulate Google setting a cookie during a redirect
