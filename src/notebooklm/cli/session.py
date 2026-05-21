@@ -963,6 +963,7 @@ def register_session_commands(cli):
                 # the canonical "Run notebooklm login" UX instead of the
                 # generic verification-failed fallback.
                 handle_auth_error(json_output)
+                raise AssertionError("unreachable")
 
             # All other failures (network errors, RPC errors, etc.) also fail
             # closed — we cannot confirm the notebook exists, so refuse to
