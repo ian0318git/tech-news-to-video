@@ -1065,3 +1065,24 @@ class TestEntitySpecificPartialArtifactId:
         with pytest.raises(ValueError) as exc:
             resolve_partial_artifact_id([], "abc")
         assert not isinstance(exc.value, _click.ClickException)
+
+    def test_full_uuid_not_in_list_preserves_not_found_contract(self):
+        """``resolve_partial_artifact_id`` keeps ``allow_full_id_passthrough=False``.
+
+        A canonical-shape UUID absent from ``artifacts`` MUST raise the
+        historical "Artifact '<id>' not found" wording rather than passing
+        through and silently 404-ing at the backend. Pins the wrapper-level
+        integration contract that the core-level
+        :class:`TestResolvePartialIdInItems` test exercises in isolation.
+        """
+        from notebooklm.cli.download_helpers import resolve_partial_artifact_id
+
+        full_uuid = "abc12345-6789-4abc-def0-1234567890ab"
+        artifacts = [
+            {"id": "xyz22222-aaaa-4abc-def0-000000000002", "title": "Only", "created_at": 1}
+        ]
+
+        with pytest.raises(ValueError) as exc:
+            resolve_partial_artifact_id(artifacts, full_uuid)
+
+        assert str(exc.value) == f"Artifact '{full_uuid}' not found"

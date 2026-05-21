@@ -338,7 +338,7 @@ class TestDownloadNotebookResolution:
         # before dispatch.
         assert result.exit_code == 1, result.output
         payload = json.loads(result.stdout)
-        assert "Ambiguous" in payload["error"] or "ambiguous" in payload["error"]
+        assert "Ambiguous partial ID" in payload["error"]
         mock_client.artifacts.download_audio.assert_not_awaited()
 
     def test_unknown_partial_artifact_id_surfaces_error(
