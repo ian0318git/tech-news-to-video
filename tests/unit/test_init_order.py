@@ -322,23 +322,20 @@ def test_feature_apis_do_not_add_direct_core_private_state_access() -> None:
 # artifact-service helper modules (``_artifact_downloads.py`` and
 # ``_artifact_generation.py``) depend only on the narrow
 # ``_ArtifactsServiceMethods`` Protocol declared in ``_artifacts.py``, not
-# on the full concrete ``ArtifactsAPI``. This PR ships the visitor + guard
-# with an empty migration list (vacuously passing); the follow-up PRs that
-# migrate each helper to constructor injection will append the helper's
-# module name to ``_REACH_IN_MIGRATED_MODULES`` below.
+# on the full concrete ``ArtifactsAPI``. Each helper migration PR appends
+# the helper's module name to ``_REACH_IN_MIGRATED_MODULES`` below.
 # ----------------------------------------------------------------------------
 
 
 # Modules already migrated to ``_ArtifactsServiceMethods`` constructor
 # injection — the guard below enforces no residual ``self._api`` reach-in.
 # Bookkeeping (mirrors the ``_ALLOWED_CORE_PRIVATE_ACCESS_COUNTS`` pattern):
-#   * The PR that migrates ``_artifact_downloads.py`` will append
-#     ``"_artifact_downloads.py"`` to this list.
+#   * ``_artifact_downloads.py`` migrated (this PR).
 #   * The PR that migrates ``_artifact_generation.py`` will append
 #     ``"_artifact_generation.py"``.
-# Until both PRs land this list is empty and the guard test passes
-# vacuously.
-_REACH_IN_MIGRATED_MODULES: list[str] = []
+_REACH_IN_MIGRATED_MODULES: list[str] = [
+    "_artifact_downloads.py",
+]
 
 
 def _is_self_api(node: ast.AST) -> bool:
@@ -360,10 +357,10 @@ class _ApiReachInVisitor(ast.NodeVisitor):
     via ``reversed(self._alias_stack)`` so aliases in outer scopes are
     visible to attribute access in nested closures and comprehensions.
 
-    The empty ``_REACH_IN_MIGRATED_MODULES`` list keeps the guard
-    vacuous until the follow-up PRs append ``_artifact_downloads.py`` /
-    ``_artifact_generation.py`` after migrating each helper to
-    constructor injection.
+    ``_REACH_IN_MIGRATED_MODULES`` enumerates helpers already migrated to
+    constructor injection; this guard is actively enforced for those
+    modules. Future migrations should append additional module names
+    (e.g. ``_artifact_generation.py``) to extend enforcement.
     """
 
     def __init__(self, module_name: str) -> None:
