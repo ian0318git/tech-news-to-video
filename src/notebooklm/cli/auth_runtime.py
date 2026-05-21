@@ -130,6 +130,7 @@ def get_auth_tokens(ctx) -> AuthTokens:
 def handle_auth_error(json_output: bool = False) -> NoReturn:
     """Handle authentication errors with helpful context."""
     from ..paths import get_path_info, get_storage_path
+    from .error_handler import exit_with_code
 
     helpers = _helpers_facade()
     ctx = click.get_current_context(silent=True)
@@ -157,7 +158,7 @@ def handle_auth_error(json_output: bool = False) -> NoReturn:
                 "help": "Run 'notebooklm login' or set NOTEBOOKLM_AUTH_JSON",
             },
         )
-        raise SystemExit(1)
+        exit_with_code(1)
     else:
         helpers.console.print("[red]Not logged in.[/red]\n")
         helpers.console.print("[dim]Checked locations:[/dim]")
@@ -170,7 +171,7 @@ def handle_auth_error(json_output: bool = False) -> NoReturn:
         helpers.console.print("  1. Run: [green]notebooklm login[/green]")
         helpers.console.print("  2. Set [cyan]NOTEBOOKLM_AUTH_JSON[/cyan] env var (for CI/CD)")
         helpers.console.print("  3. Use [cyan]--storage /path/to/file.json[/cyan] flag")
-        raise SystemExit(1)
+        exit_with_code(1)
 
 
 def with_auth_and_errors(

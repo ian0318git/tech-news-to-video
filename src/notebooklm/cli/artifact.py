@@ -17,7 +17,7 @@ from rich.table import Table
 from ..client import NotebookLMClient
 from ..types import ExportType
 from .auth_runtime import with_client
-from .error_handler import _output_error
+from .error_handler import _output_error, exit_with_code
 from .options import json_option, list_options, notebook_option, wait_polling_options
 from .rendering import (
     cli_name_to_artifact_type,
@@ -235,7 +235,12 @@ def artifact_rename(ctx, artifact_id, new_title, notebook_id, json_output, clien
             mind_maps = await client.notes.list_mind_maps(nb_id_resolved)
             for mm in mind_maps:
                 if mm[0] == resolved_id:
-                    raise click.ClickException("Mind maps cannot be renamed")
+                    _output_error(
+                        "Error: Mind maps cannot be renamed",
+                        "VALIDATION_ERROR",
+                        json_output,
+                        1,
+                    )
 
             await client.artifacts.rename(nb_id_resolved, resolved_id, new_title)
             # The rename API returns None; if no exception was raised, the operation succeeded.
@@ -523,7 +528,7 @@ def artifact_wait(ctx, artifact_id, notebook_id, timeout, interval, json_output,
                     # automation sees a JSON payload with an "error" message
                     # but the command still exits 0.
                     if status.status != "completed":
-                        raise SystemExit(1)
+                        exit_with_code(1)
                 else:
                     if status.status == "completed":
                         console.print(f"[green]✓ Artifact completed:[/green] {resolved_id}")
@@ -531,7 +536,7 @@ def artifact_wait(ctx, artifact_id, notebook_id, timeout, interval, json_output,
                             console.print(f"[dim]URL:[/dim] {status.url}")
                     elif status.error:
                         console.print(f"[red]✗ Generation failed:[/red] {status.error}")
-                        raise SystemExit(1)
+                        exit_with_code(1)
                     else:
                         console.print(f"[yellow]Status:[/yellow] {status.status}")
 
@@ -546,7 +551,7 @@ def artifact_wait(ctx, artifact_id, notebook_id, timeout, interval, json_output,
                     )
                 else:
                     console.print(f"[red]✗ Timeout after {timeout}s[/red]")
-                raise SystemExit(1) from None
+                exit_with_code(1)
 
     return _run()
 

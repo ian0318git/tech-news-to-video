@@ -29,6 +29,7 @@ from . import rendering as rendering_helpers
 from . import research_import as research_import_helpers
 from . import runtime as runtime_helpers
 from ._encoding import safe_echo
+from .error_handler import exit_with_code
 from .resolve import (
     _resolve_partial_id as _resolve_partial_id,
 )
@@ -291,7 +292,7 @@ def handle_error(e: Exception):
         console.print(f"[red]{message}[/red]")
     except UnicodeEncodeError:
         safe_echo(message, err=True)
-    raise SystemExit(1)
+    exit_with_code(1)
 
 
 def handle_auth_error(json_output: bool = False) -> NoReturn:

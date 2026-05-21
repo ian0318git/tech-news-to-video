@@ -16,6 +16,7 @@ from ..client import NotebookLMClient
 from ..io import atomic_update_json
 from ..paths import get_config_path, get_home_dir
 from .auth_runtime import get_auth_tokens
+from .error_handler import exit_with_code
 from .options import json_option
 from .rendering import console, json_error_response, json_output_response
 from .runtime import run_async
@@ -340,7 +341,7 @@ def language_set(ctx, code, local, json_output):
             )
         console.print(f"[red]Unknown language code: {code}[/red]")
         console.print("\nRun [cyan]notebooklm language list[/cyan] to see supported codes.")
-        raise SystemExit(1)
+        exit_with_code(1)
 
     # Save locally first
     set_language(code)
