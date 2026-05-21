@@ -332,12 +332,14 @@ class TestDownloadNotebookResolution:
                 ],
             )
 
-        # The ambiguity must show up in the output (either as an error
-        # envelope or as a non-zero exit). The current implementation
-        # returns the {"error": ...} envelope from ``_download()``.
-        out = result.output
-        # Either branch is acceptable; pin both so neither shape regresses.
-        assert "Ambiguous" in out or "ambiguous" in out
+        # Full contract: --json failure exits 1 (post-#925 exit-code parity)
+        # with a {"error": ...} envelope on stdout, and the download_audio
+        # mock MUST NOT be awaited because the resolver short-circuited
+        # before dispatch.
+        assert result.exit_code == 1, result.output
+        payload = json.loads(result.stdout)
+        assert "Ambiguous partial ID" in payload["error"]
+        mock_client.artifacts.download_audio.assert_not_awaited()
 
     def test_unknown_partial_artifact_id_surfaces_error(
         self, runner, mock_auth, mock_fetch, tmp_path
@@ -364,7 +366,13 @@ class TestDownloadNotebookResolution:
                 ],
             )
 
-        assert "not found" in result.output.lower()
+        # Full contract: --json failure exits 1 (post-#925 exit-code parity)
+        # with {"error": "Artifact 'zzz' not found"} on stdout, and
+        # download_audio MUST NOT be awaited.
+        assert result.exit_code == 1, result.output
+        payload = json.loads(result.stdout)
+        assert payload == {"error": "Artifact 'zzz' not found"}
+        mock_client.artifacts.download_audio.assert_not_awaited()
 
 
 # ----------------------------------------------------------------------------

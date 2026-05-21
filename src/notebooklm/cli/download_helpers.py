@@ -20,11 +20,15 @@ class ArtifactDict(TypedDict):
 def resolve_partial_artifact_id(artifacts: list[ArtifactDict], artifact_id: str) -> str:
     """Resolve a partial artifact ID to a full ID.
 
-    Full UUID-shaped IDs (canonical 8-4-4-4-12 hex layout, case-insensitive -
-    see :data:`notebooklm.cli.resolve.FULL_ID_PATTERN`) are returned as-is.
-    Anything else - including a 25-char prefix of a 36-char UUID - is matched
-    as a case-insensitive prefix against the artifact list, so unique prefixes
-    resolve locally rather than reaching the backend as truncated IDs.
+    UUID-shaped IDs (canonical 8-4-4-4-12 hex layout, case-insensitive -
+    see :data:`notebooklm.cli.resolve.FULL_ID_PATTERN`) are validated against
+    the pre-fetched ``artifacts`` list (full-ID passthrough is disabled for
+    this path via ``allow_full_id_passthrough=False``). A UUID not present
+    in ``artifacts`` raises the canonical local "not found" error instead
+    of passing through to a backend 404. Anything else - including a 25-char
+    prefix of a 36-char UUID - is matched as a case-insensitive prefix
+    against the artifact list, so unique prefixes resolve locally rather
+    than reaching the backend as truncated IDs.
 
     The matching logic is delegated to
     :func:`notebooklm.cli.resolve.resolve_partial_id_in_items` (the canonical
@@ -62,6 +66,7 @@ def resolve_partial_artifact_id(artifacts: list[ArtifactDict], artifact_id: str)
             title_of=lambda a: a["title"],
             error_factory=ValueError,
             emit_match_status=False,
+            allow_full_id_passthrough=False,
         )
     except ValueError as e:
         # Re-shape the canonical "No artifact found starting with..." /

@@ -200,6 +200,7 @@ def resolve_partial_id_in_items(
     json_output: bool = False,
     stdout_console: Console | None = None,
     stderr_output_console: Console | None = None,
+    allow_full_id_passthrough: bool = True,
 ) -> str:
     """Resolve a partial ID against a **pre-fetched** item list.
 
@@ -248,6 +249,13 @@ def resolve_partial_id_in_items(
             so stdout stays parseable JSON.
         stdout_console: Console for human-mode diagnostics.
         stderr_output_console: Console for JSON-mode diagnostics.
+        allow_full_id_passthrough: When true (default), a canonical
+            8-4-4-4-12 UUID is returned verbatim without scanning
+            ``items``. Callers that have already fetched the
+            authoritative item list (e.g. download helpers) pass
+            ``False`` so a full-shape ID that isn't in the list raises
+            the canonical "not found" error instead of silently
+            propagating to a backend 404.
 
     Returns:
         Full ID of the matched item.
@@ -267,8 +275,12 @@ def resolve_partial_id_in_items(
     partial_id = partial_id.strip()
 
     # Concrete IDs are passed through so direct get/delete commands can hit
-    # the backend by ID without forcing an extra list RPC first.
-    if _is_full_id_candidate(partial_id):
+    # the backend by ID without forcing an extra list RPC first. Callers
+    # that already hold an authoritative item list (download helpers) opt
+    # out via ``allow_full_id_passthrough=False`` so a full-shape ID that
+    # isn't in the list falls through to the membership check below and
+    # surfaces the canonical "not found" error rather than a silent 404.
+    if allow_full_id_passthrough and _is_full_id_candidate(partial_id):
         return partial_id
 
     partial_id_lower = partial_id.lower()

@@ -189,6 +189,7 @@ def research_wait(
             async with status_with_elapsed(
                 "Waiting for research to complete...",
                 json_output=json_output,
+                resume_hint="notebooklm research status",
             ):
                 poll_result = await poll_until(
                     _fetch_status,

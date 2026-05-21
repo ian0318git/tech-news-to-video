@@ -808,6 +808,27 @@ class TestResolvePartialIdInItems:
         )
         assert result == full
 
+    def test_full_uuid_no_passthrough_when_disabled(self):
+        """``allow_full_id_passthrough=False`` forces membership validation.
+
+        Callers that already hold the authoritative item list (download
+        helpers) opt out of the fast-path so a valid-shape UUID that isn't
+        in the list surfaces the canonical "not found" error instead of
+        being passed through and yielding a silent backend 404.
+        """
+        from notebooklm.cli.resolve import resolve_partial_id_in_items
+
+        full = "abc12345-6789-4abc-def0-1234567890ab"
+        with pytest.raises(click.ClickException) as exc_info:
+            resolve_partial_id_in_items(
+                full,
+                [],
+                entity_name="artifact",
+                list_command="artifact list",
+                allow_full_id_passthrough=False,
+            )
+        assert "No artifact found starting with" in str(exc_info.value.message)
+
     def test_partial_unique_match_with_attr_accessor(self):
         from notebooklm.cli.resolve import resolve_partial_id_in_items
 
@@ -1044,3 +1065,24 @@ class TestEntitySpecificPartialArtifactId:
         with pytest.raises(ValueError) as exc:
             resolve_partial_artifact_id([], "abc")
         assert not isinstance(exc.value, _click.ClickException)
+
+    def test_full_uuid_not_in_list_preserves_not_found_contract(self):
+        """``resolve_partial_artifact_id`` keeps ``allow_full_id_passthrough=False``.
+
+        A canonical-shape UUID absent from ``artifacts`` MUST raise the
+        historical "Artifact '<id>' not found" wording rather than passing
+        through and silently 404-ing at the backend. Pins the wrapper-level
+        integration contract that the core-level
+        :class:`TestResolvePartialIdInItems` test exercises in isolation.
+        """
+        from notebooklm.cli.download_helpers import resolve_partial_artifact_id
+
+        full_uuid = "abc12345-6789-4abc-def0-1234567890ab"
+        artifacts = [
+            {"id": "xyz22222-aaaa-4abc-def0-000000000002", "title": "Only", "created_at": 1}
+        ]
+
+        with pytest.raises(ValueError) as exc:
+            resolve_partial_artifact_id(artifacts, full_uuid)
+
+        assert str(exc.value) == f"Artifact '{full_uuid}' not found"

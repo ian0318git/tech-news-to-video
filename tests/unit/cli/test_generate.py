@@ -11,10 +11,10 @@ from click.testing import CliRunner
 from notebooklm.cli.services.artifact_generation import (
     RETRY_MAX_DELAY,
     _format_status_message,
-    _status_with_elapsed,
     calculate_backoff_delay,
     generate_with_retry,
 )
+from notebooklm.cli.services.polling import status_with_elapsed
 from notebooklm.notebooklm_cli import cli
 from notebooklm.rpc.types import ReportFormat
 
@@ -2292,7 +2292,7 @@ class TestStatusWithElapsed:
 
         async def _exercise() -> None:
             with patch.object(artifact_generation_module.console, "status") as mock_status:
-                async with _status_with_elapsed("audio", json_output=True):
+                async with status_with_elapsed("audio", json_output=True):
                     pass
                 assert not mock_status.called, "console.status must not be invoked under --json"
 
@@ -2409,7 +2409,7 @@ class TestGenerateWaitSigintResumeHint:
                 mock_status.return_value.__enter__ = MagicMock(return_value=MagicMock())
                 mock_status.return_value.__exit__ = MagicMock(return_value=False)
                 with pytest.raises(KeyboardInterrupt):
-                    async with _status_with_elapsed("audio", resume_hint=None):
+                    async with status_with_elapsed("audio", resume_hint=None):
                         raise KeyboardInterrupt
 
         asyncio.run(_exercise())
