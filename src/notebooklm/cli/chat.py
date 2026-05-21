@@ -16,6 +16,7 @@ from ..client import NotebookLMClient
 from ..types import ChatMode
 from .auth_runtime import with_client
 from .context import get_current_conversation, get_current_notebook, set_current_conversation
+from .error_handler import _output_error, exit_with_code
 from .input import resolve_prompt
 from .options import _complete_sources, json_option, notebook_option, prompt_file_option
 from .rendering import (
@@ -232,7 +233,7 @@ def register_chat_commands(cli):
                             # ``handle_errors`` catch-all (error_handler.py)
                             # would remap to exit 2.
                             console.print("[yellow]Aborted — no conversation deleted.[/yellow]")
-                            raise SystemExit(1)
+                            exit_with_code(1)
                         await client.chat.delete_conversation(nb_id_resolved, last_conv_id)
                     effective_conv_id: str | None = None
                 else:
@@ -538,8 +539,11 @@ def register_chat_commands(cli):
 
                 if save_as_note:
                     if not qa_pairs:
-                        raise click.ClickException(
-                            "No conversation history found for this notebook."
+                        _output_error(
+                            "Error: No conversation history found for this notebook.",
+                            "NOT_FOUND",
+                            json_output,
+                            1,
                         )
                     content = _format_history(qa_pairs)
                     title = note_title or "Chat History"

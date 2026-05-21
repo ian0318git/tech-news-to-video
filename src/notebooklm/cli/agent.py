@@ -3,6 +3,7 @@
 import click
 
 from .agent_templates import get_agent_source_content
+from .error_handler import exit_with_code
 from .rendering import console
 
 
@@ -19,6 +20,6 @@ def show_agent(target: str):
     content = get_agent_source_content(target)
     if content is None:
         console.print(f"[red]Error:[/red] {target} instructions not found in package data.")
-        raise SystemExit(1)
+        exit_with_code(1)
 
     console.print(content)

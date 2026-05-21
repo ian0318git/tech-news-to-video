@@ -17,6 +17,7 @@ from .. import paths as paths_module
 from ..paths import get_context_path
 from . import context as context_helpers
 from . import rendering as rendering_helpers
+from .error_handler import exit_with_code
 
 ContextPathFn = Callable[..., Path]
 ListFn = Callable[[], Awaitable[list[Any]]]
@@ -164,7 +165,7 @@ def require_notebook(
         "[red]No notebook specified. Use 'notebooklm use <id>' to set context, "
         "pass -n/--notebook, or set NOTEBOOKLM_NOTEBOOK.[/red]"
     )
-    raise SystemExit(1)
+    exit_with_code(1)
 
 
 # Accessor types for the sync resolver core. The default ``_attr_id`` /

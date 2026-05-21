@@ -47,7 +47,7 @@ from .context import (
     get_current_notebook,
     set_current_notebook,
 )
-from .error_handler import handle_errors
+from .error_handler import _output_error, exit_with_code, handle_errors
 from .rendering import console, json_output_response
 from .resolve import resolve_notebook_id
 from .runtime import run_async
@@ -293,7 +293,7 @@ def _ensure_chromium_installed() -> None:
                 "[red]Failed to install Chromium browser.[/red]\n"
                 f'Run manually: "{sys.executable}" -m playwright install chromium'
             )
-            raise SystemExit(1)
+            exit_with_code(1)
         console.print("[green]Chromium installed successfully.[/green]\n")
     except SystemExit:
         raise
@@ -323,7 +323,7 @@ def _recover_page(context: BrowserContext, console: Console) -> Page:
         if TARGET_CLOSED_ERROR in error_str:
             logger.error("Browser context is dead, cannot recover page: %s", error_str)
             console.print(BROWSER_CLOSED_HELP)
-            raise SystemExit(1) from exc
+            exit_with_code(1)
         # Not a TargetClosedError — don't mask the real problem
         logger.error("Failed to create new page for recovery: %s", error_str)
         raise
@@ -340,7 +340,7 @@ def _validate_login_flag_conflicts(
 ) -> None:
     """Enforce ``login`` flag mutual-exclusion rules.
 
-    Emits a styled error and ``raise SystemExit(1)`` on the first conflict.
+    Emits a styled error and ``exit_with_code(1)`` on the first conflict.
     The ``NOTEBOOKLM_AUTH_JSON`` env-var check is intentionally not handled
     here: it is an environment vs file-auth conflict, distinct from flag
     mutual-exclusion, and stays in the ``login`` orchestrator.
@@ -352,21 +352,21 @@ def _validate_login_flag_conflicts(
             "[red]Error: --account, --all-accounts, and --profile-name "
             "require --browser-cookies.[/red]"
         )
-        raise SystemExit(1)
+        exit_with_code(1)
     if all_accounts and (account_email is not None or profile_name is not None):
         console.print(
             "[red]Error: --all-accounts cannot be combined with --account or --profile-name.[/red]"
         )
-        raise SystemExit(1)
+        exit_with_code(1)
     if all_accounts and storage:
         console.print(
             "[red]Error: --all-accounts writes one profile per account "
             "and cannot be combined with --storage.[/red]"
         )
-        raise SystemExit(1)
+        exit_with_code(1)
     if update and not all_accounts:
         console.print("[red]Error: --update only applies to --all-accounts.[/red]")
-        raise SystemExit(1)
+        exit_with_code(1)
 
 
 def _prepare_login_paths(
@@ -397,7 +397,7 @@ def _prepare_login_paths(
                 "Close any open browser windows and try again.\n"
                 f"If the problem persists, manually delete: {browser_profile}"
             )
-            raise SystemExit(1) from exc
+            exit_with_code(1)
 
     if sys.platform == "win32":
         # On Windows < Python 3.13, mode= is ignored by mkdir(). On
@@ -450,7 +450,7 @@ def _run_playwright_login(
             install_hint = '  pip install "notebooklm-py[browser]"\n  playwright install chromium'
         console.print("[red]Playwright not installed. Run:[/red]")
         console.print(install_hint, markup=False)
-        raise SystemExit(1) from None
+        exit_with_code(1)
 
     # Pre-flight check: verify Chromium browser is installed (system Chrome
     # and Edge are checked at launch time by Playwright's channel routing).
@@ -531,7 +531,7 @@ def _run_playwright_login(
                             error_str,
                         )
                         console.print(BROWSER_CLOSED_HELP)
-                        raise SystemExit(1) from exc
+                        exit_with_code(1)
                     elif is_retryable:
                         # Exhausted retries on network errors
                         logger.error(
@@ -539,7 +539,7 @@ def _run_playwright_login(
                             f"Last error: {error_str}"
                         )
                         console.print(_connection_error_help())
-                        raise SystemExit(1) from exc
+                        exit_with_code(1)
                     else:
                         # Non-retryable error - re-raise immediately
                         logger.debug("Non-retryable error: %s", error_str)
@@ -562,14 +562,14 @@ def _run_playwright_login(
                         "[red]Login not detected within 5 minutes.[/red]\n"
                         "Try again with: notebooklm login"
                     )
-                    raise SystemExit(1) from None
+                    exit_with_code(1)
                 except PlaywrightError as exc:
                     # Browser/tab closed during the wait. Cannot resume a
                     # partially completed SSO form, so surface the same
                     # help text other browser-closed paths use.
                     if TARGET_CLOSED_ERROR in str(exc):
                         console.print(BROWSER_CLOSED_HELP)
-                        raise SystemExit(1) from exc
+                        exit_with_code(1)
                     raise
                 console.print("[green]Login detected.[/green]")
 
@@ -591,7 +591,7 @@ def _run_playwright_login(
                             if TARGET_CLOSED_ERROR in str(inner_exc):
                                 # Recovered page also dead -- context/browser is gone
                                 console.print(BROWSER_CLOSED_HELP)
-                                raise SystemExit(1) from inner_exc
+                                exit_with_code(1)
                             elif not _is_navigation_interrupted_error(inner_exc):
                                 raise
                     elif not _is_navigation_interrupted_error(error_str):
@@ -609,7 +609,7 @@ def _run_playwright_login(
                     "Authentication may be incomplete. "
                     "Try: notebooklm login --fresh"
                 )
-                raise SystemExit(1)
+                exit_with_code(1)
 
             # Atomic write with chmod 0o600 — Playwright's path= argument
             # writes directly (non-atomic + world-readable window).
@@ -660,7 +660,7 @@ def _run_playwright_login(
                         f"Install from: {install_url}\n"
                         "Or use the default Chromium browser: notebooklm login"
                     )
-                    raise SystemExit(1) from e
+                    exit_with_code(1)
             # Downgraded from ``logger.error(..., exc_info=True)``:
             # the previous traceback dump duplicated whatever ``handle_errors``
             # already shows the user. Keep the diagnostic available at
@@ -802,7 +802,7 @@ def register_session_commands(cli):
         # Playwright internal crashes that bubble out of the catch-all
         # except-block in _run_playwright_login) emit a friendly
         # 'Unexpected error: <msg>' line + exit 2 instead of a Python
-        # traceback. Existing ``raise SystemExit(N)`` calls inside the
+        # traceback. Existing ``exit_with_code(N)`` calls inside the
         # body propagate unchanged — handle_errors does not intercept
         # SystemExit.
         with handle_errors():
@@ -815,7 +815,7 @@ def register_session_commands(cli):
                     "  1. Unset NOTEBOOKLM_AUTH_JSON and run 'login' again\n"
                     "  2. Continue using NOTEBOOKLM_AUTH_JSON for authentication"
                 )
-                raise SystemExit(1)
+                exit_with_code(1)
 
             _validate_login_flag_conflicts(
                 browser_cookies=browser_cookies,
@@ -963,15 +963,18 @@ def register_session_commands(cli):
             # ambiguity or "no match"). These already exit non-zero with a
             # clear message and never reach the persistence branch.
             raise
-        except NotebookNotFoundError as exc:
+        except NotebookNotFoundError:
             # Server confirmed the notebook does not exist. Fail closed: do
             # not persist anything to context.json, and exit 1 with a clear
             # error.
-            raise click.ClickException(
-                f"Notebook {notebook_id!r} not found. "
+            _output_error(
+                f"Error: Notebook {notebook_id!r} not found. "
                 "Run 'notebooklm list' to see available notebooks, "
-                "or pass --force to bypass verification."
-            ) from exc
+                "or pass --force to bypass verification.",
+                "NOT_FOUND",
+                json_output,
+                1,
+            )
         except AuthError:
             # Auth expired (e.g. SID/SSID cookies stale). Route through the
             # typed UX so the user sees "Run notebooklm login" instead of
@@ -984,10 +987,13 @@ def register_session_commands(cli):
             # All other failures (network errors, RPC errors, etc.) also
             # fail closed — we cannot confirm the notebook exists, so refuse
             # to persist. --force is the documented escape hatch.
-            raise click.ClickException(
-                f"Could not verify notebook {notebook_id!r}: {exc}. "
-                "Pass --force to persist without verification."
-            ) from exc
+            _output_error(
+                f"Error: Could not verify notebook {notebook_id!r}: {exc}. "
+                "Pass --force to persist without verification.",
+                "VERIFICATION_FAILED",
+                json_output,
+                1,
+            )
 
         created_str = nb.created_at.strftime("%Y-%m-%d") if nb.created_at else None
         set_current_notebook(resolved_id, nb.title, nb.is_owner, created_str)
@@ -1194,7 +1200,7 @@ def register_session_commands(cli):
                     "Close any running notebooklm commands and try again.\n"
                     f"If the problem persists, manually delete: {storage_path}"
                 )
-                raise SystemExit(1) from exc
+                exit_with_code(1)
 
         # Remove browser profile directory
         if browser_profile.exists():
@@ -1215,7 +1221,7 @@ def register_session_commands(cli):
                     "Close any open browser windows and try again.\n"
                     f"If the problem persists, manually delete: {browser_profile}"
                 )
-                raise SystemExit(1) from exc
+                exit_with_code(1)
 
         # Clear cached notebook / conversation context so post-logout commands
         # don't silently reuse IDs from the previous account. When logout is
@@ -1237,7 +1243,7 @@ def register_session_commands(cli):
                 "Close any running notebooklm commands and try again.\n"
                 f"If the problem persists, manually delete: {context_file}"
             )
-            raise SystemExit(1) from exc
+            exit_with_code(1)
 
         if removed_any:
             console.print("[green]Logged out.[/green] Run 'notebooklm login' to sign in again.")
@@ -1493,7 +1499,7 @@ def register_session_commands(cli):
             # process exit code must agree so callers can fail-fast on
             # `notebooklm auth check --json`.
             if not all_passed:
-                raise SystemExit(1)
+                exit_with_code(1)
             return
 
         # Rich output
@@ -1636,7 +1642,7 @@ def register_session_commands(cli):
         # (AuthError, NetworkError, ValidationError, ...) get user-friendly
         # one-liners + hints; unexpected exceptions become 'Unexpected error:
         # <msg>' (exit 2) instead of leaking ``type(exc).__name__`` into the
-        # user message. Existing ``raise SystemExit(N)`` calls inside the body
+        # user message. Existing ``exit_with_code(N)`` calls inside the body
         # propagate unchanged — handle_errors does not intercept SystemExit.
         with handle_errors():
             # NOTEBOOKLM_AUTH_JSON has no writable backing store, so a keepalive
@@ -1652,7 +1658,7 @@ def register_session_commands(cli):
                     "the env var to be refreshed externally.",
                     err=True,
                 )
-                raise SystemExit(1)
+                exit_with_code(1)
 
             include_domains = _parse_include_domains(include_domains_raw)
             if include_domains and browser_cookies is None:
@@ -1661,7 +1667,7 @@ def register_session_commands(cli):
                     "is also set (the keepalive-only path does not re-extract cookies).",
                     err=True,
                 )
-                raise SystemExit(1)
+                exit_with_code(1)
 
             profile = ctx.obj.get("profile") if ctx.obj else None
             storage_path = get_storage_path(profile=profile)

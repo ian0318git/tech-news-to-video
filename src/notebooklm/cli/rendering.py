@@ -179,11 +179,10 @@ def json_output_response(data: dict | list) -> None:
 
 def json_error_response(code: str, message: str, extra: dict | None = None) -> NoReturn:
     """Print JSON error and exit (no colors for machine parsing)."""
-    response: dict[str, Any] = {"error": True, "code": code, "message": message}
-    if extra:
-        response.update(extra)
-    click.echo(json.dumps(response, indent=2, default=str, ensure_ascii=False))
-    raise SystemExit(1)
+    from .error_handler import output_error
+
+    output_error(message, code, json_output=True, exit_code=1, extra=extra)
+    raise AssertionError("unreachable")  # pragma: no cover
 
 
 _RESULT_TYPE_LABELS = {

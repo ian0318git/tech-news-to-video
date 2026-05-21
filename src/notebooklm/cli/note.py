@@ -355,7 +355,7 @@ def note_rename(ctx, note_id, new_title, notebook_id, json_output, client_auth):
             # ``CHANGELOG.md`` (Unreleased → Changed).
             #
             # The trailing ``raise AssertionError`` is unreachable at runtime
-            # (``_output_error`` always ``raise SystemExit``s) — it exists
+            # (``_output_error`` always exits) — it exists
             # solely to narrow ``n`` from ``Note | None`` to ``Note`` for
             # mypy without forcing a ``NoReturn`` annotation onto
             # ``error_handler._output_error`` (which would change the shared

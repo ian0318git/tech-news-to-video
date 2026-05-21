@@ -30,7 +30,7 @@ from rich.table import Table
 from ..client import NotebookLMClient
 from ..types import Source, source_status_to_str
 from .auth_runtime import with_client
-from .error_handler import _output_error
+from .error_handler import _output_error, current_json_output, exit_with_code
 from .input import read_stdin_text, resolve_prompt
 from .options import (
     json_option,
@@ -69,7 +69,8 @@ def _validate_upload_path(content: str, follow_symlinks: bool) -> Path:
     try:
         return source_add_service.validate_upload_path(content, follow_symlinks)
     except source_add_service.SourceAddValidationError as exc:
-        raise click.ClickException(str(exc)) from exc
+        _output_error(f"Error: {exc}", "VALIDATION_ERROR", current_json_output(), 1)
+        raise AssertionError("unreachable") from None  # pragma: no cover
 
 
 def _classify_junk_sources(sources: list[Source]) -> list[tuple[str, str, str, str]]:
@@ -148,7 +149,7 @@ def source():
     pass
 
 
-def _build_id_ambiguity_error(source_id: str, matches) -> click.ClickException:
+def _build_id_ambiguity_error(source_id: str, matches) -> str:
     """Build a consistent ambiguity error for source ID prefix matches."""
     lines = [f"Ambiguous ID '{source_id}' matches {len(matches)} sources:"]
     for item in matches[:5]:
@@ -157,7 +158,7 @@ def _build_id_ambiguity_error(source_id: str, matches) -> click.ClickException:
     if len(matches) > 5:
         lines.append(f"  ... and {len(matches) - 5} more")
     lines.append("Specify more characters to narrow down.")
-    return click.ClickException("\n".join(lines))
+    return "\n".join(lines)
 
 
 def _looks_like_full_source_id(source_id: str) -> bool:
@@ -198,7 +199,13 @@ async def _resolve_source_for_delete(
         return matches[0].id
 
     if len(matches) > 1:
-        raise _build_id_ambiguity_error(source_id, matches)
+        _output_error(
+            _build_id_ambiguity_error(source_id, matches),
+            "AMBIGUOUS_ID",
+            json_output,
+            1,
+        )
+        raise AssertionError("unreachable")  # pragma: no cover
 
     title_matches = [item for item in sources if item.title == source_id]
     if title_matches:
@@ -210,15 +217,22 @@ async def _resolve_source_for_delete(
             lines.append(f"  {item.id[:12]}... {item.title}")
         if len(title_matches) > 5:
             lines.append(f"  ... and {len(title_matches) - 5} more")
-        raise click.ClickException("\n".join(lines))
+        _output_error("\n".join(lines), "VALIDATION_ERROR", json_output, 1)
+        raise AssertionError("unreachable")  # pragma: no cover
 
-    raise click.ClickException(
+    _output_error(
         f"No source found starting with '{source_id}'. "
-        "Run 'notebooklm source list' to see available sources."
+        "Run 'notebooklm source list' to see available sources.",
+        "NOT_FOUND",
+        json_output,
+        1,
     )
+    raise AssertionError("unreachable")  # pragma: no cover
 
 
-async def _resolve_source_by_exact_title(client, notebook_id: str, title: str):
+async def _resolve_source_by_exact_title(
+    client, notebook_id: str, title: str, *, json_output: bool = False
+):
     """Resolve a source by exact title for the explicit delete-by-title flow."""
     title = validate_id(title, "source title")
     sources = await client.sources.list(notebook_id)
@@ -233,12 +247,16 @@ async def _resolve_source_by_exact_title(client, notebook_id: str, title: str):
             lines.append(f"  {item.id[:12]}... {item.title}")
         if len(matches) > 5:
             lines.append(f"  ... and {len(matches) - 5} more")
-        raise click.ClickException("\n".join(lines))
+        _output_error("\n".join(lines), "AMBIGUOUS_TITLE", json_output, 1)
 
-    raise click.ClickException(
+    _output_error(
         f"No source found with title '{title}'. "
-        "Run 'notebooklm source list' to see available sources."
+        "Run 'notebooklm source list' to see available sources.",
+        "NOT_FOUND",
+        json_output,
+        1,
     )
+    raise AssertionError("unreachable")  # pragma: no cover
 
 
 @source.command("list")
@@ -632,7 +650,9 @@ def source_delete_by_title(ctx, title, notebook_id, yes, json_output, client_aut
 
             async def resolve_delete_by_title(client):
                 nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
-                source = await _resolve_source_by_exact_title(client, nb_id_resolved, title)
+                source = await _resolve_source_by_exact_title(
+                    client, nb_id_resolved, title, json_output=json_output
+                )
 
                 # P1.T2 bug 2: same JSON-mode confirmation contract as
                 # ``source delete``. Never prompt under --json; require --yes.
@@ -959,7 +979,7 @@ def source_add_research(
             result = await client.research.start(nb_id_resolved, query, search_source, mode)
             if not result:
                 console.print("[red]Research failed to start[/red]")
-                raise SystemExit(1)
+                exit_with_code(1)
 
             task_id = result["task_id"]
             console.print(f"[dim]Task ID: {task_id}[/dim]")
@@ -994,7 +1014,7 @@ def source_add_research(
                     break
                 elif status.get("status") == "no_research":
                     console.print("[red]Research failed to start[/red]")
-                    raise SystemExit(1)
+                    exit_with_code(1)
                 await asyncio.sleep(_POLL_INTERVAL_S)
             else:
                 status = {"status": "timeout"}
@@ -1243,15 +1263,15 @@ def source_stale(ctx, source_id, notebook_id, json_output, client_auth):
                     }
                 )
                 # Exit codes remain inverted by design — see docs/cli-exit-codes.md.
-                raise SystemExit(0 if stale else 1)
+                exit_with_code(0 if stale else 1)
 
             if is_fresh:
                 console.print("[green]✓ Source is fresh[/green]")
-                raise SystemExit(1)  # Not stale
+                exit_with_code(1)  # Not stale
             else:
                 console.print("[yellow]⚠ Source is stale[/yellow]")
                 console.print("[dim]Run 'source refresh' to update[/dim]")
-                raise SystemExit(0)  # Is stale
+                exit_with_code(0)  # Is stale
 
     return _run()
 
@@ -1349,7 +1369,7 @@ def source_wait(ctx, source_id, notebook_id, timeout, interval, json_output, cli
                     json_output_response(data)
                 else:
                     console.print(f"[red]✗ Source not found:[/red] {e.source_id}")
-                raise SystemExit(1) from None
+                exit_with_code(1)
 
             except SourceProcessingError as e:
                 if json_output:
@@ -1362,7 +1382,7 @@ def source_wait(ctx, source_id, notebook_id, timeout, interval, json_output, cli
                     json_output_response(data)
                 else:
                     console.print(f"[red]✗ Source processing failed:[/red] {e.source_id}")
-                raise SystemExit(1) from None
+                exit_with_code(1)
 
             except SourceTimeoutError as e:
                 if json_output:
@@ -1377,7 +1397,7 @@ def source_wait(ctx, source_id, notebook_id, timeout, interval, json_output, cli
                 else:
                     console.print(f"[yellow]⚠ Timeout waiting for source:[/yellow] {e.source_id}")
                     console.print(f"[dim]Last status: {e.last_status}[/dim]")
-                raise SystemExit(2) from None
+                exit_with_code(2)
 
     return _run()
 
@@ -1478,7 +1498,7 @@ def source_clean(ctx, notebook_id, dry_run, yes, json_output, client_auth):
                 # is still on stdout above so callers can introspect which
                 # IDs failed.
                 if result.failures:
-                    raise SystemExit(1)
+                    exit_with_code(1)
                 return
 
             if result.status == "already_clean":
@@ -1512,7 +1532,7 @@ def source_clean(ctx, notebook_id, dry_run, yes, json_output, client_auth):
                         ctx=ctx,
                     )
                 # P1.T2 bug 8: text-mode parity with JSON-mode exit code.
-                raise SystemExit(1)
+                exit_with_code(1)
 
             cli_print(
                 f"[green]Successfully cleaned {result.deleted_count} source(s).[/green]",

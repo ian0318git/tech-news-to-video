@@ -30,6 +30,7 @@ from .download_helpers import (
     resolve_partial_artifact_id,
     select_artifact,
 )
+from .error_handler import exit_with_code
 from .options import _complete_artifacts, notebook_option
 from .rendering import console, json_output_response
 from .resolve import require_notebook, resolve_notebook_id
@@ -803,7 +804,7 @@ def _run_artifact_download(ctx, artifact_type: str, **kwargs) -> None:
     # the operation failed even though JSON mode returned a parseable legacy
     # error document (free-form ``error`` string, no typed ``code``).
     if "error" in result:
-        raise SystemExit(1)
+        exit_with_code(1)
 
 
 @download.command("report")

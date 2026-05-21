@@ -28,6 +28,7 @@ from ...auth import (
 from ...client import NotebookLMClient
 from ...io import atomic_write_json
 from ...paths import get_storage_path
+from ..error_handler import exit_with_code
 from ..language import set_language
 from ..rendering import console
 from ..runtime import run_async
@@ -186,7 +187,7 @@ def _enumerate_one_jar(
                 f"{e}\n\n"
                 "Make sure you are logged into Google in your browser."
             )
-        raise SystemExit(1) from None
+        exit_with_code(1)
 
     cookie_map = extract_cookies_with_domains(storage_state)
     jar = build_cookie_jar(cookies=cookie_map)
@@ -205,7 +206,7 @@ def _enumerate_one_jar(
                 "If you'd rather skip the browser entirely, use "
                 "[cyan]notebooklm login[/cyan] (Playwright flow)."
             )
-        raise SystemExit(1) from None
+        exit_with_code(1)
     except httpx.RequestError as e:
         # Distinct from "signed out / stale" SystemExit branches above:
         # a network failure means EVERY profile probe will fail the same
@@ -216,7 +217,7 @@ def _enumerate_one_jar(
                 f"[red]Account discovery failed (network error):[/red] {e}\n"
                 "Check your internet connection and try again."
             )
-            raise SystemExit(1) from None
+            exit_with_code(1)
         raise
 
     if browser_profile is None:
@@ -358,7 +359,7 @@ def _enumerate_chromium_profiles_fanout(
                 "or directly:\n"
                 "  pip install rookiepy"
             )
-            raise SystemExit(1) from None
+            exit_with_code(1)
         except (OSError, RuntimeError) as e:
             # One profile failing (e.g. a locked DB) shouldn't kill discovery
             # of the others. Surface a per-profile note and continue.
@@ -393,7 +394,7 @@ def _enumerate_chromium_profiles_fanout(
                 f"[red]Account discovery failed (network error):[/red] {e}\n"
                 "Check your internet connection and try again."
             )
-            raise SystemExit(1) from None
+            exit_with_code(1)
 
         per_profile_cookies[profile.directory_name] = raw
         for account in accounts:
@@ -430,7 +431,7 @@ def _enumerate_chromium_profiles_fanout(
             f"{browser_name} user-profiles.[/red]\n"
             "Sign in to a Google account in your browser and try again."
         )
-        raise SystemExit(1)
+        exit_with_code(1)
 
     return per_profile_cookies, aggregated
 
@@ -652,7 +653,7 @@ def _select_account(
             f"[red]Account {account_email} not found among signed-in accounts.[/red]\n"
             f"Available accounts: {available}"
         )
-        raise SystemExit(1)
+        exit_with_code(1)
     default_account = next((a for a in accounts if a.is_default), None)
     if default_account is not None:
         return default_account
@@ -687,7 +688,7 @@ def _write_extracted_cookies(
             f"{e}\n\n"
             "Make sure you are logged into Google in your browser."
         )
-        raise SystemExit(1) from None
+        exit_with_code(1)
 
     try:
         storage_path.parent.mkdir(parents=True, exist_ok=True)
@@ -699,7 +700,7 @@ def _write_extracted_cookies(
     except OSError as e:
         logger.error("Failed to save authentication to %s: %s", storage_path, e)
         console.print(f"[red]Failed to save authentication to {storage_path}.[/red]\nDetails: {e}")
-        raise SystemExit(1) from None
+        exit_with_code(1)
 
     from ...auth import write_account_metadata
 
@@ -750,7 +751,7 @@ def _select_refresh_account(
             f"Run [cyan]notebooklm auth inspect --browser {browser_name}[/cyan] "
             "or sign that account back into the browser."
         )
-        raise SystemExit(1)
+        exit_with_code(1)
 
     raw_authuser = metadata.get("authuser")
     if isinstance(raw_authuser, int) and raw_authuser >= 0:
@@ -763,7 +764,7 @@ def _select_refresh_account(
             f"Run [cyan]notebooklm auth inspect --browser {browser_name}[/cyan], then "
             f"[cyan]notebooklm login --browser-cookies {browser_name} --account EMAIL[/cyan]."
         )
-        raise SystemExit(1)
+        exit_with_code(1)
 
     return next((account for account in accounts if account.is_default), accounts[0])
 
@@ -782,7 +783,7 @@ def _refresh_from_browser_cookies(
     )
     if not accounts:
         console.print(f"[red]No signed-in Google accounts found in {browser_name}.[/red]")
-        raise SystemExit(1)
+        exit_with_code(1)
 
     metadata = read_account_metadata(storage_path)
     selected = _select_refresh_account(accounts, metadata, browser_name)
@@ -955,7 +956,7 @@ def _read_chromium_profile_cookies_from_selector(
         profile = chromium_profiles.resolve_chromium_profile(browser_name, profile_selector)
     except ValueError as e:
         console.print(f"[red]{e}[/red]")
-        raise SystemExit(1) from None
+        exit_with_code(1)
 
     domains = _build_google_cookie_domains(include_domains=include_domains)
     if verbose:
@@ -974,10 +975,10 @@ def _read_chromium_profile_cookies_from_selector(
             "or directly:\n"
             "  pip install rookiepy"
         )
-        raise SystemExit(1) from None
+        exit_with_code(1)
     except (OSError, RuntimeError) as e:
         _handle_rookiepy_error(e, f"{profile.browser} profile '{profile.human_name}'")
-        raise SystemExit(1) from None
+        exit_with_code(1)
 
     return profile, cookies
 
@@ -1020,13 +1021,13 @@ def _read_firefox_container_cookies(
             "container-aware extractor cannot find it. Drop the '::<container>' "
             "suffix to fall back to rookiepy's autodetection."
         )
-        raise SystemExit(1)
+        exit_with_code(1)
 
     try:
         container_id = firefox_containers.resolve_container_id(profile_path, container_spec)
     except ValueError as e:
         console.print(f"[red]{e}[/red]")
-        raise SystemExit(1) from None
+        exit_with_code(1)
 
     if verbose:
         if container_id == "none":
@@ -1044,13 +1045,13 @@ def _read_firefox_container_cookies(
         )
     except FileNotFoundError as e:
         console.print(f"[red]{e}[/red]")
-        raise SystemExit(1) from None
+        exit_with_code(1)
     except (OSError, RuntimeError) as e:
         _handle_rookiepy_error(e, "firefox")
-        raise SystemExit(1) from None
+        exit_with_code(1)
     except sqlite3.DatabaseError as e:
         console.print(f"[red]Failed to read Firefox cookies database:[/red] {e}")
-        raise SystemExit(1) from None
+        exit_with_code(1)
 
 
 def _maybe_warn_firefox_containers_in_use() -> None:
@@ -1130,7 +1131,7 @@ def _read_browser_cookies(
                 "Use [cyan]firefox::<container-name>[/cyan] (e.g. 'firefox::Work') or "
                 "[cyan]firefox::none[/cyan] for the no-container default."
             )
-            raise SystemExit(1)
+            exit_with_code(1)
         return _read_firefox_container_cookies(
             container_spec, verbose=verbose, include_domains=include_domains
         )
@@ -1156,7 +1157,7 @@ def _read_browser_cookies(
             "or directly:\n"
             "  pip install rookiepy"
         )
-        raise SystemExit(1) from None
+        exit_with_code(1)
 
     domains = _build_google_cookie_domains(include_domains=include_domains)
 
@@ -1169,7 +1170,7 @@ def _read_browser_cookies(
             return rookiepy.load(domains=domains)
         except (OSError, RuntimeError) as e:
             _handle_rookiepy_error(e, "auto-detect")
-            raise SystemExit(1) from None
+            exit_with_code(1)
 
     canonical = _ROOKIEPY_BROWSER_ALIASES.get(browser_name.lower())
     if canonical is None:
@@ -1177,7 +1178,7 @@ def _read_browser_cookies(
             f"[red]Unknown browser: '{browser_name}'[/red]\n"
             f"Supported: {', '.join(sorted(_ROOKIEPY_BROWSER_ALIASES))}"
         )
-        raise SystemExit(1)
+        exit_with_code(1)
     if verbose:
         console.print(f"[yellow]Reading cookies from {browser_name}...[/yellow]")
     browser_fn = getattr(rookiepy, canonical, None)
@@ -1186,12 +1187,12 @@ def _read_browser_cookies(
             f"[red]rookiepy does not support '{canonical}' on this platform.[/red]\n"
             "Check that rookiepy is properly installed: pip install rookiepy"
         )
-        raise SystemExit(1)
+        exit_with_code(1)
     try:
         cookies = browser_fn(domains=domains)
     except (OSError, RuntimeError) as e:
         _handle_rookiepy_error(e, browser_name)
-        raise SystemExit(1) from None
+        exit_with_code(1)
 
     # Back-compat warning: unscoped 'firefox' silently merges cookies from
     # every Multi-Account Container. Skip when ``verbose=False`` so callers
@@ -1233,7 +1234,7 @@ def _login_with_browser_cookies(
             f"{e}\n\n"
             "Make sure you are logged into Google in your browser."
         )
-        raise SystemExit(1) from None
+        exit_with_code(1)
 
     # Create parent directory (avoid mode= on Windows to prevent ACL issues)
     try:
@@ -1248,7 +1249,7 @@ def _login_with_browser_cookies(
     except OSError as e:
         logger.error("Failed to save authentication to %s: %s", storage_path, e)
         console.print(f"[red]Failed to save authentication to {storage_path}.[/red]\nDetails: {e}")
-        raise SystemExit(1) from None
+        exit_with_code(1)
 
     # Record account metadata so future calls target the same Google account.
     # Even on a default-account login (authuser=0, no email), remove stale

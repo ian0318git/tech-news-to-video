@@ -11,6 +11,7 @@ import click
 
 from ..client import NotebookLMClient
 from .auth_runtime import with_client
+from .error_handler import exit_with_code
 from .options import notebook_option
 from .rendering import (
     console,
@@ -175,7 +176,7 @@ def research_wait(
                         )
                     else:
                         console.print("[red]No research running[/red]")
-                    raise SystemExit(1)
+                    exit_with_code(1)
 
                 if task_id is None:
                     task_id = current_status.get("task_id")
@@ -203,7 +204,7 @@ def research_wait(
                     )
                 else:
                     console.print(f"[yellow]Timed out after {timeout} seconds[/yellow]")
-                raise SystemExit(1)
+                exit_with_code(1)
 
             # Research completed — poll_until returned the terminal status,
             # or raised SystemExit above for no-research / timeout cases.

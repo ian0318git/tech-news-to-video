@@ -7,6 +7,7 @@ from pathlib import Path
 import click
 
 from .agent_templates import get_agent_source_content
+from .error_handler import exit_with_code
 from .rendering import console
 
 
@@ -129,7 +130,7 @@ def install(scope: str, target_name: str):
         console.print("[red]Error:[/red] Skill source not found in package data.")
         console.print("This may indicate an incomplete or corrupted installation.")
         console.print("Try reinstalling: pip install --force-reinstall notebooklm-py")
-        raise SystemExit(1)
+        exit_with_code(1)
 
     version = get_package_version()
     stamped_content = add_version_comment(content, version)
@@ -158,7 +159,7 @@ def install(scope: str, target_name: str):
         console.print(f"[red]Failed[/red] to install {TARGETS[target].label}: {err}")
 
     if failed_targets:
-        raise SystemExit(1)
+        exit_with_code(1)
 
 
 @skill.command()
@@ -266,7 +267,7 @@ def show(scope: str, target_name: str):
         content = get_skill_source_content()
         if content is None:
             console.print("[red]Error:[/red] Skill source not found in package data.")
-            raise SystemExit(1)
+            exit_with_code(1)
         console.print(content)
         return
 
