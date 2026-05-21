@@ -56,9 +56,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 # Bridge attribute names — see :file:`src/notebooklm/_session.py`
-# bridge block (the ``@property`` declarations between the auth-coord
-# ``_ensure_*`` and the ``get_http_client`` tail). Update this set when
-# a bridge is added or retired.
+# bridge block (the ``@property`` declarations in the
+# ``AuthRefreshCoordinator`` / ``ClientMetrics`` / ``TransportDrainTracker`` /
+# ``ClientLifecycle`` / ``CookiePersistence`` / ``ReqidCounter`` /
+# ``PollingRegistry`` compat-bridge sections, between the constructor wiring
+# and the ``get_http_client`` tail). Update this set when a bridge is added
+# or retired.
 FORBIDDEN_PROPERTIES: frozenset[str] = frozenset(
     {
         # ClientLifecycle bridges
@@ -174,7 +177,6 @@ ALLOWLIST: list[str] = [
     "tests/unit/test_cookie_persistence.py",
     "tests/unit/test_drain_middleware.py",
     "tests/unit/test_idempotency_registry.py",
-    "tests/unit/test_logging_correlation.py",
     "tests/unit/test_metrics_middleware.py",
     "tests/unit/test_observability.py",
     "tests/unit/test_polling_registry.py",
