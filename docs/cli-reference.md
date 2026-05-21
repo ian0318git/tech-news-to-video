@@ -761,7 +761,7 @@ notebooklm source add-research [query] [OPTIONS]
 - `--import-all` - Automatically import all found sources (works with blocking mode)
 - `--cited-only` - With `--import-all`, import only cited sources
 - `--no-wait` - Start research and return immediately (non-blocking)
-- `--timeout SECONDS` - Retry budget for `--import-all` when the IMPORT_RESEARCH RPC times out (default: 1800). Mirrors `research wait --timeout`. Has no effect without `--import-all`.
+- `--timeout SECONDS` - Per-phase seconds budget for (a) the research-completion poll loop and (b) the `--import-all` retry loop (default: 1800). Each phase gets the full budget independently, so worst-case total wall time is up to 2× this value. Matches `research wait --timeout` semantics. Before 0.4.2 the in-line poll was hardcoded to 5 minutes, so deep research that ran longer was silently abandoned and left an "Add sources?" modal hanging in the NotebookLM web UI — bump `--timeout` for long deep-research runs.
 - `--prompt-file PATH` - Read query from a file (or `-` for stdin) instead of the positional argument
 
 > **Note:** `--mode deep` is only supported with `--from web` (the default). Combining `--mode deep --from drive` is rejected by the backend with `ValidationError("Deep Research only supports Web sources.")` — for Drive, stick with `--mode fast`.
