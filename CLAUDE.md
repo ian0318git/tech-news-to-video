@@ -130,7 +130,7 @@ RPC Layer (rpc/)
 | `_middleware_chain.py` | Constructs the middleware chain in the canonical ADR-009 order |
 | `_middleware*.py` | Modular middleware implementations (drain, metrics, semaphore, retry, auth, error injection, tracing) |
 | `rpc/types.py` | RPC method IDs (source of truth) |
-| `auth.py` | Authentication facade — flat re-exports from `_auth/*` seams (Superseded by [arch-d1-auth-side](https://github.com/teng-lin/notebooklm-py/pull/834) (#834); `_AuthFacadeModule` retired; tests use `tests/_fixtures.patch_auth_seam` for seam-write-through) |
+| `auth.py` | Authentication facade — flat re-exports from `_auth/*` seams (Superseded by [arch-d1-auth-side](https://github.com/teng-lin/notebooklm-py/pull/834) (#834); `_AuthFacadeModule` retired; tests patch the canonical home in `_auth.<module>` directly) |
 | `_auth/paths.py` | Storage paths and filesystem helpers |
 | `_auth/extraction.py` | Cookie/token extraction from browser sessions |
 | `_auth/headers.py` | HTTP header construction |
