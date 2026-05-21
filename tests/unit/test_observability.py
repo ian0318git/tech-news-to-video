@@ -45,7 +45,7 @@ async def test_rpc_metrics_event_and_correlation_scope(auth_tokens: AuthTokens) 
     """
     events: list[RpcTelemetryEvent] = []
     core = Session(auth_tokens, on_rpc_event=events.append)
-    core._http_client = AsyncMock(spec=httpx.AsyncClient)
+    core._kernel.http_client = AsyncMock(spec=httpx.AsyncClient)
     seen_request_ids: list[str | None] = []
 
     # Mock the chain LEAF (innermost wrapper around
@@ -159,10 +159,10 @@ async def test_operation_scope_tracks_drain_without_upload_semaphore(
     core = Session(auth_tokens)
 
     async with core.operation_scope("plain-operation"):
-        assert core._in_flight_posts == 1
+        assert core._drain_tracker._in_flight_posts == 1
         assert not hasattr(core, "get_upload_semaphore")
 
-    assert core._in_flight_posts == 0
+    assert core._drain_tracker._in_flight_posts == 0
     assert "_upload_semaphore" not in core.__dict__
 
 

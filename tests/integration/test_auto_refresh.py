@@ -28,13 +28,15 @@ class TestAutoRefreshIntegration:
 
         client = NotebookLMClient(auth)
         # Bound methods aren't identical, so compare underlying function
-        assert client._session._refresh_callback is not None
-        assert client._session._refresh_callback.__func__ is NotebookLMClient.refresh_auth
+        assert client._session._auth_coord._refresh_callback is not None
+        assert (
+            client._session._auth_coord._refresh_callback.__func__ is NotebookLMClient.refresh_auth
+        )
         # ``_refresh_lock`` is lazily created on first ``_await_refresh``.
         # At construction time it is ``None`` so the client can be
         # instantiated outside a running loop; the helper allocates the
         # lock on demand inside the async refresh path.
-        assert client._session._refresh_lock is None
+        assert client._session._auth_coord._refresh_lock is None
 
     @pytest.mark.asyncio
     async def test_full_refresh_flow_http_error(self):
@@ -59,7 +61,7 @@ class TestAutoRefreshIntegration:
             client._session.update_auth_headers()
             return client._session.auth
 
-        client._session._refresh_callback = tracking_refresh
+        client._session._auth_coord._refresh_callback = tracking_refresh
 
         # Mock HTTP responses
         call_count = [0]
@@ -78,7 +80,7 @@ class TestAutoRefreshIntegration:
             return response
 
         async with client:
-            install_post_as_stream(None, client._session._http_client, mock_post)
+            install_post_as_stream(None, client._session._kernel.get_http_client(), mock_post)
 
             with patch("notebooklm.rpc.decode_response") as mock_decode:
                 mock_decode.return_value = [[["nb1"], ["Notebook 1"]]]
@@ -107,7 +109,7 @@ class TestAutoRefreshIntegration:
             client._session.update_auth_headers()
             return client._session.auth
 
-        client._session._refresh_callback = tracking_refresh
+        client._session._auth_coord._refresh_callback = tracking_refresh
 
         # Mock HTTP to succeed, but decode_response to fail with auth error first
         async def mock_post(*args, **kwargs):
@@ -125,7 +127,7 @@ class TestAutoRefreshIntegration:
             return [[["nb1"], ["Notebook 1"]]]
 
         async with client:
-            install_post_as_stream(None, client._session._http_client, mock_post)
+            install_post_as_stream(None, client._session._kernel.get_http_client(), mock_post)
 
             with patch("notebooklm.rpc.decode_response", side_effect=mock_decode):
                 await client.notebooks.list()
@@ -148,7 +150,7 @@ class TestAutoRefreshIntegration:
         async def mock_refresh():
             return auth
 
-        client._session._refresh_callback = mock_refresh
+        client._session._auth_coord._refresh_callback = mock_refresh
 
         call_count = [0]
 
@@ -164,7 +166,7 @@ class TestAutoRefreshIntegration:
             return response
 
         async with client:
-            install_post_as_stream(None, client._session._http_client, mock_post)
+            install_post_as_stream(None, client._session._kernel.get_http_client(), mock_post)
 
             start_time = asyncio.get_event_loop().time()
 
@@ -192,7 +194,7 @@ class TestAutoRefreshIntegration:
             # Simulates refresh_auth detecting redirect to login
             raise ValueError("Authentication expired. Run 'notebooklm login' to re-authenticate.")
 
-        client._session._refresh_callback = failing_refresh
+        client._session._auth_coord._refresh_callback = failing_refresh
 
         async def mock_post(*args, **kwargs):
             request = httpx.Request("POST", args[0])
@@ -200,7 +202,7 @@ class TestAutoRefreshIntegration:
             raise httpx.HTTPStatusError("Unauthorized", request=request, response=response)
 
         async with client:
-            install_post_as_stream(None, client._session._http_client, mock_post)
+            install_post_as_stream(None, client._session._kernel.get_http_client(), mock_post)
 
             # Should raise the original HTTP error with refresh failure as cause
             with pytest.raises(httpx.HTTPStatusError) as exc_info:

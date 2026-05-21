@@ -3,7 +3,6 @@
 import asyncio
 import logging
 import random  # noqa: F401 - tests patch this for _backoff jitter
-import threading
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, nullcontext
 from pathlib import Path
@@ -68,14 +67,13 @@ if TYPE_CHECKING:
 
         Session-shrink PR 3 narrowed both Protocols by removing
         ``_timeout``, ``_refresh_callback``, ``_refresh_retry_delay``,
-        ``_http_client``, and ``_bound_loop`` declarations. The compat
-        bridges still exist on :class:`Session` (later PRs retire them);
-        what this assertion guarantees is that the narrowed Protocol
-        shape — only ``_kernel`` + methods for :class:`RpcOwner`, only
-        ``_kernel`` + ``_snapshot()`` for :class:`_AuthedTransportHost` —
-        is satisfied by :class:`Session`. mypy verifies this during
-        ``mypy src/notebooklm``; the function is a no-op at runtime
-        (gated by ``TYPE_CHECKING``).
+        ``_http_client``, and ``_bound_loop`` declarations. Some of those
+        compatibility bridges have since been retired; what this assertion
+        guarantees is that the narrowed Protocol shape — only ``_kernel`` +
+        methods for :class:`RpcOwner`, only ``_kernel`` + ``_snapshot()`` for
+        :class:`_AuthedTransportHost` — is satisfied by :class:`Session`.
+        mypy verifies this during ``mypy src/notebooklm``; the function is a
+        no-op at runtime (gated by ``TYPE_CHECKING``).
         """
         _owner: RpcOwner = s
         _host: _AuthedTransportHost = s
@@ -293,21 +291,16 @@ class Session:
         # the live ``httpx.AsyncClient``, the captured ``_bound_loop``, and
         # the keepalive background task all live on ``self._lifecycle``
         # (constructed below alongside the other extracted helpers so the
-        # inter-helper dependency order is obvious). Compat properties further
-        # down preserve the legacy ``_timeout`` / ``_http_client`` /
-        # ``_bound_loop`` / ``_keepalive_task`` / ``_keepalive_interval`` /
-        # ``_keepalive_storage_path`` ivar names for tests and first-party
-        # callers that probe or assign them directly. The
-        # ``_connect_timeout`` / ``_limits`` bridges were dropped in
-        # D1-audit-full; access them via ``self._lifecycle`` if needed.
+        # inter-helper dependency order is obvious). Access lifecycle state
+        # through ``self._lifecycle`` and the live HTTP client through
+        # ``self._kernel``.
         _resolved_limits = limits if limits is not None else ConnectionLimits()
         # ``_refresh_retry_delay`` stays here directly — it is read on the
         # RPC retry path by ``RpcExecutor`` and ``AuthedTransport`` and SET
         # by integration tests against ``client._session``. The refresh
-        # callback + the four refresh/auth-snapshot ivars (``_refresh_lock``,
-        # ``_refresh_task``, ``_refresh_callback``, ``_auth_snapshot_lock``)
-        # live on ``self._auth_coord``, constructed below alongside the other
-        # extracted helpers so the inter-helper dependency order is obvious.
+        # callback + refresh/auth-snapshot state live on ``self._auth_coord``,
+        # constructed below alongside the other extracted helpers so the
+        # inter-helper dependency order is obvious.
         self._refresh_retry_delay = refresh_retry_delay
         if rate_limit_max_retries < 0:
             raise ValueError(f"rate_limit_max_retries must be >= 0, got {rate_limit_max_retries}")
@@ -341,26 +334,19 @@ class Session:
         # ``_max_concurrent_rpcs is None``, the accessor returns a
         # ``contextlib.nullcontext`` instead — see ``_get_rpc_semaphore``.
         self._rpc_semaphore: asyncio.Semaphore | None = None
-        # Observability counters + telemetry callback. Compat properties
-        # below (``_metrics_lock`` / ``_metrics`` / ``_on_rpc_event``) bridge
-        # the legacy ivar names back into this helper.
+        # Observability counters + telemetry callback. ``metrics_snapshot``
+        # remains the lock-safe read path; helper-level tests that need
+        # implementation state read ``self._metrics_obj`` directly.
         self._metrics_obj = ClientMetrics(on_rpc_event=on_rpc_event)
         # Transport drain bookkeeping (in-flight posts, drain condition,
-        # per-task operation depth, draining flag). Compat properties below
-        # (``_in_flight_posts`` / ``_drain_condition`` / ``_draining``)
-        # bridge the legacy ivar names back into this helper. The
-        # ``_operation_depths`` bridge was dropped in D1-audit-full; access
-        # the WeakKeyDictionary on ``self._drain_tracker`` directly. The
-        # helper's ``__init__`` is event-loop-agnostic; the
-        # ``asyncio.Condition`` is created lazily on first
-        # ``get_drain_condition`` call.
+        # per-task operation depth, draining flag). The helper's
+        # ``__init__`` is event-loop-agnostic; the ``asyncio.Condition`` is
+        # created lazily on first ``get_drain_condition`` call.
         self._drain_tracker = TransportDrainTracker()
         # Request ID counter for chat API (must be unique per request).
         # The :class:`ReqidCounter` helper owns the monotonic ``_value`` and
         # the lazily-allocated ``asyncio.Lock`` that serialises mutation.
-        # Access ``self._reqid.value`` / ``self._reqid._lock`` directly;
-        # the ``_reqid_counter`` / ``_reqid_counter_value`` / ``_reqid_lock``
-        # compat bridges were all dropped in the session-shrink arc.
+        # Access ``self._reqid.value`` / ``self._reqid._lock`` directly.
         # The ``on_lock_wait`` hook keeps the
         # cumulative ``lock_wait_seconds_*`` metrics ticking inside
         # ``self._metrics_obj`` even though the counter is now extracted.
@@ -368,12 +354,9 @@ class Session:
         # Auth refresh coordination — single-flight refresh task, snapshot
         # serialization, and cookie-jar sync. The coordinator owns
         # ``_refresh_lock``, ``_refresh_task``, ``_refresh_callback``, and
-        # ``_auth_snapshot_lock``; field names match the legacy
-        # ``Session`` ivars so the surviving compat properties
-        # (``_refresh_lock``, ``_refresh_task``, ``_refresh_callback``)
-        # delegate cleanly. The ``_auth_snapshot_lock`` bridge was dropped
-        # in D1-audit-full; the live lock is reachable via
-        # :meth:`_get_auth_snapshot_lock`.
+        # ``_auth_snapshot_lock``. Tests and internal callers that need
+        # implementation state read the coordinator directly. The live auth
+        # snapshot lock is reachable via :meth:`_get_auth_snapshot_lock`.
         # The auth snapshot lock is intentionally distinct from
         # ``_refresh_lock`` — mixing them would re-introduce the
         # reentrancy ambiguity that snapshot-side serialization was added
@@ -383,11 +366,10 @@ class Session:
         self._auth_coord = AuthRefreshCoordinator(refresh_callback=refresh_callback)
         # HTTP-client lifecycle — owns loop binding, keepalive, and close
         # ordering while delegating the live ``httpx.AsyncClient`` to
-        # ``self._kernel``. Compat properties further down preserve the legacy
-        # ivar names. The ``_resolve_keepalive_interval`` clamp lives in
-        # :mod:`notebooklm._session_helpers` and is imported above; we call
-        # it directly here. (The historical ``notebooklm._core`` re-export
-        # was removed in v0.5.0.)
+        # ``self._kernel``. The ``_resolve_keepalive_interval`` clamp lives
+        # in :mod:`notebooklm._session_helpers` and is imported above; we
+        # call it directly here. (The historical ``notebooklm._core``
+        # re-export was removed in v0.5.0.)
         #
         # Event-loop affinity guard rationale: the lifecycle captures
         # ``asyncio.get_running_loop()`` in ``_bound_loop`` at ``open()`` time
@@ -423,23 +405,20 @@ class Session:
             cookie_saver=cookie_saver,
             cookie_rotator=cookie_rotator,
         )
-        # Owns the in-process save lock and open-time cookie baseline. The
-        # ``_save_lock`` / ``_loaded_cookie_snapshot`` compat bridges were
-        # retired in the session-shrink arc; first-party callers reach
-        # through ``self.cookie_persistence.<name>`` directly.
+        # Owns the in-process save lock and open-time cookie baseline.
         self.cookie_persistence = CookiePersistence(self.auth, _resolved_storage_path)
         self._drain_hooks: dict[str, Callable[[], Awaitable[None]]] = {}
         # Session-level :class:`PollRegistry` retained as a legacy attribute
-        # that the now-retired ``_pending_polls`` bridge exposed. Note that
-        # the *live* artifact-polling state is owned separately by
+        # for historical tests. The *live* artifact-polling state is owned
+        # separately by
         # :class:`ArtifactsAPI` (``src/notebooklm/_artifacts.py``), which
         # constructs its own :class:`PollRegistry` and threads it into
         # :class:`ArtifactPollingService` (``src/notebooklm/_artifact_polling.py``).
         # This ``self.poll_registry`` is currently unused by production code;
         # the tests in ``tests/integration/concurrency/test_artifact_poll_dedupe.py``
-        # observe it through the (vacuous) bridge-equivalent path. Migrating
-        # those tests to ``client.artifacts._polling.poll_registry.pending``
-        # — and dropping this attribute — is tracked as a follow-up audit.
+        # observe it directly. Migrating those tests to
+        # ``client.artifacts._polling.poll_registry.pending`` — and dropping
+        # this attribute — is tracked as a follow-up audit.
         self.poll_registry: PollRegistry = PollRegistry()
         self._authed_transport: AuthedTransport | None = None
         self._rpc_executor: RpcExecutor | None = None
@@ -462,156 +441,6 @@ class Session:
             self._middlewares,
             self._authed_post_chain_terminal,
         )
-
-    # ``ClientMetrics`` compat bridges. The three observability ivars now live
-    # on ``self._metrics_obj``; the bridges below delegate directly to that
-    # collaborator since ``Session.__init__`` eager-constructs it. Phase 4
-    # deleted the matching ``.setter`` halves — write on
-    # ``self._metrics_obj.X`` directly.
-    @property
-    def _metrics_lock(self) -> threading.Lock:
-        return self._metrics_obj._metrics_lock
-
-    @property
-    def _metrics(self) -> ClientMetricsSnapshot:
-        return self._metrics_obj._metrics
-
-    @property
-    def _on_rpc_event(self) -> Callable[[RpcTelemetryEvent], object] | None:
-        return self._metrics_obj._on_rpc_event
-
-    # ``TransportDrainTracker`` compat bridges. The four drain ivars now live
-    # on ``self._drain_tracker``; the bridges below delegate directly to that
-    # collaborator since ``Session.__init__`` eager-constructs it. Phase 4
-    # deleted the matching ``.setter`` halves — write on
-    # ``self._drain_tracker.X`` directly.
-    @property
-    def _in_flight_posts(self) -> int:
-        return self._drain_tracker._in_flight_posts
-
-    @property
-    def _draining(self) -> bool:
-        return self._drain_tracker._draining
-
-    @property
-    def _drain_condition(self) -> asyncio.Condition | None:
-        return self._drain_tracker._drain_condition
-
-    # ``_operation_depths`` compat bridge dropped (D1-audit-full): zero
-    # external callers; direct ivar lives on ``self._drain_tracker``.
-
-    # ------------------------------------------------------------------
-    # ``AuthRefreshCoordinator`` compat bridges. Refresh/auth-snapshot state
-    # now lives on ``self._auth_coord``; the four legacy ivar names are
-    # preserved as properties so the dozens of test sites that read them keep
-    # working without modification. Only ``_refresh_callback`` retains a setter
-    # (``core._refresh_callback = stub`` is still load-bearing — see
-    # ``tests/integration/test_session_integration.py:217,292``); the other
-    # three are read-only, so writes must go through ``self._auth_coord.<name>``
-    # directly. ``Session.__init__`` eager-constructs the coordinator, so the
-    # bridges delegate directly without lazy backfill.
-    # ------------------------------------------------------------------
-
-    @property
-    def _refresh_lock(self) -> asyncio.Lock | None:
-        """Phase 4 deleted the matching ``.setter``; write on
-        ``self._auth_coord._refresh_lock`` directly.
-        """
-        return self._auth_coord._refresh_lock
-
-    @property
-    def _refresh_task(self) -> asyncio.Task[AuthTokens] | None:
-        return self._auth_coord._refresh_task
-
-    # ``_refresh_task`` setter dropped in arch-d2-cutover: zero external callers.
-
-    @property
-    def _refresh_callback(self) -> Callable[[], Awaitable[AuthTokens]] | None:
-        return self._auth_coord._refresh_callback
-
-    @_refresh_callback.setter
-    def _refresh_callback(self, value: Callable[[], Awaitable[AuthTokens]] | None) -> None:
-        self._auth_coord._refresh_callback = value
-
-    # ``_auth_snapshot_lock`` compat bridge dropped (D1-audit-full): zero
-    # external callers. Live accessor remains ``_get_auth_snapshot_lock()`` /
-    # ``AuthRefreshCoordinator.get_auth_snapshot_lock()``.
-
-    # ------------------------------------------------------------------
-    # ``ClientLifecycle`` compat bridges. HTTP-client lifecycle state now
-    # lives on ``self._lifecycle``; the six surviving legacy ivar names
-    # (``_http_client``, ``_bound_loop``, ``_keepalive_task``,
-    # ``_keepalive_interval``, ``_keepalive_storage_path``, ``_timeout``)
-    # are preserved here as ``@property`` bridges. The
-    # ``_connect_timeout`` / ``_limits`` bridges were dropped in
-    # D1-audit-full (zero external callers). After session-shrink PR 3
-    # narrowed :class:`RpcOwner` + :class:`_AuthedTransportHost` to drop
-    # these attribute names, the bridges are no longer Protocol-required —
-    # they survive purely to support test monkeypatches that write to
-    # ``core._<bridge>``; later session-shrink PRs (4–6) retire them as
-    # the test readers migrate. ``Session.__init__`` eager-constructs
-    # ``_lifecycle`` (and ``_kernel``), so the bridges delegate directly
-    # without lazy backfill.
-    # ------------------------------------------------------------------
-
-    @property
-    def _http_client(self) -> httpx.AsyncClient | None:
-        return self._lifecycle._http_client
-
-    @_http_client.setter
-    def _http_client(self, value: httpx.AsyncClient | None) -> None:
-        self._lifecycle._http_client = value
-
-    @property
-    def _bound_loop(self) -> asyncio.AbstractEventLoop | None:
-        return self._lifecycle._bound_loop
-
-    @_bound_loop.setter
-    def _bound_loop(self, value: asyncio.AbstractEventLoop | None) -> None:
-        # Retained for test monkeypatch writers (no external SET sites in
-        # prod; bridge demolition is tracked in session-shrink PR 6 once
-        # those tests migrate). Post-PR-3 the ``_AuthedTransportHost``
-        # Protocol no longer declares ``_bound_loop``.
-        self._lifecycle._bound_loop = value
-
-    @property
-    def _keepalive_task(self) -> asyncio.Task[None] | None:
-        return self._lifecycle._keepalive_task
-
-    # ``_keepalive_task`` setter dropped in arch-d2-cutover: zero external callers.
-
-    @property
-    def _keepalive_interval(self) -> float | None:
-        """Phase 4 deleted the matching ``.setter`` (zero external write
-        sites); write on ``self._lifecycle._keepalive_interval`` directly
-        if a test needs to override it.
-        """
-        return self._lifecycle._keepalive_interval
-
-    @property
-    def _keepalive_storage_path(self) -> Path | None:
-        return self._lifecycle._keepalive_storage_path
-
-    # ``_keepalive_storage_path`` setter dropped in arch-d2-cutover: zero
-    # external callers.
-
-    @property
-    def _timeout(self) -> float:
-        return self._lifecycle._timeout
-
-    @_timeout.setter
-    def _timeout(self, value: float) -> None:
-        # Retained for test monkeypatch writers. Post-PR-3, ``RpcExecutor``
-        # reads via ``self._timeout_provider()`` (which closes over
-        # ``self._lifecycle._timeout`` directly), so ``RpcOwner`` no longer
-        # declares ``_timeout`` and the setter is not Protocol-required —
-        # it survives until the test readers migrate (session-shrink PR 6).
-        self._lifecycle._timeout = value
-
-    # ``_connect_timeout`` and ``_limits`` compat bridges dropped
-    # (D1-audit-full): zero external callers; live values remain on
-    # ``self._lifecycle`` (and the lifecycle helper reads them as plain
-    # ivars when it builds the ``httpx.AsyncClient``).
 
     def register_drain_hook(self, name: str, hook: Callable[[], Awaitable[None]]) -> None:
         """Register or replace a feature-owned close-time drain hook."""
@@ -1211,4 +1040,4 @@ class Session:
         Raises:
             RuntimeError: If client is not initialized.
         """
-        return self._lifecycle.get_http_client()
+        return self._kernel.get_http_client()
