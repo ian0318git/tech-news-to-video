@@ -161,6 +161,117 @@ class ArtifactsRuntime(RpcCaller, AsyncWorkRuntime, DrainHookRegistration, Proto
     """
 
 
+class _ArtifactsServiceMethods(Protocol):
+    """Narrow ``ArtifactsAPI`` **method-call** surface that helper services depend on.
+
+    Artifact service helpers (currently :class:`ArtifactDownloadService` and
+    :class:`ArtifactGenerationService`) accept an ``ArtifactsAPI`` instance
+    for back-references into selection / RPC / formatting flows. Today those
+    helpers reach in by holding ``self._api`` and calling
+    ``self._api._list_raw(...)`` / ``self._api._select_artifact(...)`` /
+    ``self._api._format_interactive_content(...)`` / etc. This Protocol
+    declares the subset of **method calls** those helpers actually make, so
+    the two follow-up PRs that migrate ``_artifact_downloads.py`` and
+    ``_artifact_generation.py`` can type the helper's API-collaborator
+    argument as ``_ArtifactsServiceMethods`` instead of the full concrete
+    ``ArtifactsAPI`` — pinning the dependency surface and unblocking the
+    AST guard pinned by ``test_artifact_services_have_no_facade_reach_in``
+    in ``tests/unit/test_init_order.py``.
+
+    **Scope (intentionally narrow).** This Protocol covers method calls
+    only. The helpers also currently reach through ``self._api`` for four
+    *collaborator objects* — ``_notebooks`` (``NotebookSourceIdProvider``),
+    ``_runtime`` (``ArtifactsRuntime``), ``_note_service`` (``NoteService``),
+    and ``_mind_maps`` (``NoteBackedMindMapService``). Those are
+    deliberately **not** declared here. The follow-up migration PRs will
+    eliminate those reach-throughs by injecting each collaborator as a
+    separate constructor argument on the helper service (mirroring how
+    :class:`ArtifactsAPI.__init__` already takes them), not by widening
+    this Protocol. The reach-in guard catches any residual
+    ``api._notebooks`` / ``api._runtime`` / ``api._note_service`` /
+    ``api._mind_maps`` access as a violation, forcing the migration to do
+    the constructor-injection refactor rather than smuggling the same
+    coupling through a wider Protocol.
+
+    **Migration note for follow-up implementers.** ``visit_Attribute`` in
+    :class:`_ApiReachInVisitor` (``tests/unit/test_init_order.py``) flags
+    **every** attribute access on ``self._api`` — including public methods
+    like ``self._api.generate_report(...)``. Simply re-annotating
+    ``self._api: _ArtifactsServiceMethods`` is therefore not enough to
+    clear the guard; the migrating PR must **rename** the stored reference
+    (for example to ``self._service``) so the visitor no longer sees
+    ``self._api`` at all. The Protocol declares ``generate_report`` /
+    ``list_quizzes`` / ``list_flashcards`` so the renamed reference
+    remains usable, not so the existing ``self._api`` name can be kept.
+
+    The underscore-prefixed members are deliberate: this Protocol describes
+    a private collaboration contract between ``ArtifactsAPI`` and its own
+    helper services. ``RpcOwner`` in :mod:`notebooklm._rpc_executor`
+    (see ``docs/architecture.md`` § RpcExecutor) is the established
+    precedent — a Protocol that declares the underscore-prefixed methods
+    a sibling collaborator legitimately calls. See also
+    :class:`DrainHookRegistration` above for the local docstring pattern.
+
+    The three public members (``list_quizzes``, ``list_flashcards``,
+    ``generate_report``) are not new contract — they preserve the documented
+    monkeypatch seam ``ArtifactsAPI.generate_report`` referenced from
+    ``_artifact_generation.py`` (search for "Preserve the historical facade
+    seam") and the two ``list_*`` shapes used by interactive-artifact
+    formatting.
+    """
+
+    async def _list_raw(self, notebook_id: str) -> builtins.list[Any]: ...
+
+    def _select_artifact(
+        self,
+        candidates: builtins.list[Any],
+        artifact_id: str | None,
+        type_name: str,
+        no_result_error_key: str,
+        *,
+        type_code: ArtifactTypeCode,
+    ) -> Any: ...
+
+    async def _download_url(self, url: str, output_path: str) -> str: ...
+
+    async def _get_artifact_content(self, notebook_id: str, artifact_id: str) -> str | None: ...
+
+    def _format_interactive_content(
+        self,
+        app_data: dict,
+        title: str,
+        output_format: str,
+        html_content: str,
+        is_quiz: bool,
+    ) -> str: ...
+
+    async def _call_generate(
+        self, notebook_id: str, params: builtins.list[Any]
+    ) -> GenerationStatus: ...
+
+    def _parse_generation_result(
+        self,
+        result: Any,
+        *,
+        method_id: str,
+        source: str = "_parse_generation_result",
+    ) -> GenerationStatus: ...
+
+    async def list_quizzes(self, notebook_id: str) -> builtins.list[Artifact]: ...
+
+    async def list_flashcards(self, notebook_id: str) -> builtins.list[Artifact]: ...
+
+    async def generate_report(
+        self,
+        notebook_id: str,
+        report_format: ReportFormat = ReportFormat.BRIEFING_DOC,
+        source_ids: builtins.list[str] | None = None,
+        language: str | None = None,
+        custom_prompt: str | None = None,
+        extra_instructions: str | None = None,
+    ) -> GenerationStatus: ...
+
+
 class ArtifactsAPI:
     """Operations on NotebookLM artifacts (studio content).
 
