@@ -20,10 +20,9 @@ from typing import Any, TypedDict
 
 import click
 
-from ..auth import AuthTokens
 from ..client import NotebookLMClient
 from ..types import Artifact, ArtifactType
-from .auth_runtime import with_auth_and_errors
+from .auth_runtime import run_client_workflow
 from .download_helpers import (
     ArtifactDict,
     artifact_title_to_filename,
@@ -126,7 +125,7 @@ async def _get_completed_artifacts_as_dicts(
 
 
 async def _download_artifacts_generic(
-    client_auth: AuthTokens,
+    client: NotebookLMClient,
     artifact_type_name: str,
     artifact_kind: ArtifactType,
     file_extension: str,
@@ -152,7 +151,7 @@ async def _download_artifacts_generic(
     with the same logic, only varying by extension and type filters.
 
     Args:
-        client_auth: Auth tokens for constructing the NotebookLM client
+        client: Open NotebookLM client
         artifact_type_name: Human-readable type name ("audio", "video", etc.)
         artifact_kind: ArtifactType enum value to filter by
         file_extension: File extension (".mp3", ".mp4", ".png", ".pdf")
@@ -204,291 +203,277 @@ async def _download_artifacts_generic(
                 err=True,
             )
 
-    async def _download() -> dict[str, Any]:
-        async with NotebookLMClient(client_auth) as client:
-            nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
+    nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
 
-            # Setup download method dispatch
-            download_methods: dict[str, _DownloadFn] = {
-                "audio": client.artifacts.download_audio,
-                "video": client.artifacts.download_video,
-                "infographic": client.artifacts.download_infographic,
-                "slide-deck": client.artifacts.download_slide_deck,
-                "report": client.artifacts.download_report,
-                "mind-map": client.artifacts.download_mind_map,
-                "data-table": client.artifacts.download_data_table,
-                "quiz": client.artifacts.download_quiz,
-                "flashcards": client.artifacts.download_flashcards,
+    # Setup download method dispatch
+    download_methods: dict[str, _DownloadFn] = {
+        "audio": client.artifacts.download_audio,
+        "video": client.artifacts.download_video,
+        "infographic": client.artifacts.download_infographic,
+        "slide-deck": client.artifacts.download_slide_deck,
+        "report": client.artifacts.download_report,
+        "mind-map": client.artifacts.download_mind_map,
+        "data-table": client.artifacts.download_data_table,
+        "quiz": client.artifacts.download_quiz,
+        "flashcards": client.artifacts.download_flashcards,
+    }
+    download_fn: _DownloadFn | None = download_methods.get(artifact_type_name)
+    if not download_fn:
+        raise ValueError(f"Unknown artifact type: {artifact_type_name}")
+
+    # For slide-deck with PPTX format, bind output_format="pptx"
+    if artifact_type_name == "slide-deck" and slide_format == "pptx":
+        download_fn = partial(client.artifacts.download_slide_deck, output_format="pptx")
+
+    # For quiz/flashcards, always bind --format so the underlying API
+    # serialises the requested representation (json/markdown/html).
+    if artifact_type_name == "quiz":
+        download_fn = partial(client.artifacts.download_quiz, output_format=output_format)
+    elif artifact_type_name == "flashcards":
+        download_fn = partial(client.artifacts.download_flashcards, output_format=output_format)
+
+    # Fetch and filter artifacts by type and completed status
+    type_artifacts = await _get_completed_artifacts_as_dicts(client, nb_id_resolved, artifact_kind)
+
+    if not type_artifacts:
+        return {
+            "error": f"No completed {artifact_type_name} artifacts found",
+            "suggestion": f"Generate one with: notebooklm generate {artifact_type_name}",
+        }
+
+    # Helper for file conflict resolution
+    def _resolve_conflict(path: Path) -> tuple[Path | None, dict | None]:
+        if not path.exists():
+            return path, None
+
+        if no_clobber:
+            return None, {
+                "status": "skipped",
+                "reason": "file exists",
+                "path": str(path),
             }
-            download_fn: _DownloadFn | None = download_methods.get(artifact_type_name)
-            if not download_fn:
-                raise ValueError(f"Unknown artifact type: {artifact_type_name}")
 
-            # For slide-deck with PPTX format, bind output_format="pptx"
-            if artifact_type_name == "slide-deck" and slide_format == "pptx":
-                download_fn = partial(client.artifacts.download_slide_deck, output_format="pptx")
+        if not force:
+            # Auto-rename
+            counter = 2
+            base_name = path.stem
+            parent = path.parent
+            ext = path.suffix
+            while path.exists():
+                path = parent / f"{base_name} ({counter}){ext}"
+                counter += 1
 
-            # For quiz/flashcards, always bind --format so the underlying API
-            # serialises the requested representation (json/markdown/html).
-            if artifact_type_name == "quiz":
-                download_fn = partial(client.artifacts.download_quiz, output_format=output_format)
-            elif artifact_type_name == "flashcards":
-                download_fn = partial(
-                    client.artifacts.download_flashcards, output_format=output_format
-                )
+        return path, None
 
-            # Fetch and filter artifacts by type and completed status
-            type_artifacts = await _get_completed_artifacts_as_dicts(
-                client, nb_id_resolved, artifact_kind
+    # Handle --all flag
+    if download_all:
+        output_dir = Path(output_path) if output_path else Path(default_output_dir)
+
+        # Apply --name filter before previewing/downloading. Match the
+        # case-insensitive substring semantics used by
+        # ``select_artifact`` for the single-artifact path so the two
+        # entry points stay consistent. If the filter excludes every
+        # artifact, return the same legacy error envelope as
+        # ``select_artifact`` does on a name miss (caller exits 1 via
+        # the top-level "error" key check in ``_run_artifact_download``).
+        if name:
+            name_lower = name.lower()
+            filtered_artifacts = [a for a in type_artifacts if name_lower in a["title"].lower()]
+            if not filtered_artifacts:
+                return {
+                    "error": (
+                        f"No artifacts matching '{name}'. "
+                        f"Available: {', '.join(a['title'] for a in type_artifacts)}"
+                    ),
+                }
+            type_artifacts = filtered_artifacts
+
+        # Pre-compute the final filename per artifact so dry-run and
+        # execution agree on duplicate-title disambiguation. The
+        # execution loop below mutates ``existing_names`` as it goes;
+        # dry-run iterates the same way so its preview reflects the
+        # ``Title (2).ext`` / ``Title (3).ext`` suffixes the execution
+        # path would write.
+        planned_filenames: list[str] = []
+        existing_names: set[str] = set()
+        for artifact in type_artifacts:
+            item_name = artifact_title_to_filename(
+                artifact["title"],
+                file_extension,
+                existing_names,
             )
+            existing_names.add(item_name)
+            planned_filenames.append(item_name)
 
-            if not type_artifacts:
-                return {
-                    "error": f"No completed {artifact_type_name} artifacts found",
-                    "suggestion": f"Generate one with: notebooklm generate {artifact_type_name}",
-                }
-
-            # Helper for file conflict resolution
-            def _resolve_conflict(path: Path) -> tuple[Path | None, dict | None]:
-                if not path.exists():
-                    return path, None
-
-                if no_clobber:
-                    return None, {
-                        "status": "skipped",
-                        "reason": "file exists",
-                        "path": str(path),
+        if dry_run:
+            return {
+                "dry_run": True,
+                "operation": "download_all",
+                "count": len(type_artifacts),
+                "output_dir": str(output_dir),
+                "artifacts": [
+                    {
+                        "id": a["id"],
+                        "title": a["title"],
+                        "filename": item_name,
                     }
+                    for a, item_name in zip(type_artifacts, planned_filenames, strict=True)
+                ],
+            }
 
-                if not force:
-                    # Auto-rename
-                    counter = 2
-                    base_name = path.stem
-                    parent = path.parent
-                    ext = path.suffix
-                    while path.exists():
-                        path = parent / f"{base_name} ({counter}){ext}"
-                        counter += 1
+        output_dir.mkdir(parents=True, exist_ok=True)
 
-                return path, None
+        artifacts_results: list[dict[str, Any]] = []
+        total = len(type_artifacts)
+        succeeded_count = 0
+        failed_count = 0
+        skipped_count = 0
 
-            # Handle --all flag
-            if download_all:
-                output_dir = Path(output_path) if output_path else Path(default_output_dir)
+        for i, (artifact, item_name) in enumerate(
+            zip(type_artifacts, planned_filenames, strict=True), 1
+        ):
+            # Progress indicator
+            if not json_output:
+                console.print(f"[dim]Downloading {i}/{total}:[/dim] {artifact['title']}")
 
-                # Apply --name filter before previewing/downloading. Match the
-                # case-insensitive substring semantics used by
-                # ``select_artifact`` for the single-artifact path so the two
-                # entry points stay consistent. If the filter excludes every
-                # artifact, return the same legacy error envelope as
-                # ``select_artifact`` does on a name miss (caller exits 1 via
-                # the top-level "error" key check in ``_run_artifact_download``).
-                if name:
-                    name_lower = name.lower()
-                    filtered_artifacts = [
-                        a for a in type_artifacts if name_lower in a["title"].lower()
-                    ]
-                    if not filtered_artifacts:
-                        return {
-                            "error": (
-                                f"No artifacts matching '{name}'. "
-                                f"Available: {', '.join(a['title'] for a in type_artifacts)}"
-                            ),
-                        }
-                    type_artifacts = filtered_artifacts
-
-                # Pre-compute the final filename per artifact so dry-run and
-                # execution agree on duplicate-title disambiguation. The
-                # execution loop below mutates ``existing_names`` as it goes;
-                # dry-run iterates the same way so its preview reflects the
-                # ``Title (2).ext`` / ``Title (3).ext`` suffixes the execution
-                # path would write.
-                planned_filenames: list[str] = []
-                existing_names: set[str] = set()
-                for artifact in type_artifacts:
-                    item_name = artifact_title_to_filename(
-                        artifact["title"],
-                        file_extension,
-                        existing_names,
-                    )
-                    existing_names.add(item_name)
-                    planned_filenames.append(item_name)
-
-                if dry_run:
-                    return {
-                        "dry_run": True,
-                        "operation": "download_all",
-                        "count": len(type_artifacts),
-                        "output_dir": str(output_dir),
-                        "artifacts": [
-                            {
-                                "id": a["id"],
-                                "title": a["title"],
-                                "filename": item_name,
-                            }
-                            for a, item_name in zip(type_artifacts, planned_filenames, strict=True)
-                        ],
-                    }
-
-                output_dir.mkdir(parents=True, exist_ok=True)
-
-                artifacts_results: list[dict[str, Any]] = []
-                total = len(type_artifacts)
-                succeeded_count = 0
-                failed_count = 0
-                skipped_count = 0
-
-                for i, (artifact, item_name) in enumerate(
-                    zip(type_artifacts, planned_filenames, strict=True), 1
-                ):
-                    # Progress indicator
-                    if not json_output:
-                        console.print(f"[dim]Downloading {i}/{total}:[/dim] {artifact['title']}")
-
-                    item_path = output_dir / item_name
-
-                    # Resolve conflicts
-                    resolved_path, skip_info = _resolve_conflict(item_path)
-                    if skip_info or resolved_path is None:
-                        artifacts_results.append(
-                            {
-                                "id": artifact["id"],
-                                "title": artifact["title"],
-                                "filename": item_name,
-                                **(
-                                    skip_info
-                                    or {"status": "skipped", "reason": "conflict resolution failed"}
-                                ),
-                            }
-                        )
-                        skipped_count += 1
-                        continue
-
-                    # Update if auto-renamed
-                    item_path = resolved_path
-                    item_name = item_path.name
-
-                    # Download
-                    try:
-                        # Download using dispatch
-                        await download_fn(
-                            nb_id_resolved, str(item_path), artifact_id=str(artifact["id"])
-                        )
-
-                        artifacts_results.append(
-                            {
-                                "id": artifact["id"],
-                                "title": artifact["title"],
-                                "filename": item_name,
-                                "path": str(item_path),
-                                "status": "downloaded",
-                            }
-                        )
-                        succeeded_count += 1
-                    except Exception as e:
-                        artifacts_results.append(
-                            {
-                                "id": artifact["id"],
-                                "title": artifact["title"],
-                                "filename": item_name,
-                                "status": "failed",
-                                "error": str(e),
-                            }
-                        )
-                        failed_count += 1
-
-                # Per P1.T4: ANY per-item failure must surface to a non-zero
-                # exit code. ``_run_artifact_download`` keys exit-code policy
-                # on the presence of the top-level ``"error"`` field, so we
-                # only add it when there are failures — keeping the all-success
-                # envelope exit-0-clean while making partial / total failure
-                # automation-friendly via the documented counts.
-                envelope: dict[str, Any] = {
-                    "operation": "download_all",
-                    "output_dir": str(output_dir),
-                    "total": total,
-                    "succeeded_count": succeeded_count,
-                    "failed_count": failed_count,
-                    "skipped_count": skipped_count,
-                    "artifacts": artifacts_results,
-                }
-                if failed_count > 0:
-                    envelope["error"] = True
-                return envelope
-
-            # Single artifact selection
-            try:
-                resolved_artifact_id = (
-                    resolve_partial_artifact_id(type_artifacts, artifact_id)
-                    if artifact_id
-                    else None
-                )
-                selected, reason = select_artifact(
-                    type_artifacts,
-                    latest=latest,
-                    earliest=earliest,
-                    name=name,
-                    artifact_id=resolved_artifact_id,
-                )
-            except ValueError as e:
-                return {"error": str(e)}
-
-            # Determine output path
-            if not output_path:
-                safe_name = artifact_title_to_filename(
-                    str(selected["title"]),
-                    file_extension,
-                    set(),
-                )
-                final_path = Path.cwd() / safe_name
-            else:
-                final_path = Path(output_path)
-
-            # Dry run
-            if dry_run:
-                return {
-                    "dry_run": True,
-                    "operation": "download_single",
-                    "artifact": {
-                        "id": selected["id"],
-                        "title": selected["title"],
-                        "selection_reason": reason,
-                    },
-                    "output_path": str(final_path),
-                }
+            item_path = output_dir / item_name
 
             # Resolve conflicts
-            resolved_path, skip_error = _resolve_conflict(final_path)
-            if skip_error or resolved_path is None:
-                return {
-                    "error": f"File exists: {final_path}",
-                    "artifact": selected,
-                    "suggestion": "Use --force to overwrite or choose a different path",
-                }
+            resolved_path, skip_info = _resolve_conflict(item_path)
+            if skip_info or resolved_path is None:
+                artifacts_results.append(
+                    {
+                        "id": artifact["id"],
+                        "title": artifact["title"],
+                        "filename": item_name,
+                        **(
+                            skip_info
+                            or {"status": "skipped", "reason": "conflict resolution failed"}
+                        ),
+                    }
+                )
+                skipped_count += 1
+                continue
 
-            final_path = resolved_path
+            # Update if auto-renamed
+            item_path = resolved_path
+            item_name = item_path.name
 
             # Download
             try:
                 # Download using dispatch
-                result_path = await download_fn(
-                    nb_id_resolved, str(final_path), artifact_id=str(selected["id"])
+                await download_fn(nb_id_resolved, str(item_path), artifact_id=str(artifact["id"]))
+
+                artifacts_results.append(
+                    {
+                        "id": artifact["id"],
+                        "title": artifact["title"],
+                        "filename": item_name,
+                        "path": str(item_path),
+                        "status": "downloaded",
+                    }
                 )
-
-                return {
-                    "operation": "download_single",
-                    "artifact": {
-                        "id": selected["id"],
-                        "title": selected["title"],
-                        "selection_reason": reason,
-                    },
-                    "output_path": result_path or str(final_path),
-                    "status": "downloaded",
-                }
+                succeeded_count += 1
             except Exception as e:
-                return {"error": str(e), "artifact": selected}
+                artifacts_results.append(
+                    {
+                        "id": artifact["id"],
+                        "title": artifact["title"],
+                        "filename": item_name,
+                        "status": "failed",
+                        "error": str(e),
+                    }
+                )
+                failed_count += 1
 
-    return await _download()
+        # Per P1.T4: ANY per-item failure must surface to a non-zero
+        # exit code. ``_run_artifact_download`` keys exit-code policy
+        # on the presence of the top-level ``"error"`` field, so we
+        # only add it when there are failures — keeping the all-success
+        # envelope exit-0-clean while making partial / total failure
+        # automation-friendly via the documented counts.
+        envelope: dict[str, Any] = {
+            "operation": "download_all",
+            "output_dir": str(output_dir),
+            "total": total,
+            "succeeded_count": succeeded_count,
+            "failed_count": failed_count,
+            "skipped_count": skipped_count,
+            "artifacts": artifacts_results,
+        }
+        if failed_count > 0:
+            envelope["error"] = True
+        return envelope
+
+    # Single artifact selection
+    try:
+        resolved_artifact_id = (
+            resolve_partial_artifact_id(type_artifacts, artifact_id) if artifact_id else None
+        )
+        selected, reason = select_artifact(
+            type_artifacts,
+            latest=latest,
+            earliest=earliest,
+            name=name,
+            artifact_id=resolved_artifact_id,
+        )
+    except ValueError as e:
+        return {"error": str(e)}
+
+    # Determine output path
+    if not output_path:
+        safe_name = artifact_title_to_filename(
+            str(selected["title"]),
+            file_extension,
+            set(),
+        )
+        final_path = Path.cwd() / safe_name
+    else:
+        final_path = Path(output_path)
+
+    # Dry run
+    if dry_run:
+        return {
+            "dry_run": True,
+            "operation": "download_single",
+            "artifact": {
+                "id": selected["id"],
+                "title": selected["title"],
+                "selection_reason": reason,
+            },
+            "output_path": str(final_path),
+        }
+
+    # Resolve conflicts
+    resolved_path, skip_error = _resolve_conflict(final_path)
+    if skip_error or resolved_path is None:
+        return {
+            "error": f"File exists: {final_path}",
+            "artifact": selected,
+            "suggestion": "Use --force to overwrite or choose a different path",
+        }
+
+    final_path = resolved_path
+
+    # Download
+    try:
+        # Download using dispatch
+        result_path = await download_fn(
+            nb_id_resolved, str(final_path), artifact_id=str(selected["id"])
+        )
+
+        return {
+            "operation": "download_single",
+            "artifact": {
+                "id": selected["id"],
+                "title": selected["title"],
+                "selection_reason": reason,
+            },
+            "output_path": result_path or str(final_path),
+            "status": "downloaded",
+        }
+    except Exception as e:
+        return {"error": str(e), "artifact": selected}
 
 
 def _display_download_result(result: dict, artifact_type: str) -> None:
@@ -761,7 +746,7 @@ def _run_artifact_download(ctx, artifact_type: str, **kwargs) -> None:
     Handles the common pattern across all artifact download commands.
 
     Exception and auth-bootstrap paths are routed through the shared
-    ``with_auth_and_errors`` runtime so download commands match decorator-based
+    ``run_client_workflow`` runtime so download commands match decorator-based
     commands for ``--json`` error envelopes, auth-required UX, verbose logging,
     and exit-code policy.
 
@@ -771,16 +756,16 @@ def _run_artifact_download(ctx, artifact_type: str, **kwargs) -> None:
     typed handler — it preserves the legacy `{"error": "<msg>"}` JSON shape
     that scripts already depend on, and exits 1 directly.
 
-    Missing storage files are handled inside ``with_auth_and_errors`` before
+    Missing storage files are handled inside ``run_client_workflow`` before
     the command body runs. ``FileNotFoundError`` raised by the download body
     still reaches the typed error handler as an unexpected command failure.
     """
     config = ARTIFACT_CONFIGS[artifact_type]
     json_output = kwargs.get("json_output", False)
 
-    async def body(client_auth: AuthTokens) -> dict[str, Any]:
+    async def body(client: NotebookLMClient) -> dict[str, Any]:
         return await _download_artifacts_generic(
-            client_auth=client_auth,
+            client=client,
             artifact_type_name=artifact_type,
             artifact_kind=config["kind"],
             file_extension=config["extension"],
@@ -788,11 +773,12 @@ def _run_artifact_download(ctx, artifact_type: str, **kwargs) -> None:
             **kwargs,
         )
 
-    result = with_auth_and_errors(
+    result = run_client_workflow(
         ctx,
         command_name=f"download_{artifact_type.replace('-', '_')}",
         json_output=json_output,
         body=body,
+        client_factory=NotebookLMClient,
     )
 
     if json_output:
