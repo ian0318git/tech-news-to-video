@@ -13,44 +13,13 @@ from typing import TYPE_CHECKING, Any, NoReturn
 import httpx
 
 from ._authed_transport import (
-    MAX_RETRY_AFTER_SECONDS as MAX_RETRY_AFTER_SECONDS,
-)
-from ._authed_transport import (
     AuthedTransport,
     _AuthSnapshot,
     _BuildRequest,
 )
-from ._authed_transport import (
-    _parse_retry_after as _parse_retry_after,
-)
-from ._authed_transport import (
-    _TransportAuthExpired as _TransportAuthExpired,
-)
-from ._authed_transport import (
-    _TransportRateLimited as _TransportRateLimited,
-)
-from ._authed_transport import (
-    _TransportServerError as _TransportServerError,
-)
 from ._client_metrics import ClientMetrics
 from ._cookie_persistence import CookiePersistence
-
-# Synthetic-error helpers — re-exported so ``tests/conftest.py``,
-# ``tests/unit/test_vcr_config.py``, and any other test that imports
-# them through ``notebooklm._core`` keep resolving them as documented.
-# The pre-Tier-12 ``_SyntheticErrorTransport`` httpx transport was
-# deleted in PR 12.9 (substitution moved into
-# ``ErrorInjectionMiddleware`` in PR 12.6); only the env-var resolver
-# and the startup guard remain.
-from ._error_injection import (
-    ERROR_INJECT_ENV_VAR as ERROR_INJECT_ENV_VAR,
-)
-from ._error_injection import (
-    _get_error_injection_mode as _get_error_injection_mode,
-)
-from ._error_injection import (
-    _refuse_synthetic_error_outside_test_context as _refuse_synthetic_error_outside_test_context,
-)
+from ._error_injection import _refuse_synthetic_error_outside_test_context
 from ._kernel import Kernel
 from ._loop_affinity import assert_bound_loop
 from ._middleware import (
@@ -67,92 +36,33 @@ from ._reqid_counter import DEFAULT_STEP as _REQID_DEFAULT_STEP
 from ._reqid_counter import ReqidCounter
 from ._rpc_executor import RpcExecutor
 from ._session_auth import AuthRefreshCoordinator
-
-# Re-exports for the public-on-private import contract. ``_core.py``'s preamble
-# historically held the ``DEFAULT_*`` constants, the auth-error helpers, and the
-# test-only synthetic-error transport plumbing inline. They now live in
-# dedicated seam modules; the imports below preserve the
-# ``from notebooklm._core import …`` surface that tests and first-party callers
-# rely on. Each ``as`` alias keeps ruff's ``unused-import`` lint satisfied while
-# making the re-export intent explicit at the source.
 from ._session_config import (
-    DEFAULT_CONNECT_TIMEOUT as DEFAULT_CONNECT_TIMEOUT,
-)
-from ._session_config import (
-    DEFAULT_KEEPALIVE_MIN_INTERVAL as DEFAULT_KEEPALIVE_MIN_INTERVAL,
-)
-from ._session_config import (
-    DEFAULT_MAX_CONCURRENT_RPCS as DEFAULT_MAX_CONCURRENT_RPCS,
-)
-from ._session_config import (
-    DEFAULT_MAX_CONCURRENT_UPLOADS as DEFAULT_MAX_CONCURRENT_UPLOADS,
-)
-from ._session_config import (
-    DEFAULT_TIMEOUT as DEFAULT_TIMEOUT,
-)
-from ._session_config import (
+    DEFAULT_CONNECT_TIMEOUT,
+    DEFAULT_KEEPALIVE_MIN_INTERVAL,
+    DEFAULT_MAX_CONCURRENT_RPCS,
+    DEFAULT_MAX_CONCURRENT_UPLOADS,
+    DEFAULT_TIMEOUT,
     normalize_max_concurrent_uploads,
 )
-
-# Cross-seam helpers — re-exported so ``from notebooklm._core import
-# is_auth_error`` keeps working for sub-clients and tests.
-from ._session_helpers import (
-    AUTH_ERROR_PATTERNS as AUTH_ERROR_PATTERNS,
-)
-from ._session_helpers import (
-    _resolve_keepalive_interval as _resolve_keepalive_interval,
-)
-from ._session_helpers import (
-    is_auth_error as is_auth_error,
-)
+from ._session_helpers import _resolve_keepalive_interval
 from ._session_lifecycle import ClientLifecycle, CookieRotator, CookieSaver
-from ._transport_drain import TransportDrainTracker
-
-# Re-exported so the existing import path ``from notebooklm._core import
-# _TransportOperationToken`` keeps working after the dataclass moved into
-# ``_transport_drain``. ``_transport_drain`` is the source of truth for the token
-# shape; the alias below is the backwards-compat anchor.
-from ._transport_drain import _TransportOperationToken as _TransportOperationToken
-
-# ``save_cookies_to_storage`` is re-exported as ``notebooklm._core.save_cookies_to_storage``
-# so existing ``monkeypatch.setattr("notebooklm._core.save_cookies_to_storage", …)``
-# sites in tests keep working (used in 8+ test files). The lifecycle helper
-# (``_session_lifecycle.ClientLifecycle.save_cookies``) reads the attribute via
-# ``from . import _core; _core.save_cookies_to_storage`` at call time so the
-# monkeypatched value is what runs on the live save path.
-#
-# ``_rotate_cookies`` is re-exported on the same module-level attribute surface
-# so ``tests/unit/concurrency/test_close_cancellation_leak.py:138``'s
-# ``monkeypatch.setattr("notebooklm._core._rotate_cookies", …)`` keeps
-# affecting the live keepalive loop (the lifecycle helper resolves it via
-# ``from . import _core; _core._rotate_cookies`` at call time).
+from ._transport_drain import TransportDrainTracker, _TransportOperationToken
 from .auth import (
     AuthTokens,
     CookieSnapshot,
 )
 from .auth import (
-    _rotate_cookies as _rotate_cookies,
-)
-from .auth import (
     authuser_query as _authuser_query_value,
 )
 from .auth import (
-    build_cookie_jar as build_cookie_jar,
-)
-from .auth import (
     format_authuser_value as _format_authuser_header_value,
-)
-from .auth import (
-    save_cookies_to_storage as save_cookies_to_storage,
 )
 from .types import ClientMetricsSnapshot, RpcTelemetryEvent
 
 if TYPE_CHECKING:
     from .types import ConnectionLimits
 
-from .rpc import (
-    RPCMethod,
-)
+from .rpc import RPCMethod
 
 logger = logging.getLogger(__name__)
 _OBSERVABILITY_INIT_LOCK = threading.Lock()
@@ -189,26 +99,37 @@ def _decode_response_late_bound(raw: str, rpc_id: str, *, allow_null: bool = Fal
 
 
 def _sleep_late_bound(seconds: float) -> Awaitable[Any]:
-    from . import _core
+    """Late-bound ``asyncio.sleep`` for tests that patch the module seam.
 
-    return _core.asyncio.sleep(seconds)
+    Tests patch ``notebooklm._session.asyncio.sleep`` (this module is
+    where the symbol is referenced) — e.g. ``test_authed_transport.py``
+    and ``test_rpc_executor.py``. Patching the ``asyncio.sleep``
+    attribute on the module singleton affects this function regardless
+    of whether the ``import asyncio`` lives at module top or inside the
+    body, because both forms resolve through the same ``asyncio`` module
+    object; the function-body import is kept for symmetry with the
+    other late-bound seams in this module.
+    """
+    import asyncio
+
+    return asyncio.sleep(seconds)
 
 
 def _live_is_auth_error(exc: Exception) -> bool:
-    """Resolve ``is_auth_error`` through the compatibility shim at call time.
+    """Resolve ``is_auth_error`` against the canonical seam at call time.
 
     Python function-body name lookup hits the module ``__dict__`` on each
-    call, so a ``monkeypatch.setattr("notebooklm._core.is_auth_error",
-    ...)`` swap is observed immediately. Used by every chain seed site
-    that wires ``AuthRefreshMiddleware`` and by ``RpcExecutor`` so the
-    project-wide test idiom of patching the symbol on this module stays
-    live without each seed site re-implementing the lambda. PR 12.9
-    cleanup of the prior inline lambdas / ``globals()["is_auth_error"]``
-    indirections.
+    call, so a ``monkeypatch.setattr("notebooklm._session_helpers.is_auth_error", ...)``
+    swap is observed immediately. Used by every chain seed site that
+    wires ``AuthRefreshMiddleware`` and by ``RpcExecutor`` so the
+    project-wide test idiom of patching the symbol on the canonical
+    module stays live without each seed site re-implementing the lambda.
+    The historical ``notebooklm._core`` indirection was removed in
+    v0.5.0 when the ``_core`` compatibility shim was deleted.
     """
-    from . import _core
+    from ._session_helpers import is_auth_error
 
-    return _core.is_auth_error(exc)
+    return is_auth_error(exc)
 
 
 class Session:
@@ -325,16 +246,16 @@ class Session:
                 the on-disk cookie writer used by
                 :meth:`ClientLifecycle.save_cookies`. ``None`` (default)
                 resolves to :func:`_default_cookie_saver`, which late-binds
-                to ``notebooklm._core.save_cookies_to_storage`` so the
-                existing test-monkeypatch surface keeps affecting the live
-                path. Must be sync (``def``, not ``async def``) — it runs
-                inside ``asyncio.to_thread``. Custom callables bypass the
-                ``_core`` lookup entirely.
+                to ``notebooklm._auth.storage.save_cookies_to_storage`` so
+                the canonical-seam monkeypatch surface keeps affecting the
+                live path. Must be sync (``def``, not ``async def``) — it
+                runs inside ``asyncio.to_thread``. Custom callables bypass
+                the late-bind hop entirely.
             cookie_rotator: Optional injectable seam (Phase 2 PR 3)
                 overriding the keepalive-loop rotator. ``None`` (default)
                 resolves to :func:`_default_cookie_rotator`, which late-binds
-                to ``notebooklm._core._rotate_cookies``. Must be async — it
-                is awaited from :meth:`ClientLifecycle._keepalive_loop`.
+                to ``notebooklm._auth.keepalive._rotate_cookies``. Must be
+                async — it is awaited from :meth:`ClientLifecycle._keepalive_loop`.
 
         Raises:
             ValueError: If ``keepalive`` or ``keepalive_min_interval`` is not a
@@ -451,10 +372,10 @@ class Session:
         # HTTP-client lifecycle — owns loop binding, keepalive, and close
         # ordering while delegating the live ``httpx.AsyncClient`` to
         # ``self._kernel``. Compat properties further down preserve the legacy
-        # ivar names. The ``_resolve_keepalive_interval`` clamp now lives in
-        # :mod:`notebooklm._session_helpers` and is re-exported above so
-        # ``from notebooklm._core import _resolve_keepalive_interval`` keeps
-        # resolving; we call it through the re-exported binding here.
+        # ivar names. The ``_resolve_keepalive_interval`` clamp lives in
+        # :mod:`notebooklm._session_helpers` and is imported above; we call
+        # it directly here. (The historical ``notebooklm._core`` re-export
+        # was removed in v0.5.0.)
         #
         # Event-loop affinity guard rationale: the lifecycle captures
         # ``asyncio.get_running_loop()`` in ``_bound_loop`` at ``open()`` time
@@ -527,82 +448,55 @@ class Session:
 
     @property
     def _loaded_cookie_snapshot(self) -> CookieSnapshot | None:
-        """Compatibility bridge to the cookie save baseline."""
+        """Compatibility bridge to the cookie save baseline.
+
+        Phase 4 deleted the matching ``.setter``; write on
+        ``self.cookie_persistence.loaded_cookie_snapshot`` directly.
+        """
         return self.cookie_persistence.loaded_cookie_snapshot
 
-    @_loaded_cookie_snapshot.setter
-    def _loaded_cookie_snapshot(self, value: CookieSnapshot | None) -> None:
-        self.cookie_persistence.loaded_cookie_snapshot = value
-
     # ``ClientMetrics`` compat bridges. The three observability ivars now live
-    # on ``self._metrics_obj``; each setter calls ``_ensure_observability_state``
-    # first so a ``__new__``-built fixture (no ``__init__`` ran) can still
-    # assign ``core._on_rpc_event = cb`` and have it write through.
+    # on ``self._metrics_obj``; the read-side bridges call
+    # ``_ensure_observability_state`` first so a ``__new__``-built fixture
+    # (no ``__init__`` ran) can still read through. Phase 4 deleted the
+    # matching ``.setter`` halves — write on ``self._metrics_obj.X``
+    # directly (after calling ``_ensure_observability_state()`` if you
+    # constructed via ``Session.__new__``).
     @property
     def _metrics_lock(self) -> threading.Lock:
         self._ensure_observability_state()
         return self._metrics_obj._metrics_lock
-
-    @_metrics_lock.setter
-    def _metrics_lock(self, value: threading.Lock) -> None:
-        self._ensure_observability_state()
-        self._metrics_obj._metrics_lock = value
 
     @property
     def _metrics(self) -> ClientMetricsSnapshot:
         self._ensure_observability_state()
         return self._metrics_obj._metrics
 
-    @_metrics.setter
-    def _metrics(self, value: ClientMetricsSnapshot) -> None:
-        self._ensure_observability_state()
-        self._metrics_obj._metrics = value
-
     @property
     def _on_rpc_event(self) -> Callable[[RpcTelemetryEvent], object] | None:
         self._ensure_observability_state()
         return self._metrics_obj._on_rpc_event
 
-    @_on_rpc_event.setter
-    def _on_rpc_event(self, value: Callable[[RpcTelemetryEvent], object] | None) -> None:
-        self._ensure_observability_state()
-        self._metrics_obj._on_rpc_event = value
-
     # ``TransportDrainTracker`` compat bridges. The four drain ivars now live
-    # on ``self._drain_tracker``; each setter calls
+    # on ``self._drain_tracker``; the read-side bridges call
     # ``_ensure_observability_state`` first so a ``__new__``-built fixture
-    # (no ``__init__`` ran) can still assign (e.g.) ``core._draining = True``
-    # or ``core._drain_condition = asyncio.Condition()`` and have it write
-    # through to a real helper.
+    # (no ``__init__`` ran) can still read through. Phase 4 deleted the
+    # matching ``.setter`` halves — write on ``self._drain_tracker.X``
+    # directly.
     @property
     def _in_flight_posts(self) -> int:
         self._ensure_observability_state()
         return self._drain_tracker._in_flight_posts
-
-    @_in_flight_posts.setter
-    def _in_flight_posts(self, value: int) -> None:
-        self._ensure_observability_state()
-        self._drain_tracker._in_flight_posts = value
 
     @property
     def _draining(self) -> bool:
         self._ensure_observability_state()
         return self._drain_tracker._draining
 
-    @_draining.setter
-    def _draining(self, value: bool) -> None:
-        self._ensure_observability_state()
-        self._drain_tracker._draining = value
-
     @property
     def _drain_condition(self) -> asyncio.Condition | None:
         self._ensure_observability_state()
         return self._drain_tracker._drain_condition
-
-    @_drain_condition.setter
-    def _drain_condition(self, value: asyncio.Condition | None) -> None:
-        self._ensure_observability_state()
-        self._drain_tracker._drain_condition = value
 
     # ``_operation_depths`` compat bridge dropped (D1-audit-full): zero
     # external callers; direct ivar lives on ``self._drain_tracker``.
@@ -644,13 +538,11 @@ class Session:
 
     @property
     def _refresh_lock(self) -> asyncio.Lock | None:
+        """Phase 4 deleted the matching ``.setter``; write on
+        ``self._auth_coord._refresh_lock`` directly.
+        """
         self._ensure_auth_coord()
         return self._auth_coord._refresh_lock
-
-    @_refresh_lock.setter
-    def _refresh_lock(self, value: asyncio.Lock | None) -> None:
-        self._ensure_auth_coord()
-        self._auth_coord._refresh_lock = value
 
     @property
     def _refresh_task(self) -> asyncio.Task[AuthTokens] | None:
@@ -752,13 +644,12 @@ class Session:
 
     @property
     def _keepalive_interval(self) -> float | None:
+        """Phase 4 deleted the matching ``.setter`` (zero external write
+        sites); write on ``self._lifecycle._keepalive_interval`` directly
+        if a test needs to override it.
+        """
         self._ensure_lifecycle()
         return self._lifecycle._keepalive_interval
-
-    @_keepalive_interval.setter
-    def _keepalive_interval(self, value: float | None) -> None:
-        self._ensure_lifecycle()
-        self._lifecycle._keepalive_interval = value
 
     @property
     def _keepalive_storage_path(self) -> Path | None:
@@ -829,15 +720,13 @@ class Session:
     def _pending_polls(self) -> PendingPolls:
         """Deprecated compatibility view of ``poll_registry.pending``.
 
-        The active artifact polling registry is feature-owned. This bridge
-        remains only for external callers and tests that still read or assign
-        ``Session._pending_polls`` directly.
+        The active artifact polling registry is feature-owned. Phase 4
+        deleted the matching ``.setter``; write on
+        ``self.poll_registry.pending`` directly. The read-side bridge
+        remains for external callers that still query
+        ``Session._pending_polls``.
         """
         return self.poll_registry.pending
-
-    @_pending_polls.setter
-    def _pending_polls(self, value: PendingPolls) -> None:
-        self.poll_registry.pending = value
 
     def register_drain_hook(self, name: str, hook: Callable[[], Awaitable[None]]) -> None:
         """Register or replace a feature-owned close-time drain hook."""
@@ -1112,18 +1001,16 @@ class Session:
 
         The adapters intentionally resolve through this module at call time so
         existing tests and private callers that monkeypatch
-        ``notebooklm._core.is_auth_error`` (Wave 3 will rename this seam) or
-        ``notebooklm._session.asyncio.sleep`` (Phase 2 PR 5 canonical target —
-        previously the deprecated ``notebooklm._core.asyncio.sleep`` shim)
-        still affect live transport behavior after the collaborator has been
-        constructed. Backoff jitter routes through ``notebooklm._backoff``,
-        which in turn calls ``random.uniform`` on the shared module.
+        ``notebooklm._session_helpers.is_auth_error`` or
+        ``notebooklm._session.asyncio.sleep`` still affect live transport
+        behavior after the collaborator has been constructed. Backoff
+        jitter routes through ``notebooklm._backoff``, which in turn calls
+        ``random.uniform`` on the shared module.
         ``tests/unit/test_authed_transport.py`` relies on monkeypatching
-        ``notebooklm._session.random.uniform`` (Phase 2 PR 5 canonical
-        target — previously the deprecated ``notebooklm._core.random.uniform``
-        shim) to reach that jitter path; keep the otherwise-unused module
-        import so the path stays available. Attribute patches on the
-        singleton ``random`` module are visible to all importers.
+        ``notebooklm._session.random.uniform`` to reach that jitter path;
+        keep the otherwise-unused module import so the path stays
+        available. Attribute patches on the singleton ``random`` module
+        are visible to all importers.
         """
         transport = getattr(self, "_authed_transport", None)
         if transport is None:
@@ -1135,14 +1022,10 @@ class Session:
         """Return the RPC execution collaborator, lazily initialized.
 
         The adapters resolve through this module at call time so existing
-        monkeypatches of ``notebooklm.rpc.decode_response`` (Phase 2 PR 5
-        canonical target — previously the deprecated
-        ``notebooklm._core.decode_response`` shim),
-        ``notebooklm._core.is_auth_error`` (Wave 3 will rename this seam),
-        and ``notebooklm._session.asyncio.sleep`` (Phase 2 PR 5 canonical
-        target — previously the deprecated ``notebooklm._core.asyncio.sleep``
-        shim) keep affecting live RPC behavior after the collaborator has
-        been constructed.
+        monkeypatches of ``notebooklm.rpc.decode_response``,
+        ``notebooklm._session_helpers.is_auth_error``, and
+        ``notebooklm._session.asyncio.sleep`` keep affecting live RPC
+        behavior after the collaborator has been constructed.
         """
         executor = getattr(self, "_rpc_executor", None)
         if executor is None:
@@ -1179,13 +1062,13 @@ class Session:
 
         Thin facade over :meth:`ClientLifecycle.save_cookies`. The storage
         writer resolves through ``self._lifecycle._cookie_saver`` — by
-        default the Wave-1 ``_default_cookie_saver`` wrapper that
-        late-binds to ``notebooklm._core.save_cookies_to_storage`` so the
-        legacy ``monkeypatch.setattr("notebooklm._core.save_cookies_to_storage", …)``
-        idiom keeps affecting the live save path. Phase 2 PR 4 added the
-        ``cookie_saver=`` constructor kwarg as the preferred test-side
-        seam; passing a custom callable there bypasses the ``_core``
-        indirection entirely.
+        default the ``_default_cookie_saver`` wrapper that late-binds to
+        ``notebooklm._auth.storage.save_cookies_to_storage`` so a
+        ``monkeypatch.setattr("notebooklm._auth.storage.save_cookies_to_storage", …)``
+        on the canonical seam keeps affecting the live save path. Phase 2
+        PR 4 added the ``cookie_saver=`` constructor kwarg as the
+        preferred test-side seam; passing a custom callable there bypasses
+        the late-bind hop entirely.
         """
         self._ensure_lifecycle()
         await self._lifecycle.save_cookies(self, jar, path)

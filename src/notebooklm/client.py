@@ -45,12 +45,12 @@ from ._note_service import NoteService
 from ._notebooks import NotebooksAPI
 from ._notes import NotesAPI
 from ._research import ResearchAPI
-from ._session import (
+from ._session import Session
+from ._session_config import (
     DEFAULT_KEEPALIVE_MIN_INTERVAL,
     DEFAULT_MAX_CONCURRENT_RPCS,
     DEFAULT_MAX_CONCURRENT_UPLOADS,
     DEFAULT_TIMEOUT,
-    Session,
 )
 from ._session_lifecycle import CookieRotator, CookieSaver
 from ._settings import SettingsAPI
@@ -202,16 +202,16 @@ class NotebookLMClient:
             cookie_saver: Optional injectable seam (Phase 2 PR 3) overriding
                 the on-disk cookie writer used on close / refresh / keepalive.
                 ``None`` (default) preserves the current behavior of resolving
-                ``notebooklm._core.save_cookies_to_storage`` via a late-bound
-                wrapper. Must be sync (``def``, not ``async def``) — it runs
-                inside ``asyncio.to_thread``. Custom callables bypass the
-                ``_core`` lookup entirely.
+                ``notebooklm._auth.storage.save_cookies_to_storage`` via a
+                late-bound wrapper. Must be sync (``def``, not ``async def``)
+                — it runs inside ``asyncio.to_thread``. Custom callables
+                bypass the late-bind hop entirely.
             cookie_rotator: Optional injectable seam (Phase 2 PR 3)
                 overriding the keepalive-loop cookie rotator. ``None``
                 (default) preserves the current behavior of resolving
-                ``notebooklm._core._rotate_cookies`` via a late-bound
-                wrapper. Must be async — it is awaited from the keepalive
-                loop.
+                ``notebooklm._auth.keepalive._rotate_cookies`` via a
+                late-bound wrapper. Must be async — it is awaited from
+                the keepalive loop.
         """
         # Normalize the effective storage path onto the auth object so every
         # downstream code path (refresh_auth, Session.close on-close save,

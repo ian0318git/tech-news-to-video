@@ -33,16 +33,16 @@ import httpx
 import pytest
 
 from conftest import install_post_as_stream
-from notebooklm._authed_transport import AuthedTransport
-from notebooklm._logging import get_request_id
-from notebooklm._middleware import RpcRequest, RpcResponse
-from notebooklm._session import (
-    Session,
+from notebooklm._authed_transport import (
+    AuthedTransport,
     _AuthSnapshot,
     _TransportAuthExpired,
     _TransportRateLimited,
     _TransportServerError,
 )
+from notebooklm._logging import get_request_id
+from notebooklm._middleware import RpcRequest, RpcResponse
+from notebooklm._session import Session
 from notebooklm.auth import AuthTokens
 from notebooklm.rpc import RPCMethod
 
@@ -96,23 +96,6 @@ def _status_error(code: int, *, retry_after: str | None = None) -> httpx.HTTPSta
     request = httpx.Request("POST", "https://example.test/x")
     response = httpx.Response(code, request=request, headers=headers)
     return httpx.HTTPStatusError(f"HTTP {code}", request=request, response=response)
-
-
-def test_core_reexports_transport_private_names():
-    """Private imports from ``notebooklm._core`` remain source compatible."""
-    from notebooklm import _authed_transport, _core
-
-    moved_names = [
-        "_AuthSnapshot",
-        "_BuildRequest",
-        "_TransportAuthExpired",
-        "_TransportRateLimited",
-        "_TransportServerError",
-        "_parse_retry_after",
-    ]
-    for name in moved_names:
-        assert getattr(_core, name) is getattr(_authed_transport, name)
-    assert _core.MAX_RETRY_AFTER_SECONDS == _authed_transport.MAX_RETRY_AFTER_SECONDS
 
 
 def test_authed_transport_has_no_runtime_core_imports():

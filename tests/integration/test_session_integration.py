@@ -7,7 +7,8 @@ import pytest
 
 from conftest import install_post_as_stream
 from notebooklm import AuthTokens, NotebookLMClient
-from notebooklm._session import Session, is_auth_error
+from notebooklm._session import Session
+from notebooklm._session_helpers import is_auth_error
 from notebooklm.rpc import (
     AuthError,
     ClientError,
@@ -291,7 +292,10 @@ class TestRPCCallAuthRetry:
             core._refresh_callback = refresh_callback
             import asyncio
 
-            core._refresh_lock = asyncio.Lock()
+            # Phase 4: ``Session._refresh_lock`` setter was removed; write on
+            # the collaborator directly. ``Session.__init__`` already built
+            # ``_auth_coord`` so this direct write is safe.
+            core._auth_coord._refresh_lock = asyncio.Lock()
 
             success_response = MagicMock()
             success_response.status_code = 200
@@ -515,7 +519,7 @@ class TestBuildUrlHL:
 
     @staticmethod
     def _snapshot_for(core):
-        from notebooklm._session import _AuthSnapshot
+        from notebooklm._authed_transport import _AuthSnapshot
 
         return _AuthSnapshot(
             csrf_token=core.auth.csrf_token,
