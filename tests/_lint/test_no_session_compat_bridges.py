@@ -52,7 +52,12 @@ FORBIDDEN_PROPERTIES: frozenset[str] = frozenset(
     {
         # ClientLifecycle bridges retired in session-shrink PR 6 — readers now
         # go straight to ``session._kernel`` / ``session._lifecycle`` or use
-        # the public ``session.bound_loop`` property.
+        # the public ``session.bound_loop`` property. Lifecycle bridge names
+        # (``_http_client``, ``_bound_loop``, ``_timeout``, ``_connect_timeout``,
+        # ``_limits``, ``_keepalive_interval``, ``_keepalive_task``) are
+        # intentionally NOT listed below: ``Session`` no longer defines them,
+        # so any stray reference raises ``AttributeError`` at access time —
+        # no lint guard required.
         # AuthRefreshCoordinator bridges retired in session-shrink PR 5 —
         # readers (and the two ``_refresh_callback`` writers in
         # ``tests/integration/test_session_integration.py``) now go straight

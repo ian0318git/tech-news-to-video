@@ -62,6 +62,7 @@ def resolve_partial_artifact_id(artifacts: list[ArtifactDict], artifact_id: str)
             title_of=lambda a: a["title"],
             error_factory=ValueError,
             emit_match_status=False,
+            allow_full_id_passthrough=False,
         )
     except ValueError as e:
         # Re-shape the canonical "No artifact found starting with..." /

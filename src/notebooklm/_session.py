@@ -677,7 +677,7 @@ class Session:
         3. Saves cookies one last time through ``save_cookies``.
         4. Calls ``aclose()`` under :func:`asyncio.shield` so cancellation
            arriving mid-close cannot leak the underlying httpx transport.
-        5. Nulls out ``_http_client``, ``_authed_transport`` and
+        5. Nulls out ``_kernel._http_client``, ``_authed_transport`` and
            ``_rpc_executor`` so a follow-up :meth:`open` rebuilds the
            transport collaborators against the new ``httpx.AsyncClient``.
         """

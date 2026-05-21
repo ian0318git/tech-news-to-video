@@ -49,9 +49,6 @@ def _format_status_message(artifact_type: str, elapsed: float | None = None) -> 
     return f"{base} [{int(elapsed)}s elapsed]"
 
 
-_status_with_elapsed = status_with_elapsed
-
-
 def calculate_backoff_delay(
     attempt: int,
     initial_delay: float = RETRY_INITIAL_DELAY,

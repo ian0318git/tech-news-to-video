@@ -58,10 +58,15 @@ Design constraints (load-bearing — see ``tests/unit/test_client_keepalive.py``
 
 Field names (``_http_client``, ``_bound_loop``, ``_keepalive_task``,
 ``_keepalive_interval``, ``_keepalive_storage_path``, ``_timeout``,
-``_connect_timeout``, ``_limits``) deliberately mirror the legacy
-``Session`` ivars so the compat ``@property`` bridges on ``Session``
-can stay readable for reviewers grepping the codebase. ``_http_client`` is now
-a property bridge to the Kernel rather than lifecycle-owned storage.
+``_connect_timeout``, ``_limits``) historically mirrored the legacy
+``Session`` ivars when ``Session`` still held ``@property`` bridges that
+forwarded to them. Those bridges were retired in the session-shrink arc
+(see ``tests/_lint/test_no_session_compat_bridges.py`` and the
+"closed for the property-shim debt" note in ``docs/architecture.md``);
+the names are kept verbatim now for grep discoverability across the test
+suite — callers reach the storage directly via ``session._lifecycle.<attr>``
+or the public ``session.bound_loop`` property. ``_http_client`` is a thin
+accessor returning the live ``httpx.AsyncClient`` from the concrete Kernel.
 """
 
 from __future__ import annotations
@@ -194,9 +199,11 @@ class _LifecycleHost(Protocol):
 class ClientLifecycle:
     """Owns HTTP-client open/close, keepalive, cookie persistence on close.
 
-    Field names mirror the legacy ``Session`` ivars so the compat
-    ``@property`` bridges on ``Session`` can delegate with
-    ``return self._lifecycle._<attr>`` and stay readable.
+    Field names mirror the legacy ``Session`` ivars for grep discoverability
+    across the test suite. The ``@property`` bridges that historically
+    delegated with ``return self._lifecycle._<attr>`` were retired in the
+    session-shrink arc; callers now reach these fields directly via
+    ``session._lifecycle.<attr>``.
 
     Construction is event-loop-agnostic — only plain values and ``None``
     placeholders are stored. The ``httpx.AsyncClient`` and the keepalive
