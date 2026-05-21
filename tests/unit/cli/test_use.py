@@ -6,14 +6,35 @@ helpers live in ``_session_helpers.py``; the proxy-block-aware
 ``patch_session_login_dual`` lives in ``tests/_fixtures``.
 """
 
+import inspect
 import json
 from datetime import datetime
 from unittest.mock import AsyncMock, patch
+
+from click.testing import CliRunner
 
 from notebooklm.notebooklm_cli import cli
 from notebooklm.types import Notebook
 
 from .conftest import create_mock_client, patch_main_cli_client
+
+
+def _split_stream_runner() -> CliRunner:
+    """Return a CliRunner whose stdout and stderr are captured separately.
+
+    The shared ``runner`` fixture in ``conftest.py`` uses ``CliRunner()`` with
+    default settings, which on Click 8.1.x means ``mix_stderr=True`` —
+    ``result.stdout`` then contains a mixed stream and ``result.stderr``
+    raises ``ValueError("stderr not separately captured")``. The
+    ``--json`` purity test needs pure-stdout / pure-stderr access to verify
+    that a diagnostic does not leak into stdout. Click 8.2+ removed
+    ``mix_stderr`` entirely (streams are always separate); 8.1.x supports
+    ``mix_stderr=False``. Detect via ``inspect.signature`` so this is
+    portable across the project's supported Click range (``>=8.0.0,<9``).
+    """
+    if "mix_stderr" in inspect.signature(CliRunner).parameters:
+        return CliRunner(mix_stderr=False)
+    return CliRunner()
 
 
 class TestUseCommand:
@@ -207,6 +228,78 @@ class TestUseJsonOutput:
         # Mark verification status so script callers can detect unverified IDs.
         assert data.get("verified") is False
         assert mock_context_file.exists()
+
+    def test_use_json_with_partial_id_keeps_stdout_pure(self, mock_auth, mock_context_file):
+        """`use <partial-id> --json` must NOT print the "Matched: ..." diagnostic to stdout.
+
+        Regression test for the bug where the `use` command called
+        ``resolve_notebook_id(client, notebook_id)`` without forwarding
+        ``json_output``, so the partial-ID-match "Matched: …" diagnostic
+        line went to stdout in JSON mode and broke ``json.loads`` for
+        scripted callers.
+
+        Contract: in `--json` mode, stdout MUST be parseable JSON. The
+        "Matched: …" diagnostic must route to stderr.
+
+        Uses ``_split_stream_runner()`` instead of the shared ``runner``
+        fixture because the shared one defaults to ``mix_stderr=True`` on
+        Click 8.1.x — that would (a) put the diagnostic into ``stdout``
+        making the bug invisible to this test, and (b) raise on
+        ``result.stderr`` access. Project supports Click ``>=8.0.0,<9``.
+        """
+        runner = _split_stream_runner()
+        full_id = "nb_partial_resolved_full_id"
+        with patch_main_cli_client() as mock_client_cls:
+            mock_client = create_mock_client()
+            # Real resolver path: list() returns the candidates so the
+            # prefix-match branch fires and emits "Matched: …".
+            mock_client.notebooks.list = AsyncMock(
+                return_value=[
+                    Notebook(
+                        id=full_id,
+                        title="Partial Match Notebook",
+                        created_at=datetime(2026, 5, 21),
+                        is_owner=True,
+                    ),
+                ]
+            )
+            mock_client.notebooks.get = AsyncMock(
+                return_value=Notebook(
+                    id=full_id,
+                    title="Partial Match Notebook",
+                    created_at=datetime(2026, 5, 21),
+                    is_owner=True,
+                )
+            )
+            mock_client_cls.return_value = mock_client
+
+            with patch(
+                "notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock
+            ) as mock_fetch:
+                mock_fetch.return_value = ("csrf", "session")
+                # NOTE: intentionally do NOT patch resolve_notebook_id —
+                # we want the real partial-ID resolver to run so we can
+                # verify it doesn't pollute stdout with "Matched: …".
+                result = runner.invoke(cli, ["use", "nb_partial", "--json"])
+
+        assert result.exit_code == 0, f"stdout={result.stdout!r} stderr={result.stderr!r}"
+        # Hard contract: stdout (what `notebooklm use --json > out.json`
+        # captures) MUST be pure parseable JSON, regardless of what
+        # diagnostics get printed alongside on stderr.
+        data = json.loads(result.stdout)
+        assert data["active_notebook_id"] == full_id
+        assert data["success"] is True
+        # The diagnostic must route to stderr, not stdout.
+        assert "Matched:" not in result.stdout, (
+            f"`use --json` leaked partial-ID diagnostic to stdout: {result.stdout!r}"
+        )
+        # Sanity-check that the diagnostic DID run somewhere (otherwise
+        # this test could silently regress to "resolver didn't emit at
+        # all"). The "Matched: …" line should appear on stderr.
+        assert "Matched:" in result.stderr, (
+            f"resolver diagnostic missing from stderr — test setup may not "
+            f"be exercising the partial-ID match branch: stderr={result.stderr!r}"
+        )
 
 
 class TestUseAuthAwareError:
