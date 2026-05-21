@@ -376,7 +376,6 @@ _TOP_LEVEL_EXCEPTION_EXPORTS = [
 ]
 
 _TYPES_PRIVATE_HELPER_SEAMS = [
-    "_ARTIFACT_TYPE_CODE_MAP",
     "_SOURCE_TYPE_COMPAT_MAP",
     "_datetime_from_timestamp",
     "_extract_artifact_url",
@@ -387,16 +386,11 @@ _TYPES_PRIVATE_HELPER_SEAMS = [
     "_extract_source_url",
     "_extract_video_artifact_url",
     "_is_valid_artifact_url",
-    "_map_artifact_kind",
     "_warned_artifact_types",
     "_warned_source_types",
 ]
 
-_TYPES_PRIVATE_EXTERNAL_COMPAT_SEAMS = [
-    "_SOURCE_TYPE_CODE_MAP",
-    "_extract_notebook_sources_count",
-    "_safe_source_type",
-]
+_TYPES_PRIVATE_EXTERNAL_COMPAT_SEAMS: list[str] = []
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -597,7 +591,7 @@ def test_types_private_state_seams_are_live_objects(monkeypatch: pytest.MonkeyPa
     artifact_warnings: set[tuple[int | None, int | None]] = set()
     # ADR-007 seam-aliased object-target form: patch the canonical owners in
     # ``_types/{sources,artifacts}`` directly. ``notebooklm.types._warned_*``
-    # is a re-export (see ``types.py:117-118``), so the test must target the
+    # are re-exports of those canonical objects, so the test must target the
     # canonical home — patching the public facade would rebind only the
     # facade alias and not the module-global the parser reads.
     monkeypatch.setattr(_source_types_seam, "_warned_source_types", source_warnings)
