@@ -90,7 +90,11 @@ CONTEXT_FORBIDDEN_MODULES = CLI_COMMAND_MODULES | {
     "resolve",
     "runtime",
 }
-AUTH_RUNTIME_ALLOWED_MODULES = {"error_handler", "helpers"}
+AUTH_RUNTIME_ALLOWED_MODULES = {"error_handler", "helpers", "services"}
+# Within ``services``, only the AuthSource resolver is allowed — auth_runtime
+# is not a Click handler and must not reach into command-rendering services.
+# rev-1 CodeRabbit feedback on #962 (#auth_runtime_imports tightening).
+AUTH_RUNTIME_ALLOWED_SERVICE_MODULES = {"notebooklm.cli.services.auth_source"}
 RESOLVE_FORBIDDEN_MODULES = CLI_COMMAND_MODULES | {
     "auth_runtime",
     "completion",
@@ -539,8 +543,45 @@ def test_auth_runtime_imports_only_runtime_facade_collaborators() -> None:
 
     assert imports <= AUTH_RUNTIME_ALLOWED_MODULES, (
         "cli.auth_runtime must not import command, rendering, context, resolve, "
-        "input, or completion modules directly. "
+        "input, or completion modules directly. The ``services`` subpackage is "
+        "allowed because P3.T3 consolidated the auth-source precedence chain into "
+        ":class:`notebooklm.cli.services.auth_source.AuthSource`. "
         f"Offenders: {sorted(imports - AUTH_RUNTIME_ALLOWED_MODULES)}"
+    )
+
+    # Tighter check (rev-1 CodeRabbit feedback on #962): within ``services``,
+    # only ``services.auth_source`` is on the allowlist. Reaching into command
+    # rendering services from auth_runtime would re-create the layering bug
+    # P3.T3 fixed.
+    tree = ast.parse(AUTH_RUNTIME_PATH.read_text(encoding="utf-8"))
+    service_imports = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and (node.module or "").startswith("notebooklm.cli.services")
+    }
+    # Also catch absolute ``import notebooklm.cli.services.X`` forms
+    # (rev-2 CodeRabbit feedback on #962 — without this branch a bare
+    # ``import`` would silently bypass the layering guard).
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.startswith("notebooklm.cli.services"):
+                    service_imports.add(alias.name)
+    # Also catch relative imports of the form ``from .services.X import ...``
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.ImportFrom)
+            and node.level == 1
+            and (node.module or "").startswith("services")
+        ):
+            service_imports.add("notebooklm.cli." + (node.module or ""))
+
+    assert service_imports <= AUTH_RUNTIME_ALLOWED_SERVICE_MODULES, (
+        "cli.auth_runtime may only import from ``notebooklm.cli.services.auth_source`` "
+        "(the AuthSource resolver). Other service modules are command-rendering "
+        "collaborators and must stay out of the auth-runtime layer. "
+        f"Offenders: {sorted(service_imports - AUTH_RUNTIME_ALLOWED_SERVICE_MODULES)}"
     )
 
 
