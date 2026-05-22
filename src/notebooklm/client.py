@@ -21,6 +21,7 @@ Example:
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import logging
 import os
@@ -403,24 +404,105 @@ class NotebookLMClient:
         relying on fire-and-forget close semantics (e.g. via
         ``__aexit__``) will now block briefly on the drain step; pass
         ``drain=False`` explicitly to restore the old behavior.
+
+        Cancellation-safety contract (audit finding I12):
+
+        If the caller's task is cancelled while ``close(drain=True)`` is
+        still waiting on ``drain()`` (e.g. ``asyncio.wait_for`` deadline,
+        manual ``task.cancel()``), the underlying transport is STILL torn
+        down before the cancellation propagates. The drain await
+        explicitly catches ``CancelledError`` and schedules
+        ``Session.close()`` through ``asyncio.shield`` — the shield wraps
+        the inner close in a ``Task`` that survives the outer
+        cancellation, so the ``Kernel.aclose()`` it drives runs to
+        completion in the background. On the normal-success and
+        ``TimeoutError`` paths the same shielded close call runs inline.
+        ``ValueError`` (and any other unexpected exception) from
+        ``drain()`` propagates without an implicit close, matching the
+        pre-I12 caller-error semantics asserted by
+        ``test_close_with_invalid_drain_does_not_close_transport``.
+
+        Practical guarantee:
+
+        - **Normal-success and drain-timeout paths**: on return,
+          ``is_connected is False`` and the underlying
+          ``httpx.AsyncClient`` is closed synchronously.
+        - **Cancel-during-drain path** (single cancellation): the
+          shielded ``Session.close()`` runs to completion synchronously
+          before ``CancelledError`` is re-raised — Python does not
+          re-raise ``CancelledError`` to the same task without an
+          explicit re-cancel, so the await on the shielded Task
+          blocks normally. On return, ``is_connected is False`` and
+          the transport is closed.
+        - **Cancel-during-drain path** (re-cancellation while awaiting
+          the shielded close): the shielded ``Session.close()`` Task is
+          isolated from the second cancel by ``asyncio.shield`` and
+          continues running in the background; the second cancel
+          surfaces in the awaiter, is suppressed, and the *original*
+          ``CancelledError`` is re-raised. ``is_connected`` settles to
+          ``False`` once the background Task lands (callers can
+          ``await asyncio.sleep(0)`` or poll to observe it).
+
+        There is no path that leaves a live transport behind.
         """
         if drain:
+            drain_timeout_exc: TimeoutError | None = None
             try:
                 await self.drain(timeout=drain_timeout)
-            except TimeoutError as drain_exc:
+            except TimeoutError as exc:
+                # Drain deadline missed. Hold onto the exception and
+                # fall through to the shielded close below so callers
+                # see both the timeout signal AND a torn-down transport.
+                drain_timeout_exc = exc
+            except asyncio.CancelledError:
+                # Cancellation-safety contract (audit finding I12): if
+                # the caller's task is cancelled while drain() is
+                # waiting (e.g. ``asyncio.wait_for`` deadline, manual
+                # ``task.cancel()``), we MUST still tear down the
+                # transport before letting the cancel propagate. On a
+                # single cancellation this shielded await runs to
+                # completion synchronously (Python does not re-raise
+                # CancelledError without an explicit re-cancel). If a
+                # SECOND cancel arrives while we're parked here,
+                # ``asyncio.shield`` isolates the inner Session.close()
+                # Task so it continues in the background; the second
+                # cancel hits the awaiter and is swallowed below so the
+                # original CancelledError surfaces unchanged.
                 try:
-                    await self._session.close()
-                except Exception as close_exc:
+                    await asyncio.shield(self._session.close())
+                except (Exception, asyncio.CancelledError):
+                    # Swallow regular close failures and any re-cancel
+                    # propagated through the shield await so the
+                    # original CancelledError below is the one that
+                    # reaches the caller. The inner shielded Task
+                    # continues to run regardless.
+                    # NOTE: deliberately NOT catching ``BaseException`` —
+                    # ``KeyboardInterrupt`` and ``SystemExit`` are
+                    # process-exit signals that must propagate unchanged
+                    # (per CodeRabbit feedback on PR #950, comment
+                    # 3285205066).
+                    pass
+                raise
+            # Any other exception from drain (e.g. ``ValueError`` for a
+            # caller-provided invalid deadline) propagates here without
+            # an implicit close — matches pre-I12 caller-error semantics
+            # asserted by
+            # ``test_close_with_invalid_drain_does_not_close_transport``.
+
+            try:
+                await asyncio.shield(self._session.close())
+            except Exception as close_exc:
+                if drain_timeout_exc is not None:
                     logger.warning(
-                        "Suppressing close() error after drain timeout to preserve timeout "
-                        "signal: %s",
+                        "Suppressing close() error after drain timeout to "
+                        "preserve timeout signal: %s",
                         close_exc,
                     )
-                    raise drain_exc from close_exc
+                    raise drain_timeout_exc from close_exc
                 raise
-            else:
-                await self._session.close()
-                return
+            if drain_timeout_exc is not None:
+                raise drain_timeout_exc
+            return
         await self._session.close()
 
     def metrics_snapshot(self) -> ClientMetricsSnapshot:
