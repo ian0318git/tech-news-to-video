@@ -3,7 +3,7 @@
 This document describes the runtime shape of `notebooklm-py` after the
 v0.5.0 refactor program closed (Phases 1-4 of the multi-phase refactor
 plan; the proposal that drove the work is preserved at
-[`docs/refactor.md`](./refactor.md)). It is the canonical post-refactor
+[`docs/refactor-history.md`](./refactor-history.md)). It is the canonical post-refactor
 map.
 
 ## Layered overview
@@ -135,7 +135,7 @@ Exec  Ref    Life    Chain Drain   Tracker Coun  Pers
    |         |
    |         +--- refresh task + auth-snapshot lock
    |
-   +--- single RPC dispatch path (RpcExecutor.execute → chain → AuthedTransport → httpx)
+   +--- single RPC dispatch path (RpcExecutor.execute → chain → AuthedTransport → Kernel → httpx)
    |
    +--- Kernel (transport core; owns httpx.AsyncClient + cookie jar)
 ```
@@ -152,7 +152,7 @@ Exec  Ref    Life    Chain Drain   Tracker Coun  Pers
 | `CookiePersistence` | [`_cookie_persistence.py`](../src/notebooklm/_cookie_persistence.py) | Cookie-jar persistence + `__Secure-1PSIDTS` rotation. |
 | `IdempotencyRegistry` | [`_idempotency.py`](../src/notebooklm/_idempotency.py) | Policy/classification registry keyed by `(RPCMethod, operation_variant)`. `RpcExecutor.execute()` consults it to resolve `effective_disable_internal_retries` and to inject client tokens for `CLIENT_TOKEN_DEDUPE` methods (most entries are currently `UNCLASSIFIED`, a behaviour-neutral default). Not Session-owned, but part of the RPC dispatch path. Side-effect probing (`idempotent_create(...)`) is a separate mechanism not owned by this registry. |
 | `AuthedTransport` | [`_authed_transport.py`](../src/notebooklm/_authed_transport.py) | Single-attempt authed-POST seam (today's middleware-chain leaf); post-Tier-12 a pure POST, with all retry decisions (429 / 5xx via `RetryMiddleware`; 401 / 403 / 400-CSRF via `AuthRefreshMiddleware`) owned by the chain. Consumes the `_AuthedTransportHost` Protocol declared at module top. |
-| `Kernel` | [`_kernel.py`](../src/notebooklm/_kernel.py) | Pure transport core. Owns the `httpx.AsyncClient` and cookie jar; exposes `post()`, the `cookies` property, and `aclose()` (the close path wraps it in `asyncio.shield` from `ClientLifecycle.close()`). Concrete class behind the `Kernel` Protocol in `_session_contracts.py`; constructed by `Session.__init__()` at `_session.py:398`. The middleware-chain leaf is expected to migrate from `AuthedTransport.perform_authed_post` to `Kernel.post` per the Tier-13 migration plan (row 13.2; chain-leaf contract pinned in [ADR-009](./adr/0009-middleware-chain.md)). |
+| `Kernel` | [`_kernel.py`](../src/notebooklm/_kernel.py) | Pure transport core. Owns the `httpx.AsyncClient` and cookie jar; exposes `post()`, the `cookies` property, and `aclose()` (the close path wraps it in `asyncio.shield` from `ClientLifecycle.close()`). Concrete class behind the `Kernel` Protocol in `_session_contracts.py`; constructed by `Session.__init__()` at `_session.py:393`. The middleware-chain leaf is expected to migrate from `AuthedTransport.perform_authed_post` to `Kernel.post` per the Tier-13 migration plan (row 13.2; chain-leaf contract pinned in [ADR-009](./adr/0009-middleware-chain.md)). |
 
 ## Domain-service collaborators
 
@@ -231,5 +231,5 @@ directly.
 
 - [`CLAUDE.md`](../CLAUDE.md) — high-level navigation map for AI agents working in this repo.
 - [`docs/development.md`](./development.md) — how to add a new feature API.
-- [`docs/refactor.md`](./refactor.md) — historical narrative of the multi-phase refactor.
+- [`docs/refactor-history.md`](./refactor-history.md) — historical narrative of the multi-phase refactor + downstream migration tables.
 - [`docs/python-api.md`](./python-api.md) — public Python API surface.

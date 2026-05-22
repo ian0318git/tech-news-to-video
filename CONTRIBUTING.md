@@ -211,16 +211,15 @@ Agents should ignore files marked `Deprecated`.
 docs/
 ├── adr/                   # Architectural Decision Records (ADRs)
 ├── architecture.md        # Monolithic Session to composable capabilities architecture map
-├── auth-keepalive.md      # Cookie expiration mitigation strategies and keepalive loops
+├── auth-cookie-lifecycle.md      # Cookie expiration mitigation strategies and keepalive loops
 ├── cli-exit-codes.md      # CLI exit-code convention (binding contract for scripts/CI)
 ├── cli-reference.md       # CLI command reference
 ├── configuration.md       # Storage, profiles, and settings
 ├── deprecations.md        # Staged API deprecations tracker
 ├── development.md         # Architecture, testing, and VCR cassette practices
 ├── installation.md        # Canonical install guide (personas, extras, platform notes)
-├── migration-tier-12-to-13.md # Guide for cutover to Tier 13 composable APIs
 ├── python-api.md          # Python API reference
-├── refactor.md            # Post-refactor narrative and historical seams map
+├── refactor-history.md    # Historical record of the Tier 12/13 refactor + downstream migration tables
 ├── releasing.md           # Release checklist
 ├── rpc-development.md     # RPC capture and debugging
 ├── rpc-reference.md       # RPC payload structures and Content Type Codes
