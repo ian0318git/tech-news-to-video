@@ -119,21 +119,21 @@ def _make_client(extra_setup=None) -> MagicMock:
 
 def _patch_modules() -> list:
     """Patch NotebookLMClient in every cli module that constructs it."""
-    import importlib
-
     modules = [
-        "notebooklm.cli.notebook",
-        "notebooklm.cli.chat",
-        "notebooklm.cli.session",
-        "notebooklm.cli.share",
-        "notebooklm.cli.source",
-        "notebooklm.cli.artifact",
-        "notebooklm.cli.research",
-        "notebooklm.cli.note",
-        "notebooklm.cli.generate",
-        "notebooklm.cli.download",
+        "notebooklm.cli.notebook_cmd",
+        "notebooklm.cli.chat_cmd",
+        "notebooklm.cli.session_cmd",
+        "notebooklm.cli.share_cmd",
+        "notebooklm.cli.source_cmd",
+        "notebooklm.cli.artifact_cmd",
+        "notebooklm.cli.research_cmd",
+        "notebooklm.cli.note_cmd",
+        "notebooklm.cli.generate_cmd",
+        "notebooklm.cli.download_cmd",
     ]
-    return [patch.object(importlib.import_module(name), "NotebookLMClient") for name in modules]
+    # Post-P3.T0: `*_cmd` modules are not shadowed, so direct string-form
+    # `patch(...)` resolves correctly without importlib indirection.
+    return [patch(f"{name}.NotebookLMClient") for name in modules]
 
 
 def _run_with_mock_client(runner: CliRunner, args: list[str], client: MagicMock):

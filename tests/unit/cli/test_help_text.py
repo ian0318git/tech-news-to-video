@@ -25,10 +25,10 @@ import click
 import pytest
 from click.testing import CliRunner
 
-from notebooklm.cli.artifact import artifact
-from notebooklm.cli.download import download
-from notebooklm.cli.note import note
-from notebooklm.cli.source import source
+from notebooklm.cli.artifact_cmd import artifact
+from notebooklm.cli.download_cmd import download
+from notebooklm.cli.note_cmd import note
+from notebooklm.cli.source_cmd import source
 
 
 @pytest.fixture
@@ -84,7 +84,7 @@ def test_group_help_lists_every_subcommand(
     assert not missing, (
         f"`{group_name} --help` is missing subcommand(s): {missing}. "
         f"Update the group docstring 'Commands:' block in "
-        f"src/notebooklm/cli/{group_name}.py to include them."
+        f"src/notebooklm/cli/{group_name}_cmd.py to include them."
     )
 
 
@@ -110,5 +110,5 @@ def test_group_docstring_lists_every_subcommand(
     assert not missing, (
         f"`{group_name}` group docstring is missing subcommand(s): {missing}. "
         f"Update the docstring 'Commands:' / 'Types:' block in "
-        f"src/notebooklm/cli/{group_name}.py."
+        f"src/notebooklm/cli/{group_name}_cmd.py."
     )
