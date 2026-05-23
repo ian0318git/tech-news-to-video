@@ -3,8 +3,28 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
+from typing import Any
 
 logger = logging.getLogger("notebooklm.auth")
+
+
+def cookie_names_from_storage(storage_state: Mapping[str, Any]) -> set[str]:
+    """Return the set of cookie names present in a Playwright storage_state.
+
+    Centralizes the ``{entry["name"] for entry in storage_state["cookies"]}``
+    pattern that the CLI extraction paths use to feed
+    :func:`missing_cookies_hint` after a failed extraction. Defensive against
+    non-dict entries (rookiepy can return malformed rows), missing keys, and
+    ``None`` / empty-string names (so the returned set never contains ``""``).
+    """
+    cookies = storage_state.get("cookies", [])
+    return {
+        name
+        for entry in cookies
+        if isinstance(entry, dict) and isinstance(name := entry.get("name"), str) and name
+    }
+
 
 # Tier 1: cookies whose absence Google rejects deterministically.
 #
@@ -107,6 +127,83 @@ def _validate_required_cookies(
                 "and SAPISID). Google may reject auth on the next call. %s",
                 _EXTRACTION_HINT,
             )
+
+
+def missing_cookies_hint(
+    cookie_names: set[str],
+    *,
+    browser_label: str | None = None,
+) -> str:
+    """Return an actionable recovery hint for the missing-cookies failure mode.
+
+    The browser-extraction CLI calls this after a ``ValueError`` from
+    :func:`extract_cookies_from_storage` to replace the generic "Make sure you
+    are logged into Google in your browser" tail with a scenario-specific
+    message. Branches on which Tier-1 / Tier-2 cookies are actually missing.
+
+    Scenarios (issue #990):
+
+    - ``SID`` missing: user is not signed in to Google at all in this browser.
+      Recovery is impossible without a fresh login.
+    - ``__Secure-1PSIDTS`` missing + secondary binding present: typically a
+      cold browser session. The in-memory ``RotateCookies`` recovery should
+      have already attempted to mint it; reaching this hint means Google
+      declined the POST (4xx / 5xx / withheld the Set-Cookie). Suggest
+      visiting NotebookLM in-browser to refresh.
+    - ``__Secure-1PSIDTS`` missing + secondary binding missing: ``RotateCookies``
+      cannot help because Google rejects requests without the binding cookies.
+      User must visit NotebookLM in-browser to populate ``OSID``.
+    - Secondary binding missing (Tier-2 warning case): the session works for
+      now but is fragile. Visiting NotebookLM populates the missing cookies.
+
+    Args:
+        cookie_names: Names of cookies that survived extraction.
+        browser_label: Optional browser label for the message
+            (``"chrome"``, ``"firefox"``). When omitted, defaults to
+            ``"your browser"``.
+
+    Returns:
+        A multi-line human-readable hint. The caller is responsible for any
+        formatting (rich tags, indentation) — this returns plain text.
+    """
+    browser_phrase = browser_label or "your browser"
+
+    if "SID" not in cookie_names:
+        return (
+            f"You are not signed in to Google in {browser_phrase}.\n"
+            f"Sign in to a Google account (Gmail, Drive, NotebookLM, ...) "
+            f"in {browser_phrase} and re-run this command."
+        )
+
+    psidts_missing = "__Secure-1PSIDTS" not in cookie_names
+    has_secondary = _has_valid_secondary_binding(cookie_names)
+
+    if psidts_missing and not has_secondary:
+        return (
+            f"Your {browser_phrase} session is signed in to Google but is missing "
+            f"the cookies NotebookLM needs (OSID or APISID+SAPISID, plus "
+            f"__Secure-1PSIDTS).\n"
+            f"Open https://notebooklm.google.com in {browser_phrase} (sign in if "
+            f"prompted), reload the page, then re-run this command."
+        )
+
+    if psidts_missing:
+        return (
+            f"__Secure-1PSIDTS is missing and the automatic RotateCookies recovery "
+            f"did not succeed.\n"
+            f"Open https://notebooklm.google.com in {browser_phrase} (this triggers "
+            f"Google to refresh the cookie), then re-run this command."
+        )
+
+    if not has_secondary:
+        return (
+            f"Your {browser_phrase} cookies are missing the NotebookLM binding "
+            f"(OSID, or APISID+SAPISID).\n"
+            f"Open https://notebooklm.google.com in {browser_phrase} (sign in if "
+            f"prompted), reload the page, then re-run this command."
+        )
+
+    return _EXTRACTION_HINT
 
 
 # Cookie domains we extract / accept by default.

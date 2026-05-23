@@ -54,6 +54,7 @@ EXPECTED_AUTH_ALL: list[str] = [
     "build_httpx_cookies_from_storage",
     "clear_account_metadata",
     "convert_rookiepy_cookies_to_storage_state",
+    "cookie_names_from_storage",
     "CookieSaveResult",
     "CookieSnapshot",
     "CookieSnapshotKey",
@@ -75,6 +76,7 @@ EXPECTED_AUTH_ALL: list[str] = [
     "load_auth_from_storage",
     "load_httpx_cookies",
     "MINIMUM_REQUIRED_COOKIES",
+    "missing_cookies_hint",
     "normalize_cookie_map",
     "NOTEBOOKLM_DISABLE_KEEPALIVE_POKE_ENV",
     "NOTEBOOKLM_REFRESH_CMD_ENV",
@@ -82,9 +84,11 @@ EXPECTED_AUTH_ALL: list[str] = [
     "OPTIONAL_COOKIE_DOMAINS",
     "OPTIONAL_COOKIE_DOMAINS_BY_LABEL",
     "read_account_metadata",
+    "recover_psidts_in_memory",
     "REQUIRED_COOKIE_DOMAINS",
     "save_cookies_to_storage",
     "snapshot_cookie_jar",
+    "validate_with_recovery",
     "write_account_metadata",
 ]
 
