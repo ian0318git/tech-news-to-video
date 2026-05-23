@@ -53,9 +53,11 @@ async def execute_source_add_research(
         * 1 — research failed to start (``research.start`` returned empty, or
           the wait API reports no active research before a task is known).
 
-    The wait call passes the ``task_id`` returned by ``research.start`` so a
-    second research task started mid-wait (e.g. concurrent caller, web UI, or
-    retry) cannot cross-wire its sources into this task's import branch.
+    The wait call passes the task discriminator returned by ``research.start``
+    so a second research task started mid-wait (e.g. concurrent caller, web UI,
+    or retry) cannot cross-wire its sources into this task's import branch.
+    Deep research uses the returned ``report_id`` for polling/import because
+    ``START_DEEP_RESEARCH`` slot 0 is not stable for those follow-up RPCs.
     """
     console.print(f"[yellow]Starting {plan.mode} research on {plan.search_source}...[/yellow]")
     result = await client.research.start(
@@ -65,8 +67,15 @@ async def execute_source_add_research(
         console.print("[red]Research failed to start[/red]")
         exit_with_code(1)
 
-    task_id = result["task_id"]
-    console.print(f"[dim]Task ID: {task_id}[/dim]")
+    start_task_id = result["task_id"]
+    # Deep research polls under the report id returned in slot 1 of the
+    # START_DEEP_RESEARCH response; the first slot is not stable for
+    # POLL_RESEARCH / IMPORT_RESEARCH.
+    task_id = result.get("report_id") if plan.mode == "deep" else start_task_id
+    task_id = task_id or start_task_id
+    console.print(f"[dim]Task ID: {start_task_id}[/dim]")
+    if task_id != start_task_id:
+        console.print(f"[dim]Poll ID: {task_id}[/dim]")
 
     # Non-blocking mode: return immediately. Research will keep running
     # server-side; until something fires IMPORT_RESEARCH the NotebookLM

@@ -11,7 +11,11 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 
-from notebooklm._source_upload import SourceUploadPipeline, _extract_register_file_source_id
+from notebooklm._source_upload import (
+    SourceUploadPipeline,
+    _extract_register_file_source_id,
+    _transient_error_types_for_upload,
+)
 from notebooklm.rpc import RPCError, RPCMethod
 from notebooklm.types import Source, SourceAddError
 
@@ -134,6 +138,24 @@ def test_extract_register_file_source_id_skips_large_string_candidates() -> None
     assert _extract_register_file_source_id([long_payload, "src_123"], "report.pdf") == "src_123"
 
 
+@pytest.mark.parametrize(
+    ("content_type", "expected"),
+    [
+        ("audio/mpeg", (10, 0, None)),
+        ("Audio/MPEG", (10, 0, None)),
+        ("audio/mpeg; codecs=mp3", (10, 0, None)),
+        ("application/mp4", (10, 0, None)),
+        ("application/ogg", (10, 0, None)),
+        ("application/x-matroska", (10, 0, None)),
+        ("application/pdf", ()),
+    ],
+)
+def test_transient_error_types_for_upload_classifies_media_content_types(
+    content_type: str, expected: tuple[int | None, ...]
+) -> None:
+    assert _transient_error_types_for_upload(content_type) == expected
+
+
 @pytest.mark.asyncio
 async def test_upload_semaphore_is_owned_per_pipeline() -> None:
     first = make_pipeline(max_concurrent_uploads=1)
@@ -181,7 +203,9 @@ async def test_add_file_uses_late_bound_hooks_and_finishes_transport(
     assert runtime.finished == ["upload:0"]
     assert len(runtime.queue_waits) == 1
     register_file_source.assert_awaited_once_with("nb_123", "report.pdf")
-    start_resumable_upload.assert_awaited_once_with("nb_123", "report.pdf", 5, "src_123")
+    start_resumable_upload.assert_awaited_once_with(
+        "nb_123", "report.pdf", 5, "src_123", "application/pdf"
+    )
 
 
 @pytest.mark.asyncio
@@ -262,7 +286,9 @@ async def test_add_file_custom_title_waits_for_registration_before_rename(
     )
 
     assert source == Source(id="src_123", title="Custom", _type_code=7, url="https://source")
-    wait_until_registered.assert_awaited_once_with("nb_123", "src_123", timeout=45.0)
+    wait_until_registered.assert_awaited_once_with(
+        "nb_123", "src_123", timeout=45.0, transient_error_types=()
+    )
     rename.assert_awaited_once_with("nb_123", "src_123", "Custom")
 
 
@@ -376,10 +402,12 @@ async def test_start_resumable_upload_uses_injected_http_client() -> None:
         "report.pdf",
         12,
         "src_123",
+        "application/pdf",
     )
 
     assert upload_url == "https://upload.example.com/session"
     assert client_factory.call_args.kwargs["cookies"] is runtime.cookies
     request = client.post.await_args
     assert request.kwargs["headers"]["x-goog-upload-command"] == "start"
+    assert request.kwargs["headers"]["x-goog-upload-header-content-type"] == "application/pdf"
     assert '"SOURCE_ID": "src_123"' in request.kwargs["content"]
