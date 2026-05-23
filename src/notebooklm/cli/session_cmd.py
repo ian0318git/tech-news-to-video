@@ -116,6 +116,9 @@ from .services.playwright_login import (
     recover_page as _recover_page,  # noqa: F401 — patch surface
 )
 from .services.playwright_login import (
+    repair_playwright_account_metadata as _repair_playwright_account_metadata,
+)
+from .services.playwright_login import (
     url_matches_base_host as _url_matches_base_host,  # noqa: F401 — patch surface
 )
 from .services.playwright_login import (
@@ -137,6 +140,16 @@ async def fetch_tokens_with_domains(*args: Any, **kwargs: Any) -> Any:
     from ..auth import fetch_tokens_with_domains as auth_fetch_tokens_with_domains
 
     return await auth_fetch_tokens_with_domains(*args, **kwargs)
+
+
+def _is_valid_account_metadata(metadata: dict[str, Any]) -> bool:
+    raw_authuser = metadata.get("authuser")
+    if type(raw_authuser) is not int or raw_authuser < 0:
+        return False
+    raw_email = metadata.get("email")
+    if raw_email is None:
+        return True
+    return isinstance(raw_email, str) and bool(raw_email.strip())
 
 
 # Legacy thin alias kept for the small set of session-cmd-internal helpers
@@ -709,6 +722,13 @@ def register_session_commands(cli):
                 return
 
             run_async(fetch_tokens_with_domains(storage_path, profile))
+
+            from ..auth import read_account_metadata
+
+            if storage_path.exists():
+                metadata = read_account_metadata(storage_path)
+                if not _is_valid_account_metadata(metadata):
+                    _repair_playwright_account_metadata(storage_path, quiet=quiet)
 
             if not quiet:
                 console.print(f"[green]ok[/green] refreshed: {storage_path}")
