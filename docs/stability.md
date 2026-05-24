@@ -213,6 +213,8 @@ The following v0.3-era deprecations completed their removal cycle in v0.5.0:
 | `notebooklm.DEFAULT_STORAGE_PATH` | `notebooklm.paths.get_storage_path()` | Module-level constant replaced by helper |
 | `notebooklm.rpc.types.StudioContentType` | `ArtifactType` | Internal raw code alias removed |
 | `notebooklm.rpc.StudioContentType` | `ArtifactType` | Internal re-export removed |
+| `notebooklm.rpc.RPCMethod.DISCOVER_SOURCES` | none | Unused raw RPC enum member, not exercised by client APIs |
+| `notebooklm.rpc.RPCMethod.QUERY_ENDPOINT` | `notebooklm.rpc.get_query_url()` | Endpoint URL path moved out of the RPC method enum |
 | `notebooklm.cli.language_cmd.save_config` | `_save_config` | Private low-level write primitive only |
 
 ### Deprecated for a future major release
