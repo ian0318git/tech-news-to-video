@@ -1,32 +1,23 @@
-"""Integration tests for the empty middleware chain wired into ``Session``.
+"""Integration tests for the authed-post middleware chain wired into ``Session``.
 
-PR 12.2 of the Tier-12/13 greenfield migration wires
-:func:`notebooklm._middleware.build_chain` into
-:meth:`Session.__init__` with an empty middleware list. The chain leaf
-(:meth:`Session._authed_post_chain_terminal`) reads
-``build_request`` / ``log_label`` / ``disable_internal_retries`` from
-``RpcRequest.context`` and delegates to
-:meth:`AuthedTransport.perform_authed_post` — the shared seam covering both
-:meth:`Session._perform_authed_post` AND ``RpcExecutor.execute`` (which
-calls ``self._owner._perform_authed_post`` at ``_rpc_executor.py:275``).
+The Tier-12/13 greenfield migration wires
+:func:`notebooklm._middleware.build_chain` into :meth:`Session.__init__`.
+The chain leaf (:meth:`Session._authed_post_chain_terminal`) consumes the
+populated ``RpcRequest.url`` / ``headers`` / ``body`` envelope and delegates
+directly to ``Kernel.post`` — the transport seam under both
+:meth:`Session._perform_authed_post` AND ``RpcExecutor.execute``.
 
 These tests verify the wiring contract from
-``.sisyphus/plans/tier-12-13-greenfield-migration.md`` line 160 and ADR-009
-§"RpcRequest.context keys":
+ADR-009 §"RpcRequest.context keys":
 
-1. Both call paths (``Session._perform_authed_post`` directly and
-   ``RpcExecutor.execute`` indirectly) flow through the empty chain to the
-   transport.
+1. Both call paths (``Session._perform_authed_post`` directly and the
+   ``RpcExecutor.execute`` keyword shape) flow through the chain terminal to
+   the transport.
 2. ``RpcRequest.context`` carries ``build_request`` / ``log_label`` /
-   ``disable_internal_retries`` exactly as the leaf expects them.
+   ``disable_internal_retries`` for retry/rebuild metadata while the terminal
+   reads the envelope itself.
 3. The leaf returns an :class:`RpcResponse` wrapping the
    :class:`httpx.Response` from the transport.
-
-The terminal adapter resolves ``self._get_authed_transport()`` per
-invocation so swapping the transport mid-test (the idiom used here) still
-affects live behavior — a property the existing
-``test_authed_transport.py`` test suite already relies on for its
-monkeypatch surface.
 """
 
 from __future__ import annotations
@@ -37,9 +28,7 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
-# pytest puts ``tests/`` on ``sys.path``; ``_fixtures.chain`` is the
-# canonical import path documented in ``tests/_fixtures/__init__.py``.
-from _fixtures.chain import FakeAuthedPost
+from notebooklm._authed_transport import TransportServerError
 from notebooklm._middleware import (
     Middleware,
     NextCall,
@@ -54,8 +43,8 @@ def _make_core() -> Session:
     """Build a ``Session`` instance without opening an HTTP client.
 
     ``Session.__init__`` is event-loop-agnostic, so we can construct an
-    instance in synchronous test setup. The transport is then swapped in
-    each test for a :class:`FakeAuthedPost` so no real HTTP call fires.
+    instance in synchronous test setup. Tests replace ``Kernel.post`` directly
+    so no real HTTP call fires.
     """
     auth = MagicMock()
     auth.storage_path = None
@@ -66,31 +55,44 @@ def _make_core() -> Session:
     return Session(auth=auth)
 
 
-def _swap_transport(core: Session, fake: FakeAuthedPost) -> None:
-    """Replace ``core._get_authed_transport`` with a callable returning ``fake``.
+class FakeKernelPost:
+    """Programmable stub for ``Kernel.post``."""
 
-    The chain terminal calls ``self._get_authed_transport()`` per
-    invocation; overriding the bound method on the instance is sufficient
-    because Python's attribute lookup finds the instance attribute before
-    the class method. This keeps the swap local to the test (no shared
-    module-level monkeypatch).
-    """
-    core._get_authed_transport = lambda: fake  # type: ignore[method-assign]
+    def __init__(self, response: httpx.Response | None = None) -> None:
+        self.response = response or httpx.Response(status_code=200, content=b"")
+        self.calls: list[dict[str, Any]] = []
+
+    @property
+    def call_count(self) -> int:
+        return len(self.calls)
+
+    async def post(
+        self,
+        url: str,
+        *,
+        headers: Any,
+        body: bytes,
+    ) -> httpx.Response:
+        self.calls.append({"url": url, "headers": headers, "body": body})
+        return self.response
+
+
+def _swap_kernel_post(core: Session, fake: FakeKernelPost) -> None:
+    core._kernel.post = fake.post  # type: ignore[method-assign]
 
 
 @pytest.mark.asyncio
-async def test_empty_chain_routes_perform_authed_post_to_transport() -> None:
-    """``Session._perform_authed_post`` flows through the empty chain to transport.
+async def test_chain_routes_perform_authed_post_to_transport() -> None:
+    """``Session._perform_authed_post`` flows through the chain to transport.
 
-    Covers the first of the two call paths from master plan line 160:
-    direct callers of ``Session._perform_authed_post`` (the chat path
-    in ``_chat_transport.py:64`` and any first-party caller via
-    ``client._session._perform_authed_post``).
+    Covers direct callers of ``Session._perform_authed_post``: the chat
+    path in ``_chat_transport.py:64`` and any first-party caller via
+    ``client._session._perform_authed_post``.
     """
     expected_response = httpx.Response(status_code=200, content=b"chain-routed")
-    fake = FakeAuthedPost(response=expected_response)
+    fake = FakeKernelPost(response=expected_response)
     core = _make_core()
-    _swap_transport(core, fake)
+    _swap_kernel_post(core, fake)
 
     def build_request(snapshot: Any) -> tuple[str, bytes, dict[str, str] | None]:
         return ("https://fake/url", b"body", None)
@@ -104,21 +106,20 @@ async def test_empty_chain_routes_perform_authed_post_to_transport() -> None:
     assert response is expected_response
     assert fake.call_count == 1
     call = fake.calls[0]
-    assert call["build_request"] is build_request
-    assert call["log_label"] == "test-log-label"
-    assert call["disable_internal_retries"] is False
+    assert call["url"] == "https://fake/url"
+    assert call["headers"] == {}
+    assert call["body"] == b"body"
 
 
 @pytest.mark.asyncio
-async def test_empty_chain_routes_rpc_executor_path_to_transport() -> None:
+async def test_chain_routes_rpc_executor_path_to_transport() -> None:
     """``RpcExecutor.execute`` → ``_perform_authed_post`` flows through the chain too.
 
-    Covers the second of the two call paths from master plan line 160:
     ``RpcExecutor.execute`` (``_rpc_executor.py:275``) calls
     ``self._owner._perform_authed_post(...)`` which is precisely
-    :meth:`Session._perform_authed_post`. Routing both paths through
-    one seam is the whole point of wiring at ``_perform_authed_post``
-    rather than at each call site.
+    :meth:`Session._perform_authed_post`. Routing both paths through one
+    seam is the whole point of wiring at ``_perform_authed_post`` rather
+    than at each call site.
 
     We exercise the route by calling ``_perform_authed_post`` with the
     keyword shape ``RpcExecutor.execute`` uses (the
@@ -130,9 +131,9 @@ async def test_empty_chain_routes_rpc_executor_path_to_transport() -> None:
     receives," which a direct call validates without the extra surface.
     """
     expected_response = httpx.Response(status_code=200, content=b"rpc-path")
-    fake = FakeAuthedPost(response=expected_response)
+    fake = FakeKernelPost(response=expected_response)
     core = _make_core()
-    _swap_transport(core, fake)
+    _swap_kernel_post(core, fake)
 
     def build_request(snapshot: Any) -> tuple[str, bytes, dict[str, str] | None]:
         return ("https://fake/rpc", b"rpc-body", {"X-Goog-AuthUser": "0"})
@@ -146,12 +147,9 @@ async def test_empty_chain_routes_rpc_executor_path_to_transport() -> None:
     assert response is expected_response
     assert fake.call_count == 1
     call = fake.calls[0]
-    assert call["build_request"] is build_request
-    assert call["log_label"] == "RPC LIST_NOTEBOOKS"
-    # The ``disable_internal_retries`` bool resolved by
-    # ``_idempotency.resolve_effective_disable_internal_retries`` upstream
-    # propagates through the chain unchanged.
-    assert call["disable_internal_retries"] is True
+    assert call["url"] == "https://fake/rpc"
+    assert call["headers"] == {"X-Goog-AuthUser": "0"}
+    assert call["body"] == b"rpc-body"
 
 
 @pytest.mark.asyncio
@@ -166,19 +164,15 @@ async def test_chain_terminal_reads_context_keys() -> None:
     the request into a transport call.
     """
     expected_response = httpx.Response(status_code=204, content=b"")
-    fake = FakeAuthedPost(response=expected_response)
+    fake = FakeKernelPost(response=expected_response)
     core = _make_core()
-    _swap_transport(core, fake)
-
-    def build_request(snapshot: Any) -> tuple[str, bytes, dict[str, str] | None]:
-        return ("https://fake/ctx", b"ctx-body", None)
+    _swap_kernel_post(core, fake)
 
     request = RpcRequest(
-        url="",
-        headers={},
-        body=b"",
+        url="https://fake/ctx",
+        headers={"X-Test": "yes"},
+        body=b"ctx-body",
         context={
-            "build_request": build_request,
             "log_label": "context-test",
             "disable_internal_retries": False,
         },
@@ -190,12 +184,14 @@ async def test_chain_terminal_reads_context_keys() -> None:
     assert result.response is expected_response
     # The ``RpcResponse.context`` propagates the same dict the request
     # carried, so middlewares above the leaf can read additions a deeper
-    # link made. The empty chain leaves the dict unchanged.
+    # link made. The terminal adapter leaves the dict unchanged.
     assert result.context is request.context
     assert fake.call_count == 1
-    assert fake.calls[0]["build_request"] is build_request
-    assert fake.calls[0]["log_label"] == "context-test"
-    assert fake.calls[0]["disable_internal_retries"] is False
+    assert fake.calls[0] == {
+        "url": "https://fake/ctx",
+        "headers": {"X-Test": "yes"},
+        "body": b"ctx-body",
+    }
 
 
 @pytest.mark.asyncio
@@ -208,19 +204,15 @@ async def test_chain_terminal_disable_internal_retries_defaults_false() -> None:
     seam, master plan section 3) cannot trip the leaf with a
     ``KeyError``.
     """
-    fake = FakeAuthedPost()
+    fake = FakeKernelPost()
     core = _make_core()
-    _swap_transport(core, fake)
-
-    def build_request(snapshot: Any) -> tuple[str, bytes, dict[str, str] | None]:
-        return ("https://fake/no-retry-flag", b"", None)
+    _swap_kernel_post(core, fake)
 
     request = RpcRequest(
-        url="",
+        url="https://fake/no-retry-flag",
         headers={},
         body=b"",
         context={
-            "build_request": build_request,
             "log_label": "default-flag",
         },
     )
@@ -228,7 +220,33 @@ async def test_chain_terminal_disable_internal_retries_defaults_false() -> None:
     await core._authed_post_chain_terminal(request)
 
     assert fake.call_count == 1
-    assert fake.calls[0]["disable_internal_retries"] is False
+    assert fake.calls[0]["url"] == "https://fake/no-retry-flag"
+
+
+@pytest.mark.asyncio
+async def test_chain_terminal_log_label_defaults_for_direct_calls() -> None:
+    """Direct terminal calls without context metadata still map errors safely."""
+    core = _make_core()
+
+    async def raise_network_error(
+        url: str,
+        *,
+        headers: Any,
+        body: bytes,
+    ) -> httpx.Response:
+        request = httpx.Request("POST", url, headers=dict(headers), content=body)
+        raise httpx.RequestError("boom", request=request)
+
+    core._kernel.post = raise_network_error  # type: ignore[method-assign]
+    request = RpcRequest(
+        url="https://fake/no-log-label",
+        headers={},
+        body=b"",
+        context={},
+    )
+
+    with pytest.raises(TransportServerError, match="<unknown-chain-call> network error"):
+        await core._authed_post_chain_terminal(request)
 
 
 @pytest.mark.asyncio
@@ -300,25 +318,21 @@ async def test_chain_with_test_middleware_observes_request_and_response() -> Non
         return response
 
     expected_response = httpx.Response(status_code=200, content=b"observed")
-    fake = FakeAuthedPost(response=expected_response)
+    fake = FakeKernelPost(response=expected_response)
     core = _make_core()
-    _swap_transport(core, fake)
+    _swap_kernel_post(core, fake)
 
     # Build a chain with one observer middleware around the production
-    # terminal. The production chain stays empty; this is a per-test
-    # composition that validates the leaf's contract against
-    # ``build_chain`` rather than ``Session.__init__``.
+    # terminal. This per-test composition validates the leaf's contract
+    # against ``build_chain`` without mutating ``Session.__init__``'s
+    # production chain.
     chain: NextCall = build_chain([observer], core._authed_post_chain_terminal)
 
-    def build_request(snapshot: Any) -> tuple[str, bytes, dict[str, str] | None]:
-        return ("https://fake/observe", b"", None)
-
     request = RpcRequest(
-        url="",
+        url="https://fake/observe",
         headers={},
         body=b"",
         context={
-            "build_request": build_request,
             "log_label": "observer-test",
             "disable_internal_retries": False,
         },
@@ -331,6 +345,7 @@ async def test_chain_with_test_middleware_observes_request_and_response() -> Non
     assert observed["response"].response is expected_response
     assert result.response is expected_response
     assert fake.call_count == 1
+    assert fake.calls[0]["url"] == "https://fake/observe"
 
 
 def test_build_chain_empty_returns_terminal_unchanged() -> None:

@@ -12,16 +12,17 @@ defines:
   style: each middleware receives the request and a ``next_call`` callable;
   it decides whether (and how) to invoke ``next_call(request)``, optionally
   observing or transforming the response.
+- :func:`materialize_rpc_request` — converts the legacy ``BuildRequest``
+  callback shape into the future populated ``RpcRequest`` envelope.
 - :func:`build_chain` — composes a ``Sequence[Middleware]`` around a terminal
   ``NextCall`` so the leftmost middleware in the sequence becomes the
   *outermost* wrapper (matches the ordering documented in ADR-009).
 
-No middleware is implemented in this PR. No production code wires the
-chain in this PR. PR 12.2 wires an empty chain into ``Session``; PRs
-12.3–12.8 extract one middleware at a time. See
-``docs/adr/0009-middleware-chain.md`` for the load-bearing decisions and
-``.sisyphus/plans/tier-12-13-greenfield-migration.md`` section 2 for the
-PR sequence.
+Production ``Session`` wiring composes these envelopes through the current
+middleware stack. During the request-materialization migration, the chain
+enters with populated ``RpcRequest(url, headers, body)`` fields and the
+terminal consumes that envelope directly through ``Kernel.post``. See
+``docs/adr/0009-middleware-chain.md`` for the load-bearing decisions.
 """
 
 from __future__ import annotations
@@ -32,6 +33,8 @@ from typing import Any, Protocol
 
 import httpx
 
+from ._request_types import AuthSnapshot, BuildRequest, materialize_build_request
+
 # ---------------------------------------------------------------------------
 # Chain envelope types.
 # ---------------------------------------------------------------------------
@@ -41,10 +44,9 @@ import httpx
 class RpcRequest:
     """HTTP-shape request envelope passed through the middleware chain.
 
-    The chain wraps ``Kernel.post`` (or, until PR 13.2 renames the seam,
-    ``AuthedTransport.perform_authed_post``). Every middleware sees an
-    already-encoded HTTP request — encoding lives *above* the chain in
-    ``Session.rpc_call``. RPC-level metadata that middlewares need (rpc
+    The chain wraps ``Kernel.post``. Every middleware sees an already-encoded
+    HTTP request — encoding lives *above* the chain in ``Session.rpc_call``.
+    RPC-level metadata that middlewares need (rpc
     method id, idempotency, operation variant, log labels, build-request
     callback, etc.) travels through :attr:`context`.
 
@@ -107,10 +109,10 @@ class RpcResponse:
     response: httpx.Response
     """The buffered :class:`httpx.Response` from the transport leaf.
 
-    Identical in shape to what ``AuthedTransport.perform_authed_post``
-    returns today (see ``_authed_transport.stream_post_with_size_cap``):
-    fully-buffered body, headers stripped of ``content-encoding`` /
-    ``content-length`` so ``.text`` / ``.content`` work synchronously.
+    Identical in shape to what ``Kernel.post`` returns via
+    ``_authed_transport.stream_post_with_size_cap``: fully-buffered body,
+    headers stripped of ``content-encoding`` / ``content-length`` so
+    ``.text`` / ``.content`` work synchronously.
     """
 
     context: dict[str, Any] = field(default_factory=dict)
@@ -119,6 +121,32 @@ class RpcResponse:
     ``request.context['trace_id']`` can read it back here) plus any
     response-side additions a middleware made.
     """
+
+
+def materialize_rpc_request(
+    *,
+    build_request: BuildRequest,
+    snapshot: AuthSnapshot,
+    context: dict[str, Any],
+) -> RpcRequest:
+    """Build a populated chain envelope from the legacy request callback.
+
+    This is a behavior-neutral bridge for the Tier-13 request-materialization
+    migration. ``Session`` uses this helper to enter the chain with populated
+    ``RpcRequest(url, headers, body)`` fields while the transitional terminal
+    still delegates through the legacy ``BuildRequest`` callback. A later
+    ``Kernel.post`` terminal can consume the same envelope directly.
+
+    ``context`` is intentionally retained by reference, matching ADR-009's
+    mutable per-request metadata contract.
+    """
+    request = materialize_build_request(build_request, snapshot)
+    return RpcRequest(
+        url=request.url,
+        headers=request.headers or {},
+        body=request.body,
+        context=context,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -227,4 +255,5 @@ __all__ = [
     "RpcRequest",
     "RpcResponse",
     "build_chain",
+    "materialize_rpc_request",
 ]

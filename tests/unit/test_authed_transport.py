@@ -102,6 +102,54 @@ def _status_error(code: int, *, retry_after: str | None = None) -> httpx.HTTPSta
 
 
 @pytest.mark.asyncio
+async def test_perform_authed_post_populates_request_envelope_for_chain() -> None:
+    """Middlewares see the materialized URL, headers, and byte body."""
+    core = _make_core()
+    captured: list[RpcRequest] = []
+
+    async def fake_chain(request: RpcRequest) -> RpcResponse:
+        captured.append(request)
+        return RpcResponse(response=_ok_response(), context=request.context)
+
+    core._authed_post_chain = fake_chain  # type: ignore[method-assign]
+
+    calls: list[AuthSnapshot] = []
+
+    def build(snapshot: AuthSnapshot) -> tuple[str, str, dict[str, str]]:
+        calls.append(snapshot)
+        return (
+            f"https://example.test/x?authuser={snapshot.authuser}",
+            "payload",
+            {"X-Test": "yes"},
+        )
+
+    await core.open()
+    try:
+        response = await core._perform_authed_post(
+            build_request=build,
+            log_label="RPC LIST_NOTEBOOKS",
+            disable_internal_retries=True,
+            rpc_method="LIST_NOTEBOOKS",
+        )
+
+        assert response.status_code == 200
+        assert len(captured) == 1
+        request = captured[0]
+        assert request.url == "https://example.test/x?authuser=0"
+        assert request.headers == {"X-Test": "yes"}
+        assert request.body == b"payload"
+        assert request.context["log_label"] == "RPC LIST_NOTEBOOKS"
+        assert request.context["disable_internal_retries"] is True
+        assert request.context["rpc_method"] == "LIST_NOTEBOOKS"
+        assert len(calls) == 1
+        assert calls[0].csrf_token == "CSRF_OLD"
+        assert request.context["build_request"] is build
+        assert request.context["auth_snapshot"] == calls[0]
+    finally:
+        await core.close()
+
+
+@pytest.mark.asyncio
 async def test_chain_reads_live_retry_budget(monkeypatch):
     """Tier-12 PR 12.7 lifted the 429 / 5xx retry loop into ``RetryMiddleware``.
 
@@ -116,7 +164,8 @@ async def test_chain_reads_live_retry_budget(monkeypatch):
     core = _make_core(rate_limit_max_retries=0)
     await core.open()
     try:
-        # Confirm the leaf is still AuthedTransport (sanity).
+        # AuthedTransport still exists as a compatibility Adapter, while the
+        # production chain now sends through Kernel.post directly.
         assert isinstance(core._get_authed_transport(), AuthedTransport)
         # Mutate AFTER open() — middleware reads via lambda closure so this
         # bump from 0 → 1 grants a single retry on the next chain call.
@@ -382,7 +431,7 @@ async def test_build_request_called_once_on_happy_path(monkeypatch):
 
         async def fake_post(url, *, content, **kwargs):
             assert url == "https://example.test/x"
-            assert content == "payload"
+            assert content == b"payload"
             return _ok_response()
 
         install_post_as_stream(monkeypatch, core._kernel.get_http_client(), fake_post)
@@ -392,6 +441,52 @@ async def test_build_request_called_once_on_happy_path(monkeypatch):
         assert response.status_code == 200
         assert len(calls) == 1
         assert calls[0].csrf_token == "CSRF_OLD"
+    finally:
+        await core.close()
+
+
+@pytest.mark.asyncio
+async def test_first_terminal_attempt_rebuilds_when_snapshot_changed(monkeypatch):
+    """A changed terminal snapshot rebuilds the envelope before send.
+
+    The pre-chain envelope is observable, but the ``Kernel.post`` terminal must
+    not send a stale body if auth changed before its first POST attempt.
+    """
+    core = _make_core()
+    await core.open()
+    try:
+        snapshots = iter(
+            [
+                AuthSnapshot("CSRF_OLD", "SID_OLD", 0, None),
+                AuthSnapshot("CSRF_NEW", "SID_NEW", 0, None),
+            ]
+        )
+
+        async def fake_snapshot() -> AuthSnapshot:
+            try:
+                return next(snapshots)
+            except StopIteration:
+                pytest.fail("unexpected extra auth snapshot")
+
+        core._snapshot = fake_snapshot  # type: ignore[method-assign]
+        calls: list[AuthSnapshot] = []
+
+        def build(snapshot: AuthSnapshot) -> tuple[str, str, dict[str, str]]:
+            calls.append(snapshot)
+            return "https://example.test/x", f"payload-{snapshot.csrf_token}", {}
+
+        async def fake_post(url, *, content, **kwargs):
+            assert content == b"payload-CSRF_NEW"
+            return _ok_response()
+
+        install_post_as_stream(monkeypatch, core._kernel.get_http_client(), fake_post)
+
+        response = await core._perform_authed_post(build_request=build, log_label="test")
+
+        assert response.status_code == 200
+        assert len(calls) == 2
+        assert calls[0].csrf_token == "CSRF_OLD"
+        assert calls[1].csrf_token == "CSRF_NEW"
     finally:
         await core.close()
 
@@ -425,7 +520,7 @@ async def test_build_request_called_twice_with_fresh_snapshot_on_401(monkeypatch
             if call_count["n"] == 1:
                 raise _status_error(401)
             # Second attempt succeeds — confirm it carries the refreshed body.
-            assert content == "body-CSRF_NEW"
+            assert content == b"body-CSRF_NEW"
             return _ok_response()
 
         install_post_as_stream(monkeypatch, core._kernel.get_http_client(), fake_post)
@@ -622,8 +717,8 @@ async def test_rpc_call_happy_path_url_and_body_unchanged(monkeypatch):
         assert "rpcids=" + RPCMethod.LIST_NOTEBOOKS.value in captured["url"]
         assert "f.sid=SID_OLD" in captured["url"]
         # The body must include the CSRF token under the historical ``at=`` param.
-        assert "at=CSRF_OLD" in captured["content"]
-        assert "f.req=" in captured["content"]
+        assert b"at=CSRF_OLD" in captured["content"]
+        assert b"f.req=" in captured["content"]
     finally:
         await core.close()
 

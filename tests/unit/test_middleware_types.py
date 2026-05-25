@@ -9,11 +9,11 @@ public-ish aliases in ``src/notebooklm/_request_types.py``:
   satisfies the Protocol without inheriting from it.
 - ``build_chain`` composition order — leftmost middleware in the sequence
   becomes the outermost wrapper (matches ADR-009 chain ordering).
-- ``BuildRequestResult`` value semantics.
+- ``BuildRequestResult`` value semantics and request materialization bridges.
 
-These tests target the type-only scaffolding from PR 12.1. No production
-chain is wired (PR 12.2 does that), so the tests build chains over fake
-terminals and observe behavior directly.
+These tests target the type scaffolding and materialization contracts from
+Tier-12/13. No production chain is wired (PR 12.2 does that), so the tests
+build chains over fake terminals and observe behavior directly.
 """
 
 from __future__ import annotations
@@ -30,11 +30,13 @@ from notebooklm._middleware import (
     RpcRequest,
     RpcResponse,
     build_chain,
+    materialize_rpc_request,
 )
 from notebooklm._request_types import (
     AuthSnapshot,
     BuildRequest,
     BuildRequestResult,
+    materialize_build_request,
 )
 
 # ---------------------------------------------------------------------------
@@ -360,6 +362,65 @@ def test_build_request_result_accepts_none_headers() -> None:
     assert r.headers is None
 
 
+def test_materialize_build_request_normalizes_str_body_and_copies_headers() -> None:
+    """Legacy tuple builders become the named bytes-body request shape."""
+    snap = AuthSnapshot(csrf_token="csrf", session_id="sid", authuser=1, account_email=None)
+    original_headers = {"X-Goog-AuthUser": "1"}
+
+    def factory(snapshot: AuthSnapshot) -> tuple[str, str, dict[str, str]]:
+        return (
+            f"https://example.test/batchexecute?authuser={snapshot.authuser}",
+            "f.req=%5B%5D&",
+            original_headers,
+        )
+
+    result = materialize_build_request(factory, snap)
+
+    assert result == BuildRequestResult(
+        url="https://example.test/batchexecute?authuser=1",
+        body=b"f.req=%5B%5D&",
+        headers={"X-Goog-AuthUser": "1"},
+    )
+    assert result.headers is not original_headers
+    original_headers["X-Goog-AuthUser"] = "2"
+    assert result.headers == {"X-Goog-AuthUser": "1"}
+
+
+def test_materialize_build_request_preserves_bytes_body_and_none_headers() -> None:
+    snap = AuthSnapshot(csrf_token="csrf", session_id="sid", authuser=0, account_email=None)
+
+    def factory(snapshot: AuthSnapshot) -> tuple[str, bytes, None]:
+        return ("https://example.test/batchexecute", b"raw-bytes", None)
+
+    result = materialize_build_request(factory, snap)
+
+    assert result.body == b"raw-bytes"
+    assert result.headers is None
+
+
+def test_materialize_rpc_request_populates_envelope_and_preserves_context_identity() -> None:
+    """The future middleware envelope keeps ADR-009's shared context object."""
+    snap = AuthSnapshot(csrf_token="csrf", session_id="sid", authuser=0, account_email=None)
+
+    def factory(snapshot: AuthSnapshot) -> tuple[str, str, None]:
+        return (
+            f"https://example.test/batchexecute?authuser={snapshot.authuser}",
+            "f.req=body&",
+            None,
+        )
+
+    context = {"build_request": factory, "log_label": "RPC TEST_METHOD"}
+    request = materialize_rpc_request(build_request=factory, snapshot=snap, context=context)
+
+    assert request.url == "https://example.test/batchexecute?authuser=0"
+    assert request.headers == {}
+    assert request.body == b"f.req=body&"
+    assert request.context is context
+
+    request.context["trace_id"] = "trace-1"
+    assert context["trace_id"] == "trace-1"
+
+
 def test_request_types_all_contains_only_public_names() -> None:
     """``__all__`` is the canonical public-within-package export list."""
     from notebooklm import _request_types
@@ -367,4 +428,18 @@ def test_request_types_all_contains_only_public_names() -> None:
     assert "AuthSnapshot" in _request_types.__all__
     assert "BuildRequest" in _request_types.__all__
     assert "BuildRequestResult" in _request_types.__all__
+    assert "materialize_build_request" in _request_types.__all__
     assert all(not name.startswith("_") for name in _request_types.__all__)
+
+
+def test_middleware_all_contains_only_public_names() -> None:
+    """``_middleware.__all__`` exports the chain contract helpers."""
+    from notebooklm import _middleware
+
+    assert "Middleware" in _middleware.__all__
+    assert "NextCall" in _middleware.__all__
+    assert "RpcRequest" in _middleware.__all__
+    assert "RpcResponse" in _middleware.__all__
+    assert "build_chain" in _middleware.__all__
+    assert "materialize_rpc_request" in _middleware.__all__
+    assert all(not name.startswith("_") for name in _middleware.__all__)
