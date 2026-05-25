@@ -72,17 +72,23 @@ jobs:
     #
     # 1. ``needs.resolve-branch.outputs.is_standard`` — set by the upstream
     #    ``resolve-branch`` job. Only ``main`` and ``release/*`` branches
-    #    (or scheduled cron triggers, which resolve to one of those) flip this to ``true``;
-    #    any other branch keeps it ``false`` and the secret-using steps below
-    #    skip outright (no secret values land in the runner env).
-    # 2. ``environment: protected-readonly`` (workflow_dispatch only) —
-    #    surfaces an approval prompt before secrets unlock when a human kicks
-    #    off a manual run. The expression yields an empty string on schedule
-    #    triggers so cron canary runs are unaffected. Together with (1) this
-    #    means a non-maintainer ``gh workflow run nightly.yml`` either skips
-    #    the secret steps (non-standard branch) OR pauses at the maintainer
-    #    approval gate. See docs/development.md → "Workflow secret gates".
-    environment: ${{ github.event_name == 'workflow_dispatch' && 'protected-readonly' || '' }}
+    #    (or scheduled cron triggers, which resolve to one of those) flip
+    #    this to ``true``; any other branch keeps it ``false`` and the
+    #    job-level ``if:`` above skips this whole job (no secret values
+    #    land in the runner env). The step-level ``if:`` guards on the
+    #    secret-bearing steps below are belt-and-suspenders so the gate
+    #    stays visible if the job-level guard is ever loosened.
+    # 2. ``environment: protected-readonly`` (unconditional). The secrets
+    #    this job consumes (``NOTEBOOKLM_AUTH_JSON`` and friends) live only
+    #    in that environment, so the binding has to be unconditional —
+    #    issue #1009 surfaced the scheduled cron failing when the previous
+    #    conditional (``workflow_dispatch``-only) form fell back to
+    #    repo-level secrets that no longer exist. Add a ``required
+    #    reviewers`` rule on the environment if you want to block
+    #    workflow_dispatch behind manual approval; scheduled runs would
+    #    then queue too, so today this env carries no protection rules.
+    # See docs/development.md → "Workflow secret gates".
+    environment: protected-readonly
     strategy:
       fail-fast: false
       matrix:
@@ -145,6 +151,26 @@ jobs:
     - name: Install Playwright system dependencies (Linux)
       if: runner.os == 'Linux'
       run: uv run playwright install-deps chromium
+
+    # Fail-fast preflight. Without this, an empty NOTEBOOKLM_AUTH_JSON
+    # (env-binding misconfig, missing repo-level fallback, etc.) lets the
+    # E2E suite proceed; pytest then skips every auth-requiring test
+    # silently and the job lands green with 0 tests run (issue #1009).
+    - name: Verify auth secret is present
+      if: needs.resolve-branch.outputs.is_standard == 'true'
+      env:
+        NOTEBOOKLM_AUTH_JSON: ${{ secrets.NOTEBOOKLM_AUTH_JSON }}
+        NOTEBOOKLM_READ_ONLY_NOTEBOOK_ID: ${{ secrets.NOTEBOOKLM_READ_ONLY_NOTEBOOK_ID }}
+      shell: bash
+      run: |
+        if [ -z "${NOTEBOOKLM_AUTH_JSON:-}" ]; then
+          echo "::error::NOTEBOOKLM_AUTH_JSON resolved to empty. Env binding or secret config is broken — see docs/development.md → Workflow secret gates."
+          exit 1
+        fi
+        if [ -z "${NOTEBOOKLM_READ_ONLY_NOTEBOOK_ID:-}" ]; then
+          echo "::error::NOTEBOOKLM_READ_ONLY_NOTEBOOK_ID resolved to empty."
+          exit 1
+        fi
 
     - name: Run E2E tests
       id: e2e

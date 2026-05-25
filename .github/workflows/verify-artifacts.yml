@@ -14,13 +14,14 @@ jobs:
     name: Verify Artifacts
     runs-on: ubuntu-latest
     if: github.repository == 'teng-lin/notebooklm-py'
-    # Secret-bearing job. Scheduled cron runs continue unattended; only
-    # ``workflow_dispatch`` (human-initiated, potentially non-maintainer)
-    # routes through the ``protected-readonly`` GitHub Environment for
-    # approval before secrets unlock. An empty environment expression on
-    # the schedule path leaves the canary unaffected. See
-    # docs/development.md → "Workflow secret gates".
-    environment: ${{ github.event_name == 'workflow_dispatch' && 'protected-readonly' || '' }}
+    # Secret-bearing job. ``NOTEBOOKLM_AUTH_JSON`` and friends live only in
+    # the ``protected-readonly`` GitHub Environment (issue #1009), so the
+    # env binding is unconditional — every trigger sees the same secret
+    # values. Add a ``required reviewers`` rule on the environment if you
+    # want to block workflow_dispatch behind manual approval; scheduled
+    # runs would queue too, so the env carries no protection rules today.
+    # See docs/development.md → "Workflow secret gates".
+    environment: protected-readonly
 
     steps:
     - uses: actions/checkout@v6
@@ -39,6 +40,24 @@ jobs:
       # inline verification script below only touches the public client API
       # (no playwright / pytest / markdownify), so no extras are needed.
       run: uv sync --frozen
+
+    # Fail-fast preflight. Without this, ``NotebookLMClient.from_storage()``
+    # below would die with a confusing "no storage" error when the secret
+    # resolves empty (issue #1009).
+    - name: Verify auth secret is present
+      env:
+        NOTEBOOKLM_AUTH_JSON: ${{ secrets.NOTEBOOKLM_AUTH_JSON }}
+        NOTEBOOKLM_GENERATION_NOTEBOOK_ID: ${{ secrets.NOTEBOOKLM_GENERATION_NOTEBOOK_ID }}
+      shell: bash
+      run: |
+        if [ -z "${NOTEBOOKLM_AUTH_JSON:-}" ]; then
+          echo "::error::NOTEBOOKLM_AUTH_JSON resolved to empty. Env binding or secret config is broken — see docs/development.md → Workflow secret gates."
+          exit 1
+        fi
+        if [ -z "${NOTEBOOKLM_GENERATION_NOTEBOOK_ID:-}" ]; then
+          echo "::error::NOTEBOOKLM_GENERATION_NOTEBOOK_ID resolved to empty."
+          exit 1
+        fi
 
     - name: Verify artifacts exist
       env:

@@ -73,16 +73,6 @@ _BENIGN_SECRETS = frozenset({"GITHUB_TOKEN"})
 # gates".
 _APPROVED_ENVIRONMENTS = frozenset({"protected-readonly"})
 
-# Strings that are accepted as the *value* of an ``environment:`` line.
-# Bare names must match ``_APPROVED_ENVIRONMENTS``. Expressions are
-# matched structurally: we require the expression to embed a quoted
-# literal that is itself an approved environment name. This catches the
-# project's documented conditional idiom
-#   ``environment: ${{ event == 'workflow_dispatch' && 'protected-readonly' || '' }}``
-# while rejecting expressions that resolve to an unconfigured environment.
-_ENV_EXPR_RE = re.compile(r"\$\{\{[^}]*\}\}")
-_QUOTED_LITERAL_RE = re.compile(r"['\"]([A-Za-z0-9_.\-]+)['\"]")
-
 # Secret reference shapes:
 #   * Dot notation:    ``${{ secrets.MY_SECRET }}`` — the canonical form
 #                      we see everywhere in this repo.
@@ -182,29 +172,25 @@ def _environment_value_is_approved(value: str) -> bool:
     Accepts:
       * a bare name in ``_APPROVED_ENVIRONMENTS`` (e.g. ``protected-readonly``)
       * a quoted name (``"protected-readonly"`` / ``'protected-readonly'``)
-      * an expression value that embeds at least one quoted literal naming
-        an approved environment (e.g.
-        ``${{ event_name == 'workflow_dispatch' && 'protected-readonly' || '' }}``)
 
-    Rejects empty strings, unknown names, and expressions whose only
-    quoted literals are unapproved/empty — those would let a misspelled
-    environment ride past the static check.
+    Rejects everything else, including:
+      * empty strings, unknown names
+      * **expression form** (``${{ ... }}``). The historical conditional
+        shape
+        ``${{ event == 'workflow_dispatch' && 'protected-readonly' || '' }}``
+        silently broke scheduled runs once the referenced secret was
+        env-only (issue #1009): the empty branch resolves to "no
+        environment", and env-only secrets resolve to empty under that
+        branch. An expression without an empty fallback offers nothing
+        over the bare ``environment: protected-readonly`` form, so we
+        force the bare form — legible at a glance and impossible to
+        falsy-branch around. Expression values never strip-match an
+        approved name, so the check below rejects them as a side-effect
+        of the literal-only match.
     """
     if not value or value in ("''", '""'):
         return False
-    # Bare or quoted literal name.
-    stripped = value.strip().strip("'\"")
-    if stripped in _APPROVED_ENVIRONMENTS:
-        return True
-    # Expression form: require at least one embedded quoted literal that
-    # matches an approved environment. The expression may also contain
-    # an empty-string literal (the falsy branch of a conditional) — that
-    # alone does NOT count, hence the explicit non-empty match.
-    if _ENV_EXPR_RE.search(value):
-        for m in _QUOTED_LITERAL_RE.finditer(value):
-            if m.group(1) in _APPROVED_ENVIRONMENTS:
-                return True
-    return False
+    return value.strip().strip("'\"") in _APPROVED_ENVIRONMENTS
 
 
 def main() -> int:
