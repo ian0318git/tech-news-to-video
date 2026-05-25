@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from notebooklm import _artifact_downloads as artifact_downloads
 from notebooklm._artifacts import ArtifactsAPI
 from notebooklm.types import (
     ArtifactDownloadError,
@@ -50,6 +51,48 @@ def mock_artifacts_api():
         note_service=note_service,
     )
     return api, mock_core
+
+
+class TestDownloadInteractiveArtifact:
+    """Test shared quiz/flashcard download parsing behavior."""
+
+    @pytest.mark.asyncio
+    async def test_extract_app_data_value_error_propagates(self, monkeypatch, tmp_path):
+        """Bare ValueError from helper internals is not converted to parse drift."""
+        artifact = MagicMock(
+            id="quiz_001",
+            title="My Quiz",
+            is_completed=True,
+            created_at=None,
+        )
+        methods = MagicMock()
+        methods.list_quizzes = AsyncMock(return_value=[artifact])
+        methods.list_flashcards = AsyncMock()
+        methods._get_artifact_content = AsyncMock(
+            return_value='<html><body data-app-data="{&quot;quiz&quot;:[]}"></body></html>'
+        )
+        methods._format_interactive_content = MagicMock(return_value="unused")
+        service = artifact_downloads.ArtifactDownloadService(
+            methods=methods,
+            mind_maps=MagicMock(),
+        )
+
+        monkeypatch.setattr(
+            artifact_downloads,
+            "_extract_app_data",
+            MagicMock(side_effect=ValueError("implementation bug")),
+        )
+
+        with pytest.raises(ValueError, match="implementation bug"):
+            await service.download_interactive_artifact(
+                "nb_123",
+                str(tmp_path / "quiz.json"),
+                None,
+                "json",
+                "quiz",
+            )
+
+        methods._format_interactive_content.assert_not_called()
 
 
 class TestDownloadAudio:
@@ -465,7 +508,9 @@ class TestDownloadUrl:
             mock_cookies = MagicMock()
             with (
                 patch.object(real_httpx, "AsyncClient", return_value=mock_client),
-                patch("notebooklm._artifacts.load_httpx_cookies", return_value=mock_cookies),
+                patch(
+                    "notebooklm._artifact_downloads.load_httpx_cookies", return_value=mock_cookies
+                ),
             ):
                 result = await api._download_url(
                     "https://storage.googleapis.com/file.mp4", output_path
@@ -506,7 +551,9 @@ class TestDownloadUrl:
             mock_cookies = MagicMock()
             with (
                 patch.object(real_httpx, "AsyncClient", return_value=mock_client),
-                patch("notebooklm._artifacts.load_httpx_cookies", return_value=mock_cookies),
+                patch(
+                    "notebooklm._artifact_downloads.load_httpx_cookies", return_value=mock_cookies
+                ),
                 pytest.raises(ArtifactDownloadError, match="0 bytes"),
             ):
                 await api._download_url("https://storage.googleapis.com/file.mp4", output_path)
@@ -814,7 +861,7 @@ class TestStoragePathEncapsulation:
             raise _StopAfterCapture
 
         with (
-            patch("notebooklm._artifacts.load_httpx_cookies", new=recording),
+            patch("notebooklm._artifact_downloads.load_httpx_cookies", new=recording),
             pytest.raises(_StopAfterCapture),
         ):
             await service.download_url(
@@ -840,7 +887,7 @@ class TestStoragePathEncapsulation:
             captured.append(path)
             return {}
 
-        with patch("notebooklm._artifacts.load_httpx_cookies", new=recording):
+        with patch("notebooklm._artifact_downloads.load_httpx_cookies", new=recording):
             await service.download_urls_batch([])
 
         assert captured == [sentinel]
