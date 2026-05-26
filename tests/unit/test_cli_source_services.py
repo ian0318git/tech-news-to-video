@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import AsyncIterator
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
-from notebooklm.cli.services import source_content, source_mutations, source_research, source_wait
-from notebooklm.cli.services.source_content import SourceFulltextPlan, execute_source_fulltext
+from notebooklm.cli.services import source_mutations, source_research, source_wait
+from notebooklm.cli.services.source_content import (
+    SourceFulltextPlan,
+    SourceGuidePlan,
+    execute_source_fulltext,
+    execute_source_guide,
+)
 from notebooklm.cli.services.source_mutations import (
     SourceDeletePlan,
     SourceRenamePlan,
@@ -121,11 +125,7 @@ async def test_source_rename_json_emits_service_payload(monkeypatch: pytest.Monk
 
 
 @pytest.mark.asyncio
-async def test_source_fulltext_json_output_writes_file_and_emits_metadata(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    payloads: list[dict[str, object]] = []
-    monkeypatch.setattr(source_content, "json_output_response", payloads.append)
+async def test_source_fulltext_service_returns_fetched_content() -> None:
     client = SimpleNamespace(
         sources=SimpleNamespace(
             get_fulltext=AsyncMock(
@@ -138,28 +138,56 @@ async def test_source_fulltext_json_output_writes_file_and_emits_metadata(
             )
         )
     )
-    output_path = tmp_path / "source.txt"
 
-    await execute_source_fulltext(
+    result = await execute_source_fulltext(
         client,
         SourceFulltextPlan(
             notebook_id="nb_1",
             source_id="src_1",
-            json_output=True,
-            output=str(output_path),
             output_format="text",
         ),
     )
 
-    assert output_path.read_text(encoding="utf-8") == "full content"
-    assert payloads == [
-        {
-            "path": str(output_path),
-            "bytes": len(b"full content"),
-            "source_id": "src_1",
-            "title": "Paper",
-        }
-    ]
+    assert result.fulltext.source_id == "src_1"
+    assert result.fulltext.title == "Paper"
+    assert result.fulltext.content == "full content"
+    assert result.fulltext.char_count == 12
+
+
+@pytest.mark.asyncio
+async def test_source_guide_service_normalizes_untrusted_backend_payload() -> None:
+    client = SimpleNamespace(
+        sources=SimpleNamespace(
+            get_guide=AsyncMock(
+                return_value={
+                    "summary": 42,
+                    "keywords": [" alpha ", 7, "", "   ", None, "beta"],
+                }
+            )
+        )
+    )
+
+    result = await execute_source_guide(
+        client,
+        SourceGuidePlan(notebook_id="nb_1", source_id="src_1"),
+    )
+
+    assert result.source_id == "src_1"
+    assert result.summary == ""
+    assert result.keywords == ("alpha", "beta")
+
+
+@pytest.mark.asyncio
+async def test_source_guide_service_treats_non_mapping_payload_as_empty() -> None:
+    client = SimpleNamespace(sources=SimpleNamespace(get_guide=AsyncMock(return_value=None)))
+
+    result = await execute_source_guide(
+        client,
+        SourceGuidePlan(notebook_id="nb_1", source_id="src_1"),
+    )
+
+    assert result.source_id == "src_1"
+    assert result.is_empty
 
 
 @pytest.mark.asyncio
