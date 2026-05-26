@@ -19,7 +19,7 @@ import httpx
 
 from ._artifact_formatters import _extract_app_data, _format_interactive_content, _parse_data_table
 from .auth import load_httpx_cookies
-from .exceptions import ValidationError
+from .exceptions import UnknownRPCMethodError, ValidationError
 from .rpc import ArtifactTypeCode, RPCMethod, safe_index
 from .types import (
     Artifact,
@@ -28,12 +28,12 @@ from .types import (
     ArtifactNotReadyError,
     ArtifactParseError,
     ArtifactType,
-    _extract_artifact_url,
 )
 
 if TYPE_CHECKING:
     from ._artifact_listing import ArtifactListingService
     from ._mind_map import NoteBackedMindMapService
+    from ._row_adapters import ArtifactRow
     from ._session_contracts import RpcCaller
 
 logger = logging.getLogger(__name__)
@@ -183,9 +183,9 @@ class ArtifactDownloadService:
         no_result_error_key: str,
         *,
         type_code: ArtifactTypeCode,
-    ) -> Any:
-        """Select one artifact candidate using the injected listing policy."""
-        return self._listing.select_artifact(
+    ) -> ArtifactRow:
+        """Select one completed artifact candidate as an adapter row."""
+        return self._listing.select_completed_artifact_row(
             candidates,
             artifact_id,
             type_name,
@@ -224,7 +224,15 @@ class ArtifactDownloadService:
             type_code=ArtifactTypeCode.AUDIO,
         )
 
-        url = _extract_artifact_url(audio_art, ArtifactTypeCode.AUDIO.value)
+        try:
+            url = audio_art.audio_url
+        except UnknownRPCMethodError as e:
+            raise ArtifactParseError(
+                "audio",
+                artifact_id=artifact_id,
+                details=f"Failed to parse structure: {e}",
+                cause=e,
+            ) from e
         if not url:
             raise ArtifactParseError(
                 "audio",
@@ -251,7 +259,15 @@ class ArtifactDownloadService:
             type_code=ArtifactTypeCode.VIDEO,
         )
 
-        url = _extract_artifact_url(video_art, ArtifactTypeCode.VIDEO.value)
+        try:
+            url = video_art.video_url
+        except UnknownRPCMethodError as e:
+            raise ArtifactParseError(
+                "video_artifact",
+                artifact_id=artifact_id,
+                details=f"Failed to parse structure: {e}",
+                cause=e,
+            ) from e
         if not url:
             raise ArtifactParseError(
                 "video_artifact",
@@ -276,14 +292,21 @@ class ArtifactDownloadService:
         )
 
         try:
-            url = _extract_artifact_url(info_art, ArtifactTypeCode.INFOGRAPHIC.value)
+            url = info_art.infographic_url
             if not url:
-                raise ArtifactParseError("infographic", details="Could not find metadata")
+                raise ArtifactParseError(
+                    "infographic",
+                    artifact_id=artifact_id,
+                    details="Could not find metadata",
+                )
             return await self.download_url(url, output_path)
 
-        except (IndexError, TypeError) as e:
+        except (IndexError, TypeError, UnknownRPCMethodError) as e:
             raise ArtifactParseError(
-                "infographic", details=f"Failed to parse structure: {e}", cause=e
+                "infographic",
+                artifact_id=artifact_id,
+                details=f"Failed to parse structure: {e}",
+                cause=e,
             ) from e
 
     async def download_slide_deck(
@@ -307,36 +330,27 @@ class ArtifactDownloadService:
             type_code=ArtifactTypeCode.SLIDE_DECK,
         )
 
-        # Extract download URL from metadata at index 16.
-        # Structure: artifact[16] = [config, title, slides_list, pdf_url, pptx_url]
         try:
-            if len(slide_art) <= 16:
-                raise ArtifactParseError("slide_deck_artifact", details="Invalid structure")
-
-            metadata = slide_art[16]
-            if not isinstance(metadata, list):
-                raise ArtifactParseError("slide_deck_metadata", details="Invalid structure")
-
             if output_format == "pptx":
-                if len(metadata) < 5:
+                url = slide_art.slide_deck_pptx_url
+                if not url:
                     raise ArtifactDownloadError(
                         "slide_deck", details="PPTX URL not available in artifact data"
                     )
-                url = metadata[4]
             else:
-                if len(metadata) < 4:
-                    raise ArtifactParseError("slide_deck_metadata", details="Invalid structure")
-                url = metadata[3]
+                url = slide_art.slide_deck_pdf_url
+                if not url:
+                    raise ArtifactDownloadError(
+                        "slide_deck",
+                        details=f"Could not find {output_format.upper()} download URL",
+                    )
 
-            if not isinstance(url, str) or not url.startswith("http"):
-                raise ArtifactDownloadError(
-                    "slide_deck",
-                    details=f"Could not find {output_format.upper()} download URL",
-                )
-
-        except (IndexError, TypeError) as e:
+        except UnknownRPCMethodError as e:
             raise ArtifactParseError(
-                "slide_deck", details=f"Failed to parse structure: {e}", cause=e
+                "slide_deck",
+                artifact_id=artifact_id,
+                details=f"Failed to parse structure: {e}",
+                cause=e,
             ) from e
 
         return await self.download_url(url, output_path)
@@ -416,15 +430,14 @@ class ArtifactDownloadService:
         )
 
         try:
-            content_wrapper = report_art[7]
-            markdown_content = (
-                content_wrapper[0]
-                if isinstance(content_wrapper, list) and content_wrapper
-                else content_wrapper
-            )
+            markdown_content = report_art.report_markdown
 
             if not isinstance(markdown_content, str):
-                raise ArtifactParseError("report_content", details="Invalid structure")
+                raise ArtifactParseError(
+                    "report_content",
+                    artifact_id=artifact_id,
+                    details="Invalid structure",
+                )
 
             output = Path(output_path)
             output.parent.mkdir(parents=True, exist_ok=True)
@@ -435,9 +448,12 @@ class ArtifactDownloadService:
             await asyncio.to_thread(_write_markdown)
             return str(output)
 
-        except (IndexError, TypeError) as e:
+        except (IndexError, TypeError, UnknownRPCMethodError) as e:
             raise ArtifactParseError(
-                "report", details=f"Failed to parse structure: {e}", cause=e
+                "report",
+                artifact_id=artifact_id,
+                details=f"Failed to parse structure: {e}",
+                cause=e,
             ) from e
 
     async def download_mind_map(
@@ -501,7 +517,7 @@ class ArtifactDownloadService:
         )
 
         try:
-            raw_data = table_art[18]
+            raw_data = table_art.data_table_raw_payload
             headers, rows = _parse_data_table(raw_data)
 
             output = Path(output_path)
@@ -517,9 +533,12 @@ class ArtifactDownloadService:
 
             return str(output)
 
-        except (IndexError, TypeError, ValueError) as e:
+        except (IndexError, TypeError, ValueError, UnknownRPCMethodError) as e:
             raise ArtifactParseError(
-                "data_table", details=f"Failed to parse structure: {e}", cause=e
+                "data_table",
+                artifact_id=artifact_id,
+                details=f"Failed to parse structure: {e}",
+                cause=e,
             ) from e
 
     async def download_quiz(
