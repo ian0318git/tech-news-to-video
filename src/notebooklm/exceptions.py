@@ -41,6 +41,8 @@ def _truncate_response_preview(raw: str | None) -> str | None:
 __all__ = [
     # Base
     "NotebookLMError",
+    # Cross-domain umbrellas
+    "NotFoundError",
     # Validation/Config
     "ValidationError",
     "ConfigurationError",
@@ -97,6 +99,48 @@ class NotebookLMError(Exception):
             await client.notebooks.list()
         except NotebookLMError as e:
             handle_error(e)
+    """
+
+
+# =============================================================================
+# Cross-domain umbrellas
+# =============================================================================
+
+
+class NotFoundError(NotebookLMError):
+    """Common base for resource-not-found exceptions.
+
+    Catch this to handle any not-found case across notebooks, sources,
+    and artifacts in one ``except`` clause::
+
+        try:
+            notebook = await client.notebooks.get(nb_id)
+            source = await client.sources.wait_until_ready(nb_id, src_id)
+            await client.artifacts.download_audio(nb_id, dest, audio_id)
+        except NotFoundError as e:
+            # Catches NotebookNotFoundError, SourceNotFoundError,
+            # and ArtifactNotFoundError uniformly.
+            handle_missing_resource(e)
+
+    The example uses methods that *raise* a ``*NotFoundError`` on missing
+    IDs (:meth:`NotebooksAPI.get`, :meth:`SourcesAPI.wait_until_ready`,
+    the artifact download / content paths). :meth:`SourcesAPI.get` and
+    :meth:`ArtifactsAPI.get` instead return ``None`` for missing IDs — use
+    them when you want a lookup that does not trigger the umbrella.
+
+    Subclasses retain their existing type-specific bases — for example,
+    :class:`SourceNotFoundError` is still a :class:`SourceError`, and
+    :class:`NotebookNotFoundError` is still an :class:`RPCError` and a
+    :class:`NotebookError`. This umbrella is additive and does not
+    change existing catch semantics.
+
+    .. note::
+
+        Today, only :class:`NotebookNotFoundError` also inherits from
+        :class:`RPCError`. :class:`SourceNotFoundError` and
+        :class:`ArtifactNotFoundError` do not — a known asymmetry that
+        is *not* addressed by this umbrella and is deferred to a future
+        release with explicit migration notes.
     """
 
 
@@ -553,15 +597,18 @@ class NotebookError(NotebookLMError):
     """Base for notebook operations."""
 
 
-class NotebookNotFoundError(RPCError, NotebookError):
+class NotebookNotFoundError(NotFoundError, RPCError, NotebookError):
     """Notebook not found.
 
-    Inherits from both :class:`RPCError` and :class:`NotebookError` so callers
-    can catch either base. The RPC base is what ``client.notebooks.get`` raises
-    when the server returns an empty / degenerate payload for a missing ID, so
-    ``except RPCError`` keeps working at call sites that handle transport-level
-    failures. ``except NotebookError`` continues to work at domain-level call
-    sites that don't care about the RPC layer.
+    Inherits from :class:`NotFoundError`, :class:`RPCError`, and
+    :class:`NotebookError` so callers can catch any of them. The
+    :class:`NotFoundError` umbrella catches this alongside
+    :class:`SourceNotFoundError` and :class:`ArtifactNotFoundError`. The RPC
+    base is what ``client.notebooks.get`` raises when the server returns an
+    empty / degenerate payload for a missing ID, so ``except RPCError`` keeps
+    working at call sites that handle transport-level failures.
+    ``except NotebookError`` continues to work at domain-level call sites that
+    don't care about the RPC layer.
 
     Attributes:
         notebook_id: The ID that was not found.
@@ -707,8 +754,18 @@ class SourceAddError(SourceError):
         super().__init__(msg)
 
 
-class SourceNotFoundError(SourceError):
+class SourceNotFoundError(NotFoundError, SourceError):
     """Source not found in notebook.
+
+    Inherits from :class:`NotFoundError` (cross-domain umbrella) and
+    :class:`SourceError` (domain base). Existing ``except SourceError`` and
+    ``except SourceNotFoundError`` clauses continue to work unchanged.
+
+    .. note::
+
+        Unlike :class:`NotebookNotFoundError`, this class does not inherit
+        from :class:`RPCError`. That asymmetry is intentional for this
+        release (no behavior change); see the note on :class:`NotFoundError`.
 
     Attributes:
         source_id: The ID that was not found.
@@ -765,8 +822,18 @@ class ArtifactError(NotebookLMError):
     """Base for artifact operations."""
 
 
-class ArtifactNotFoundError(ArtifactError):
+class ArtifactNotFoundError(NotFoundError, ArtifactError):
     """Artifact not found.
+
+    Inherits from :class:`NotFoundError` (cross-domain umbrella) and
+    :class:`ArtifactError` (domain base). Existing ``except ArtifactError``
+    and ``except ArtifactNotFoundError`` clauses continue to work unchanged.
+
+    .. note::
+
+        Unlike :class:`NotebookNotFoundError`, this class does not inherit
+        from :class:`RPCError`. That asymmetry is intentional for this
+        release (no behavior change); see the note on :class:`NotFoundError`.
 
     Attributes:
         artifact_id: The ID that was not found.
