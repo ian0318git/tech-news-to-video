@@ -25,12 +25,14 @@ from notebooklm.types import ArtifactDownloadError
 @pytest.fixture
 def mock_artifacts_api():
     """ArtifactsAPI wired to MagicMocks -- no real I/O."""
+    from _fixtures.fake_core import make_fake_core
     from notebooklm._mind_map import NoteBackedMindMapService
     from notebooklm._note_service import NoteService
 
-    mock_core = MagicMock()
-    mock_core.rpc_call = AsyncMock()
-    mock_core.get_source_ids = AsyncMock(return_value=[])
+    mock_core = make_fake_core(
+        rpc_call=AsyncMock(),
+        get_source_ids=AsyncMock(return_value=[]),
+    )
     mind_maps = MagicMock(spec=NoteBackedMindMapService)
     mind_maps.list_mind_maps = AsyncMock(return_value=[])
     note_service = MagicMock(spec=NoteService)

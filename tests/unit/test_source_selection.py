@@ -35,39 +35,37 @@ def mock_core():
     factory so URL/body assertions still exercise the production request
     builder.
     """
-    from notebooklm._request_types import AuthSnapshot
+    from types import SimpleNamespace
 
-    core = MagicMock()
+    from notebooklm._request_types import AuthSnapshot
 
     # ``ChatAPI.get_conversation_id`` uses ``core.rpc_call`` with the
     # ``hPTbtc`` (GET_LAST_CONVERSATION_ID) method. Issue #659: after a
     # new-conversation ask, ``ChatAPI.ask`` calls this to recover the real
     # conversation_id. Route only that method to a hPTbtc-shaped reply;
-    # every other RPC honors ``mock_core.rpc_call.return_value`` so the
-    # artifact tests in this module (which set ``return_value`` per call)
-    # are unaffected.
+    # every other RPC honors ``rpc_call.return_value`` so the artifact
+    # tests in this module (which set ``return_value`` per call) are
+    # unaffected.
     from notebooklm.rpc import RPCMethod as _RPC
 
-    core.rpc_call = AsyncMock(return_value=MagicMock())
+    rpc_call = AsyncMock(return_value=MagicMock())
+
+    # Forward declare so the dispatcher and default-transport closures can
+    # capture the eventual ``core`` symbol. The actual ``SimpleNamespace``
+    # assembly happens further below, after both closures are defined.
+    auth = SimpleNamespace(
+        csrf_token="test_csrf",
+        session_id="test_session",
+        authuser=0,
+        account_email=None,
+    )
 
     async def _rpc_call_dispatch(method, params, **kwargs):
         if method == _RPC.GET_LAST_CONVERSATION_ID:
             return [[["mock-core-conv-id"]]]
-        return core.rpc_call.return_value
+        return rpc_call.return_value
 
-    core.rpc_call.side_effect = _rpc_call_dispatch
-    core.auth = MagicMock()
-    core.auth.csrf_token = "test_csrf"
-    core.auth.session_id = "test_session"
-    core.auth.authuser = 0
-    core.auth.account_email = None
-    # Reqid counter is bumped via ``await self._reqid.next_reqid()`` inside
-    # ``ChatAPI.ask`` (Wave 8 of session-decoupling); the mock_core fixture
-    # is passed as the ``reqid=`` collaborator by ``_chat_from_mock_core``
-    # below, so this attribute stub is what the chat path actually calls.
-    core.next_reqid = AsyncMock(return_value=100000)
-    core.assert_bound_loop = MagicMock(return_value=None)
-    core.get_http_client = MagicMock()
+    rpc_call.side_effect = _rpc_call_dispatch
 
     # Default ``perform_authed_post`` stub on the session-transport
     # collaborator: invokes the caller-supplied ``build_request`` factory
@@ -78,10 +76,10 @@ def mock_core():
     # chat-side ``parse_label`` is forwarded as ``log_label``.
     async def _perform_authed_post_default(*, build_request, log_label):
         snapshot = AuthSnapshot(
-            csrf_token=core.auth.csrf_token,
-            session_id=core.auth.session_id,
-            authuser=core.auth.authuser,
-            account_email=core.auth.account_email,
+            csrf_token=auth.csrf_token,
+            session_id=auth.session_id,
+            authuser=auth.authuser,
+            account_email=auth.account_email,
         )
         url, body, headers = build_request(snapshot)
         core._last_chat_request = {"url": url, "body": body, "headers": headers}
@@ -103,11 +101,51 @@ def mock_core():
         resp.text = f")]}}'\n{len(chunk)}\n{chunk}\n"
         return resp
 
-    # Track call counts so tests can assert on transport invocation.
+    # Assemble the bag-of-attributes fixture in one ``SimpleNamespace`` call
+    # so every collaborator slot ``ChatAPI`` and ``ArtifactsAPI`` read from
+    # the fixture lands at construction time. ADR-007 specifically forbids
+    # the ``core.<attr> = <value>`` re-assignment pattern (which is why this
+    # is *not* built via ``make_fake_core`` + post-construction stubs); the
+    # SimpleNamespace constructor satisfies the policy by setting every
+    # attribute up-front.
+    #
     # Wave 8 of session-decoupling: chat now reaches the network through
     # ``session_transport.perform_authed_post`` rather than the legacy
-    # ``transport_post`` facade on Session.
-    core.session_transport.perform_authed_post = AsyncMock(side_effect=_perform_authed_post_default)
+    # ``transport_post`` facade on Session. Reqid is bumped via
+    # ``await self._reqid.next_reqid()``; the bag below is passed as the
+    # ``reqid=`` collaborator by ``_chat_from_mock_core``.
+    session_transport = SimpleNamespace(
+        perform_authed_post=AsyncMock(side_effect=_perform_authed_post_default),
+    )
+
+    # ArtifactsAPI uses the same fixture as its runtime collaborator and
+    # exercises ``register_drain_hook`` (close-time hook) and
+    # ``operation_scope`` (drain-coordinated scope). Stub both up-front so
+    # the fixture satisfies both ChatAPI's reqid/transport surfaces and
+    # ArtifactsAPI's runtime surface in one bag.
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _operation_scope_factory(label: str):
+        yield None
+
+    drain_hooks: dict = {}
+
+    def _register_drain_hook(name: str, hook):
+        drain_hooks[name] = hook
+
+    core = SimpleNamespace(
+        rpc_call=rpc_call,
+        auth=auth,
+        next_reqid=AsyncMock(return_value=100000),
+        assert_bound_loop=MagicMock(return_value=None),
+        get_http_client=MagicMock(),
+        session_transport=session_transport,
+        _last_chat_request=None,
+        operation_scope=MagicMock(side_effect=_operation_scope_factory),
+        register_drain_hook=MagicMock(side_effect=_register_drain_hook),
+        _drain_hooks=drain_hooks,
+    )
     return core
 
 
@@ -786,19 +824,19 @@ class TestGetSourceIds:
     """Tests for NotebooksAPI.get_source_ids method."""
 
     @pytest.mark.asyncio
-    async def test_get_source_ids_extracts_correctly(self, auth_tokens):
+    async def test_get_source_ids_extracts_correctly(self):
         """Test get_source_ids correctly extracts source IDs from notebook data."""
+        from _fixtures.fake_core import make_fake_core
         from notebooklm._notebooks import NotebooksAPI
-        from notebooklm._session import Session
 
-        core = Session(auth_tokens)
-        core.rpc_call = AsyncMock()
+        rpc = AsyncMock()
+        core = make_fake_core(rpc_call=rpc)
         api = NotebooksAPI(core)
 
         # Mock notebook data with multiple sources
         # Structure: notebook_data[0][1] = sources list
         # Each source: [["source_id"], "Source Title", ...]
-        core.rpc_call.return_value = [
+        rpc.return_value = [
             [
                 "nb_123",  # notebook_info[0]
                 [
@@ -815,50 +853,50 @@ class TestGetSourceIds:
         assert source_ids == ["source_aaa", "source_bbb", "source_ccc"]
 
     @pytest.mark.asyncio
-    async def test_get_source_ids_handles_empty_notebook(self, auth_tokens):
+    async def test_get_source_ids_handles_empty_notebook(self):
         """Test get_source_ids handles notebook with no sources."""
+        from _fixtures.fake_core import make_fake_core
         from notebooklm._notebooks import NotebooksAPI
-        from notebooklm._session import Session
 
-        core = Session(auth_tokens)
-        core.rpc_call = AsyncMock()
+        rpc = AsyncMock()
+        core = make_fake_core(rpc_call=rpc)
         api = NotebooksAPI(core)
 
-        core.rpc_call.return_value = [["nb_123", []]]
+        rpc.return_value = [["nb_123", []]]
 
         source_ids = await api.get_source_ids("nb_123")
 
         assert source_ids == []
 
     @pytest.mark.asyncio
-    async def test_get_source_ids_handles_null_response(self, auth_tokens):
+    async def test_get_source_ids_handles_null_response(self):
         """Test get_source_ids handles null API response."""
+        from _fixtures.fake_core import make_fake_core
         from notebooklm._notebooks import NotebooksAPI
-        from notebooklm._session import Session
 
-        core = Session(auth_tokens)
-        core.rpc_call = AsyncMock()
+        rpc = AsyncMock()
+        core = make_fake_core(rpc_call=rpc)
         api = NotebooksAPI(core)
 
-        core.rpc_call.return_value = None
+        rpc.return_value = None
 
         source_ids = await api.get_source_ids("nb_123")
 
         assert source_ids == []
 
     @pytest.mark.asyncio
-    async def test_get_source_ids_handles_malformed_data(self, auth_tokens):
+    async def test_get_source_ids_handles_malformed_data(self):
         """Test get_source_ids handles malformed source data gracefully."""
+        from _fixtures.fake_core import make_fake_core
         from notebooklm._notebooks import NotebooksAPI
-        from notebooklm._session import Session
 
-        core = Session(auth_tokens)
-        core.rpc_call = AsyncMock()
+        rpc = AsyncMock()
+        core = make_fake_core(rpc_call=rpc)
         api = NotebooksAPI(core)
 
         # Malformed data - missing nested structure
         # Structure: source[0] must be a list, source[0][0] must be a string
-        core.rpc_call.return_value = [
+        rpc.return_value = [
             [
                 "nb_123",
                 [

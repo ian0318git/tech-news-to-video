@@ -29,15 +29,16 @@ from notebooklm.types import GenerationStatus
 
 def _make_api():
     """Return an ArtifactsAPI with mocked runtime + mind-map services."""
+    from _fixtures.fake_core import make_fake_core
     from notebooklm._mind_map import NoteBackedMindMapService
     from notebooklm._note_service import NoteService
 
-    core = MagicMock()
-    core.rpc_call = AsyncMock()
+    core = make_fake_core(
+        rpc_call=AsyncMock(),
+        operation_scope=MagicMock(side_effect=lambda _label: _noop_operation_scope()),
+    )
     # Real registry backing so wait_for_completion can ``dict.get(key)``.
     core.poll_registry = PollRegistry()
-    core.operation_scope = MagicMock(side_effect=lambda _label: _noop_operation_scope())
-    core.assert_bound_loop = MagicMock(return_value=None)
     mind_maps = MagicMock(spec=NoteBackedMindMapService)
     note_service = MagicMock(spec=NoteService)
     notebooks = MagicMock()
