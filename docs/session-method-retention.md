@@ -60,11 +60,11 @@ lint at PR time.
 | `_keepalive_loop` | lifecycle | retain — background task body; introspected by `test_client_keepalive` |
 | `rpc_call` | public API forward | retain — pinned by `tests/unit/test_public_shims.py:1048-1089` (`NotebookLMClient.rpc_call` forwards through it) |
 | `_authed_post_chain_terminal` (property) | middleware chain leaf | retain — forwards to MiddlewareChainHost (Stage B2 PR 1 of the post-refactoring plan 2026-05-27); the writable @property descriptor preserves the canonical seam (a fixture-time rebind via `core._authed_post_chain_terminal = fake_terminal` writes through to `chain_host._authed_post_chain_terminal`, mirroring [`test_observability.py:77`](../tests/unit/test_observability.py)). The host's bound method is wired as the live chain leaf by `_session_init.wire_middleware_chain` (`authed_post_chain_terminal=session._authed_post_chain_terminal`, which resolves through the descriptor to the host). |
-| `_authed_post_chain` (property) | middleware chain leaf | retain — forwards to MiddlewareChainHost (Stage B2 PR 1 of the post-refactoring plan 2026-05-27); the writable @property descriptor preserves the canonical seam (a fixture-time rebind via `core._authed_post_chain = fake_chain` writes through to `chain_host._authed_post_chain`, mirroring [`test_authed_post_pipeline.py:113`](../tests/unit/test_authed_post_pipeline.py)). The transport's `chain_provider` closure reads `host._authed_post_chain` live (B2 PR 1 still routes via the Session descriptor; B2 PR 2 will switch it to read `chain_host` directly). |
+| `_authed_post_chain` (property) | middleware chain leaf | retain — forwards to MiddlewareChainHost (Stage B2 PR 1 of the post-refactoring plan 2026-05-27); the writable @property descriptor preserves the canonical seam (a fixture-time rebind via `core._authed_post_chain = fake_chain` writes through to `chain_host._authed_post_chain`, mirroring [`test_authed_post_pipeline.py:113`](../tests/unit/test_authed_post_pipeline.py)). After Stage B2 PR 2 the transport's `chain_provider` closure reads `chain_host._authed_post_chain` directly — see `_session_init.py:408` (`chain_provider=lambda: chain_host._authed_post_chain`); the Session-side descriptor is exclusively the rebind seam. |
 | `_rate_limit_max_retries` (property) | provider-closure capture target | retain — forwards to MiddlewareChainHost (Stage B2 PR 1 of the post-refactoring plan 2026-05-27); the writable @property descriptor preserves the integration-test seam (mid-flight `core._rate_limit_max_retries = N` writes through to the host so the chain's `rate_limit_max_retries_provider` lambda picks up the new budget on the next attempt). |
 | `_server_error_max_retries` (property) | provider-closure capture target | retain — forwards to MiddlewareChainHost (Stage B2 PR 1 of the post-refactoring plan 2026-05-27); the writable @property descriptor preserves the same mutation-after-construction contract as `_rate_limit_max_retries`. |
 | `_refresh_retry_delay` (property) | provider-closure capture target | retain — forwards to MiddlewareChainHost (Stage B2 PR 1 of the post-refactoring plan 2026-05-27); the writable @property descriptor preserves the mutation-after-construction contract for both the chain's `refresh_retry_delay_provider` lambda and the executor's `refresh_retry_delay_provider` closure built in `compose_session_internals`. |
-| `_await_refresh` | session-side refresh delegate | retain — Stage B2 PR 1 routed the body through `MiddlewareChainHost.await_refresh` (dynamic delegation to `host._auth_refresh.await_refresh()`) so a fixture rebinding the coordinator still steers the live refresh. Stage B2 PR 2 moved the chain's capture site off this method onto `chain_host.await_refresh` directly (the chain no longer reaches through this Session-side delegate on every refresh) — see [`_session_init.py`](../src/notebooklm/_session_init.py) `wire_middleware_chain` `refresh_callable=chain_host.await_refresh`. The method is retained as a test seam (the long-standing `session._await_refresh` patch point survives — it routes through the host, which dynamically delegates to the coordinator). |
+| `_await_refresh` | session-side refresh delegate | retain — forwards to MiddlewareChainHost (test-seam forward; Stage B2 PR 1 routed the body through `MiddlewareChainHost.await_refresh` — dynamic delegation to `host._auth_refresh.await_refresh()` so a fixture rebinding the coordinator still steers the live refresh). Stage B2 PR 2 moved the chain's capture site off this method onto `chain_host.await_refresh` directly (the chain no longer reaches through this Session-side delegate on every refresh) — see [`_session_init.py`](../src/notebooklm/_session_init.py) `wire_middleware_chain` `refresh_callable=chain_host.await_refresh`. The method is retained as a test seam (the long-standing `session._await_refresh` patch point survives — it routes through the host, which dynamically delegates to the coordinator). |
 | `assert_bound_loop` | provider-closure capture target | retain — captured via lambda (`bound_loop_check=lambda: host.assert_bound_loop()`) by `build_session_transport` at [`_session_init.py:395`](../src/notebooklm/_session_init.py); late-bound so a test reassigning `core.assert_bound_loop = mock` still steers the live check |
 | `_get_rpc_semaphore` | provider-closure capture target | retain — passed as `rpc_semaphore_factory=self._get_rpc_semaphore` to `wire_middleware_chain` at [`_session.py:416`](../src/notebooklm/_session.py); has real body (lazy semaphore creation) reading `self._max_concurrent_rpcs` / `self._rpc_semaphore`, not a forward |
 | `update_auth_tokens` | RefreshAuthCore Protocol surface | retain — `refresh_auth_session(core, lifecycle)` calls `core.update_auth_tokens(...)` from [`_auth/session.py`](../src/notebooklm/_auth/session.py); also referenced in the AST-guard prose at `tests/unit/test_concurrency_refresh_race.py:386` (the guard inspects `AuthRefreshCoordinator.update_auth_tokens` directly, but the Session-side delegate is the Protocol seam) |
@@ -104,15 +104,22 @@ The two follow-up issues filed per ADR-014 close-out (Wave 6 / Task 6.2):
   `MiddlewareChainHost` collaborator owning `_authed_post_chain_terminal` +
   the `_rate_limit_max_retries` / `_server_error_max_retries` /
   `_refresh_retry_delay` tunables; `Session` holds it like any other
-  collaborator. **STARTED by Stage B2 PR 1 of the post-refactoring plan
-  (2026-05-27)** — the host skeleton (`_middleware_chain_host.py`) is in
-  place, the storage moved off `Session`, and the five writable `@property`
-  descriptor forwards (`_authed_post_chain_terminal`, `_authed_post_chain`,
+  collaborator. **CLOSED by Stage B2 of the post-refactoring plan
+  (2026-05-27)** — PR 1 (#1090) introduced the host skeleton
+  (`_middleware_chain_host.py`), moved the storage off `Session`, and
+  added the five writable `@property` descriptor forwards
+  (`_authed_post_chain_terminal`, `_authed_post_chain`,
   `_rate_limit_max_retries`, `_server_error_max_retries`,
-  `_refresh_retry_delay`) preserve the historical test seams. Stage B2 PR 2
-  will split `wire_middleware_chain` / `build_session_transport` signatures
-  so the chain reads the host directly; PR 3 closes out ADR-014 Rule 4 and
-  amends this doc.
+  `_refresh_retry_delay`) plus the `_await_refresh` delegate to preserve
+  the historical test seams. PR 2 (#1092) split
+  `wire_middleware_chain` / `build_session_transport` so they take
+  `chain_host: MiddlewareChainHost` directly and the live chain reads
+  the host (the descriptors are now exclusively a test-seam forward, no
+  longer a load-bearing dereference on the hot path). PR 3 (this doc
+  change) amends ADR-014 Rule 4's retention list to record the five
+  writable descriptors + `_await_refresh` as `test-seam forwards to
+  MiddlewareChainHost` and notes the chain-ownership carve-out in the
+  ADR's revision history.
 
 ## Deleted
 
