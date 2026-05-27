@@ -36,7 +36,7 @@ if TYPE_CHECKING:
     from .rpc import RPCMethod
     from .types import ClientMetricsSnapshot, ConnectionLimits, RpcTelemetryEvent
 
-from ._artifacts import ArtifactsAPI
+from ._artifacts import ArtifactsAPI, ArtifactsRuntimeAdapter
 from ._auth.session import refresh_auth_session
 from ._chat import ChatAPI
 from ._env import get_base_url as get_base_url
@@ -55,7 +55,7 @@ from ._session_config import (
 from ._session_lifecycle import CookieRotator, CookieSaver
 from ._settings import SettingsAPI
 from ._sharing import SharingAPI
-from ._source_upload import SourceUploadPipeline
+from ._source_upload import SourceUploadPipeline, UploadRuntimeAdapter
 from ._sources import SourcesAPI
 from ._url_utils import is_google_auth_redirect as is_google_auth_redirect
 from .auth import AuthTokens
@@ -290,12 +290,29 @@ class NotebookLMClient:
             cookie_rotator=cookie_rotator,
         )
 
-        # Wire the upload pipeline explicitly with the concrete capability
-        # surfaces (UploadRuntime via the Session, plus Kernel and AuthMetadata).
-        # NotebookLMClient is the only composition root that knows these
-        # internals — SourcesAPI no longer reads them back off the session.
+        # Per ADR-014 Rule 3 Stage A, every feature adapter draws from
+        # the same ``SessionCollaborators`` bundle exposed by Wave 6.
+        # Hoist the accessor once so the upload / artifacts / chat
+        # wirings below read as obvious siblings rather than as
+        # potentially-distinct bundles. (Claude review on PR #1074
+        # Wave 9 / step 3 flagged the per-adapter aliases as misleading.)
+        collaborators = self._session.collaborators
+
+        # Wave 9 of session-decoupling (ADR-014 Rule 2 + Rule 3): the
+        # upload pipeline takes a ``UploadRuntimeAdapter`` composite —
+        # built from ``rpc_executor`` + ``drain_tracker`` + ``lifecycle``
+        # — instead of the whole ``Session``. ``Kernel`` and
+        # ``AuthMetadata`` continue to flow as separate parameters per
+        # the ADR-014 Rule 6 example. ``NotebookLMClient.__init__`` is
+        # the composition root that knows these internals;
+        # ``SourcesAPI`` no longer reads them back off the session.
+        upload_runtime = UploadRuntimeAdapter(
+            rpc=self._session.rpc_executor,
+            drain=collaborators.drain_tracker,
+            lifecycle=collaborators.lifecycle,
+        )
         source_uploader = SourceUploadPipeline(
-            self._session,
+            upload_runtime,
             self._session.kernel,
             self._session.auth,
             upload_timeout=upload_timeout,
@@ -322,8 +339,20 @@ class NotebookLMClient:
         # NoteService.create_note directly to persist a generated mind map.
         note_service = NoteService(self._session.rpc_executor)
         mind_maps = NoteBackedMindMapService(note_service)
+        # Wave 9 of session-decoupling (ADR-014 Rule 2 + Rule 3): the
+        # artifacts API takes an ``ArtifactsRuntimeAdapter`` composite —
+        # built from ``rpc_executor`` + ``drain_tracker`` + ``lifecycle``
+        # — instead of the whole ``Session``. The adapter satisfies
+        # ``ArtifactsRuntime`` (RpcCaller + AsyncWorkRuntime +
+        # DrainHookRegistration) by delegating to those three
+        # collaborators directly.
+        artifacts_runtime = ArtifactsRuntimeAdapter(
+            rpc=self._session.rpc_executor,
+            drain=collaborators.drain_tracker,
+            lifecycle=collaborators.lifecycle,
+        )
         self.artifacts = ArtifactsAPI(
-            self._session,
+            artifacts_runtime,
             notebooks=self.notebooks,
             mind_maps=mind_maps,
             note_service=note_service,
@@ -342,12 +371,11 @@ class NotebookLMClient:
         # are sourced from the late-bound ``session.rpc_executor`` /
         # ``session.session_transport`` accessors and the
         # ``session.collaborators`` bundle.
-        chat_collaborators = self._session.collaborators
         self.chat = ChatAPI(
             rpc=self._session.rpc_executor,
             transport=self._session.session_transport,
-            reqid=chat_collaborators.reqid,
-            loop_guard=chat_collaborators.lifecycle,
+            reqid=collaborators.reqid,
+            loop_guard=collaborators.lifecycle,
             notebooks=self.notebooks,
         )
         self.notes = NotesAPI(
