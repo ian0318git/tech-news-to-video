@@ -24,10 +24,16 @@ from notebooklm.rpc import InfographicStyle, VideoFormat, VideoStyle
 def mock_core():
     """Create a mock Session.
 
-    After the D2 cutover, ``ChatAPI.ask`` reaches the network through
-    ``Session.transport_post``. The fixture stubs that session method and
-    invokes the caller-supplied ``build_request`` factory so URL/body
-    assertions still exercise the production request builder.
+    After Wave 8 of session-decoupling, ``ChatAPI.ask`` reaches the network
+    through its injected :class:`SessionTransport` collaborator via
+    ``self._transport.perform_authed_post`` (constructor-injected by the
+    ``_chat_from_mock_core`` helper below, which maps the bag-of-attributes
+    ``mock_core`` fixture onto the four keyword-only collaborator slots).
+    The fixture stubs ``mock_core.session_transport.perform_authed_post`` —
+    that ``AsyncMock`` is the value ``_chat_from_mock_core`` passes as
+    ``transport=`` — and invokes the caller-supplied ``build_request``
+    factory so URL/body assertions still exercise the production request
+    builder.
     """
     from notebooklm._request_types import AuthSnapshot
 
@@ -62,12 +68,14 @@ def mock_core():
     core.assert_bound_loop = MagicMock(return_value=None)
     core.get_http_client = MagicMock()
 
-    # Default ``transport_post`` stub: invokes the caller-supplied
-    # ``build_request`` factory with a frozen snapshot (so the URL/body the
-    # test wants to assert on actually gets assembled) and returns a stock
-    # answer response. Individual tests that need to inspect the URL/body can
-    # read ``core._last_chat_request`` after calling ``ChatAPI.ask``.
-    async def _transport_post_default(*, build_request, parse_label):
+    # Default ``perform_authed_post`` stub on the session-transport
+    # collaborator: invokes the caller-supplied ``build_request`` factory
+    # with a frozen snapshot (so the URL/body the test wants to assert on
+    # actually gets assembled) and returns a stock answer response.
+    # Individual tests that need to inspect the URL/body can read
+    # ``core._last_chat_request`` after calling ``ChatAPI.ask``. The
+    # chat-side ``parse_label`` is forwarded as ``log_label``.
+    async def _perform_authed_post_default(*, build_request, log_label):
         snapshot = AuthSnapshot(
             csrf_token=core.auth.csrf_token,
             session_id=core.auth.session_id,
@@ -95,7 +103,10 @@ def mock_core():
         return resp
 
     # Track call counts so tests can assert on transport invocation.
-    core.transport_post = AsyncMock(side_effect=_transport_post_default)
+    # Wave 8 of session-decoupling: chat now reaches the network through
+    # ``session_transport.perform_authed_post`` rather than the legacy
+    # ``transport_post`` facade on Session.
+    core.session_transport.perform_authed_post = AsyncMock(side_effect=_perform_authed_post_default)
     return core
 
 
@@ -104,6 +115,27 @@ def mock_notebooks_api():
     notebooks = MagicMock()
     notebooks.get_source_ids = AsyncMock(return_value=[])
     return notebooks
+
+
+def _chat_from_mock_core(mock_core, *, notebooks=None) -> ChatAPI:
+    """Build a ``ChatAPI`` from the ``mock_core`` fixture's surfaces.
+
+    Wave 8 of session-decoupling (ADR-014 Rule 2 Corollary): ``ChatAPI``
+    takes its four direct collaborators by keyword arg. The legacy single-
+    arg ``ChatAPI(mock_core)`` form is gone; this helper preserves the
+    test shape by mapping the bag-of-attributes mock_core fixture onto
+    the new constructor surface (rpc, transport, reqid, loop_guard).
+    Tests pass ``mock_core.rpc_call`` for ``rpc.rpc_call`` and the
+    fixture's pre-wired ``mock_core.session_transport.perform_authed_post``
+    for the transport entry point.
+    """
+    return ChatAPI(
+        rpc=mock_core,
+        transport=mock_core.session_transport,
+        reqid=mock_core,
+        loop_guard=mock_core,
+        notebooks=notebooks,
+    )
 
 
 @pytest.fixture
@@ -132,7 +164,7 @@ class TestChatSourceSelection:
     @pytest.mark.asyncio
     async def test_ask_with_explicit_source_ids(self, mock_core):
         """Test ask() with explicitly provided source_ids."""
-        api = ChatAPI(mock_core)
+        api = _chat_from_mock_core(mock_core)
 
         result = await api.ask(
             notebook_id="nb_123",
@@ -142,8 +174,9 @@ class TestChatSourceSelection:
 
         assert result.answer == "Default answer long enough to be valid."
 
-        # transport_post is the session entry point; the request body is captured
-        # into ``_last_chat_request`` by the mock_core fixture.
+        # session_transport.perform_authed_post is the session entry point;
+        # the request body is captured into ``_last_chat_request`` by the
+        # mock_core fixture.
         body = mock_core._last_chat_request["body"]
 
         # The body should contain the encoded sources_array
@@ -155,7 +188,7 @@ class TestChatSourceSelection:
     @pytest.mark.asyncio
     async def test_ask_with_none_fetches_all_sources(self, mock_core, mock_notebooks_api):
         """Test ask() with source_ids=None fetches all sources."""
-        api = ChatAPI(mock_core, notebooks=mock_notebooks_api)
+        api = _chat_from_mock_core(mock_core, notebooks=mock_notebooks_api)
 
         # Mock get_source_ids to return source IDs
         mock_notebooks_api.get_source_ids.return_value = ["src_001", "src_002", "src_003"]
@@ -174,7 +207,7 @@ class TestChatSourceSelection:
     @pytest.mark.asyncio
     async def test_ask_source_encoding_format(self, mock_core):
         """Verify the correct encoding format for source IDs in ask()."""
-        api = ChatAPI(mock_core)
+        api = _chat_from_mock_core(mock_core)
 
         await api.ask(
             notebook_id="nb_123",
@@ -182,9 +215,10 @@ class TestChatSourceSelection:
             source_ids=["s1", "s2", "s3"],
         )
 
-        # transport_post should have been called once with a build_request factory
-        # that produces the URL-encoded body with the triple-nested sources.
-        mock_core.transport_post.assert_awaited_once()
+        # session_transport.perform_authed_post should have been called once
+        # with a build_request factory that produces the URL-encoded body
+        # with the triple-nested sources.
+        mock_core.session_transport.perform_authed_post.assert_awaited_once()
         body = mock_core._last_chat_request["body"]
 
         # The body contains URL-encoded f.req parameter
@@ -722,7 +756,7 @@ class TestEmptySourceIds:
     @pytest.mark.asyncio
     async def test_ask_with_empty_source_list(self, mock_core):
         """Test ask with empty source_ids list."""
-        api = ChatAPI(mock_core)
+        api = _chat_from_mock_core(mock_core)
 
         await api.ask(
             notebook_id="nb_123",
