@@ -154,7 +154,7 @@ def test_notebooklm_client_initializes_client_holders() -> None:
     assert client._composed.session_collaborators is client._collaborators
     assert client._composed.max_concurrent_rpcs == 2
     assert client._composed.executor is client._rpc_executor
-    assert client._composed.transport is client._composed.transport
+    assert client._composed.transport is client._rpc_executor._transport
 
 
 def test_invalid_max_concurrent_rpcs_rejected_before_zero_cap_semaphore() -> None:
@@ -412,8 +412,9 @@ def test_client_composed_properties_raise_before_binding(attr_name: str, message
 def test_client_shell_reads_composition_from_client_composed() -> None:
     client = build_client_shell_for_tests(_make_auth())
 
-    assert client._composed.transport is client._composed.transport
     assert client._rpc_executor is client._composed.executor
-    assert client._composed.chain_host is client._composed.chain_host
-    assert client._composed.chain_builder is client._composed.chain_builder
-    assert client._composed.middlewares is client._composed.middlewares
+    assert client._rpc_executor._transport is client._composed.transport
+    assert client._composed.chain_host._transport is client._composed.transport
+    assert client._composed.chain_builder._drain_tracker is client._collaborators.drain_tracker
+    assert client._composed.middlewares[0]._drain_tracker is client._collaborators.drain_tracker
+    assert client._composed.middlewares[1]._metrics is client._collaborators.metrics

@@ -66,6 +66,10 @@ def scan_source(source: str, *, rel: str = "<memory>") -> list[str]:
         elif isinstance(node, ast.ImportFrom):
             if node.module in {SESSION_ATTR, DELETED_MODULE}:
                 violations.append(f"{rel}:{node.lineno}: imports deleted module")
+            if node.module == "notebooklm":
+                for alias in node.names:
+                    if alias.name in {SESSION_ATTR, DELETED_MODULE}:
+                        violations.append(f"{rel}:{node.lineno}: imports deleted module")
             for alias in node.names:
                 if alias.name in OLD_HELPERS:
                     violations.append(f"{rel}:{node.lineno}: imports old helper {alias.name}")
@@ -114,6 +118,7 @@ def test_scan_source_catches_static_and_dynamic_deleted_surface() -> None:
         [
             "class Session: pass",
             f"from notebooklm.{SESSION_ATTR} import Session",
+            f"from notebooklm import {SESSION_ATTR}",
             f"import notebooklm.{SESSION_ATTR}",
             f"client.{SESSION_ATTR}.close()",
             f"getattr(client, {SESSION_ATTR!r})",
@@ -128,7 +133,7 @@ def test_scan_source_catches_static_and_dynamic_deleted_surface() -> None:
         ]
     )
     violations = scan_source(source)
-    assert len(violations) >= 13
+    assert len(violations) >= 14
 
 
 def test_scan_source_allows_surviving_sibling_modules() -> None:

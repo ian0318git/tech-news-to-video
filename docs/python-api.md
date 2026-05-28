@@ -642,8 +642,7 @@ keepalive code path handles this automatically.
 ### Constraints enforced at construction
 
 These validations run in `NotebookLMClient.__init__` /
-`NotebookLMClient.from_storage()` (and `Session.__init__` for the
-floor checks). All raise `ValueError`:
+`NotebookLMClient.from_storage()`. All raise `ValueError`:
 
 - `max_concurrent_rpcs ≤ ConnectionLimits.max_connections` when both are
   set (skipped when either is `None`).
@@ -666,7 +665,7 @@ responsible for closing it on `aclose()`. `_session_init.py` constructs
 the collaborator bundle, `SessionTransport`, middleware chain, and
 `RpcExecutor`, then binds them into `ClientComposed`. The supporting state
 (metrics, drain bookkeeping, request-id counter, transport plumbing,
-conversation cache, etc.) is split across single-responsibility session
+conversation cache, etc.) is split across single-responsibility runtime
 and kernel collaborator modules such as `notebooklm._rpc_executor`,
 `notebooklm._transport_drain`, and `notebooklm._transport_errors`. The
 split is internal — module-level constants and helpers live in canonical
@@ -677,27 +676,29 @@ compatibility shim was removed in v0.5.0.
 
 | Module | Owns | Notes |
 |---|---|---|
-| `_session` | Concrete `Session` orchestrator. Constructs and exposes a `Kernel`; the `httpx.AsyncClient` lifecycle is owned by `Kernel`. | Concrete implementation. |
+| `_client_composed` | `ClientComposed`: bound runtime holder for transport, executor, middleware chain metadata, and the collaborator bundle. | The composition root binds this once; public methods read the bound collaborators from the client. |
 | `_kernel` | Concrete `Kernel` transport core; owns the `httpx.AsyncClient` (constructed in `Kernel.__init__`, closed in `Kernel.aclose()`) and the cookie jar. | Pure transport surface (see `Kernel` Protocol in `_session_contracts`). |
+| `_session_init` | Client composition root helpers: constructor validation, collaborator construction, `SessionTransport`, middleware chain, and `RpcExecutor` wiring. | `NotebookLMClient` calls this during construction and stores the result directly. |
+| `_session_transport` | Authenticated transport leg used by `RpcExecutor` and the middleware chain terminal. | Routes through `Kernel.post` and centralizes request-envelope materialization. |
 | `_session_config` | Module-level constants: `DEFAULT_TIMEOUT`, `DEFAULT_KEEPALIVE_MIN_INTERVAL`, `DEFAULT_MAX_CONCURRENT_RPCS`, `DEFAULT_MAX_CONCURRENT_UPLOADS`, `CORE_LOGGER_NAME`, `normalize_max_concurrent_uploads`. | Pure constants; importable without side effects. |
 | `_session_helpers` | `is_auth_error`, `AUTH_ERROR_PATTERNS`, `_resolve_keepalive_interval`. | Cross-seam pure helpers; behaviour-bearing (and therefore unit-tested). |
 | `_error_injection` | `ERROR_INJECT_ENV_VAR`, `_get_error_injection_mode`, `_refuse_synthetic_error_outside_test_context`. | Env-var resolver + startup guard for the synthetic-error harness. |
 | `_session_auth` | `AuthRefreshCoordinator`: refresh-task lifecycle, refresh lock, `AuthSnapshot` rotation. | Lazy `asyncio.Lock` construction; never instantiated outside a running loop. |
-| `_conversation_cache` | Per-instance LRU `_conversation_cache` for `ChatAPI` continuity. | Pure in-process state; not shared across `Session` instances. |
+| `_conversation_cache` | Per-instance LRU `_conversation_cache` for `ChatAPI` continuity. | Pure in-process state; not shared across client instances. |
 | `_cookie_persistence` | Cookie-jar → storage-state serialization, `__Secure-1PSIDTS` rotation. | Exposes a `SaveCookiesToStorage` Protocol host. |
 | `_transport_drain` | `TransportDrainTracker`: in-flight transport counters, `_TransportOperationToken`, lazy `asyncio.Condition` powering `client.drain(...)`. | Construction is event-loop-agnostic; the `Condition` is allocated on first use. |
-| `_session_lifecycle` | `ClientLifecycle`: loop-affinity guard, `aclose` plumbing, keepalive task wiring. | Session lifecycle collaborator. |
+| `_session_lifecycle` | `ClientLifecycle`: loop-affinity guard, `aclose` plumbing, keepalive task wiring. | Client lifecycle collaborator. |
 | `_client_metrics` | `ClientMetrics`: `ClientMetricsSnapshot` counters, `_metrics_lock`, `on_rpc_event` callback, queue-wait recorders. | `__init__` is event-loop-agnostic; `emit_rpc_event` is `async` and intentionally awaits the user callback (back-pressure). |
-| `_polling_registry` | Pending-poll registry shared by long-running artifact generations. | Used by artifacts and the legacy `Session._pending_polls` compatibility bridge. |
+| `_polling_registry` | Pending-poll registry shared by long-running artifact generations. | Used by artifacts to coordinate and cancel pending polls. |
 | `_reqid_counter` | `ReqidCounter`: monotonic `_reqid` for the chat backend, lazy `asyncio.Lock` for concurrent `ChatAPI.ask` callers. | Baseline `_value=100000`, default `step=100000` — both are chat-API contract values; do not change. |
 | `_rpc_executor` | RPC dispatch executor; exposes `DecodeResponse` Protocol so callers can be unit-tested against a stub. | `NotebookLMClient.rpc_call` dispatches here directly. |
 | `_request_types` | `AuthSnapshot`, `BuildRequest`, `BuildRequestResult`, and request materialization helpers. | Shared request Interface for RPC, chat, auth refresh, and the chain terminal. |
-| `_transport_errors` | Transport exceptions, `Retry-After` parsing, and raw `Kernel.post` error mapping. | Keeps terminal error mapping out of `Session` and lets the middleware chain consume a narrow exception Interface. |
+| `_transport_errors` | Transport exceptions, `Retry-After` parsing, and raw `Kernel.post` error mapping. | Keeps terminal error mapping out of `Kernel` callers and lets the middleware chain consume a narrow exception Interface. |
 | `_streaming_post` | Streaming POST helper with the response-size cap. | Keeps low-level buffered HTTP read behavior local to the `Kernel.post` implementation. |
 
 Feature APIs depend on narrow per-capability Protocols defined in
-`notebooklm._session_contracts` rather than on the concrete `Session`
-class. `ChatAPI`, `ArtifactsAPI`, and `SourceUploadPipeline` each take
+`notebooklm._session_contracts` rather than on a broad runtime facade.
+`ChatAPI`, `ArtifactsAPI`, and `SourceUploadPipeline` each take
 their direct collaborators by keyword-only constructor argument. The
 feature-local composite-runtime Protocols (`ChatRuntime`,
 `ArtifactsRuntime`, `UploadRuntime`) and their adapter dataclasses that
