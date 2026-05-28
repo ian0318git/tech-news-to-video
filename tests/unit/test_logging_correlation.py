@@ -271,7 +271,7 @@ async def test_retry_inherits_parent_request_id():
     # wrapper purely in-process.
     auth = AuthTokens(cookies={"SID": "test_sid"}, csrf_token="csrf", session_id="sid")
     core = build_client_shell_for_tests(auth)
-    await core.open()
+    await core.__aenter__()
     try:
         executor = core._rpc_executor
         executor._execute_once = fake_impl  # type: ignore[method-assign]

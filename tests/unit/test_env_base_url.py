@@ -99,7 +99,7 @@ async def test_upload_start_uses_enterprise_url_and_headers(monkeypatch, httpx_m
     )
 
     core = build_client_shell_for_tests(auth)
-    await core.open()
+    await core.__aenter__()
     try:
         api = SourcesAPI(
             core,

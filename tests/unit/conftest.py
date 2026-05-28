@@ -148,7 +148,7 @@ async def make_core(refresh_callback=None, transport=None, refresh_retry_delay=0
         refresh_callback=refresh_callback,
         refresh_retry_delay=refresh_retry_delay,
     )
-    await core.open()
+    await core.__aenter__()
     if transport is not None:
         # Replace the auto-built client with one that uses our transport so we
         # can observe real httpx.Request construction (cookie merge, headers).

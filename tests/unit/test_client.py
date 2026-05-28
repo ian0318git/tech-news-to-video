@@ -780,7 +780,9 @@ class TestRpcCallAutoRetry:
             refresh_count[0] += 1
             return auth
 
-        core = build_client_shell_for_tests(auth, refresh_callback=mock_refresh, refresh_retry_delay=0)
+        core = build_client_shell_for_tests(
+            auth, refresh_callback=mock_refresh, refresh_retry_delay=0
+        )
 
         call_count = [0]
 

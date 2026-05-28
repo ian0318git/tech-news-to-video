@@ -1186,13 +1186,15 @@ class TestBaselineNotAdvancedOnSaveFailure:
 
         auth = await auth_mod.AuthTokens.from_storage(path=storage)
         core = build_client_shell_for_tests(auth)
-        await core.open()
+        await core.__aenter__()
         try:
             key = CookieSnapshotKey("__Secure-1PSIDTS", ".google.com", "/")
             assert auth.cookie_snapshot is not None
             assert auth.cookie_snapshot[key].value == "old"
             assert core._collaborators.cookie_persistence.loaded_cookie_snapshot is not None
-            assert core._collaborators.cookie_persistence.loaded_cookie_snapshot[key].value == "old", (
+            assert (
+                core._collaborators.cookie_persistence.loaded_cookie_snapshot[key].value == "old"
+            ), (
                 "Session must inherit the pre-fetch baseline so the mutated "
                 "cookie remains a delta after the failed pre-client save"
             )
@@ -1341,7 +1343,7 @@ class TestCASRejectReturnsFalse:
             storage_path=storage,
         )
         core = build_client_shell_for_tests(auth)
-        await core.open()
+        await core.__aenter__()
 
         def jar_with(sid_value: str) -> httpx.Cookies:
             jar = httpx.Cookies()
@@ -1356,11 +1358,15 @@ class TestCASRejectReturnsFalse:
                     cookie["value"] = "sibling"
             _write_storage(storage, cookies)
 
-            await core._collaborators.lifecycle.save_cookies(core._collaborators.cookie_persistence, jar_with("sid1"))
+            await core._collaborators.lifecycle.save_cookies(
+                core._collaborators.cookie_persistence, jar_with("sid1")
+            )
             assert _cookie_value(storage, "SID", ".google.com") == "sid1"
             assert _cookie_value(storage, "__Secure-1PSIDTS", ".google.com") == "sibling"
 
-            await core._collaborators.lifecycle.save_cookies(core._collaborators.cookie_persistence, jar_with("sid2"))
+            await core._collaborators.lifecycle.save_cookies(
+                core._collaborators.cookie_persistence, jar_with("sid2")
+            )
             assert _cookie_value(storage, "SID", ".google.com") == "sid2", (
                 "The successful SID delta from the partial save must advance "
                 "baseline; otherwise the next SID rotation CAS-rejects against "
@@ -1538,10 +1544,13 @@ class TestCASVariantAware:
         # Session.save_cookies (lock + to_thread + baseline advance), not
         # straight into save_cookies_to_storage.
         core = build_client_shell_for_tests(auth)
-        await core.open()
+        await core.__aenter__()
         try:
             assert core._collaborators.cookie_persistence.loaded_cookie_snapshot is not None
-            assert core._collaborators.cookie_persistence.loaded_cookie_snapshot[bare_key].value == "OLD", (
+            assert (
+                core._collaborators.cookie_persistence.loaded_cookie_snapshot[bare_key].value
+                == "OLD"
+            ), (
                 "Session.open must inherit the variant-aware preserved "
                 "baseline from AuthTokens.cookie_snapshot"
             )
@@ -1549,9 +1558,12 @@ class TestCASVariantAware:
             # Set-Cookie aligns the in-memory dotted OSID with what disk now
             # holds. Run the second save through the real Session plumbing.
             assert core._collaborators.kernel.http_client is not None
-            _set_cookie_value(core._collaborators.kernel.get_http_client().cookies, "OSID", "SIBLING")
+            _set_cookie_value(
+                core._collaborators.kernel.get_http_client().cookies, "OSID", "SIBLING"
+            )
             await core._collaborators.lifecycle.save_cookies(
-                core._collaborators.cookie_persistence, core._collaborators.kernel.get_http_client().cookies
+                core._collaborators.cookie_persistence,
+                core._collaborators.kernel.get_http_client().cookies,
             )
 
             assert _cookie_value(storage, "OSID", "accounts.google.com") == "SIBLING", (
@@ -1560,8 +1572,14 @@ class TestCASVariantAware:
                 "divergence through the leading-dot variant"
             )
             assert core._collaborators.cookie_persistence.loaded_cookie_snapshot is not None
-            assert core._collaborators.cookie_persistence.loaded_cookie_snapshot.get(dotted_key) is not None
-            assert core._collaborators.cookie_persistence.loaded_cookie_snapshot[dotted_key].value == "SIBLING", (
+            assert (
+                core._collaborators.cookie_persistence.loaded_cookie_snapshot.get(dotted_key)
+                is not None
+            )
+            assert (
+                core._collaborators.cookie_persistence.loaded_cookie_snapshot[dotted_key].value
+                == "SIBLING"
+            ), (
                 "After the second save, disk already matches the current "
                 "dotted-variant jar value, so the save must recover from the "
                 "prior CAS rejection and advance baseline to the converged "
@@ -1570,7 +1588,8 @@ class TestCASVariantAware:
 
             _set_cookie_value(core._collaborators.kernel.get_http_client().cookies, "OSID", "NEXT")
             await core._collaborators.lifecycle.save_cookies(
-                core._collaborators.cookie_persistence, core._collaborators.kernel.get_http_client().cookies
+                core._collaborators.cookie_persistence,
+                core._collaborators.kernel.get_http_client().cookies,
             )
 
             assert _cookie_value(storage, "OSID", "accounts.google.com") == "NEXT", (
@@ -1578,7 +1597,10 @@ class TestCASVariantAware:
                 "rotation must persist through the variant-aware lookup"
             )
             assert core._collaborators.cookie_persistence.loaded_cookie_snapshot is not None
-            assert core._collaborators.cookie_persistence.loaded_cookie_snapshot[dotted_key].value == "NEXT", (
+            assert (
+                core._collaborators.cookie_persistence.loaded_cookie_snapshot[dotted_key].value
+                == "NEXT"
+            ), (
                 "The successful follow-up rotation should advance the dotted "
                 "baseline to the value now reflected on disk"
             )
@@ -1651,7 +1673,7 @@ class TestSaveCookiesSeesLatestBaselineUnderContention:
         # Phase 2 PR 4: inject the cookie-saver seam via the constructor
         # rather than monkeypatching ``notebooklm._core.save_cookies_to_storage``.
         core = build_client_shell_for_tests(auth, cookie_saver=capture_save)
-        await core.open()
+        await core.__aenter__()
 
         # Explicit barrier: each coroutine records its submission and the
         # second arrival sets ``both_submitted``; both then ``await`` the
@@ -1705,8 +1727,12 @@ class TestSaveCookiesSeesLatestBaselineUnderContention:
 
         try:
             await asyncio.gather(
-                core._collaborators.lifecycle.save_cookies(core._collaborators.cookie_persistence, jar_a),
-                core._collaborators.lifecycle.save_cookies(core._collaborators.cookie_persistence, jar_b),
+                core._collaborators.lifecycle.save_cookies(
+                    core._collaborators.cookie_persistence, jar_a
+                ),
+                core._collaborators.lifecycle.save_cookies(
+                    core._collaborators.cookie_persistence, jar_b
+                ),
             )
         finally:
             await core.close()

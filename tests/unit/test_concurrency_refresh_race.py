@@ -475,7 +475,7 @@ async def test_concurrent_refresh_does_not_corrupt_inflight_rpc_request(rpc_firs
     )
     client = build_client_shell_for_tests(auth=auth, refresh_retry_delay=0.0)
     core = client
-    await core.open()
+    await core.__aenter__()
     try:
         # Swap the auto-built http client for one that uses the test
         # transport so we can observe the real ``httpx.Request`` (cookie

@@ -91,7 +91,7 @@ async def _open_core_with_transport(transport: ConcurrentMockTransport) -> Noteb
     ``open()`` again.
     """
     core = build_client_shell_for_tests(auth=_make_auth())
-    await core.open()
+    await core.__aenter__()
     assert core._collaborators.kernel.http_client is not None
     prior_cookies = core._collaborators.kernel.get_http_client().cookies
     await core._collaborators.kernel.get_http_client().aclose()
@@ -217,7 +217,7 @@ async def test_bound_loop_captured_on_open(
         "NotebookLMClient must not bind to a loop at construction time — open() is the binding moment."
     )
 
-    await core.open()
+    await core.__aenter__()
     try:
         assert core._collaborators.lifecycle.get_bound_loop() is asyncio.get_running_loop(), (
             "open() must capture the *running* loop, not a stored or module-level reference."

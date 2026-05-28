@@ -53,7 +53,7 @@ class TestClientInitialization:
         # ``ClientLifecycle._cookie_saver``).
         mock_save = MagicMock(return_value=False)
         core = build_client_shell_for_tests(auth, cookie_saver=mock_save)
-        await core.open()
+        await core.__aenter__()
 
         await core.close()
 
@@ -68,7 +68,7 @@ class TestClientInitialization:
         # legacy ``_core.save_cookies_to_storage`` seam.
         boom_save = MagicMock(side_effect=RuntimeError("boom"))
         core = build_client_shell_for_tests(auth_tokens, cookie_saver=boom_save)
-        await core.open()
+        await core.__aenter__()
 
         await core.close()
 
@@ -465,7 +465,9 @@ class TestCrossDomainCookiePreservation:
             # Wave 3 of plan ``host-protocol-removal`` deleted the
             # NotebookLMClient-level ``update_auth_headers`` forward; call the
             # canonical coordinator method directly with explicit kwargs.
-            core._collaborators.auth_coord.update_auth_headers(auth=core._auth, kernel=core._collaborators.kernel)
+            core._collaborators.auth_coord.update_auth_headers(
+                auth=core._auth, kernel=core._collaborators.kernel
+            )
 
             # Verify original cookies are still present (not wiped)
             # httpx.Cookies.get() returns None if cookie not found
@@ -490,7 +492,9 @@ class TestCrossDomainCookiePreservation:
             # Wave 3 of plan ``host-protocol-removal`` deleted the
             # NotebookLMClient-level ``update_auth_headers`` forward; call the
             # canonical coordinator method directly with explicit kwargs.
-            core._collaborators.auth_coord.update_auth_headers(auth=core._auth, kernel=core._collaborators.kernel)
+            core._collaborators.auth_coord.update_auth_headers(
+                auth=core._auth, kernel=core._collaborators.kernel
+            )
 
             # The EXACT value should still be there (merged, not replaced)
             assert (
@@ -529,7 +533,9 @@ class TestCrossDomainCookiePreservation:
             # Wave 3 of plan ``host-protocol-removal`` deleted the
             # NotebookLMClient-level ``update_auth_headers`` forward; call the
             # canonical coordinator method directly with explicit kwargs.
-            core._collaborators.auth_coord.update_auth_headers(auth=core._auth, kernel=core._collaborators.kernel)
+            core._collaborators.auth_coord.update_auth_headers(
+                auth=core._auth, kernel=core._collaborators.kernel
+            )
 
             # The redirect cookie must survive
             assert http.cookies.get("__Secure-1PSIDCC", domain=".google.com") == "from_redirect"

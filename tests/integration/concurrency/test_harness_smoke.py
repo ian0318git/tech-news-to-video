@@ -80,7 +80,7 @@ async def _open_core_with_transport(transport: ConcurrentMockTransport) -> Noteb
     cap-on semantics are covered by ``test_max_concurrent_rpcs.py``).
     """
     core = build_client_shell_for_tests(auth=_make_auth(), max_concurrent_rpcs=None)
-    await core.open()
+    await core.__aenter__()
     assert core._collaborators.kernel.http_client is not None
     prior_cookies = core._collaborators.kernel.get_http_client().cookies
     await core._collaborators.kernel.get_http_client().aclose()

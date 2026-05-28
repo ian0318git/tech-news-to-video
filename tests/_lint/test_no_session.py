@@ -81,7 +81,7 @@ def scan_source(source: str, *, rel: str = "<memory>") -> list[str]:
             if node.attr == "collaborators":
                 parent = getattr(node, "value", None)
                 if isinstance(parent, ast.Name) and parent.id == "composed":
-                    violations.append(f"{rel}:{node.lineno}: composed.collaborators")
+                    violations.append(f"{rel}:{node.lineno}: composed" + ".collaborators")
         elif isinstance(node, ast.Call):
             attr = _dynamic_attr_name(node)
             if attr == SESSION_ATTR:
@@ -124,7 +124,7 @@ def test_scan_source_catches_static_and_dynamic_deleted_surface() -> None:
             f"attrgetter({SESSION_ATTR!r})",
             f"target = {DELETED_MODULE!r}",
             ("build_client" + "_for_tests(auth)"),
-            "composed.collaborators",
+            "composed" + ".collaborators",
         ]
     )
     violations = scan_source(source)

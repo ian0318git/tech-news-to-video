@@ -30,7 +30,8 @@ class TestAutoRefreshIntegration:
         # Bound methods aren't identical, so compare underlying function
         assert client._collaborators.auth_coord._refresh_callback is not None
         assert (
-            client._collaborators.auth_coord._refresh_callback.__func__ is NotebookLMClient.refresh_auth
+            client._collaborators.auth_coord._refresh_callback.__func__
+            is NotebookLMClient.refresh_auth
         )
         # ``_refresh_lock`` is lazily created on first ``_await_refresh``.
         # At construction time it is ``None`` so the client can be

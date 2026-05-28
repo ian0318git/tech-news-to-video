@@ -62,7 +62,7 @@ async def _opened_core(refresh_callback):
         refresh_callback=refresh_callback,
         refresh_retry_delay=0.0,
     )
-    await core.open()
+    await core.__aenter__()
     try:
         yield core
     finally:
@@ -149,7 +149,9 @@ async def test_waiter_cancellation_does_not_kill_shared_refresh():
         # The shared task must still be alive — caller #1's cancellation
         # should not have cancelled it. This is the load-bearing
         # invariant the shield protects.
-        assert core._collaborators.auth_coord._refresh_task is not None, "shared refresh task vanished"
+        assert core._collaborators.auth_coord._refresh_task is not None, (
+            "shared refresh task vanished"
+        )
         assert not core._collaborators.auth_coord._refresh_task.done(), (
             "Shared refresh task completed/cancelled before release — "
             "Shield regression: waiter cancellation propagated into the "

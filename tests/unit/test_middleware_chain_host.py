@@ -119,7 +119,7 @@ async def test_chain_host_rate_limit_max_retries_steers_live_chain(monkeypatch) 
     """
     core = _make_core(rate_limit_max_retries=0)
     chain_host = core._composed.chain_host
-    await core.open()
+    await core.__aenter__()
     try:
         # Mutate the host slot directly — the provider lambda captures
         # chain_host. The bump from 0 -> 1 grants a single retry on
@@ -243,7 +243,7 @@ async def test_authed_post_chain_on_host_steers_transport() -> None:
     # live-binding contract without a full perform_authed_post run.
     assert core._composed.transport._chain_provider() is fake_chain
 
-    await core.open()
+    await core.__aenter__()
     try:
 
         def build(snapshot: AuthSnapshot) -> tuple[str, str, dict[str, str]]:

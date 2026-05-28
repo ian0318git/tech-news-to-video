@@ -483,7 +483,9 @@ class TestSaveCookiesUnification:
             ``original_snapshot=`` through, the assertion below catches it
             before production silently reverts to legacy merge.
             """
-            lock_held_during_save.append(core_ref["core"].cookie_persistence.save_lock.locked())
+            lock_held_during_save.append(
+                core_ref["core"]._collaborators.cookie_persistence.save_lock.locked()
+            )
             call_kwargs.append(kwargs)
             return True
 
@@ -491,7 +493,10 @@ class TestSaveCookiesUnification:
         core = build_client_shell_for_tests(auth, cookie_saver=spy)
         core_ref["core"] = core
 
-        await core._collaborators.lifecycle.save_cookies(core._collaborators.cookie_persistence, httpx.Cookies())
+        await core._collaborators.lifecycle.save_cookies(
+            core._collaborators.cookie_persistence,
+            httpx.Cookies(),
+        )
 
         assert lock_held_during_save == [True], (
             "save_cookies must hold _save_lock for the duration of "
@@ -556,7 +561,9 @@ class TestSaveCookiesUnification:
             must route through the snapshot/delta path, never the legacy
             full-merge path.
             """
-            save_calls.append(client_ref["client"]._collaborators.cookie_persistence.save_lock.locked())
+            save_calls.append(
+                client_ref["client"]._collaborators.cookie_persistence.save_lock.locked()
+            )
             snapshot_kwarg_present.append("original_snapshot" in kwargs)
             return True
 

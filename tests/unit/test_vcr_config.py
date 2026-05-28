@@ -561,7 +561,7 @@ async def test_error_injection_middleware_present_when_env_var_set_in_session(mo
     auth = AuthTokens(cookies={"SID": "t"}, csrf_token="c", session_id="s")
     core = build_client_shell_for_tests(auth)
     try:
-        await core.open()
+        await core.__aenter__()
         assert core._collaborators.kernel.http_client is not None
         # The middleware reads the env var per call; env-var-to-mode
         # resolution is covered by the dedicated middleware tests in

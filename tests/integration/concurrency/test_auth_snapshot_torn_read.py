@@ -230,7 +230,7 @@ async def test_concurrent_refresh_does_not_tear_auth_triple_across_fan_out():
             core._auth.cookies = {("SID", ".google.com"): f"sid_cookie_{new_gen}"}
             current_gen = new_gen
 
-    await core.open()
+    await core.__aenter__()
     try:
         # Replace the auto-built client with one using our MockTransport so
         # we can observe outgoing requests post-cookie-merge.

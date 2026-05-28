@@ -83,7 +83,7 @@ class FakeKernelPost:
 
 
 def _swap_kernel_post(core: NotebookLMClient, fake: FakeKernelPost) -> None:
-    core._kernel.post = fake.post  # type: ignore[method-assign]
+    core._collaborators.kernel.post = fake.post  # type: ignore[method-assign]
 
 
 @pytest.mark.asyncio
@@ -102,7 +102,7 @@ async def test_chain_routes_perform_authed_post_to_transport() -> None:
     def build_request(snapshot: Any) -> tuple[str, bytes, dict[str, str] | None]:
         return ("https://fake/url", b"body", None)
 
-    response = await core._transport.perform_authed_post(
+    response = await core._composed.transport.perform_authed_post(
         build_request=build_request,
         log_label="test-log-label",
         disable_internal_retries=False,
@@ -144,7 +144,7 @@ async def test_chain_routes_rpc_executor_path_to_transport() -> None:
     def build_request(snapshot: Any) -> tuple[str, bytes, dict[str, str] | None]:
         return ("https://fake/rpc", b"rpc-body", {"X-Goog-AuthUser": "0"})
 
-    response = await core._transport.perform_authed_post(
+    response = await core._composed.transport.perform_authed_post(
         build_request=build_request,
         log_label="RPC LIST_NOTEBOOKS",
         disable_internal_retries=True,
@@ -184,7 +184,7 @@ async def test_chain_terminal_reads_context_keys() -> None:
         },
     )
 
-    result = await core._chain_host._authed_post_chain_terminal(request)
+    result = await core._composed.chain_host._authed_post_chain_terminal(request)
 
     assert isinstance(result, RpcResponse)
     assert result.response is expected_response
@@ -221,7 +221,7 @@ async def test_chain_terminal_disable_internal_retries_defaults_false() -> None:
         },
     )
 
-    await core._chain_host._authed_post_chain_terminal(request)
+    await core._composed.chain_host._authed_post_chain_terminal(request)
 
     assert fake.call_count == 1
     assert fake.calls[0]["url"] == "https://fake/no-retry-flag"
@@ -241,7 +241,7 @@ async def test_chain_terminal_log_label_defaults_for_direct_calls() -> None:
         request = httpx.Request("POST", url, headers=dict(headers), content=body)
         raise httpx.RequestError("boom", request=request)
 
-    core._kernel.post = raise_network_error  # type: ignore[method-assign]
+    core._collaborators.kernel.post = raise_network_error  # type: ignore[method-assign]
     request = RpcRequest(
         url="https://fake/no-log-label",
         headers={},
@@ -250,7 +250,7 @@ async def test_chain_terminal_log_label_defaults_for_direct_calls() -> None:
     )
 
     with pytest.raises(TransportServerError, match="<unknown-chain-call> network error"):
-        await core._chain_host._authed_post_chain_terminal(request)
+        await core._composed.chain_host._authed_post_chain_terminal(request)
 
 
 @pytest.mark.asyncio
@@ -290,14 +290,14 @@ async def test_chain_seeded_with_final_adr_009_ordering() -> None:
     from notebooklm._middleware_tracing import TracingMiddleware
 
     core = _make_core()
-    assert len(core._middlewares) == 7
-    assert isinstance(core._middlewares[0], DrainMiddleware)
-    assert isinstance(core._middlewares[1], MetricsMiddleware)
-    assert isinstance(core._middlewares[2], SemaphoreMiddleware)
-    assert isinstance(core._middlewares[3], RetryMiddleware)
-    assert isinstance(core._middlewares[4], AuthRefreshMiddleware)
-    assert isinstance(core._middlewares[5], ErrorInjectionMiddleware)
-    assert isinstance(core._middlewares[6], TracingMiddleware)
+    assert len(core._composed.middlewares) == 7
+    assert isinstance(core._composed.middlewares[0], DrainMiddleware)
+    assert isinstance(core._composed.middlewares[1], MetricsMiddleware)
+    assert isinstance(core._composed.middlewares[2], SemaphoreMiddleware)
+    assert isinstance(core._composed.middlewares[3], RetryMiddleware)
+    assert isinstance(core._composed.middlewares[4], AuthRefreshMiddleware)
+    assert isinstance(core._composed.middlewares[5], ErrorInjectionMiddleware)
+    assert isinstance(core._composed.middlewares[6], TracingMiddleware)
 
 
 @pytest.mark.asyncio
@@ -309,7 +309,7 @@ async def test_chain_with_test_middleware_observes_request_and_response() -> Non
     assert the middleware saw both the inbound request and the outbound
     response. This is the wire-up smoke test for middleware extractions.
 
-    Builds the chain locally (rather than mutating ``core._middlewares``
+    Builds the chain locally (rather than mutating ``core._composed.middlewares``
     in-place) because production code does not yet support hot-swapping
     the chain — that's a PR 12.3 concern when ``TracingMiddleware`` lands.
     """
@@ -330,7 +330,7 @@ async def test_chain_with_test_middleware_observes_request_and_response() -> Non
     # terminal. This per-test composition validates the leaf's contract
     # against ``build_chain`` without mutating ``NotebookLMClient.__init__``'s
     # production chain.
-    chain: NextCall = build_chain([observer], core._chain_host._authed_post_chain_terminal)
+    chain: NextCall = build_chain([observer], core._composed.chain_host._authed_post_chain_terminal)
 
     request = RpcRequest(
         url="https://fake/observe",

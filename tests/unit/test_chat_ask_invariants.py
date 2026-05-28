@@ -208,7 +208,7 @@ class TestChatReqid:
     ):
         """``asyncio.gather(ask*3)`` → three distinct ``_reqid`` URL values.
 
-        Previously, the body did ``self._core._reqid_counter += 100000`` under
+        Previously, the body did ``self._core._collaborators.reqid_counter += 100000`` under
         a read-modify-write race (``self._core`` was the pre-Phase-2 attribute
         name, now ``self._runtime``); under concurrent gather() this collapsed
         to a single reqid value. ``runtime.next_reqid()`` serializes the
@@ -273,8 +273,10 @@ class TestChatRefreshRetry:
             auth.session_id = "NEW_SID"
             return auth
 
-        core = build_client_shell_for_tests(auth=auth, refresh_callback=refresh, refresh_retry_delay=0.0)
-        await core.open()
+        core = build_client_shell_for_tests(
+            auth=auth, refresh_callback=refresh, refresh_retry_delay=0.0
+        )
+        await core.__aenter__()
         try:
             observed_bodies: list[str] = []
             call_count = {"n": 0}
@@ -313,7 +315,9 @@ class TestChatRefreshRetry:
                 )
 
             assert core._collaborators.kernel.http_client is not None
-            install_post_as_stream(monkeypatch, core._collaborators.kernel.get_http_client(), fake_post)
+            install_post_as_stream(
+                monkeypatch, core._collaborators.kernel.get_http_client(), fake_post
+            )
 
             # Wave 8 of session-decoupling (ADR-014 Rule 2 Corollary):
             # ``ChatAPI`` takes its four direct collaborators by keyword

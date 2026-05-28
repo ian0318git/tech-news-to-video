@@ -81,7 +81,9 @@ async def test_rpc_metrics_event_and_correlation_scope(auth_tokens: AuthTokens) 
     # was built in the composition root against the original bound method).
     from notebooklm._middleware import build_chain
 
-    core._composed.chain_host._authed_post_chain = build_chain(core._composed.middlewares, fake_terminal)
+    core._composed.chain_host._authed_post_chain = build_chain(
+        core._composed.middlewares, fake_terminal
+    )
 
     with correlation_id("batch-42"):
         result = await core._rpc_executor.rpc_call(RPCMethod.GET_NOTEBOOK, ["nb_123"])
@@ -142,7 +144,9 @@ async def test_drain_allows_nested_work_inside_accepted_operation(
         drain_task = asyncio.create_task(core._collaborators.drain_tracker.drain(timeout=1.0))
         await asyncio.sleep(0)
 
-        nested_token = await core._collaborators.drain_tracker.begin_transport_post("RPC ADD_SOURCE")
+        nested_token = await core._collaborators.drain_tracker.begin_transport_post(
+            "RPC ADD_SOURCE"
+        )
         await core._collaborators.drain_tracker.finish_transport_post(nested_token)
 
         assert not drain_task.done()
@@ -208,7 +212,9 @@ async def test_drain_waits_for_artifact_poll_task(auth_tokens: AuthTokens) -> No
 
     async def fake_poll_status(notebook_id: str, task_id: str) -> GenerationStatus:
         nonlocal poll_count
-        operation_token = await core._collaborators.drain_tracker.begin_transport_post("poll_status")
+        operation_token = await core._collaborators.drain_tracker.begin_transport_post(
+            "poll_status"
+        )
         try:
             poll_count += 1
             if poll_count == 1:

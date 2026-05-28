@@ -539,7 +539,7 @@ def test_bound_loop_mismatch_via_session_raises_runtime_error() -> None:
     core = build_client_shell_for_tests(auth=auth)
 
     async def _open_on_loop_a() -> None:
-        await core.open()
+        await core.__aenter__()
         # We deliberately do NOT call core.close() because close() resets
         # _http_client (which would let loop B's open() re-bind the loop
         # and skip the guard). The whole point is that the guard fires when
@@ -558,7 +558,7 @@ def test_bound_loop_mismatch_via_session_raises_runtime_error() -> None:
     async def _attempt_post_on_loop_b() -> Exception | None:
         # ``open()`` is idempotent — since loop A left ``_http_client``
         # populated, this is a no-op and ``_bound_loop`` stays bound to loop A.
-        await core.open()
+        await core.__aenter__()
         try:
             await core._composed.transport.perform_authed_post(
                 build_request=_build_request_stub,

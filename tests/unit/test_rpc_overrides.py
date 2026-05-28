@@ -380,7 +380,7 @@ async def test_rpc_call_resolved_id_at_both_sites(monkeypatch, env_value, expect
     rpc_overrides._logged_override_hashes.clear()
 
     core = _make_core()
-    await core.open()
+    await core.__aenter__()
     try:
         captured: dict[str, Any] = {}
 
@@ -392,7 +392,7 @@ async def test_rpc_call_resolved_id_at_both_sites(monkeypatch, env_value, expect
             # exercises the full encode → wire → decode round-trip.
             return _ok_response_for(expected_id)
 
-        install_post_as_stream(monkeypatch, core._kernel.get_http_client(), fake_post)
+        install_post_as_stream(monkeypatch, core._collaborators.kernel.get_http_client(), fake_post)
 
         await core._rpc_executor.rpc_call(RPCMethod.LIST_NOTEBOOKS, [None, 1])
 
@@ -417,7 +417,7 @@ async def test_rpc_call_host_off_allowlist_ignores_override(monkeypatch):
     rpc_overrides._logged_override_hashes.clear()
 
     core = _make_core()
-    await core.open()
+    await core.__aenter__()
     try:
         captured: dict[str, Any] = {}
 
@@ -426,7 +426,7 @@ async def test_rpc_call_host_off_allowlist_ignores_override(monkeypatch):
             captured["content"] = content
             return _ok_response_for(RPCMethod.LIST_NOTEBOOKS.value)
 
-        install_post_as_stream(monkeypatch, core._kernel.get_http_client(), fake_post)
+        install_post_as_stream(monkeypatch, core._collaborators.kernel.get_http_client(), fake_post)
 
         await core._rpc_executor.rpc_call(RPCMethod.LIST_NOTEBOOKS, [None, 1])
 
@@ -444,7 +444,7 @@ async def test_rpc_call_invalid_json_falls_back_with_warning(monkeypatch, caplog
     rpc_overrides._logged_override_hashes.clear()
 
     core = _make_core()
-    await core.open()
+    await core.__aenter__()
     try:
         captured: dict[str, Any] = {}
 
@@ -453,7 +453,7 @@ async def test_rpc_call_invalid_json_falls_back_with_warning(monkeypatch, caplog
             captured["content"] = content
             return _ok_response_for(RPCMethod.LIST_NOTEBOOKS.value)
 
-        install_post_as_stream(monkeypatch, core._kernel.get_http_client(), fake_post)
+        install_post_as_stream(monkeypatch, core._collaborators.kernel.get_http_client(), fake_post)
 
         with caplog.at_level("WARNING", logger="notebooklm.rpc.overrides"):
             await core._rpc_executor.rpc_call(RPCMethod.LIST_NOTEBOOKS, [None, 1])
@@ -471,7 +471,7 @@ async def test_rpc_call_non_dict_json_falls_back_with_warning(monkeypatch, caplo
     rpc_overrides._logged_override_hashes.clear()
 
     core = _make_core()
-    await core.open()
+    await core.__aenter__()
     try:
         captured: dict[str, Any] = {}
 
@@ -480,7 +480,7 @@ async def test_rpc_call_non_dict_json_falls_back_with_warning(monkeypatch, caplo
             captured["content"] = content
             return _ok_response_for(RPCMethod.LIST_NOTEBOOKS.value)
 
-        install_post_as_stream(monkeypatch, core._kernel.get_http_client(), fake_post)
+        install_post_as_stream(monkeypatch, core._collaborators.kernel.get_http_client(), fake_post)
 
         with caplog.at_level("WARNING", logger="notebooklm.rpc.overrides"):
             await core._rpc_executor.rpc_call(RPCMethod.LIST_NOTEBOOKS, [None, 1])

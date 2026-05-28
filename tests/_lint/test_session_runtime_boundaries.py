@@ -371,8 +371,7 @@ def test_moved_session_symbols_are_not_reached_through_session_module_aliases() 
         violations.extend(_moved_session_symbol_alias_violations(tree, rel=rel))
     assert not violations, (
         "Composition helpers moved out of the deleted session module. Import them from "
-        "the session-init or client-seam modules instead. Offenders:\n  "
-        + "\n  ".join(violations)
+        "the session-init or client-seam modules instead. Offenders:\n  " + "\n  ".join(violations)
     )
 
 
@@ -801,8 +800,7 @@ def test_format_receiver_for_diagnostic_shapes() -> None:
 def test_moved_session_symbol_alias_guard_catches_synthetic_alias() -> None:
     """Prove aliasing the deleted session module cannot hide moved helper access."""
     tree = ast.parse(
-        f"import {DELETED_SESSION_MODULE} as session_mod\n"
-        "session_mod.compose_session_internals\n"
+        f"import {DELETED_SESSION_MODULE} as session_mod\nsession_mod.compose_session_internals\n"
     )
     assert _moved_session_symbol_alias_violations(tree, rel="synthetic.py") == [
         "synthetic.py:2 session_mod.compose_session_internals"

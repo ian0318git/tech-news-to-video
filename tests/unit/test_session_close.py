@@ -107,7 +107,10 @@ async def test_session_close_drains_artifact_poll_hook() -> None:
         mind_maps=MagicMock(spec=NoteBackedMindMapService),
         note_service=MagicMock(spec=NoteService),
     )
-    assert core._collaborators.drain_tracker._drain_hooks["artifacts.polls"] == artifacts._polling.drain
+    assert (
+        core._collaborators.drain_tracker._drain_hooks["artifacts.polls"]
+        == artifacts._polling.drain
+    )
     await core.__aenter__()
 
     loop = asyncio.get_running_loop()
