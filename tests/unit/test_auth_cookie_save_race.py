@@ -12,7 +12,7 @@ The canonical race that motivated this code (#361):
     differs from disk's ``NEW``, and "merges" by writing ``OLD`` —
     silently undoing B's rotation.
 
-The fix is an open-time snapshot per ``Session`` instance, plus a
+The fix is an open-time snapshot per client runtime, plus a
 ``save_cookies_to_storage`` mode that writes only the deltas relative to
 that snapshot. Cookies the in-process code never touched are left to
 disk; sibling-process writes survive.
@@ -531,7 +531,7 @@ class TestAttributeOnlyRefresh:
 
 
 class TestSnapshotRefreshedAfterSave:
-    """``Session._loaded_cookie_snapshot`` is refreshed after every
+    """``CookiePersistence.loaded_cookie_snapshot`` is refreshed after every
     successful save. Without this, the open-time snapshot stays frozen
     and a second save from the same client re-applies the first save's
     delta — silently clobbering any sibling-process write that landed
@@ -692,8 +692,8 @@ class TestSnapshotValueIncludesAttributes:
 class TestSaveReturnsBoolSuccess:
     """``save_cookies_to_storage`` returns ``True`` when the disk now
     reflects the in-memory state (successful write or no-op-because-equal)
-    and ``False`` when an I/O error prevented the write. ``Session``
-    uses this signal to decide whether to advance ``_loaded_cookie_snapshot``;
+    and ``False`` when an I/O error prevented the write. The client runtime
+    uses this signal to decide whether to advance the loaded cookie snapshot;
     a silent disk-write failure must NOT advance the baseline, otherwise
     the failed delta is permanently lost on the next save.
     """
@@ -1104,7 +1104,7 @@ class TestFlockUnavailableWarning:
 
 
 class TestBaselineNotAdvancedOnSaveFailure:
-    """``Session.save_cookies`` only advances ``_loaded_cookie_snapshot``
+    """The lifecycle save path only advances ``loaded_cookie_snapshot``
     when the underlying ``save_cookies_to_storage`` call succeeded. This
     is the load-bearing invariant: on save failure the next save must
     retry the same delta against the original baseline.
@@ -1195,7 +1195,7 @@ class TestBaselineNotAdvancedOnSaveFailure:
             assert (
                 core._collaborators.cookie_persistence.loaded_cookie_snapshot[key].value == "old"
             ), (
-                "Session must inherit the pre-fetch baseline so the mutated "
+                "Client runtime must inherit the pre-fetch baseline so the mutated "
                 "cookie remains a delta after the failed pre-client save"
             )
         finally:
@@ -1458,8 +1458,8 @@ class TestCASVariantAware:
     ):
         """Composition of variant-aware CAS + variant-aware baseline through real plumbing.
 
-        Wires the full ``AuthTokens.from_storage`` -> ``Session`` ->
-        ``save_cookies`` plumbing rather than driving the helpers directly,
+        Wires the full ``AuthTokens.from_storage`` -> client shell ->
+        lifecycle ``save_cookies`` plumbing rather than driving the helpers directly,
         so this complements the unit-level coverage in
         ``test_rejected_variant_preserves_original_baseline_variant`` and
         ``test_cas_protects_across_leading_dot_variant``.
@@ -1480,7 +1480,7 @@ class TestCASVariantAware:
            ``advance_cookie_snapshot_after_save``, which must preserve the
            bare-host baseline rather than dropping the key.
         4. A Set-Cookie aligns the in-memory jar to disk (``OSID`` reset to
-           the sibling's value) and a second ``Session.save_cookies``
+           the sibling's value) and a second lifecycle ``save_cookies``
            runs. With the variant-aware baseline preserved by step 3, the
            second save recognizes convergence, advances cleanly, and a later
            rotation can persist without re-clobbering the sibling write.
@@ -1540,9 +1540,9 @@ class TestCASVariantAware:
             "absorbed into the new baseline"
         )
 
-        # Stand up the real Session so the second save flows through
-        # Session.save_cookies (lock + to_thread + baseline advance), not
-        # straight into save_cookies_to_storage.
+        # Stand up the real client runtime so the second save flows through
+        # ClientLifecycle.save_cookies (lock + to_thread + baseline advance),
+        # not straight into save_cookies_to_storage.
         core = build_client_shell_for_tests(auth)
         await core.__aenter__()
         try:
@@ -1551,12 +1551,12 @@ class TestCASVariantAware:
                 core._collaborators.cookie_persistence.loaded_cookie_snapshot[bare_key].value
                 == "OLD"
             ), (
-                "Session.open must inherit the variant-aware preserved "
+                "Client open must inherit the variant-aware preserved "
                 "baseline from AuthTokens.cookie_snapshot"
             )
 
             # Set-Cookie aligns the in-memory dotted OSID with what disk now
-            # holds. Run the second save through the real Session plumbing.
+            # holds. Run the second save through the real lifecycle plumbing.
             assert core._collaborators.kernel.http_client is not None
             _set_cookie_value(
                 core._collaborators.kernel.get_http_client().cookies, "OSID", "SIBLING"
@@ -1609,7 +1609,7 @@ class TestCASVariantAware:
 
 
 class TestSaveCookiesSeesLatestBaselineUnderContention:
-    """``Session.save_cookies`` captures ``original_snapshot`` on the
+    """``ClientLifecycle.save_cookies`` captures ``original_snapshot`` on the
     loop thread BEFORE the worker thread acquires ``_save_lock``. If two
     saves are issued in rapid succession, the second can capture a stale
     baseline (the first hasn't completed its baseline-advance yet) — and

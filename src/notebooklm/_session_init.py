@@ -65,6 +65,8 @@ if TYPE_CHECKING:
     # inline comment in the function body).
     from .types import ConnectionLimits, RpcTelemetryEvent
 
+# Preserve the historical logger namespace while avoiding a raw deleted-module
+# string that the no-session lint guard should reject elsewhere.
 SESSION_LOGGER = logging.getLogger("notebooklm" + "." + "_session")
 
 
@@ -182,14 +184,14 @@ def validate_constructor_args(
     is_auth_error: Callable[[Exception], bool],
     async_client_factory: Callable[..., httpx.AsyncClient],
 ) -> ValidatedSessionConfig:
-    """Validate and normalize the scalar args to :class:`Session.__init__`.
+    """Validate and normalize the scalar args for client internals.
 
-    Mirrors the original validation/normalization block of
-    ``Session.__init__`` one-for-one — same ``ValueError`` messages, same
-    order of checks. The seam callables (``decode_response`` / ``sleep`` /
-    ``is_auth_error`` / ``async_client_factory``) are already resolved by
-    the caller against the ``_session`` module's bindings — see the
-    module docstring for why the seam-resolution boundary stops here.
+    Mirrors the original validation/normalization behavior one-for-one:
+    same ``ValueError`` messages, same order of checks. The seam callables
+    (``decode_response`` / ``sleep`` / ``is_auth_error`` /
+    ``async_client_factory``) are already resolved by the caller against
+    the final client-side seam bindings; see the module docstring for why
+    the seam-resolution boundary stops here.
     The returned :class:`ValidatedSessionConfig` is consumed by
     :func:`build_collaborators` and :func:`wire_middleware_chain`.
 
@@ -307,7 +309,7 @@ def build_collaborators(
     # ``lock_wait_seconds_*`` metrics ticking inside ``metrics`` — we
     # pass the bound method of the metrics object we just built so the
     # counter cannot capture an unbound seam (which is what would happen
-    # if we forwarded a Session-level thin wrapper before
+    # if we forwarded a broad host-level thin wrapper before
     # ``self._metrics_obj`` was assigned in the outer ``__init__``).
     reqid = ReqidCounter(on_lock_wait=metrics.record_lock_wait)
     # Auth refresh coordination — single-flight refresh task, snapshot
@@ -317,8 +319,8 @@ def build_collaborators(
     # implementation state read the coordinator directly. The live auth
     # snapshot lock is reachable via
     # :meth:`AuthRefreshCoordinator.get_auth_snapshot_lock` (the
-    # Session-level ``_get_auth_snapshot_lock`` thin wrapper was
-    # inlined in PR #4b — callers now address the coordinator directly
+    # legacy ``_get_auth_snapshot_lock`` thin wrapper was inlined in
+    # PR #4b — callers now address the coordinator directly
     # through ``self._auth_coord``).
     # The auth snapshot lock is intentionally distinct from
     # ``_refresh_lock`` — mixing them would re-introduce the
@@ -400,21 +402,21 @@ def build_session_transport(
     immediately after :func:`wire_middleware_chain` returns. Using a
     provider closure (rather than a frozen reference) preserves the
     pre-extraction behavior where tests reassign
-    ``core._chain_host._authed_post_chain = fake_chain`` to install a
-    fake chain and expect the next call to honor it.
+    ``core._composed.chain_host._authed_post_chain = fake_chain`` to
+    install a fake chain and expect the next call to honor it.
 
     The ``snapshot_provider`` closure passes the client-owned
     :class:`AuthTokens` collaborator directly to
-    :meth:`AuthRefreshCoordinator.snapshot`; the Session-shaped
+    :meth:`AuthRefreshCoordinator.snapshot`; the former host-shaped
     ``_AuthRefreshHost`` Protocol was deleted, and the coordinator routes
     its lock-wait metric through ``self._metrics`` (supplied at
     construction). The ``bound_loop_check`` lambda reads through
     ``collaborators.lifecycle.assert_bound_loop`` at call time, preserving
-    lifecycle method patchability without retaining a Session-level
+    lifecycle method patchability without retaining a broad host-level
     ``assert_bound_loop`` forward.
 
     The ``chain_host`` parameter lets the chain-slot lookup go through
-    the host directly, with no Session-side indirection on the hot
+    the host directly, with no extra indirection on the hot
     path.
 
     The ``logger`` is forwarded as-is so transport-error log lines keep

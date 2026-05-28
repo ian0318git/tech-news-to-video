@@ -455,6 +455,7 @@ class NotebookLMClient:
     async def __aenter__(self) -> NotebookLMClient:
         """Open the client connection."""
         logger.debug("Opening NotebookLM client")
+        # Preserve the historical fail-fast check that composition is complete.
         _ = self._composed.transport
         await self._collaborators.lifecycle.open(
             auth=self._auth,
