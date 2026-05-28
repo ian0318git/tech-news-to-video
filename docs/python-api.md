@@ -658,14 +658,13 @@ floor checks). All raise `ValueError`:
 
 ## Internal module map
 
-Kernel owns the `httpx.AsyncClient`; Session constructs and exposes the
-Kernel. Per the [ADR-010](adr/0010-session-kernel-split.md) split,
-`Kernel.__init__` in `src/notebooklm/_kernel.py` constructs the
-`httpx.AsyncClient` and is responsible for closing it on `aclose()`;
-`Session` (in `src/notebooklm/_session.py`) is the orchestrator that
-constructs a `Kernel`, exposes it via `get_http_client()` delegation,
-glues the authed transport to RPC dispatch, and holds the `AuthTokens`
-for the running session. The supporting state
+Kernel owns the `httpx.AsyncClient`; `NotebookLMClient` constructs the
+runtime graph and owns the public surface. Per the
+[ADR-010](adr/0010-session-kernel-split.md) split, `Kernel.__init__` in
+`src/notebooklm/_kernel.py` constructs the `httpx.AsyncClient` and is
+responsible for closing it on `aclose()`. `_session_init.py` constructs
+the collaborator bundle, `SessionTransport`, middleware chain, and
+`RpcExecutor`, then binds them into `ClientComposed`. The supporting state
 (metrics, drain bookkeeping, request-id counter, transport plumbing,
 conversation cache, etc.) is split across single-responsibility session
 and kernel collaborator modules such as `notebooklm._rpc_executor`,

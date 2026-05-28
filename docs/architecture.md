@@ -26,10 +26,10 @@ the historical narrative lives in
 +----------------------------------------------------------+
                           ▼
 +----------------------------------------------------------+
-| Session Layer (Session + collaborators)                  |
-|   Session orchestrates a small set of focused            |
+| Runtime Layer (client-owned collaborators)               |
+|   NotebookLMClient owns ClientComposed plus focused       |
 |   collaborators such as RpcExecutor, SessionTransport,   |
-|   and Kernel (see "Collaborator graph" below).           |
+|   ClientLifecycle, and Kernel.                           |
 +----------------------------------------------------------+
                           ▼
 +----------------------------------------------------------+
@@ -42,11 +42,11 @@ the historical narrative lives in
 
 ## Library call flows
 
-`NotebookLMClient` is the composition root. It constructs one shared `Session`,
-wires feature APIs to narrow runtime Protocols, and injects stateful services
+`NotebookLMClient` is the composition root. It constructs the shared runtime
+collaborator graph, wires feature APIs to narrow runtime Protocols, and injects stateful services
 such as `SourceUploadPipeline`, `NoteService`, `NoteBackedMindMapService`, and
 `ArtifactDownloadService`. Feature modules build NotebookLM params and parse
-domain rows; Session collaborators own dispatch, transport, auth refresh,
+domain rows; client-owned collaborators own dispatch, transport, auth refresh,
 metrics, and lifecycle.
 
 ### Typed batchexecute RPCs
@@ -434,7 +434,7 @@ Exec  Ref    Life    Chain Trans Drain  Tracker Coun  Pers
 | `_transport_errors` | [`_transport_errors.py`](../src/notebooklm/_transport_errors.py) | Owns transport-level exceptions, `Retry-After` parsing, and raw `Kernel.post` error mapping consumed by `RetryMiddleware` and `AuthRefreshMiddleware`. |
 | `_streaming_post` | [`_streaming_post.py`](../src/notebooklm/_streaming_post.py) | Low-level streaming POST helper with the response-size cap used by `Kernel.post`. |
 | `Kernel` | [`_kernel.py`](../src/notebooklm/_kernel.py) | Pure transport core. Owns the `httpx.AsyncClient` and cookie jar; exposes `post()`, the `cookies` property, and `aclose()` (the close path wraps it in `asyncio.shield` from `ClientLifecycle.close()`). Concrete class behind the `Kernel` Protocol in `_session_contracts.py`; constructed by `Session.__init__()` and called from the middleware leaf via `SessionTransport.terminal → Kernel.post`. |
-| `_session_init` | [`_session_init.py`](../src/notebooklm/_session_init.py) | Construction-time helpers extracted from `Session.__init__`: `validate_constructor_args` (kwarg validation/normalization), `build_collaborators` (the seven collaborators in dependency order: `metrics`, `drain_tracker`, `reqid`, `auth_coord`, `kernel`, `lifecycle`, `cookie_persistence`), `build_session_transport`, and `wire_middleware_chain`. Lets `Session.__init__` stay short while keeping the seam-resolution boundary documented (`None`-default resolution for `sleep` / `async_client_factory` stays in `_session.py` so the documented monkeypatch paths still steer construction). |
+| `_session_init` | [`_session_init.py`](../src/notebooklm/_session_init.py) | Construction-time helpers for `NotebookLMClient`: `validate_constructor_args` (kwarg validation/normalization), `build_collaborators` (the seven collaborators in dependency order: `metrics`, `drain_tracker`, `reqid`, `auth_coord`, `kernel`, `lifecycle`, `cookie_persistence`), `build_session_transport`, and `wire_middleware_chain`. `None` defaults resolve through direct client seams or `httpx.AsyncClient`. |
 | `_loop_affinity` | [`_loop_affinity.py`](../src/notebooklm/_loop_affinity.py) | Tiny free-function `assert_bound_loop(bound_loop)` shared by every helper that captures a loop reference at `open()` time (`TransportDrainTracker`, `ReqidCounter`, `AuthRefreshCoordinator`, `ArtifactPollingService`, `ChatAPI`). Module-private on purpose so those helpers can guard without importing `Session`. Enforces ADR-004. |
 
 ## Domain-service collaborators
@@ -631,75 +631,47 @@ TracingMiddleware            innermost — structured-logging boundary
 Authed POST leaf             (SessionTransport.terminal → Kernel → httpx)
 ```
 
-## Session as lifecycle root
+## Client as composition root
 
-`Session` is a narrow lifecycle root, not a compatibility facade. It
-constructs the collaborator graph at `__init__` time, owns the
-open/close lifecycle (loop-affinity binding, keepalive task), and
-exposes the few surfaces that remain load-bearing for the public API
-or the middleware chain ([ADR-014](./adr/0014-feature-local-runtime-adapters.md)).
-The exact retention list is checked-in at
-[`docs/session-method-retention.md`](./session-method-retention.md)
-and enforced by
-[`tests/_lint/test_session_retention.py`](../tests/_lint/test_session_retention.py)
-— a new method on `Session` cannot land without a documented
-disposition.
+`NotebookLMClient` is both the public surface and the composition root. It owns
+`ClientComposed`, the collaborator bundle, the RPC executor, and the feature API
+instances. `ClientLifecycle` owns open/close behavior (loop-affinity binding,
+keepalive task, cookie persistence, and transport teardown);
+`TransportDrainTracker` owns drain semantics.
 
-Concretely, `Session` retains:
+Concretely, the client-owned runtime retains:
 
-1. **Late-bound composition slots.** `Session._transport`, the chain
-   metadata slots (`_chain_builder` / `_middlewares`), and
-   `Session._rpc_executor` are bound exactly once by
-   `compose_session_internals(...)` through the write-once
-   `_bind_transport` / `_bind_chain_metadata` / `_bind_executor`
-   setters; pre-binding access trips the `_require_constructed` guard.
-   `NotebookLMClient.__init__` reads `composed.collaborators` /
-   `composed.transport` / `composed.executor` from the `ComposedSession`
-   return value and threads them into feature APIs directly — `Session`
-   exposes no public collaborator accessors.
+1. **Late-bound composition slots.** `ClientComposed.transport`, the chain
+   metadata slots (`chain_builder` / `middlewares`), and
+   `ClientComposed.executor` are bound exactly once by
+   `compose_client_internals(...)` through write-once binders. Pre-binding
+   access trips the `ClientComposed` guard. `ClientComposed` exposes
+   `session_collaborators`, not a broad `collaborators` alias.
    [`tests/_lint/test_client_composition.py`](../tests/_lint/test_client_composition.py)
-   guards against re-adding them: AST reads of `collaborators`,
-   `session_transport`, or `rpc_executor` trip the lint anywhere
-   outside `client.py` + `_session.py`.
+   guards against inlining holder state back onto `NotebookLMClient`.
 2. **Middleware-chain seams.** The chain leaf
    (`_authed_post_chain_terminal`), the chain slot (`_authed_post_chain`),
    the dynamic refresh delegate (`await_refresh`), and the three
    retry-budget tunables (`_rate_limit_max_retries`,
-   `_server_error_max_retries`, `_refresh_retry_delay`) all live on
-   `MiddlewareChainHost` after the chain-ownership carve-out (ADR-014
-   Rule 4). `wire_middleware_chain` and `build_session_transport` take
-   `chain_host: MiddlewareChainHost` directly and read the host
-   attributes live; tests rebind through `core._chain_host._<attr>`.
-   The only middleware-chain capture target that remains on `Session`
-   is `assert_bound_loop`, which is reached as `host.assert_bound_loop`
-   from `build_session_transport`'s `bound_loop_check` lambda.
-3. **Lifecycle methods.** `open`, `close`, `is_open`, `_keepalive_loop`,
-   and `assert_bound_loop` (now a one-line forward to
-   `ClientLifecycle.assert_bound_loop` since
-   `ClientLifecycle` satisfies the `LoopGuard` Protocol directly).
-
-The auth-forward surface that previously appeared here as a fourth
-retention bucket (`update_auth_tokens` / `update_auth_headers`, plus
-the `lifecycle` property) was deleted in Wave 3 of plan
-[`host-protocol-removal`](../.sisyphus/phases/host-protocol-removal/phase-1.md).
-The AST guard at
-`tests/unit/test_concurrency_refresh_race.py::test_update_auth_tokens_has_no_await_inside_mutation_block`
-now inspects `AuthRefreshCoordinator.update_auth_tokens` directly via
-`inspect.getsource(...)`; no Session-side delegate is involved.
+   `_server_error_max_retries`, `_refresh_retry_delay`) live on
+   `MiddlewareChainHost`. `wire_middleware_chain` and
+   `build_session_transport` take that host directly and read its
+   attributes live.
+3. **Lifecycle methods.** Public client `__aenter__`, `__aexit__`,
+   `close`, `drain`, and `is_connected` call `ClientLifecycle` and
+   `TransportDrainTracker` directly.
 
 `NotebookLMClient.rpc_call(method, params)` dispatches directly through
 `self._rpc_executor.rpc_call(...)` — the `RpcExecutor` captured during
-`NotebookLMClient.__init__` from `compose_session_internals(...)` and
-shared with every feature API. There is no Session-side `rpc_call`
-wrapper.
+`NotebookLMClient.__init__` from `compose_client_internals(...)` and
+shared with every feature API.
 
-Feature APIs do **not** receive `Session`. They receive the
-collaborator (`RpcExecutor` for `RpcCaller`, `ClientLifecycle` for
-`LoopGuard`, `TransportDrainTracker` for `OperationScopeProvider` /
-`register_drain_hook`) per ADR-014 Rules 1 + 3. Features that need
-more than one capability — `ChatAPI`, `ArtifactsAPI`, and
-`SourceUploadPipeline` — take each collaborator by keyword-only
-constructor argument. The composition wiring is in
+Feature APIs receive the collaborator they need (`RpcExecutor` for
+`RpcCaller`, `ClientLifecycle` for `LoopGuard`, `TransportDrainTracker`
+for `OperationScopeProvider` / `register_drain_hook`) per ADR-014 Rules
+1 + 3. Features that need more than one capability — `ChatAPI`,
+`ArtifactsAPI`, and `SourceUploadPipeline` — take each collaborator by
+keyword-only constructor argument. The composition wiring is in
 [`client.py`](../src/notebooklm/client.py).
 
 ## Testing patterns
@@ -758,17 +730,15 @@ one of the named modules.
 
 ## Boundary moratorium
 
-New architectural carve-outs are expensive: every ADR amendment,
-[`session-method-retention.md`](./session-method-retention.md) entry,
-and `tests/_lint/` pin becomes load-bearing for contributors who have
+New architectural carve-outs are expensive: every ADR amendment and
+`tests/_lint/` pin becomes load-bearing for contributors who have
 to read the docs before touching the relevant seam. To keep that
 surface from drifting upward without bound, the following discipline
 applies to any future change that would *expand* the documented
 boundary set:
 
-- **Justify by failure mode.** A new ADR amendment,
-  [`session-method-retention.md`](./session-method-retention.md) row,
-  or `tests/_lint/` pin must cite a concrete user-visible failure mode
+- **Justify by failure mode.** A new ADR amendment or `tests/_lint/` pin
+  must cite a concrete user-visible failure mode
   it prevents (loop-affinity break, auth-snapshot tear, transport drain
   regression, public-API breakage, etc.). "Future-proofing" or "in case
   someone refactors X" is not sufficient.
