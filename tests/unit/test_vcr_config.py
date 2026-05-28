@@ -29,7 +29,7 @@ from urllib.parse import quote
 
 import pytest
 
-from _helpers.session_factory import build_session_for_tests
+from _helpers.client_factory import build_client_shell_for_tests
 from notebooklm._error_injection import (
     ERROR_INJECT_ENV_VAR,
     _get_error_injection_mode,
@@ -559,17 +559,17 @@ async def test_error_injection_middleware_present_when_env_var_set_in_session(mo
     from notebooklm.auth import AuthTokens
 
     auth = AuthTokens(cookies={"SID": "t"}, csrf_token="c", session_id="s")
-    core = build_session_for_tests(auth)
+    core = build_client_shell_for_tests(auth)
     try:
         await core.open()
-        assert core._kernel.http_client is not None
+        assert core._collaborators.kernel.http_client is not None
         # The middleware reads the env var per call; env-var-to-mode
         # resolution is covered by the dedicated middleware tests in
         # ``test_error_injection_middleware.py``.
-        assert any(isinstance(mw, ErrorInjectionMiddleware) for mw in core._middlewares)
+        assert any(isinstance(mw, ErrorInjectionMiddleware) for mw in core._composed.middlewares)
     finally:
-        if core._kernel.http_client is not None:
-            await core._kernel.get_http_client().aclose()
+        if core._collaborators.kernel.http_client is not None:
+            await core._collaborators.kernel.get_http_client().aclose()
 
 
 # --- (5) marker plumbing in tests/conftest.py --------------------------------

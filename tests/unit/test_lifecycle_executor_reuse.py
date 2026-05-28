@@ -32,7 +32,7 @@ from typing import Any
 
 import pytest
 
-from _helpers.session_factory import build_session_for_tests
+from _helpers.client_factory import build_client_shell_for_tests
 from notebooklm.auth import AuthTokens
 from notebooklm.rpc import RPCMethod
 
@@ -56,7 +56,7 @@ async def test_executor_identity_survives_close_then_open() -> None:
     adapters that captured the executor at construction time
     (``ChatAPI`` / ``SourcesAPI`` / etc.) do not need to re-grab it.
     """
-    core = build_session_for_tests(_make_auth())
+    core = build_client_shell_for_tests(_make_auth())
     initial_executor = core._rpc_executor
     assert initial_executor is not None, "composition root must bind the executor"
 
@@ -97,7 +97,7 @@ async def test_rpc_call_succeeds_after_close_then_open_with_same_executor() -> N
     end-to-end through a stubbed executor to confirm the binding
     survives.
     """
-    core = build_session_for_tests(_make_auth())
+    core = build_client_shell_for_tests(_make_auth())
     executor = core._rpc_executor
     assert executor is not None
 
@@ -140,6 +140,6 @@ async def test_rpc_call_succeeds_after_close_then_open_with_same_executor() -> N
 
 def test_session_rpc_executor_forwards_to_client_composed() -> None:
     """The temporary Session executor seam reads through ``ClientComposed``."""
-    core = build_session_for_tests(_make_auth())
+    core = build_client_shell_for_tests(_make_auth())
 
     assert core._rpc_executor is core._composed.executor

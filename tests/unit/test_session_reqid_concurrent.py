@@ -1,4 +1,4 @@
-"""Concurrency test for ``Session._reqid.next_reqid``.
+"""Concurrency test for ``NotebookLMClient._reqid.next_reqid``.
 
 Covers 100 concurrent ``next_reqid()`` callers (via
 ``asyncio.gather``) must each see a unique, monotonic counter value. Without
@@ -6,7 +6,7 @@ the ``asyncio.Lock`` guard, the underlying read-modify-write would race and
 produce duplicate values — exactly the bug Google's chat backend rejects
 when two concurrent ``ChatAPI.ask`` calls happen on the same client.
 
-The ``Session.next_reqid`` compatibility forward was deleted in Wave 11c
+The ``NotebookLMClient.next_reqid`` compatibility forward was deleted in Wave 11c
 of session-decoupling; tests now reach the canonical counter directly via
 ``core._reqid.next_reqid(...)``.
 """
@@ -15,18 +15,18 @@ import asyncio
 
 import pytest
 
-from _helpers.session_factory import build_session_for_tests
-from notebooklm._session import Session
+from _helpers.client_factory import build_client_shell_for_tests
 from notebooklm.auth import AuthTokens
+from notebooklm.client import NotebookLMClient
 
 
-def _make_core() -> Session:
+def _make_core() -> NotebookLMClient:
     auth = AuthTokens(
         cookies={"SID": "test"},
         csrf_token="test_csrf",
         session_id="test_session",
     )
-    return build_session_for_tests(auth=auth)
+    return build_client_shell_for_tests(auth=auth)
 
 
 @pytest.mark.asyncio

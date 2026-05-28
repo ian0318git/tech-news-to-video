@@ -50,7 +50,7 @@ def install_http_client_for_test(
     Args:
         kernel: The :class:`Kernel` instance whose live HTTP client is
             being replaced. Typically reached via
-            ``client._session._kernel`` (or ``core._kernel`` in older
+            ``client._collaborators.kernel`` (or ``core._kernel`` in older
             test fixtures).
         client: The replacement ``httpx.AsyncClient`` (or ``None`` to
             clear the live client and force the next operation to fail

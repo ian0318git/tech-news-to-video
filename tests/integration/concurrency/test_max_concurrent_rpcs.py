@@ -35,7 +35,7 @@ The semaphore is placed at ``_perform_authed_post`` **only**:
   refresh starve in-flight RPCs.
 
 The semaphore is also lazily constructed (``asyncio.Semaphore()`` binds
-to the running loop in older Python versions; ``Session`` can be
+to the running loop in older Python versions; ``NotebookLMClient`` can be
 constructed outside one). Mirrors the lazy-init pattern of
 ``_reqid_lock`` / ``_auth_snapshot_lock``.
 
@@ -60,9 +60,8 @@ import httpx
 import pytest
 
 from _fixtures.kernel_test_helpers import install_http_client_for_test
-from _helpers.session_factory import build_session_for_tests
+from _helpers.client_factory import build_client_shell_for_tests
 from notebooklm import NotebookLMClient
-from notebooklm._session import Session
 from notebooklm.auth import AuthTokens
 from notebooklm.rpc import RPCMethod
 from notebooklm.types import ConnectionLimits
@@ -90,22 +89,22 @@ async def _open_core_with_transport(
     transport: ConcurrentMockTransport,
     *,
     max_concurrent_rpcs: int | None,
-) -> Session:
-    """Open a ``Session`` with the mock transport swapped in.
+) -> NotebookLMClient:
+    """Open a ``NotebookLMClient`` with the mock transport swapped in.
 
     Mirrors ``test_harness_smoke.py::_open_core_with_transport`` plus the
-    new ``max_concurrent_rpcs`` knob exercised here. ``Session.open()``
+    new ``max_concurrent_rpcs`` knob exercised here. ``NotebookLMClient.open()``
     builds its own ``httpx.AsyncClient``; we close it and replace with
     one routing through the recording transport so the in-flight peak
     is observable.
     """
-    core = build_session_for_tests(auth=_make_auth(), max_concurrent_rpcs=max_concurrent_rpcs)
+    core = build_client_shell_for_tests(auth=_make_auth(), max_concurrent_rpcs=max_concurrent_rpcs)
     await core.open()
-    assert core._kernel.http_client is not None
-    prior_cookies = core._kernel.get_http_client().cookies
-    await core._kernel.get_http_client().aclose()
+    assert core._collaborators.kernel.http_client is not None
+    prior_cookies = core._collaborators.kernel.get_http_client().cookies
+    await core._collaborators.kernel.get_http_client().aclose()
     install_http_client_for_test(
-        core._kernel,
+        core._collaborators.kernel,
         httpx.AsyncClient(
             cookies=prior_cookies,
             transport=transport,
@@ -282,7 +281,7 @@ async def test_slot_held_across_retry_middleware_retries(
 
     core = await _open_core_with_transport(transport, max_concurrent_rpcs=1)
     # Force fast retry so the test finishes promptly even on a slow box.
-    core._chain_host._rate_limit_max_retries = 3
+    core._composed.chain_host._rate_limit_max_retries = 3
 
     try:
         results = await asyncio.gather(
@@ -315,7 +314,7 @@ def test_cap_above_pool_max_connections_raises_at_construction(
     the underlying httpx pool can't fulfill, surfacing as opaque
     ``PoolTimeout``s. The constructor catches the misconfiguration
     eagerly. The check is at the ``NotebookLMClient`` boundary because
-    ``Session`` synthesizes its own ``ConnectionLimits()`` when
+    ``NotebookLMClient`` synthesizes its own ``ConnectionLimits()`` when
     ``limits=None`` is passed — the client-layer enforcement keeps the
     invariant consistent regardless of how the limits are supplied.
     """

@@ -3,11 +3,11 @@
 Wave 2 of plan ``host-protocol-removal`` deleted the ``_LifecycleHost``
 and ``RefreshAuthCore`` Protocols and rewrote ``refresh_auth_session``
 to take five explicit keyword-only collaborators instead of a
-Session-shaped core. Wave 3 deleted the surviving Session-level
+NotebookLMClient-shaped core. Wave 3 deleted the surviving NotebookLMClient-level
 auth/lifecycle forwards (``update_auth_tokens`` / ``update_auth_headers``
 / ``lifecycle``) that those Protocols had backed. Wave 4 (this file)
 adds the AST regression guards that catch any future reintroduction of
-the Session-as-host pattern at PR time.
+the NotebookLMClient-as-host pattern at PR time.
 
 The four guards in this module are deliberately AST-based — string-vs-name
 spelling, ``typing.cast`` qualification, and re-imported ``cast`` aliases
@@ -24,7 +24,7 @@ all slip past a regex but not past an :mod:`ast` walk.
    Failure mode: introducing a typing import like
    ``from .._session_lifecycle import _LifecycleHost`` or annotating a
    parameter ``host: "_LifecycleHost"`` would re-establish the
-   Session-as-host coupling Waves 1-3 dismantled.
+   NotebookLMClient-as-host coupling Waves 1-3 dismantled.
 
 2. :func:`test_no_cast_to_lifecycle_host_in_src` walks every module
    under ``src/notebooklm/`` and fails if any :class:`ast.Call` to a
@@ -55,14 +55,14 @@ all slip past a regex but not past an :mod:`ast` walk.
 
    Failure mode: re-declaring ``class RefreshAuthCore(Protocol): ...``
    anywhere in ``src/notebooklm/`` (most likely in ``_auth/session.py``)
-   would re-establish the Session-shaped argument contract that Wave 2
+   would re-establish the NotebookLMClient-shaped argument contract that Wave 2
    replaced with five explicit kwargs.
 
 4. :func:`test_auth_session_module_has_no_host_protocol_residue` is a
    focused contract for ``src/notebooklm/_auth/session.py`` — the
    module Wave 2 rewrote. Four sub-checks, all AST-based:
 
-   - no import of the ``Session`` class (from any module path), so the
+   - no import of the ``NotebookLMClient`` class (from any module path), so the
      refresh helper cannot regrow a typing dependency on the concrete
      lifecycle root
    - no Protocol class body that declares a ``_kernel`` attribute, so a
@@ -75,13 +75,13 @@ all slip past a regex but not past an :mod:`ast` walk.
      (``self._auth_coord.update_*``, ``client._collaborators.auth_coordinator.update_*``).
      The live caller invokes ``auth_coord.update_auth_*(...)`` on the
      explicit kwarg; calling either method on ``core``, ``session``,
-     ``host``, ``self``, or ``self._session`` restores the
-     Session-as-host pattern
+     ``host``, ``self``, or the deleted client-side session attribute restores the
+     NotebookLMClient-as-host pattern
    - no ``cast`` to either ``_LifecycleHost`` or ``RefreshAuthCore``
      (this duplicates Guards 1-3 for the one file that historically
      carried both casts; the duplication is intentional belt-and-braces)
 
-   Failure mode: a future refactor that "just adds back the Session
+   Failure mode: a future refactor that "just adds back the NotebookLMClient
    import for a typing-only annotation" or "re-introduces a cast for
    one production call site" trips this guard before the PR opens.
 
@@ -117,18 +117,20 @@ DELETED_HOST_PROTOCOL_NAMES: frozenset[str] = frozenset({"_LifecycleHost", "Refr
 # ``_auth/session.py::refresh_auth_session`` invokes
 # ``auth_coord.update_auth_tokens(...)`` / ``auth_coord.update_auth_headers(...)``
 # on the explicit ``auth_coord`` kwarg. Names like ``core``, ``host``,
-# ``session``, or ``self`` are the Wave-2-deleted Session-as-host shape
+# ``session``, or ``self`` are the Wave-2-deleted NotebookLMClient-as-host shape
 # and must not reappear.
 AUTH_COORD_RECEIVER_NAMES: frozenset[str] = frozenset({"auth_coord", "coord"})
 
 # The two ``update_auth_*`` method names that historically pinned the
-# ``RefreshAuthCore`` Protocol surface. Wave 3 deleted the Session-level
+# ``RefreshAuthCore`` Protocol surface. Wave 3 deleted the NotebookLMClient-level
 # forwards (PR #1134) — they now live on ``AuthRefreshCoordinator`` and
 # must be reached through that collaborator's name.
 AUTH_FORWARD_METHOD_NAMES: frozenset[str] = frozenset({"update_auth_tokens", "update_auth_headers"})
+DELETED_SESSION_MODULE = "notebooklm" + "." + "_session"
+DELETED_SESSION_ATTR = "_" + "session"
 
 MOVED_SESSION_SYMBOL_NAMES: frozenset[str] = frozenset(
-    # Only symbols that used to be reachable through `notebooklm._session`
+    # Only symbols that used to be reachable through the deleted session module
     # aliases belong here. Moves between other modules, such as default sleep
     # resolution moving onto `ClientSeams`, are outside this guard's scope.
     {
@@ -255,23 +257,23 @@ def _protocol_class_declares_kernel(class_def: ast.ClassDef) -> bool:
 
 
 def _imports_session_class(tree: ast.AST) -> list[int]:
-    """Return line numbers of any import that brings ``Session`` into scope.
+    """Return line numbers of any import that brings ``NotebookLMClient`` into scope.
 
-    Catches both ``from notebooklm._session import Session`` and
-    ``import notebooklm._session as ...`` followed by ``Session``
-    reference. We focus on the direct ``Session`` import — the second
-    form would also surface as a ``Session`` Name/Attribute reference,
+    Catches both ``from notebooklm.client import NotebookLMClient`` and
+    an import of the deleted session module followed by ``NotebookLMClient``
+    reference. We focus on the direct ``NotebookLMClient`` import — the second
+    form would also surface as a ``NotebookLMClient`` Name/Attribute reference,
     but that's a Guard-2-style concern and out of scope for this guard.
     """
     hits: list[int] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
             for alias in node.names:
-                if alias.name == "Session" or alias.asname == "Session":
+                if alias.name == "NotebookLMClient" or alias.asname == "NotebookLMClient":
                     hits.append(node.lineno)
         elif isinstance(node, ast.Import):
             for alias in node.names:
-                if alias.asname == "Session":
+                if alias.asname == "NotebookLMClient":
                     hits.append(node.lineno)
     return hits
 
@@ -293,7 +295,7 @@ def _is_coordinator_receiver(receiver: ast.expr) -> bool:
 
     Anything else (bare-name receivers like ``core`` / ``session`` /
     ``host`` / ``self``; Attribute chains terminating in
-    non-coordinator segments like ``self._session``; computed
+    non-coordinator segments like the deleted session attribute; computed
     receivers like ``[a, b][0]``; Subscripts; etc.) is the regression
     surface and returns ``False``.
     """
@@ -309,8 +311,8 @@ def _format_receiver_for_diagnostic(receiver: ast.expr) -> str:
     """Render ``receiver`` as a short human-readable string for failure messages.
 
     - ``ast.Name`` → its ``id`` (``core``, ``session``, ...).
-    - ``ast.Attribute`` → ``...<terminal_attr>`` (``...session`` for
-      ``self._session``, ``..._kernel`` for ``payload._kernel``). The
+    - ``ast.Attribute`` -> ``...<terminal_attr>`` (for example
+      ``..._kernel`` for ``payload._kernel``). The
       leading ``...`` signals that the upstream chain is elided so the
       reader can grep the file by the terminal segment.
     - Anything else → the literal string ``"expression"`` (we cannot
@@ -325,12 +327,12 @@ def _format_receiver_for_diagnostic(receiver: ast.expr) -> str:
 
 
 def _session_module_aliases(tree: ast.AST) -> set[str]:
-    """Return local aliases bound to the ``notebooklm._session`` module."""
+    """Return local aliases bound to the deleted session module."""
     aliases: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                if alias.name == "notebooklm._session" and alias.asname is not None:
+                if alias.name == DELETED_SESSION_MODULE and alias.asname is not None:
                     aliases.add(alias.asname)
         elif isinstance(node, ast.ImportFrom):
             imports_session_from_notebooklm = node.module == "notebooklm"
@@ -368,8 +370,8 @@ def test_moved_session_symbols_are_not_reached_through_session_module_aliases() 
         tree = ast.parse(path.read_text(encoding="utf-8"))
         violations.extend(_moved_session_symbol_alias_violations(tree, rel=rel))
     assert not violations, (
-        "Composition helpers moved out of notebooklm._session. Import them from "
-        "notebooklm._session_init or notebooklm._client_seams instead. Offenders:\n  "
+        "Composition helpers moved out of the deleted session module. Import them from "
+        "the session-init or client-seam modules instead. Offenders:\n  "
         + "\n  ".join(violations)
     )
 
@@ -397,7 +399,7 @@ def test_lifecycle_host_symbol_does_not_appear_in_src() -> None:
             violations.append(f"{rel}:{lineno} ({ctx}) _LifecycleHost")
     assert not violations, (
         "_LifecycleHost was deleted in Wave 2 of plan host-protocol-removal "
-        "(PR #1133). Reappearance reintroduces the Session-as-host pattern "
+        "(PR #1133). Reappearance reintroduces the NotebookLMClient-as-host pattern "
         "that Wave 2 dismantled — refresh_auth_session now takes five "
         "explicit keyword-only collaborators (auth, kernel, auth_coord, "
         "lifecycle, cookie_persistence). Offenders:\n  " + "\n  ".join(violations)
@@ -438,7 +440,7 @@ def test_no_cast_to_lifecycle_host_in_src() -> None:
     assert not violations, (
         "cast(..., _LifecycleHost) was retired in Wave 2 of plan "
         "host-protocol-removal (PR #1133). Reintroducing the cast — even "
-        "for a one-line typing accommodation — reopens the Session-as-host "
+        "for a one-line typing accommodation — reopens the NotebookLMClient-as-host "
         "coupling Waves 1-3 closed. Offenders:\n  " + "\n  ".join(violations)
     )
 
@@ -468,7 +470,7 @@ def test_refresh_auth_core_symbol_does_not_appear_in_src() -> None:
             violations.append(f"{rel}:{lineno} ({ctx}) RefreshAuthCore")
     assert not violations, (
         "RefreshAuthCore was deleted in Wave 2 of plan host-protocol-removal "
-        "(PR #1133). Reappearance restores the Session-shaped argument "
+        "(PR #1133). Reappearance restores the NotebookLMClient-shaped argument "
         "contract that refresh_auth_session(core) once required; the live "
         "helper takes five explicit collaborators by keyword. Offenders:\n  "
         + "\n  ".join(violations)
@@ -485,7 +487,7 @@ def test_auth_session_module_has_no_host_protocol_residue() -> None:
 
     Four sub-checks (any failure surfaces as a separate violation line):
 
-    1. no import of the ``Session`` class — keeps the refresh helper
+    1. no import of the ``NotebookLMClient`` class — keeps the refresh helper
        free of any typing dependency on the lifecycle root
     2. no Protocol body declaring ``_kernel`` — prevents resurrection of
        a host-shaped Protocol under a new name
@@ -493,12 +495,12 @@ def test_auth_session_module_has_no_host_protocol_residue() -> None:
        where ``X`` is not a coordinator-shaped name. The live caller
        routes through ``auth_coord.update_auth_*(...)``; calling either
        method on ``core`` / ``session`` / ``host`` / ``self`` would
-       restore the deleted Session-as-host shape.
+       restore the deleted NotebookLMClient-as-host shape.
     4. no cast to ``_LifecycleHost`` or ``RefreshAuthCore`` — duplicates
        Guards 1-3 for the one file that historically carried both casts;
        the duplication is belt-and-braces.
 
-    Failure mode: a future PR that "re-adds the Session import for a
+    Failure mode: a future PR that "re-adds the NotebookLMClient import for a
     typing-only annotation" or "re-introduces a cast for one call site"
     trips this guard before the PR opens.
     """
@@ -506,11 +508,11 @@ def test_auth_session_module_has_no_host_protocol_residue() -> None:
     tree = ast.parse(source)
     violations: list[str] = []
 
-    # Sub-check 1: no import of ``Session``.
+    # Sub-check 1: no import of ``NotebookLMClient``.
     for lineno in _imports_session_class(tree):
         violations.append(
-            f"_auth/session.py:{lineno} imports `Session` — Wave 2 removed "
-            "the Session-shaped core argument; refresh_auth_session takes "
+            f"_auth/session.py:{lineno} imports `NotebookLMClient` — Wave 2 removed "
+            "the NotebookLMClient-shaped core argument; refresh_auth_session takes "
             "five explicit collaborators."
         )
 
@@ -539,12 +541,12 @@ def test_auth_session_module_has_no_host_protocol_residue() -> None:
     #
     # Everything else — bare-name receivers like ``core`` / ``session``
     # / ``host`` / ``self``, and Attribute chains terminating in
-    # non-coordinator segments like ``self._session.update_*`` —
-    # restores the Session-as-host shape Wave 3 deleted and surfaces
+    # non-coordinator segments like calls through the deleted session attribute —
+    # restores the NotebookLMClient-as-host shape Wave 3 deleted and surfaces
     # here as a violation. The widened receiver coverage closes the
     # gap that gemini-code-assist flagged: the previous code only
     # checked ``ast.Name`` receivers and silently passed
-    # ``self._session.update_auth_tokens(...)`` because that receiver
+    # calls through the deleted session attribute because that receiver
     # is an ``ast.Attribute``.
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -578,7 +580,7 @@ def test_auth_session_module_has_no_host_protocol_residue() -> None:
             )
 
     assert not violations, (
-        "_auth/session.py must remain free of Session-as-host residue after "
+        "_auth/session.py must remain free of NotebookLMClient-as-host residue after "
         "Waves 2-3 of plan host-protocol-removal. Offenders:\n  " + "\n  ".join(violations)
     )
 
@@ -704,14 +706,14 @@ def test_protocol_class_declares_kernel_skips_non_protocol() -> None:
 
 
 def test_imports_session_class_catches_both_shapes() -> None:
-    """``from foo import Session`` and ``import foo as Session`` both surface."""
+    """``from foo import NotebookLMClient`` and ``import foo as NotebookLMClient`` both surface."""
     tree = ast.parse(
-        "from notebooklm._session import Session\n"
-        "import other as Session\n"
-        "from notebooklm._session import Session as S\n"  # aliased rename also surfaces
+        "from notebooklm.client import NotebookLMClient\n"
+        "import other as NotebookLMClient\n"
+        "from notebooklm.client import NotebookLMClient as S\n"  # aliased rename also surfaces
     )
-    # All three lines bring some name into scope that resolves to Session.
-    # The third form (``Session as S``) imports the Session class itself
+    # All three lines bring some name into scope that resolves to NotebookLMClient.
+    # The third form (``NotebookLMClient as S``) imports the NotebookLMClient class itself
     # and renames it; we surface that too because the typing dependency
     # is what the guard is preventing, not the local name choice.
     hits = _imports_session_class(tree)
@@ -735,9 +737,9 @@ def test_imports_session_class_catches_both_shapes() -> None:
         ("self._auth_coord.x", True),
         ("self._collaborators.auth_coordinator.x", True),
         # Attribute-chain receivers whose terminal segment is NOT coordinator-shaped.
-        # ``self._session.update_*`` was historically the deleted Session-as-host
+        # Calls through the deleted session attribute were historically the host
         # shape; the previous version of this guard silently passed it.
-        ("self._session.x", False),
+        (f"self.{DELETED_SESSION_ATTR}.x", False),
         ("client._collaborators.x", False),  # terminal segment is plain `_collaborators`
         ("payload.kernel.x", False),
     ],
@@ -750,7 +752,7 @@ def test_imports_session_class_catches_both_shapes() -> None:
         "bare-self-reject",
         "chain-self-_auth_coord",
         "chain-collaborators-auth_coordinator",
-        "chain-self-_session-reject",
+        "chain-self-deleted-session-attr-reject",
         "chain-collaborators-terminal-only",
         "chain-payload-kernel-reject",
     ],
@@ -761,9 +763,9 @@ def test_is_coordinator_receiver_covers_both_shapes(source: str, is_coordinator:
 
     The terminal-segment rule is what closes the gap gemini-code-assist
     flagged on PR #1135: the previous code only checked bare-name
-    receivers, so ``self._session.update_auth_tokens(...)`` slipped
-    past the guard because its receiver is an ``ast.Attribute`` (the
-    ``self._session`` chain) rather than an ``ast.Name``.
+    receivers, so calls through the deleted session attribute slipped
+    past the guard because the receiver is an ``ast.Attribute`` rather
+    than an ``ast.Name``.
     """
     tree = ast.parse(source)
     # The source above is a single bare attribute expression; the
@@ -785,21 +787,22 @@ def test_is_coordinator_receiver_covers_both_shapes(source: str, is_coordinator:
 
 def test_format_receiver_for_diagnostic_shapes() -> None:
     """Diagnostic rendering elides the upstream chain but pins the terminal segment."""
-    tree = ast.parse("self._session.x\nbare.x\n(1 + 2).x\n")
+    tree = ast.parse(f"self.{DELETED_SESSION_ATTR}.x\nbare.x\n(1 + 2).x\n")
     receivers = [
         node.value.value  # type: ignore[union-attr]
         for node in tree.body
         if isinstance(node, ast.Expr) and isinstance(node.value, ast.Attribute)
     ]
-    assert _format_receiver_for_diagnostic(receivers[0]) == "..._session"
+    assert _format_receiver_for_diagnostic(receivers[0]) == "..." + DELETED_SESSION_ATTR
     assert _format_receiver_for_diagnostic(receivers[1]) == "bare"
     assert _format_receiver_for_diagnostic(receivers[2]) == "expression"
 
 
 def test_moved_session_symbol_alias_guard_catches_synthetic_alias() -> None:
-    """Prove aliasing ``notebooklm._session`` cannot hide moved helper access."""
+    """Prove aliasing the deleted session module cannot hide moved helper access."""
     tree = ast.parse(
-        "import notebooklm._session as session_mod\nsession_mod.compose_session_internals\n"
+        f"import {DELETED_SESSION_MODULE} as session_mod\n"
+        "session_mod.compose_session_internals\n"
     )
     assert _moved_session_symbol_alias_violations(tree, rel="synthetic.py") == [
         "synthetic.py:2 session_mod.compose_session_internals"

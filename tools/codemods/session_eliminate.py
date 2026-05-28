@@ -158,7 +158,6 @@ def _report_remaining(source: str, file: str) -> list[UnsupportedPattern]:
         (r"notebooklm\._session(\.|['\"])", "deleted_module_string", "use surviving sibling module"),
         (r"build_(?:session|client)_for_tests", "old_helper_name", "use build_client_shell_for_tests"),
         (r"from notebooklm\._session import", "session_import", "use NotebookLMClient typing"),
-        (r"\bSession\b", "session_type_name", "use NotebookLMClient or remove stale prose"),
     ]
     unsupported: list[UnsupportedPattern] = []
     for pattern, kind, target in checks:

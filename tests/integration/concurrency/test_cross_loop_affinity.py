@@ -1,7 +1,7 @@
 """Regression test for the event-loop affinity guard.
 
 Audit item §14 (`thread-safety-concurrency-audit.md` §14):
-Pre-fix, ``Session`` carried asyncio primitives (``_reqid_lock``,
+Pre-fix, ``NotebookLMClient`` carried asyncio primitives (``_reqid_lock``,
 ``_refresh_lock``, the underlying ``httpx.AsyncClient``'s connection
 pool, and any spawned ``asyncio.Task``s) that are silently bound to
 whichever event loop was current when they were constructed or first
@@ -11,9 +11,9 @@ in one thread and then hands it to another thread's loop hits opaque
 httpx, or — worse — a hang on a never-acquired lock that belongs to
 a dead loop.
 
-Post-fix: ``Session.open()`` captures
+Post-fix: ``NotebookLMClient.open()`` captures
 ``asyncio.get_running_loop()`` on the lifecycle (read via
-``core._lifecycle.get_bound_loop()``) and
+``core._collaborators.lifecycle.get_bound_loop()``) and
 ``SessionTransport.perform_authed_post`` asserts the running loop matches
 via a cheap ``is`` comparison through ``assert_bound_loop``. On mismatch
 we raise an actionable ``RuntimeError`` at the call site instead of
@@ -30,9 +30,9 @@ The test exercises the surgical contract:
 2. **Same-loop use is unaffected** — open + dispatch under one loop and
    confirm 100 fan-out calls succeed (no false positive on the
    ``is`` comparison).
-3. **No binding before open()** — a freshly-constructed ``Session``
+3. **No binding before open()** — a freshly-constructed ``NotebookLMClient``
    that has never been ``open()``ed has
-   ``core._lifecycle.get_bound_loop() is None``; the check inside
+   ``core._collaborators.lifecycle.get_bound_loop() is None``; the check inside
    ``SessionTransport.perform_authed_post`` already asserts
    ``self._kernel.http_client is not None``, so an "unopened client"
    caller sees the existing assertion error, not the loop guard.
@@ -53,9 +53,9 @@ import httpx
 import pytest
 
 from _fixtures.kernel_test_helpers import install_http_client_for_test
-from _helpers.session_factory import build_session_for_tests
-from notebooklm._session import Session
+from _helpers.client_factory import build_client_shell_for_tests
 from notebooklm.auth import AuthTokens
+from notebooklm.client import NotebookLMClient
 from notebooklm.rpc import RPCMethod
 
 from .conftest import ConcurrentMockTransport
@@ -78,11 +78,11 @@ def _make_auth() -> AuthTokens:
     )
 
 
-async def _open_core_with_transport(transport: ConcurrentMockTransport) -> Session:
-    """Open a ``Session`` and swap in the mock transport.
+async def _open_core_with_transport(transport: ConcurrentMockTransport) -> NotebookLMClient:
+    """Open a ``NotebookLMClient`` and swap in the mock transport.
 
     Mirrors the documented pattern from ``test_harness_smoke.py``:
-    ``Session.open()`` builds its own ``httpx.AsyncClient`` and we
+    ``NotebookLMClient.open()`` builds its own ``httpx.AsyncClient`` and we
     can't override the transport via the constructor. So we open
     normally — which is the moment the loop affinity is captured —
     then close-and-replace the underlying client with one that routes
@@ -90,13 +90,13 @@ async def _open_core_with_transport(transport: ConcurrentMockTransport) -> Sessi
     ``self._lifecycle.get_bound_loop()`` unchanged because we don't call
     ``open()`` again.
     """
-    core = build_session_for_tests(auth=_make_auth())
+    core = build_client_shell_for_tests(auth=_make_auth())
     await core.open()
-    assert core._kernel.http_client is not None
-    prior_cookies = core._kernel.get_http_client().cookies
-    await core._kernel.get_http_client().aclose()
+    assert core._collaborators.kernel.http_client is not None
+    prior_cookies = core._collaborators.kernel.get_http_client().cookies
+    await core._collaborators.kernel.get_http_client().aclose()
     install_http_client_for_test(
-        core._kernel,
+        core._collaborators.kernel,
         httpx.AsyncClient(
             cookies=prior_cookies,
             transport=transport,
@@ -134,7 +134,7 @@ def test_cross_loop_use_raises_actionable_runtime_error(
     # ``close()`` is also async and would need yet another loop — we
     # rely on the test's terminal ``asyncio.run`` for the second-loop
     # close.
-    core: Session = asyncio.run(_open_core_with_transport(transport))
+    core: NotebookLMClient = asyncio.run(_open_core_with_transport(transport))
 
     # Loop A is now closed; loop B is the fresh loop ``asyncio.run``
     # below will construct. Both ``open`` and ``call_under_loop_b`` must
@@ -169,9 +169,9 @@ def test_cross_loop_use_raises_actionable_runtime_error(
         # don't leak the transport. We deliberately go around
         # ``core.close()`` because that path also touches asyncio
         # primitives bound to loop A.
-        if core._kernel.http_client is not None:
-            await core._kernel.get_http_client().aclose()
-            install_http_client_for_test(core._kernel, None)
+        if core._collaborators.kernel.http_client is not None:
+            await core._collaborators.kernel.get_http_client().aclose()
+            install_http_client_for_test(core._collaborators.kernel, None)
 
     asyncio.run(call_under_loop_b())
 
@@ -212,14 +212,14 @@ async def test_bound_loop_captured_on_open(
     outside a running loop) would break the audit-§14 fix because the
     construction-time loop may not be the dispatch-time loop.
     """
-    core = build_session_for_tests(auth=_make_auth())
-    assert core._lifecycle.get_bound_loop() is None, (
-        "Session must not bind to a loop at construction time — open() is the binding moment."
+    core = build_client_shell_for_tests(auth=_make_auth())
+    assert core._collaborators.lifecycle.get_bound_loop() is None, (
+        "NotebookLMClient must not bind to a loop at construction time — open() is the binding moment."
     )
 
     await core.open()
     try:
-        assert core._lifecycle.get_bound_loop() is asyncio.get_running_loop(), (
+        assert core._collaborators.lifecycle.get_bound_loop() is asyncio.get_running_loop(), (
             "open() must capture the *running* loop, not a stored or module-level reference."
         )
 
@@ -227,11 +227,11 @@ async def test_bound_loop_captured_on_open(
         # requests for cookie persistence (auth has no storage_path so
         # save_cookies is already a no-op, but route everything through
         # the recorder to keep the test deterministic).
-        assert core._kernel.http_client is not None
-        prior_cookies = core._kernel.get_http_client().cookies
-        await core._kernel.get_http_client().aclose()
+        assert core._collaborators.kernel.http_client is not None
+        prior_cookies = core._collaborators.kernel.get_http_client().cookies
+        await core._collaborators.kernel.get_http_client().aclose()
         install_http_client_for_test(
-            core._kernel,
+            core._collaborators.kernel,
             httpx.AsyncClient(
                 cookies=prior_cookies,
                 transport=mock_transport_concurrent,

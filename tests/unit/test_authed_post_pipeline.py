@@ -1,7 +1,7 @@
 """Parity tests for the shared transport pipeline.
 
 Pins down the behavior of :meth:`SessionTransport.perform_authed_post`
-used by the RPC executor path (the ``Session._perform_authed_post``
+used by the RPC executor path (the ``NotebookLMClient._perform_authed_post``
 compatibility forward was deleted in Wave 11c of session-decoupling;
 tests now drive the canonical collaborator method directly):
 
@@ -32,7 +32,7 @@ tests now drive the canonical collaborator method directly):
   (URL + body identical to pre-extraction).
 
 The chat-side error mapping that used to live on
-``Session.query_post`` moved to
+``NotebookLMClient.query_post`` moved to
 :func:`notebooklm._chat_transport.chat_aware_authed_post` in the D2
 cutover; equivalent coverage lives in ``tests/unit/test_chat_transport.py``.
 """
@@ -47,18 +47,18 @@ from typing import Any
 import httpx
 import pytest
 
-from _helpers.session_factory import build_session_for_tests
+from _helpers.client_factory import build_client_shell_for_tests
 from conftest import install_post_as_stream
 from notebooklm._logging import get_request_id
 from notebooklm._middleware import RpcRequest, RpcResponse
 from notebooklm._request_types import AuthSnapshot
-from notebooklm._session import Session
 from notebooklm._transport_errors import (
     TransportAuthExpired,
     TransportRateLimited,
     TransportServerError,
 )
 from notebooklm.auth import AuthTokens
+from notebooklm.client import NotebookLMClient
 from notebooklm.rpc import RPCMethod
 
 
@@ -69,13 +69,11 @@ def _no_backoff_jitter(monkeypatch):
     Production code adds a small ±20% jitter to the exponential backoff to
     reduce thundering-herd effects across clients. These transport tests
     assert exact sleep schedules (``[1, 2, 4, ...]``), so we patch
-    ``random.uniform`` on its canonical importing module
-    :mod:`notebooklm._session` (Phase 2 PR 5 migrated this off the
-    deprecated ``notebooklm._core.random.uniform`` shim) to return 0. The
+    ``random.uniform`` on its canonical importing module to return 0. The
     429 path uses ``Retry-After`` instead of jitter, so this fixture has
     no effect on those tests.
     """
-    monkeypatch.setattr("notebooklm._session.random.uniform", lambda a, b: 0.0)
+    monkeypatch.setattr("notebooklm._backoff._random.uniform", lambda a, b: 0.0)
 
 
 def _make_core(
@@ -83,13 +81,13 @@ def _make_core(
     refresh_callback: Callable[[], Any] | None = None,
     rate_limit_max_retries: int = 0,
     server_error_max_retries: int = 0,
-) -> Session:
+) -> NotebookLMClient:
     auth = AuthTokens(
         csrf_token="CSRF_OLD",
         session_id="SID_OLD",
         cookies={"SID": "sid_cookie"},
     )
-    return build_session_for_tests(
+    return build_client_shell_for_tests(
         auth=auth,
         refresh_callback=refresh_callback,
         refresh_retry_delay=0.0,
@@ -192,7 +190,7 @@ async def test_chain_reads_live_retry_budget(monkeypatch):
         # ``RetryMiddleware`` defaults to ``asyncio.sleep`` resolved at call
         # time, so patching the asyncio module's ``sleep`` reaches it
         # through Python's module identity.
-        monkeypatch.setattr("notebooklm._session.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr("notebooklm._session_helpers.asyncio.sleep", fake_sleep)
 
         def build(snapshot: AuthSnapshot) -> tuple[str, str, dict[str, str]]:
             return "https://example.test/x", "payload", {}
@@ -336,7 +334,7 @@ async def test_production_chain_drives_refresh_on_real_401(monkeypatch):
         assert response.status_code == 200
         assert refresh_calls == [True], (
             "Production chain must drive the refresh-and-retry path on a "
-            "real 401 — proves Session wires AuthRefreshMiddleware with a "
+            "real 401 — proves NotebookLMClient wires AuthRefreshMiddleware with a "
             "predicate that recognises canonical auth errors."
         )
         assert call_count["n"] == 2
@@ -359,8 +357,8 @@ async def test_chain_uses_late_bound_sleep_and_shared_random_uniform(monkeypatch
         async def fake_sleep(seconds: float) -> None:
             sleeps.append(seconds)
 
-        monkeypatch.setattr("notebooklm._session.asyncio.sleep", fake_sleep)
-        monkeypatch.setattr("notebooklm._session.random.uniform", lambda a, b: 0.2)
+        monkeypatch.setattr("notebooklm._session_helpers.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr("notebooklm._backoff._random.uniform", lambda a, b: 0.2)
 
         def build(snapshot: AuthSnapshot) -> tuple[str, str, dict[str, str]]:
             return "https://example.test/x", "payload", {}
@@ -394,7 +392,7 @@ async def test_perform_authed_post_disable_internal_retries_short_circuits(monke
         async def fake_sleep(seconds: float) -> None:
             sleeps.append(seconds)
 
-        monkeypatch.setattr("notebooklm._session.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr("notebooklm._session_helpers.asyncio.sleep", fake_sleep)
 
         def build(snapshot: AuthSnapshot) -> tuple[str, str, dict[str, str]]:
             return "https://example.test/x", "payload", {}
@@ -478,7 +476,7 @@ async def test_first_terminal_attempt_rebuilds_when_snapshot_changed(monkeypatch
             # Tightened signature pins the explicit-collaborator contract:
             # the production caller MUST pass ``auth=<live AuthTokens>``,
             # not the legacy positional host. ``auth is core.auth`` proves
-            # the chain captured the same ``AuthTokens`` instance Session
+            # the chain captured the same ``AuthTokens`` instance NotebookLMClient
             # holds (identity-stable per the live-reference contract in
             # ``wire_middleware_chain``).
             assert auth is core.auth
@@ -487,12 +485,12 @@ async def test_first_terminal_attempt_rebuilds_when_snapshot_changed(monkeypatch
             except StopIteration:
                 pytest.fail("unexpected extra auth snapshot")
 
-        # PR #4b inlined ``Session._snapshot``; the production call
+        # PR #4b inlined ``NotebookLMClient._snapshot``; the production call
         # sites now read ``self._auth_coord.snapshot(auth=self.auth)``
-        # directly (the Session-shaped ``_AuthRefreshHost`` was deleted
+        # directly (the NotebookLMClient-shaped ``_AuthRefreshHost`` was deleted
         # in favor of an explicit ``auth: AuthTokens`` kwarg), so this
         # test swaps the canonical coordinator method instead of the
-        # (now-deleted) Session delegate.
+        # (now-deleted) NotebookLMClient delegate.
         core._auth_coord.snapshot = fake_snapshot  # type: ignore[method-assign]
         calls: list[AuthSnapshot] = []
 
@@ -633,7 +631,7 @@ async def test_stale_envelope_rebuilt_after_refresh_then_retry(monkeypatch):
         async def fake_sleep(seconds: float) -> None:
             sleeps.append(seconds)
 
-        monkeypatch.setattr("notebooklm._session.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr("notebooklm._session_helpers.asyncio.sleep", fake_sleep)
 
         def build(snapshot: AuthSnapshot) -> tuple[str, str, dict[str, str]]:
             # Encode CSRF in the body and session-id + authuser in the URL,
@@ -903,7 +901,7 @@ async def test_5xx_retries_then_succeeds(monkeypatch):
         async def fake_sleep(seconds: float) -> None:
             sleeps.append(seconds)
 
-        monkeypatch.setattr("notebooklm._session.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr("notebooklm._session_helpers.asyncio.sleep", fake_sleep)
 
         def build(snapshot: AuthSnapshot) -> tuple[str, str, dict[str, str]]:
             return "https://example.test/x", "payload", {}
@@ -939,7 +937,7 @@ async def test_5xx_exhausts_budget_raises_transport_server_error(monkeypatch):
         async def fake_sleep(seconds: float) -> None:
             sleeps.append(seconds)
 
-        monkeypatch.setattr("notebooklm._session.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr("notebooklm._session_helpers.asyncio.sleep", fake_sleep)
 
         def build(snapshot: AuthSnapshot) -> tuple[str, str, dict[str, str]]:
             return "https://example.test/x", "payload", {}
@@ -976,7 +974,7 @@ async def test_network_error_retries_then_succeeds(monkeypatch):
         async def fake_sleep(seconds: float) -> None:
             sleeps.append(seconds)
 
-        monkeypatch.setattr("notebooklm._session.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr("notebooklm._session_helpers.asyncio.sleep", fake_sleep)
 
         def build(snapshot: AuthSnapshot) -> tuple[str, str, dict[str, str]]:
             return "https://example.test/x", "payload", {}
@@ -1012,7 +1010,7 @@ async def test_network_error_exhausts_budget_raises_transport_server_error(monke
         async def fake_sleep(seconds: float) -> None:
             sleeps.append(seconds)
 
-        monkeypatch.setattr("notebooklm._session.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr("notebooklm._session_helpers.asyncio.sleep", fake_sleep)
 
         def build(snapshot: AuthSnapshot) -> tuple[str, str, dict[str, str]]:
             return "https://example.test/x", "payload", {}
@@ -1045,7 +1043,7 @@ async def test_server_error_budget_zero_raises_immediately(monkeypatch):
         async def fake_sleep(seconds: float) -> None:
             sleeps.append(seconds)
 
-        monkeypatch.setattr("notebooklm._session.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr("notebooklm._session_helpers.asyncio.sleep", fake_sleep)
 
         def build(snapshot: AuthSnapshot) -> tuple[str, str, dict[str, str]]:
             return "https://example.test/x", "payload", {}
@@ -1080,7 +1078,7 @@ async def test_exponential_backoff_caps_at_30_seconds(monkeypatch):
         async def fake_sleep(seconds: float) -> None:
             sleeps.append(seconds)
 
-        monkeypatch.setattr("notebooklm._session.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr("notebooklm._session_helpers.asyncio.sleep", fake_sleep)
 
         def build(snapshot: AuthSnapshot) -> tuple[str, str, dict[str, str]]:
             return "https://example.test/x", "payload", {}
@@ -1111,7 +1109,7 @@ async def test_5xx_path_does_not_touch_429_path(monkeypatch):
         async def fake_sleep(seconds: float) -> None:
             sleeps.append(seconds)
 
-        monkeypatch.setattr("notebooklm._session.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr("notebooklm._session_helpers.asyncio.sleep", fake_sleep)
 
         def build(snapshot: AuthSnapshot) -> tuple[str, str, dict[str, str]]:
             return "https://example.test/x", "payload", {}
@@ -1136,7 +1134,7 @@ async def test_5xx_path_does_not_trigger_auth_refresh(monkeypatch):
     """A 503 must not be misclassified as auth error → refresh path. Refresh
     callback must never be called even when configured."""
     refresh_calls: list[bool] = []
-    captured_core: dict[str, Session] = {}
+    captured_core: dict[str, NotebookLMClient] = {}
 
     async def refresh() -> AuthTokens:
         refresh_calls.append(True)
@@ -1151,7 +1149,7 @@ async def test_5xx_path_does_not_trigger_auth_refresh(monkeypatch):
         async def fake_sleep(seconds: float) -> None:
             sleeps.append(seconds)
 
-        monkeypatch.setattr("notebooklm._session.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr("notebooklm._session_helpers.asyncio.sleep", fake_sleep)
 
         def build(snapshot: AuthSnapshot) -> tuple[str, str, dict[str, str]]:
             return "https://example.test/x", "payload", {}
@@ -1186,7 +1184,7 @@ async def test_rpc_call_maps_transport_server_error_to_server_error(monkeypatch)
         async def fake_sleep(seconds: float) -> None:
             pass
 
-        monkeypatch.setattr("notebooklm._session.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr("notebooklm._session_helpers.asyncio.sleep", fake_sleep)
 
         async def fake_post(*args, **kwargs):
             raise _status_error(503)
@@ -1213,7 +1211,7 @@ async def test_rpc_call_maps_transport_server_error_network_to_network_error(mon
         async def fake_sleep(seconds: float) -> None:
             pass
 
-        monkeypatch.setattr("notebooklm._session.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr("notebooklm._session_helpers.asyncio.sleep", fake_sleep)
 
         async def fake_post(*args, **kwargs):
             raise httpx.ConnectError("nope")
@@ -1239,7 +1237,7 @@ def test_server_error_max_retries_negative_raises():
         cookies={"SID": "x"},
     )
     with pytest.raises(ValueError, match="server_error_max_retries must be >= 0"):
-        build_session_for_tests(auth=auth, server_error_max_retries=-1)
+        build_client_shell_for_tests(auth=auth, server_error_max_retries=-1)
 
 
 # ---------------------------------------------------------------------------

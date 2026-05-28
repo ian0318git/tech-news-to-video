@@ -10,9 +10,9 @@ PR 2 of the post-refactoring plan
 - ``ClientComposed.bind_*`` write-once setters
 - ``ClientComposed`` required-property guards
 
-Session-elimination Phase 2 leaves :class:`Session` alive as a one-wave
-lifecycle/property forwarder, but all composition runtime state belongs to
-:class:`ClientComposed`.
+Session-elimination Phase 3 leaves ``NotebookLMClient`` as both composition
+root and public surface; all composition runtime state belongs to
+``ClientComposed`` or the client-owned collaborator bundle.
 """
 
 from __future__ import annotations
@@ -24,13 +24,9 @@ from typing import Any
 import httpx
 import pytest
 
-from _helpers.client_factory import build_client_for_tests
-from _helpers.session_factory import (
-    build_session_for_tests,
-)
+from _helpers.client_factory import build_client_shell_for_tests
 from notebooklm._client_composed import ClientComposed
 from notebooklm._client_seams import ClientSeams
-from notebooklm._session import Session
 from notebooklm._session_init import (
     ClientInternals,
     compose_client_internals,
@@ -68,8 +64,7 @@ def test_resolve_seam_defaults_returns_module_bindings_when_none() -> None:
         decode_response=None,
     )
 
-    # ``sleep`` resolves to ``asyncio.sleep`` via the module-level
-    # ``asyncio`` binding inside :mod:`notebooklm._session`.
+    # ``sleep`` resolves to ``asyncio.sleep`` via the client seam defaults.
     assert resolved["sleep"] is asyncio.sleep
 
     # ``async_client_factory`` resolves to :class:`httpx.AsyncClient`.
@@ -141,14 +136,12 @@ def test_compose_client_internals_returns_client_internals() -> None:
 
 def test_shell_helpers_carry_client_holders() -> None:
     """Client shell helpers mirror production holder attributes."""
-    client = build_client_for_tests(auth=_make_auth(), max_concurrent_rpcs=3)
+    client = build_client_shell_for_tests(auth=_make_auth(), max_concurrent_rpcs=3)
 
     assert isinstance(client._seams, ClientSeams)
     assert isinstance(client._composed, ClientComposed)
     assert client._composed.max_concurrent_rpcs == 3
-    assert isinstance(client._session, Session)
-    assert client._session._seams is client._seams
-    assert client._session._rpc_executor is client._rpc_executor
+    assert client._composed.session_collaborators is client._collaborators
     assert client._composed.executor is client._rpc_executor
 
 
@@ -158,10 +151,10 @@ def test_notebooklm_client_initializes_client_holders() -> None:
 
     assert isinstance(client._seams, ClientSeams)
     assert isinstance(client._composed, ClientComposed)
-    assert client._session._seams is client._seams
+    assert client._composed.session_collaborators is client._collaborators
     assert client._composed.max_concurrent_rpcs == 2
     assert client._composed.executor is client._rpc_executor
-    assert client._session._transport is client._composed.transport
+    assert client._composed.transport is client._composed.transport
 
 
 def test_invalid_max_concurrent_rpcs_rejected_before_zero_cap_semaphore() -> None:
@@ -172,7 +165,7 @@ def test_invalid_max_concurrent_rpcs_rejected_before_zero_cap_semaphore() -> Non
         NotebookLMClient(auth, max_concurrent_rpcs=0)
 
     with pytest.raises(ValueError, match="max_concurrent_rpcs must be >= 1, got 0"):
-        build_session_for_tests(auth, max_concurrent_rpcs=0)
+        build_client_shell_for_tests(auth, max_concurrent_rpcs=0)
 
 
 def test_prebuilt_client_composed_cap_must_match_constructor_cap() -> None:
@@ -299,7 +292,7 @@ def test_compose_client_internals_preserves_late_binding_for_refresh_retry_delay
     call.
 
     The integration-test contract is that
-    ``client._session._chain_host._refresh_retry_delay = 0`` continues
+    ``client._composed.chain_host._refresh_retry_delay = 0`` continues
     to steer the live chain after construction. The lambda
     ``refresh_retry_delay_provider=lambda: chain_host._refresh_retry_delay``
     re-reads the attribute on every invocation, so this is a live binding,
@@ -416,11 +409,11 @@ def test_client_composed_properties_raise_before_binding(attr_name: str, message
         getattr(holder, attr_name)
 
 
-def test_session_composition_properties_forward_to_client_composed() -> None:
-    session = build_session_for_tests(_make_auth())
+def test_client_shell_reads_composition_from_client_composed() -> None:
+    client = build_client_shell_for_tests(_make_auth())
 
-    assert session._transport is session._composed.transport
-    assert session._rpc_executor is session._composed.executor
-    assert session._chain_host is session._composed.chain_host
-    assert session._chain_builder is session._composed.chain_builder
-    assert session._middlewares is session._composed.middlewares
+    assert client._composed.transport is client._composed.transport
+    assert client._rpc_executor is client._composed.executor
+    assert client._composed.chain_host is client._composed.chain_host
+    assert client._composed.chain_builder is client._composed.chain_builder
+    assert client._composed.middlewares is client._composed.middlewares

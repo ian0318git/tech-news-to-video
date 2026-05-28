@@ -4,7 +4,7 @@ Demonstrates that:
 
 1. ``ConcurrentMockTransport`` correctly records peak concurrent
    in-flight requests under a 100-way ``asyncio.gather`` fan-out.
-2. ``Session`` can be wired with the mock transport via the same
+2. ``NotebookLMClient`` can be wired with the mock transport via the same
    "replace ``_http_client`` after ``open()``" pattern used in
    ``tests/unit/conftest.py::make_core``.
 3. All 100 fan-out RPC calls complete successfully (each returns the
@@ -20,7 +20,7 @@ the core is constructed with ``max_concurrent_rpcs=None`` here —
 gather width rather than the production cap. The dedicated
 ``test_max_concurrent_rpcs.py`` suite covers the semaphore semantics
 themselves; this smoke test exists purely to prove the
-``ConcurrentMockTransport`` + ``Session`` plumbing fans out the way
+``ConcurrentMockTransport`` + ``NotebookLMClient`` plumbing fans out the way
 fan-out integration tests expect when the cap is intentionally off.
 
 Performance budget
@@ -40,9 +40,9 @@ import httpx
 import pytest
 
 from _fixtures.kernel_test_helpers import install_http_client_for_test
-from _helpers.session_factory import build_session_for_tests
-from notebooklm._session import Session
+from _helpers.client_factory import build_client_shell_for_tests
 from notebooklm.auth import AuthTokens
+from notebooklm.client import NotebookLMClient
 from notebooklm.rpc import RPCMethod
 
 from .conftest import ConcurrentMockTransport
@@ -65,11 +65,11 @@ def _make_auth() -> AuthTokens:
     )
 
 
-async def _open_core_with_transport(transport: ConcurrentMockTransport) -> Session:
-    """Open a ``Session`` and swap in the mock transport.
+async def _open_core_with_transport(transport: ConcurrentMockTransport) -> NotebookLMClient:
+    """Open a ``NotebookLMClient`` and swap in the mock transport.
 
     Mirrors the documented pattern from ``tests/unit/conftest.py``:
-    ``Session.open()`` builds its own ``httpx.AsyncClient`` and we
+    ``NotebookLMClient.open()`` builds its own ``httpx.AsyncClient`` and we
     can't override the transport via the constructor. So we open
     normally, then close-and-replace the underlying client with one
     that routes through our recording transport.
@@ -79,13 +79,13 @@ async def _open_core_with_transport(transport: ConcurrentMockTransport) -> Sessi
     prove the harness fans out at the *transport* boundary (the
     cap-on semantics are covered by ``test_max_concurrent_rpcs.py``).
     """
-    core = build_session_for_tests(auth=_make_auth(), max_concurrent_rpcs=None)
+    core = build_client_shell_for_tests(auth=_make_auth(), max_concurrent_rpcs=None)
     await core.open()
-    assert core._kernel.http_client is not None
-    prior_cookies = core._kernel.get_http_client().cookies
-    await core._kernel.get_http_client().aclose()
+    assert core._collaborators.kernel.http_client is not None
+    prior_cookies = core._collaborators.kernel.get_http_client().cookies
+    await core._collaborators.kernel.get_http_client().aclose()
     install_http_client_for_test(
-        core._kernel,
+        core._collaborators.kernel,
         httpx.AsyncClient(
             cookies=prior_cookies,
             transport=transport,

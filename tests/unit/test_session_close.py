@@ -18,7 +18,7 @@ from typing import Any
 
 import pytest
 
-from _helpers.session_factory import build_session_for_tests
+from _helpers.client_factory import build_client_shell_for_tests
 from notebooklm._artifacts import ArtifactsAPI
 from notebooklm._polling_registry import PollRegistry
 from notebooklm.auth import AuthTokens
@@ -95,20 +95,20 @@ async def test_session_close_drains_artifact_poll_hook() -> None:
     from notebooklm._mind_map import NoteBackedMindMapService
     from notebooklm._note_service import NoteService
 
-    core = build_session_for_tests(_auth())
+    core = build_client_shell_for_tests(_auth())
     # ``ArtifactsAPI`` consumes its three runtime collaborators
     # (``rpc`` + ``drain`` + ``lifecycle``) directly — mirrors production
     # wiring in ``NotebookLMClient.__init__``.
     artifacts = ArtifactsAPI(
         rpc=core._rpc_executor,
-        drain=core._drain_tracker,
-        lifecycle=core._lifecycle,
+        drain=core._collaborators.drain_tracker,
+        lifecycle=core._collaborators.lifecycle,
         notebooks=MagicMock(),
         mind_maps=MagicMock(spec=NoteBackedMindMapService),
         note_service=MagicMock(spec=NoteService),
     )
-    assert core._drain_tracker._drain_hooks["artifacts.polls"] == artifacts._polling.drain
-    await core.open()
+    assert core._collaborators.drain_tracker._drain_hooks["artifacts.polls"] == artifacts._polling.drain
+    await core.__aenter__()
 
     loop = asyncio.get_running_loop()
     future: asyncio.Future[Any] = loop.create_future()
@@ -139,27 +139,27 @@ async def test_session_close_drains_artifact_poll_hook() -> None:
 @pytest.mark.asyncio
 async def test_session_close_absorbs_drain_hook_errors() -> None:
     """A drain hook raising during close does not block transport teardown."""
-    core = build_session_for_tests(_auth())
-    await core.open()
+    core = build_client_shell_for_tests(_auth())
+    await core.__aenter__()
 
     async def angry_hook() -> None:
         raise RuntimeError("poll cleanup failed")
 
-    core._drain_tracker.register_drain_hook("angry", angry_hook)
+    core._collaborators.drain_tracker.register_drain_hook("angry", angry_hook)
 
     # return_exceptions=True in close() means this should NOT propagate.
     await asyncio.wait_for(core.close(), timeout=1.0)
 
-    assert core._kernel.http_client is None
+    assert core._collaborators.kernel.http_client is None
 
 
 @pytest.mark.asyncio
 async def test_session_close_with_no_polls_is_noop_on_drain_step() -> None:
     """``close()`` works unchanged when no polls are registered."""
-    core = build_session_for_tests(_auth())
-    await core.open()
+    core = build_client_shell_for_tests(_auth())
+    await core.__aenter__()
     await core.close()
-    assert core._kernel.http_client is None
+    assert core._collaborators.kernel.http_client is None
 
 
 # ---------------------------------------------------------------------------
@@ -176,11 +176,11 @@ async def test_client_close_default_drain_is_true() -> None:
     async def fake_drain(timeout: float | None = None) -> None:
         drain_calls.append(timeout)
 
-    async def fake_close() -> None:
+    async def fake_close(**_kwargs: object) -> None:
         pass
 
-    client._session._drain_tracker.drain = fake_drain  # type: ignore[method-assign]
-    client._session.close = fake_close  # type: ignore[method-assign]
+    client._collaborators.drain_tracker.drain = fake_drain  # type: ignore[method-assign]
+    client._collaborators.lifecycle.close = fake_close  # type: ignore[method-assign]
 
     await client.close()
 
@@ -198,11 +198,11 @@ async def test_client_close_drain_false_skips_drain() -> None:
     async def fake_drain(timeout: float | None = None) -> None:
         drain_calls.append(timeout)
 
-    async def fake_close() -> None:
+    async def fake_close(**_kwargs: object) -> None:
         pass
 
-    client._session._drain_tracker.drain = fake_drain  # type: ignore[method-assign]
-    client._session.close = fake_close  # type: ignore[method-assign]
+    client._collaborators.drain_tracker.drain = fake_drain  # type: ignore[method-assign]
+    client._collaborators.lifecycle.close = fake_close  # type: ignore[method-assign]
 
     await client.close(drain=False)
 
@@ -218,11 +218,11 @@ async def test_client_aexit_uses_drain_true_default() -> None:
     async def fake_drain(timeout: float | None = None) -> None:
         drain_calls.append(timeout)
 
-    async def fake_close() -> None:
+    async def fake_close(**_kwargs: object) -> None:
         pass
 
-    client._session._drain_tracker.drain = fake_drain  # type: ignore[method-assign]
-    client._session.close = fake_close  # type: ignore[method-assign]
+    client._collaborators.drain_tracker.drain = fake_drain  # type: ignore[method-assign]
+    client._collaborators.lifecycle.close = fake_close  # type: ignore[method-assign]
 
     # Drive __aexit__ directly rather than `async with` so we can use the
     # patched core without going through ``open()``.

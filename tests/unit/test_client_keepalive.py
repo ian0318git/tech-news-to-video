@@ -9,7 +9,7 @@ import pytest
 from pytest_httpx import HTTPXMock
 
 import notebooklm._auth.keepalive as _auth_keepalive
-from _helpers.session_factory import build_session_for_tests
+from _helpers.client_factory import build_client_shell_for_tests
 from notebooklm.auth import AuthTokens
 from notebooklm.client import NotebookLMClient
 
@@ -82,7 +82,7 @@ class TestKeepaliveDisabledByDefault:
         """No keepalive task is spawned and no extra HTTP calls fire by default."""
         client = NotebookLMClient(mock_auth)
         async with client:
-            assert client._session._lifecycle._keepalive_task is None
+            assert client._collaborators.lifecycle._keepalive_task is None
             # Give the loop a chance to run; nothing should happen
             await asyncio.sleep(0.1)
 
@@ -110,12 +110,12 @@ class TestKeepaliveLifecycle:
         )
 
         async with client:
-            task = client._session._lifecycle._keepalive_task
+            task = client._collaborators.lifecycle._keepalive_task
             assert task is not None
             assert not task.done()
 
         # Task should be cleaned up; no warnings should be raised.
-        assert client._session._lifecycle._keepalive_task is None
+        assert client._collaborators.lifecycle._keepalive_task is None
         # Either cancelled or finished; never left dangling.
         assert task.done()
 
@@ -129,7 +129,7 @@ class TestKeepaliveFloor:
             keepalive=10.0,
             keepalive_min_interval=60.0,
         )
-        assert client._session._lifecycle._keepalive_interval == 60.0
+        assert client._collaborators.lifecycle._keepalive_interval == 60.0
 
     @pytest.mark.asyncio
     async def test_floor_does_not_lower_higher_interval(self, mock_auth):
@@ -139,7 +139,7 @@ class TestKeepaliveFloor:
             keepalive=600.0,
             keepalive_min_interval=60.0,
         )
-        assert client._session._lifecycle._keepalive_interval == 600.0
+        assert client._collaborators.lifecycle._keepalive_interval == 600.0
 
     @pytest.mark.asyncio
     async def test_none_keeps_disabled(self, mock_auth):
@@ -149,7 +149,7 @@ class TestKeepaliveFloor:
             keepalive=None,
             keepalive_min_interval=60.0,
         )
-        assert client._session._lifecycle._keepalive_interval is None
+        assert client._collaborators.lifecycle._keepalive_interval is None
 
 
 class TestKeepaliveValidation:
@@ -232,8 +232,8 @@ class TestKeepalivePokes:
         async with client:
             await asyncio.sleep(0.4)
             # Task is still running after the failure
-            assert client._session._lifecycle._keepalive_task is not None
-            assert not client._session._lifecycle._keepalive_task.done()
+            assert client._collaborators.lifecycle._keepalive_task is not None
+            assert not client._collaborators.lifecycle._keepalive_task.done()
 
         poke_requests = [r for r in httpx_mock.get_requests() if "RotateCookies" in str(r.url)]
         # First call raised; at least one further successful call must follow.
@@ -348,8 +348,8 @@ class TestKeepaliveExplicitStoragePath:
 
     def test_explicit_storage_path_normalizes_onto_auth_without_mutating_caller(self, tmp_path):
         """The constructor exposes ``storage_path`` on ``client.auth`` so
-        ``refresh_auth()`` and ``Session.close()`` (which read
-        ``self._session.auth.storage_path`` directly, not the keepalive-specific
+        ``refresh_auth()`` and ``NotebookLMClient.close()`` (which read
+        ``self._auth.storage_path`` directly, not the keepalive-specific
         path) persist to the same file. Crucially, the caller's original
         ``AuthTokens`` is *not* mutated, so reusing one ``AuthTokens`` across
         multiple ``NotebookLMClient`` instances with different storage paths
@@ -369,7 +369,7 @@ class TestKeepaliveExplicitStoragePath:
 
         assert client.auth.storage_path == storage_path, (
             "Explicit storage_path must be reflected on client.auth so non-keepalive "
-            "code paths (refresh_auth, Session.close) see the same file"
+            "code paths (refresh_auth, NotebookLMClient.close) see the same file"
         )
         assert auth.storage_path is None, (
             "Caller's AuthTokens must not be mutated — sharing one AuthTokens "
@@ -379,7 +379,7 @@ class TestKeepaliveExplicitStoragePath:
     @pytest.mark.asyncio
     @pytest.mark.no_default_keepalive_mock
     async def test_close_persists_to_explicit_storage_path(self, tmp_path, httpx_mock: HTTPXMock):
-        """``Session.close()`` calls ``save_cookies_to_storage`` with the
+        """``NotebookLMClient.close()`` calls ``save_cookies_to_storage`` with the
         explicit constructor ``storage_path`` even when keepalive never ran
         and ``auth.storage_path`` was ``None`` originally — proving the
         normalization actually wires the on-close save, not just the
@@ -453,15 +453,15 @@ class TestKeepalivePersistence:
 
 
 class TestSaveCookiesUnification:
-    """Tests for Session.save_cookies — the single chokepoint that close,
+    """Tests for NotebookLMClient.save_cookies — the single chokepoint that close,
     keepalive, and refresh_auth all route through."""
 
     @pytest.mark.asyncio
     async def test_save_cookies_takes_in_process_lock_before_writing(self, tmp_path):
-        """``Session.save_cookies`` holds ``_save_lock`` for the duration of
+        """``NotebookLMClient.save_cookies`` holds ``_save_lock`` for the duration of
         the worker-thread write, so an older snapshot can't clobber a newer one
         within the same process."""
-        from notebooklm._session import Session
+        from notebooklm.client import NotebookLMClient
 
         auth = AuthTokens(
             cookies={"SID": "x", "__Secure-1PSIDTS": "test_1psidts"},
@@ -473,13 +473,13 @@ class TestSaveCookiesUnification:
 
         lock_held_during_save: list[bool] = []
         call_kwargs: list[dict] = []
-        core_ref: dict[str, Session] = {}
+        core_ref: dict[str, NotebookLMClient] = {}
 
         def spy(jar, path, **kwargs):
             """Record lock state and the kwargs.
 
             Capturing ``kwargs`` here is the regression guard for the §3.4.1
-            fix: if ``Session.save_cookies`` ever stops threading
+            fix: if ``NotebookLMClient.save_cookies`` ever stops threading
             ``original_snapshot=`` through, the assertion below catches it
             before production silently reverts to legacy merge.
             """
@@ -488,10 +488,10 @@ class TestSaveCookiesUnification:
             return True
 
         # Phase 2 PR 4: inject the cookie-saver seam at construction.
-        core = build_session_for_tests(auth, cookie_saver=spy)
+        core = build_client_shell_for_tests(auth, cookie_saver=spy)
         core_ref["core"] = core
 
-        await core._lifecycle.save_cookies(core.cookie_persistence, httpx.Cookies())
+        await core._collaborators.lifecycle.save_cookies(core._collaborators.cookie_persistence, httpx.Cookies())
 
         assert lock_held_during_save == [True], (
             "save_cookies must hold _save_lock for the duration of "
@@ -507,7 +507,7 @@ class TestSaveCookiesUnification:
         self, tmp_path, httpx_mock: HTTPXMock
     ):
         """``refresh_auth`` no longer calls ``save_cookies_to_storage`` directly;
-        it routes through ``Session.save_cookies`` so the in-process lock is
+        it routes through ``NotebookLMClient.save_cookies`` so the in-process lock is
         held — preventing an older keepalive snapshot from clobbering the
         freshly-refreshed tokens."""
         storage_path = tmp_path / "storage_state.json"
@@ -556,7 +556,7 @@ class TestSaveCookiesUnification:
             must route through the snapshot/delta path, never the legacy
             full-merge path.
             """
-            save_calls.append(client_ref["client"]._session.cookie_persistence.save_lock.locked())
+            save_calls.append(client_ref["client"]._collaborators.cookie_persistence.save_lock.locked())
             snapshot_kwarg_present.append("original_snapshot" in kwargs)
             return True
 

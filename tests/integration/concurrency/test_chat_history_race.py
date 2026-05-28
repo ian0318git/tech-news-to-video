@@ -153,7 +153,7 @@ def _make_client(transport: httpx.AsyncBaseTransport, auth_tokens) -> NotebookLM
     """
     client = NotebookLMClient(auth_tokens)
     install_http_client_for_test(
-        client._session._kernel,
+        client._collaborators.kernel,
         httpx.AsyncClient(
             transport=transport,
             headers={
@@ -208,7 +208,7 @@ async def test_concurrent_follow_ups_serialize_on_conversation_id(auth_tokens) -
             return_exceptions=False,
         )
     finally:
-        await client._session._kernel.get_http_client().aclose()
+        await client._collaborators.kernel.get_http_client().aclose()
 
     # Sanity: both calls returned their respective answers.
     answers = sorted(r.answer for r in results)
@@ -304,7 +304,7 @@ async def test_different_conversation_ids_run_in_parallel(auth_tokens) -> None:
             client.chat.ask(notebook_id, "qB", source_ids=["src_001"], conversation_id=cid_b),
         )
     finally:
-        await client._session._kernel.get_http_client().aclose()
+        await client._collaborators.kernel.get_http_client().aclose()
 
     assert peak_inflight == 2, (
         f"different-conversation follow-ups must run in parallel, "

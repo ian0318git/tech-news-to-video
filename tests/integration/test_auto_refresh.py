@@ -28,15 +28,15 @@ class TestAutoRefreshIntegration:
 
         client = NotebookLMClient(auth)
         # Bound methods aren't identical, so compare underlying function
-        assert client._session._auth_coord._refresh_callback is not None
+        assert client._collaborators.auth_coord._refresh_callback is not None
         assert (
-            client._session._auth_coord._refresh_callback.__func__ is NotebookLMClient.refresh_auth
+            client._collaborators.auth_coord._refresh_callback.__func__ is NotebookLMClient.refresh_auth
         )
         # ``_refresh_lock`` is lazily created on first ``_await_refresh``.
         # At construction time it is ``None`` so the client can be
         # instantiated outside a running loop; the helper allocates the
         # lock on demand inside the async refresh path.
-        assert client._session._auth_coord._refresh_lock is None
+        assert client._collaborators.auth_coord._refresh_lock is None
 
     @pytest.mark.asyncio
     async def test_full_refresh_flow_http_error(self):
@@ -49,7 +49,7 @@ class TestAutoRefreshIntegration:
 
         client = NotebookLMClient(auth)
         # Override retry delay for faster tests
-        client._session._chain_host._refresh_retry_delay = 0
+        client._composed.chain_host._refresh_retry_delay = 0
 
         # Track refresh calls
         refresh_calls = []
@@ -57,7 +57,7 @@ class TestAutoRefreshIntegration:
         async def tracking_refresh():
             refresh_calls.append(True)
             # Simulate successful refresh
-            client._session.auth.csrf_token = "new_csrf"
+            client._auth.csrf_token = "new_csrf"
             # Wave 3 of plan ``host-protocol-removal`` deleted the
             # Session-level ``update_auth_headers`` forward; call the
             # canonical coordinator method directly with explicit kwargs.
@@ -65,9 +65,9 @@ class TestAutoRefreshIntegration:
                 auth=client._auth,
                 kernel=client._collaborators.kernel,
             )
-            return client._session.auth
+            return client._auth
 
-        client._session._auth_coord._refresh_callback = tracking_refresh
+        client._collaborators.auth_coord._refresh_callback = tracking_refresh
 
         # Mock HTTP responses
         call_count = [0]
@@ -89,7 +89,7 @@ class TestAutoRefreshIntegration:
         client._seams.decode_response = lambda *a, **kw: [[["nb1"], ["Notebook 1"]]]
 
         async with client:
-            install_post_as_stream(None, client._session._kernel.get_http_client(), mock_post)
+            install_post_as_stream(None, client._collaborators.kernel.get_http_client(), mock_post)
             await client.notebooks.list()
 
         assert len(refresh_calls) == 1, "Should have refreshed once"
@@ -105,13 +105,13 @@ class TestAutoRefreshIntegration:
         )
 
         client = NotebookLMClient(auth)
-        client._session._chain_host._refresh_retry_delay = 0
+        client._composed.chain_host._refresh_retry_delay = 0
 
         refresh_calls = []
 
         async def tracking_refresh():
             refresh_calls.append(True)
-            client._session.auth.csrf_token = "new_csrf"
+            client._auth.csrf_token = "new_csrf"
             # Wave 3 of plan ``host-protocol-removal`` deleted the
             # Session-level ``update_auth_headers`` forward; call the
             # canonical coordinator method directly with explicit kwargs.
@@ -119,9 +119,9 @@ class TestAutoRefreshIntegration:
                 auth=client._auth,
                 kernel=client._collaborators.kernel,
             )
-            return client._session.auth
+            return client._auth
 
-        client._session._auth_coord._refresh_callback = tracking_refresh
+        client._collaborators.auth_coord._refresh_callback = tracking_refresh
 
         # Mock HTTP to succeed, but decode_response to fail with auth error first
         async def mock_post(*args, **kwargs):
@@ -142,7 +142,7 @@ class TestAutoRefreshIntegration:
         client._seams.decode_response = mock_decode
 
         async with client:
-            install_post_as_stream(None, client._session._kernel.get_http_client(), mock_post)
+            install_post_as_stream(None, client._collaborators.kernel.get_http_client(), mock_post)
             await client.notebooks.list()
 
         assert len(refresh_calls) == 1, "Should have refreshed once"
@@ -158,12 +158,12 @@ class TestAutoRefreshIntegration:
         )
 
         client = NotebookLMClient(auth)
-        client._session._chain_host._refresh_retry_delay = 0.1  # 100ms delay
+        client._composed.chain_host._refresh_retry_delay = 0.1  # 100ms delay
 
         async def mock_refresh():
             return auth
 
-        client._session._auth_coord._refresh_callback = mock_refresh
+        client._collaborators.auth_coord._refresh_callback = mock_refresh
 
         call_count = [0]
 
@@ -182,7 +182,7 @@ class TestAutoRefreshIntegration:
         client._seams.decode_response = lambda *a, **kw: []
 
         async with client:
-            install_post_as_stream(None, client._session._kernel.get_http_client(), mock_post)
+            install_post_as_stream(None, client._collaborators.kernel.get_http_client(), mock_post)
 
             start_time = asyncio.get_event_loop().time()
             await client.notebooks.list()
@@ -201,13 +201,13 @@ class TestAutoRefreshIntegration:
         )
 
         client = NotebookLMClient(auth)
-        client._session._chain_host._refresh_retry_delay = 0
+        client._composed.chain_host._refresh_retry_delay = 0
 
         async def failing_refresh():
             # Simulates refresh_auth detecting redirect to login
             raise ValueError("Authentication expired. Run 'notebooklm login' to re-authenticate.")
 
-        client._session._auth_coord._refresh_callback = failing_refresh
+        client._collaborators.auth_coord._refresh_callback = failing_refresh
 
         async def mock_post(*args, **kwargs):
             request = httpx.Request("POST", args[0])
@@ -215,7 +215,7 @@ class TestAutoRefreshIntegration:
             raise httpx.HTTPStatusError("Unauthorized", request=request, response=response)
 
         async with client:
-            install_post_as_stream(None, client._session._kernel.get_http_client(), mock_post)
+            install_post_as_stream(None, client._collaborators.kernel.get_http_client(), mock_post)
 
             # Should raise the original HTTP error with refresh failure as cause
             with pytest.raises(httpx.HTTPStatusError) as exc_info:

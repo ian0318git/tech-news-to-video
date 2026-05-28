@@ -7,7 +7,7 @@
 consumes the populated ``RpcRequest.url`` / ``headers`` / ``body``
 envelope and delegates directly to ``Kernel.post`` — the transport
 seam under both :meth:`SessionTransport.perform_authed_post` AND
-``RpcExecutor._execute_once``. The ``Session._perform_authed_post``
+``RpcExecutor._execute_once``. The ``NotebookLMClient._perform_authed_post``
 compatibility forward was deleted in Wave 11c of session-decoupling;
 tests now drive the canonical collaborator method directly.
 
@@ -32,7 +32,7 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
-from _helpers.session_factory import build_session_for_tests
+from _helpers.client_factory import build_client_shell_for_tests
 from notebooklm._middleware import (
     Middleware,
     NextCall,
@@ -40,14 +40,14 @@ from notebooklm._middleware import (
     RpcResponse,
     build_chain,
 )
-from notebooklm._session import Session
 from notebooklm._transport_errors import TransportServerError
+from notebooklm.client import NotebookLMClient
 
 
-def _make_core() -> Session:
-    """Build a ``Session`` instance without opening an HTTP client.
+def _make_core() -> NotebookLMClient:
+    """Build a ``NotebookLMClient`` instance without opening an HTTP client.
 
-    ``Session.__init__`` is event-loop-agnostic, so we can construct an
+    ``NotebookLMClient.__init__`` is event-loop-agnostic, so we can construct an
     instance in synchronous test setup. Tests replace ``Kernel.post`` directly
     so no real HTTP call fires.
     """
@@ -57,7 +57,7 @@ def _make_core() -> Session:
     auth.account_email = None
     auth.csrf_token = "csrf-token"
     auth.session_id = "session-id"
-    return build_session_for_tests(auth=auth)
+    return build_client_shell_for_tests(auth=auth)
 
 
 class FakeKernelPost:
@@ -82,7 +82,7 @@ class FakeKernelPost:
         return self.response
 
 
-def _swap_kernel_post(core: Session, fake: FakeKernelPost) -> None:
+def _swap_kernel_post(core: NotebookLMClient, fake: FakeKernelPost) -> None:
     core._kernel.post = fake.post  # type: ignore[method-assign]
 
 
@@ -92,7 +92,7 @@ async def test_chain_routes_perform_authed_post_to_transport() -> None:
 
     Covers direct callers of ``SessionTransport.perform_authed_post``:
     the chat path in ``_chat_transport.py:64`` and any first-party
-    caller via ``client._session._transport.perform_authed_post``.
+    caller via ``client._composed.transport.perform_authed_post``.
     """
     expected_response = httpx.Response(status_code=200, content=b"chain-routed")
     fake = FakeKernelPost(response=expected_response)
@@ -123,7 +123,7 @@ async def test_chain_routes_rpc_executor_path_to_transport() -> None:
     ``RpcExecutor._execute_once`` calls
     ``self._transport.perform_authed_post(...)`` (Wave 4 of
     session-decoupling: the executor takes :class:`SessionTransport`
-    directly instead of reaching through Session). Routing both paths
+    directly instead of reaching through NotebookLMClient). Routing both paths
     through one seam is the whole point of wiring at
     ``perform_authed_post`` rather than at each call site.
 
@@ -255,7 +255,7 @@ async def test_chain_terminal_log_label_defaults_for_direct_calls() -> None:
 
 @pytest.mark.asyncio
 async def test_chain_seeded_with_final_adr_009_ordering() -> None:
-    """``Session.__init__`` seeds the chain with the FINAL ADR-009 ordering.
+    """``NotebookLMClient.__init__`` seeds the chain with the FINAL ADR-009 ordering.
 
     PR 12.3 landed ``TracingMiddleware`` at the innermost position; PR 12.4
     prepended ``MetricsMiddleware``; PR 12.5 prepended ``DrainMiddleware``
@@ -328,7 +328,7 @@ async def test_chain_with_test_middleware_observes_request_and_response() -> Non
 
     # Build a chain with one observer middleware around the production
     # terminal. This per-test composition validates the leaf's contract
-    # against ``build_chain`` without mutating ``Session.__init__``'s
+    # against ``build_chain`` without mutating ``NotebookLMClient.__init__``'s
     # production chain.
     chain: NextCall = build_chain([observer], core._chain_host._authed_post_chain_terminal)
 
@@ -380,7 +380,7 @@ def test_perform_authed_post_signature_unchanged() -> None:
     Many call sites pass the three kwargs by name, including the RPC executor,
     chat transport, and integration tests. The chain wiring inside the body
     must NOT change the public-ish signature; this guard catches an
-    accidental rename. The Session-level ``_perform_authed_post`` forward
+    accidental rename. The NotebookLMClient-level ``_perform_authed_post`` forward
     was deleted in Wave 11c of session-decoupling; the signature contract
     now lives on the canonical collaborator method
     (``SessionTransport.perform_authed_post``).

@@ -26,14 +26,14 @@ from pathlib import Path
 import httpx
 import pytest
 
-from _helpers.session_factory import build_session_for_tests
+from _helpers.client_factory import build_client_shell_for_tests
 from notebooklm._cookie_persistence import CookiePersistence
-from notebooklm._session import Session
 from notebooklm.auth import AuthTokens
+from notebooklm.client import NotebookLMClient
 
 
-def _make_core(tmp_path: Path, *, cookie_saver=None) -> Session:
-    """Build a minimal ``Session`` whose ``save_cookies`` is safe to call.
+def _make_core(tmp_path: Path, *, cookie_saver=None) -> NotebookLMClient:
+    """Build a minimal ``NotebookLMClient`` whose ``save_cookies`` is safe to call.
 
     Order matters: ``AuthTokens.__post_init__`` calls ``build_cookie_jar``,
     which loads from ``storage_path`` if it exists and enforces the cookie-set rule. We want it to take the in-memory ``cookies={...}``
@@ -41,7 +41,7 @@ def _make_core(tmp_path: Path, *, cookie_saver=None) -> Session:
     file so the subsequent ``save_cookies`` call has something to merge
     against.
 
-    ``cookie_saver`` (Phase 2 PR 4) is forwarded to ``Session(...)`` so
+    ``cookie_saver`` (Phase 2 PR 4) is forwarded to ``NotebookLMClient(...)`` so
     tests can inject the persistence spy at construction rather than via
     the legacy ``notebooklm._core.save_cookies_to_storage`` monkeypatch.
     """
@@ -53,7 +53,7 @@ def _make_core(tmp_path: Path, *, cookie_saver=None) -> Session:
         storage_path=storage_path,
     )
     storage_path.write_text('{"cookies": []}')
-    return build_session_for_tests(auth, cookie_saver=cookie_saver)
+    return build_client_shell_for_tests(auth, cookie_saver=cookie_saver)
 
 
 @pytest.mark.asyncio
@@ -74,7 +74,7 @@ async def test_save_lock_acquired_off_event_loop_thread(
 
     # ``core`` is closed over by ``spy`` below; we declare a placeholder so
     # the spy's reference can be resolved before ``_make_core`` returns.
-    core_ref: dict[str, Session] = {}
+    core_ref: dict[str, NotebookLMClient] = {}
 
     def spy(jar, path, **kwargs):  # type: ignore[no-untyped-def]
         # ``save_cookies_to_storage`` is called from inside ``with lock:``

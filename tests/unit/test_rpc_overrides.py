@@ -17,10 +17,10 @@ from typing import Any
 import httpx
 import pytest
 
-from _helpers.session_factory import build_session_for_tests
+from _helpers.client_factory import build_client_shell_for_tests
 from conftest import install_post_as_stream
-from notebooklm._session import Session
 from notebooklm.auth import AuthTokens
+from notebooklm.client import NotebookLMClient
 from notebooklm.rpc import RPCMethod
 from notebooklm.rpc import overrides as rpc_overrides
 from notebooklm.rpc import types as rpc_types
@@ -322,13 +322,13 @@ def test_encode_rpc_request_none_override_uses_canonical():
 # ---------------------------------------------------------------------------
 
 
-def _make_core() -> Session:
+def _make_core() -> NotebookLMClient:
     auth = AuthTokens(
         csrf_token="CSRF_OLD",
         session_id="SID_OLD",
         cookies={"SID": "sid_cookie"},
     )
-    return build_session_for_tests(
+    return build_client_shell_for_tests(
         auth=auth,
         refresh_callback=None,
         refresh_retry_delay=0.0,

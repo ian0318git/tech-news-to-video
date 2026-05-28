@@ -1,8 +1,8 @@
 """Meta-lint: external code may not access retired ``Session`` private attrs.
 
 The names enumerated in :data:`FORBIDDEN_PROPERTIES` were once private
-properties on :class:`notebooklm._session.Session` that delegated to
-per-seam collaborators. The session-shrink arc retired those properties
+properties on the concrete session type that delegated to per-seam
+collaborators. The session-shrink arc retired those properties
 and migrated tests to the owning collaborators or ``make_fake_core(...)``.
 This lint is now a strict regression guard; :data:`ALLOWLIST` must stay
 empty.

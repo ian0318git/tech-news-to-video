@@ -123,7 +123,7 @@ class TestErrorPaths:
         # has ONE interaction; with the default retry budget the client would
         # ask for a second cassette response that doesn't exist and VCR would
         # raise ``CannotOverwriteExistingCassetteException``.
-        client._session._chain_host._rate_limit_max_retries = 0
+        client._composed.chain_host._rate_limit_max_retries = 0
 
         with notebooklm_vcr.use_cassette("error_synthetic_429_rate_limit.yaml") as cassette:
             async with client:
@@ -163,7 +163,7 @@ class TestErrorPaths:
         # is exercised separately by the unit tests in
         # ``test_rate_limit_retry.py`` — here we focus on the terminal
         # exception-mapping branch.
-        client._session._chain_host._server_error_max_retries = 0
+        client._composed.chain_host._server_error_max_retries = 0
 
         with notebooklm_vcr.use_cassette("error_synthetic_500_server.yaml") as cassette:
             async with client:
@@ -202,7 +202,7 @@ class TestErrorPaths:
         client = NotebookLMClient(_synthetic_auth())
         # Eliminate the post-refresh retry delay so the test runs fast under
         # replay (mirrors ``test_auth_refresh_vcr.py``).
-        client._session._chain_host._refresh_retry_delay = 0
+        client._composed.chain_host._refresh_retry_delay = 0
 
         # In-process refresh callback that issues NO HTTP traffic. This is
         # what lets the cassette capture only the TWO synthetic batchexecute
@@ -221,7 +221,7 @@ class TestErrorPaths:
             # request-side body would carry the refreshed value if VCR
             # matched on body (it doesn't; the default matcher uses
             # method/path/rpcids).
-            client._session.auth.csrf_token = "refreshed_csrf_token"
+            client._auth.csrf_token = "refreshed_csrf_token"
             # Wave 3 of plan ``host-protocol-removal`` deleted the
             # Session-level ``update_auth_headers`` forward; call the
             # canonical coordinator method directly with the explicit
@@ -230,9 +230,9 @@ class TestErrorPaths:
                 auth=client._auth,
                 kernel=client._collaborators.kernel,
             )
-            return client._session.auth
+            return client._auth
 
-        client._session._auth_coord._refresh_callback = stub_refresh
+        client._collaborators.auth_coord._refresh_callback = stub_refresh
 
         with notebooklm_vcr.use_cassette("error_synthetic_stale_csrf.yaml") as cassette:
             async with client:

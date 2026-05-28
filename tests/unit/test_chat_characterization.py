@@ -1821,10 +1821,9 @@ class TestGetConversationIdNullRaw:
         async with NotebookLMClient(auth_tokens) as client:
             # Patch the direct ``rpc`` collaborator on ChatAPI to return
             # None (bypasses decode error). Wave 8 of session-decoupling
-            # (ADR-014 Rule 2 Corollary) replaced the ``client._session``
-            # facade with direct constructor injection of the underlying
-            # collaborators, so we reach the chat dispatch surface via
-            # ``client.chat._rpc`` rather than ``client._session``.
+            # (ADR-014 Rule 2 Corollary) replaced the old facade with
+            # direct constructor injection of the underlying collaborators,
+            # so we reach the chat dispatch surface via ``client.chat._rpc``.
             with patch.object(
                 client.chat._rpc,
                 "rpc_call",

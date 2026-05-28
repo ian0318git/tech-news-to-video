@@ -10,7 +10,7 @@ import httpx
 import pytest
 
 import notebooklm._cookie_persistence as persistence_module
-from _helpers.session_factory import build_session_for_tests
+from _helpers.client_factory import build_client_shell_for_tests
 from notebooklm._cookie_persistence import CookiePersistence
 from notebooklm.auth import (
     AuthTokens,
@@ -38,18 +38,18 @@ def _jar(sid: str = "sid", psidts: str = "psidts") -> httpx.Cookies:
 
 
 def test_client_core_exposes_cookie_persistence(tmp_path: Path) -> None:
-    core = build_session_for_tests(_auth_tokens(tmp_path / "storage_state.json"))
+    core = build_client_shell_for_tests(_auth_tokens(tmp_path / "storage_state.json"))
     baseline = snapshot_cookie_jar(_jar())
 
     # The ``Session._save_lock`` + ``Session._loaded_cookie_snapshot`` compat
     # bridges were retired in the session-shrink arc; tests read on the
     # collaborator directly.
-    core.cookie_persistence.loaded_cookie_snapshot = baseline
+    core._collaborators.cookie_persistence.loaded_cookie_snapshot = baseline
 
-    assert isinstance(core.cookie_persistence, CookiePersistence)
-    assert core.cookie_persistence.loaded_cookie_snapshot is baseline
+    assert isinstance(core._collaborators.cookie_persistence, CookiePersistence)
+    assert core._collaborators.cookie_persistence.loaded_cookie_snapshot is baseline
     # The save lock is a stock ``threading.Lock`` owned by the collaborator.
-    assert isinstance(core.cookie_persistence.save_lock, type(threading.Lock()))
+    assert isinstance(core._collaborators.cookie_persistence.save_lock, type(threading.Lock()))
 
 
 @pytest.mark.asyncio
@@ -84,11 +84,11 @@ async def test_client_core_save_cookies_routes_through_injected_seam_and_to_thre
         return func(*args, **kwargs)
 
     monkeypatch.setattr("notebooklm._session_lifecycle.asyncio.to_thread", fake_to_thread)
-    core = build_session_for_tests(
+    core = build_client_shell_for_tests(
         _auth_tokens(tmp_path / "storage_state.json"), cookie_saver=fake_save
     )
 
-    await core._lifecycle.save_cookies(core.cookie_persistence, _jar())
+    await core._collaborators.lifecycle.save_cookies(core._collaborators.cookie_persistence, _jar())
 
     assert calls == ["to_thread", "save"]
 

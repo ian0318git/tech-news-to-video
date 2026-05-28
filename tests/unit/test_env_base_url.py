@@ -2,7 +2,7 @@
 
 import pytest
 
-from _helpers.session_factory import build_session_for_tests
+from _helpers.client_factory import build_client_shell_for_tests
 from notebooklm._env import get_base_host, get_base_url
 from notebooklm._source_upload import SourceUploadPipeline
 from notebooklm._sources import SourcesAPI
@@ -70,17 +70,17 @@ def test_rpc_endpoint_helpers_are_lazy(monkeypatch):
 
 def test_core_build_url_uses_enterprise_base_url(monkeypatch):
     monkeypatch.setenv("NOTEBOOKLM_BASE_URL", "https://notebooklm.cloud.google.com")
-    core = build_session_for_tests(AuthTokens(cookies={}, csrf_token="csrf", session_id="sid"))
+    core = build_client_shell_for_tests(AuthTokens(cookies={}, csrf_token="csrf", session_id="sid"))
 
     # ``RpcExecutor.build_url`` consumes an ``AuthSnapshot`` so callers
     # outside ``_perform_authed_post`` must build one inline.
     from notebooklm._request_types import AuthSnapshot
 
     snapshot = AuthSnapshot(
-        csrf_token=core.auth.csrf_token,
-        session_id=core.auth.session_id,
-        authuser=core.auth.authuser,
-        account_email=core.auth.account_email,
+        csrf_token=core._auth.csrf_token,
+        session_id=core._auth.session_id,
+        authuser=core._auth.authuser,
+        account_email=core._auth.account_email,
     )
     url = core._rpc_executor.build_url(RPCMethod.LIST_NOTEBOOKS, snapshot)
 
@@ -98,7 +98,7 @@ async def test_upload_start_uses_enterprise_url_and_headers(monkeypatch, httpx_m
         headers={"x-goog-upload-url": upload_url},
     )
 
-    core = build_session_for_tests(auth)
+    core = build_client_shell_for_tests(auth)
     await core.open()
     try:
         api = SourcesAPI(
@@ -107,9 +107,9 @@ async def test_upload_start_uses_enterprise_url_and_headers(monkeypatch, httpx_m
                 rpc=core,
                 drain=core,
                 lifecycle=core,
-                kernel=core._kernel,
-                auth=core.auth,
-                record_upload_queue_wait=core._metrics_obj.record_upload_queue_wait,
+                kernel=core._collaborators.kernel,
+                auth=core._auth,
+                record_upload_queue_wait=core._collaborators.metrics.record_upload_queue_wait,
             ),
         )
         result = await api._start_resumable_upload(

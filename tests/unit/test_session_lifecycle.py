@@ -51,7 +51,7 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 
-from _helpers.session_factory import build_session_for_tests
+from _helpers.client_factory import build_client_shell_for_tests
 from notebooklm._session_helpers import _resolve_keepalive_interval
 from notebooklm._session_lifecycle import (
     ClientLifecycle,
@@ -536,7 +536,7 @@ def test_bound_loop_mismatch_via_session_raises_runtime_error() -> None:
     """
 
     auth = AuthTokens(csrf_token="CSRF", session_id="SID", cookies={"SID": "v1"})
-    core = build_session_for_tests(auth=auth)
+    core = build_client_shell_for_tests(auth=auth)
 
     async def _open_on_loop_a() -> None:
         await core.open()
@@ -560,7 +560,7 @@ def test_bound_loop_mismatch_via_session_raises_runtime_error() -> None:
         # populated, this is a no-op and ``_bound_loop`` stays bound to loop A.
         await core.open()
         try:
-            await core._transport.perform_authed_post(
+            await core._composed.transport.perform_authed_post(
                 build_request=_build_request_stub,
                 log_label="test.cross_loop",
             )

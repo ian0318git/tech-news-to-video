@@ -10,7 +10,7 @@ from contextvars import Token
 
 import pytest
 
-from _helpers.session_factory import build_session_for_tests
+from _helpers.client_factory import build_client_shell_for_tests
 from notebooklm._logging import (
     RedactingFilter,
     RedactingFormatter,
@@ -270,7 +270,7 @@ async def test_retry_inherits_parent_request_id():
     # the test exercises the request-id propagation through the executor
     # wrapper purely in-process.
     auth = AuthTokens(cookies={"SID": "test_sid"}, csrf_token="csrf", session_id="sid")
-    core = build_session_for_tests(auth)
+    core = build_client_shell_for_tests(auth)
     await core.open()
     try:
         executor = core._rpc_executor

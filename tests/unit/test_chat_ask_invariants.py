@@ -28,7 +28,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 import httpx
 import pytest
 
-from _helpers.session_factory import build_session_for_tests
+from _helpers.client_factory import build_client_shell_for_tests
 from conftest import install_post_as_stream
 from notebooklm import NotebookLMClient
 from notebooklm._chat import ChatAPI
@@ -273,7 +273,7 @@ class TestChatRefreshRetry:
             auth.session_id = "NEW_SID"
             return auth
 
-        core = build_session_for_tests(auth=auth, refresh_callback=refresh, refresh_retry_delay=0.0)
+        core = build_client_shell_for_tests(auth=auth, refresh_callback=refresh, refresh_retry_delay=0.0)
         await core.open()
         try:
             observed_bodies: list[str] = []
@@ -312,8 +312,8 @@ class TestChatRefreshRetry:
                     content=_make_answer_response_body(),
                 )
 
-            assert core._kernel.http_client is not None
-            install_post_as_stream(monkeypatch, core._kernel.get_http_client(), fake_post)
+            assert core._collaborators.kernel.http_client is not None
+            install_post_as_stream(monkeypatch, core._collaborators.kernel.get_http_client(), fake_post)
 
             # Wave 8 of session-decoupling (ADR-014 Rule 2 Corollary):
             # ``ChatAPI`` takes its four direct collaborators by keyword
@@ -325,7 +325,7 @@ class TestChatRefreshRetry:
             # read the private slots directly instead.
             api = ChatAPI(
                 rpc=core._rpc_executor,
-                transport=core._transport,
+                transport=core._composed.transport,
                 reqid=core._collaborators.reqid,
                 loop_guard=core._collaborators.lifecycle,
             )

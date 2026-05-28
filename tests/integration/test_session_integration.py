@@ -5,10 +5,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from _helpers.session_factory import build_session_for_tests
+from _helpers.client_factory import build_client_shell_for_tests
 from conftest import install_post_as_stream
 from notebooklm import AuthTokens, NotebookLMClient
-from notebooklm._session import Session
 from notebooklm._session_helpers import is_auth_error
 from notebooklm.rpc import (
     AuthError,
@@ -26,9 +25,9 @@ from notebooklm.rpc import (
 pytestmark = pytest.mark.allow_no_vcr
 
 
-def _install_error_post(core: Session, error: Exception) -> AsyncMock:
+def _install_error_post(core: NotebookLMClient, error: Exception) -> AsyncMock:
     mock_post = AsyncMock(side_effect=error)
-    install_post_as_stream(None, core._kernel.get_http_client(), mock_post)
+    install_post_as_stream(None, core._collaborators.kernel.get_http_client(), mock_post)
     return mock_post
 
 
@@ -36,14 +35,14 @@ class TestClientInitialization:
     @pytest.mark.asyncio
     async def test_client_initialization(self, auth_tokens):
         async with NotebookLMClient(auth_tokens) as client:
-            assert client._session.auth == auth_tokens
-            assert client._session._kernel.http_client is not None
+            assert client._auth == auth_tokens
+            assert client._collaborators.kernel.http_client is not None
 
     @pytest.mark.asyncio
     async def test_client_context_manager_closes(self, auth_tokens):
         async with NotebookLMClient(auth_tokens) as client:
-            assert client._session._kernel.http_client is not None  # client is open
-        assert client._session._kernel.http_client is None  # closed after exit
+            assert client._collaborators.kernel.http_client is not None  # client is open
+        assert client._collaborators.kernel.http_client is None  # closed after exit
 
     @pytest.mark.asyncio
     async def test_close_does_not_sync_in_memory_auth_to_default_storage(self):
@@ -53,13 +52,13 @@ class TestClientInitialization:
         # with a constructor-injection seam wired through
         # ``ClientLifecycle._cookie_saver``).
         mock_save = MagicMock(return_value=False)
-        core = build_session_for_tests(auth, cookie_saver=mock_save)
+        core = build_client_shell_for_tests(auth, cookie_saver=mock_save)
         await core.open()
 
         await core.close()
 
         mock_save.assert_not_called()
-        assert core._kernel.http_client is None
+        assert core._collaborators.kernel.http_client is None
 
     @pytest.mark.asyncio
     async def test_close_closes_http_client_when_cookie_sync_fails(self, auth_tokens, tmp_path):
@@ -68,7 +67,7 @@ class TestClientInitialization:
         # close()-handles-saver-failure path without monkeypatching the
         # legacy ``_core.save_cookies_to_storage`` seam.
         boom_save = MagicMock(side_effect=RuntimeError("boom"))
-        core = build_session_for_tests(auth_tokens, cookie_saver=boom_save)
+        core = build_client_shell_for_tests(auth_tokens, cookie_saver=boom_save)
         await core.open()
 
         await core.close()
@@ -77,7 +76,7 @@ class TestClientInitialization:
         # test could pass via an early exit that never reaches the saver,
         # silently weakening the regression guard.
         boom_save.assert_called_once()
-        assert core._kernel.http_client is None
+        assert core._collaborators.kernel.http_client is None
 
     @pytest.mark.asyncio
     async def test_client_raises_if_not_initialized(self, auth_tokens):
@@ -157,8 +156,7 @@ class TestRPCCallHTTPErrors:
         # covered by ``tests/integration/concurrency/test_rate_limit_default.py``;
         # this test documents the explicit-disable contract.
         async with NotebookLMClient(auth_tokens, rate_limit_max_retries=0) as client:
-            core = client._session
-
+            core = client
             mock_response = MagicMock()
             mock_response.status_code = 429
             mock_response.headers = {"retry-after": "60"}
@@ -175,8 +173,7 @@ class TestRPCCallHTTPErrors:
         # See ``test_rate_limit_429_with_retry_after_header`` for why this
         # pins ``rate_limit_max_retries=0``.
         async with NotebookLMClient(auth_tokens, rate_limit_max_retries=0) as client:
-            core = client._session
-
+            core = client
             mock_response = MagicMock()
             mock_response.status_code = 429
             mock_response.headers = {}
@@ -193,8 +190,7 @@ class TestRPCCallHTTPErrors:
         # See ``test_rate_limit_429_with_retry_after_header`` for why this
         # pins ``rate_limit_max_retries=0``.
         async with NotebookLMClient(auth_tokens, rate_limit_max_retries=0) as client:
-            core = client._session
-
+            core = client
             mock_response = MagicMock()
             mock_response.status_code = 429
             mock_response.headers = {"retry-after": "not-a-number"}
@@ -214,8 +210,8 @@ class TestRPCCallHTTPErrors:
         # in to auto-refresh), clear the refresh callback so is_auth_error's
         # gate in rpc_call short-circuits and the status mapping runs.
         async with NotebookLMClient(auth_tokens) as client:
-            core = client._session
-            core._auth_coord._refresh_callback = None
+            core = client
+            core._collaborators.auth_coord._refresh_callback = None
 
             mock_response = MagicMock()
             mock_response.status_code = 400
@@ -231,8 +227,7 @@ class TestRPCCallHTTPErrors:
         # Pin ``server_error_max_retries=0`` to exercise the raise-immediately
         # mapping path. Retry/backoff behavior is covered in core transport tests.
         async with NotebookLMClient(auth_tokens, server_error_max_retries=0) as client:
-            core = client._session
-
+            core = client
             mock_response = MagicMock()
             mock_response.status_code = 500
             mock_response.reason_phrase = "Internal Server Error"
@@ -247,8 +242,7 @@ class TestRPCCallHTTPErrors:
         # Network errors flow through the same retry loop as 5xx responses;
         # pin to 0 so these mapping tests don't pay backoff sleeps.
         async with NotebookLMClient(auth_tokens, server_error_max_retries=0) as client:
-            core = client._session
-
+            core = client
             _install_error_post(core, httpx.ConnectTimeout("connect timeout"))
             with pytest.raises(NetworkError):
                 await core._rpc_executor.rpc_call(RPCMethod.LIST_NOTEBOOKS, [])
@@ -256,8 +250,7 @@ class TestRPCCallHTTPErrors:
     @pytest.mark.asyncio
     async def test_read_timeout_raises_rpc_timeout_error(self, auth_tokens):
         async with NotebookLMClient(auth_tokens, server_error_max_retries=0) as client:
-            core = client._session
-
+            core = client
             _install_error_post(core, httpx.ReadTimeout("read timeout"))
             with pytest.raises(RPCTimeoutError):
                 await core._rpc_executor.rpc_call(RPCMethod.LIST_NOTEBOOKS, [])
@@ -265,8 +258,7 @@ class TestRPCCallHTTPErrors:
     @pytest.mark.asyncio
     async def test_connect_error_raises_network_error(self, auth_tokens):
         async with NotebookLMClient(auth_tokens, server_error_max_retries=0) as client:
-            core = client._session
-
+            core = client
             _install_error_post(core, httpx.ConnectError("connection refused"))
             with pytest.raises(NetworkError):
                 await core._rpc_executor.rpc_call(RPCMethod.LIST_NOTEBOOKS, [])
@@ -274,8 +266,7 @@ class TestRPCCallHTTPErrors:
     @pytest.mark.asyncio
     async def test_generic_request_error_raises_network_error(self, auth_tokens):
         async with NotebookLMClient(auth_tokens, server_error_max_retries=0) as client:
-            core = client._session
-
+            core = client
             _install_error_post(core, httpx.RequestError("something went wrong"))
             with pytest.raises(NetworkError):
                 await core._rpc_executor.rpc_call(RPCMethod.LIST_NOTEBOOKS, [])
@@ -287,23 +278,22 @@ class TestRPCCallAuthRetry:
     @pytest.mark.asyncio
     async def test_auth_retry_on_decode_rpc_error(self, auth_tokens):
         async with NotebookLMClient(auth_tokens) as client:
-            core = client._session
-
+            core = client
             refresh_callback = AsyncMock()
-            core._auth_coord._refresh_callback = refresh_callback
+            core._collaborators.auth_coord._refresh_callback = refresh_callback
             import asyncio
 
             # Pre-allocate the lock so the first refresh attempt doesn't
             # try to construct one (the coordinator's lazy-init runs at
             # the first ``await_refresh`` call site).
-            core._auth_coord._refresh_lock = asyncio.Lock()
+            core._collaborators.auth_coord._refresh_lock = asyncio.Lock()
 
             success_response = MagicMock()
             success_response.status_code = 200
             success_response.text = "some_valid_response"
 
             mock_post = AsyncMock(return_value=success_response)
-            install_post_as_stream(None, core._kernel.get_http_client(), mock_post)
+            install_post_as_stream(None, core._collaborators.kernel.get_http_client(), mock_post)
 
             # Override the runtime decode-response seam before the RPC fires.
             decode_responses = iter(
@@ -330,20 +320,20 @@ class TestRPCCallAuthRetry:
 class TestGetHttpClient:
     """Tests for get_http_client() RuntimeError when not initialized.
 
-    Wave 11b of session-decoupling: the ``Session.get_http_client`` forward
+    Wave 11b of session-decoupling: the ``NotebookLMClient.get_http_client`` forward
     was deleted; the canonical home is ``Kernel.get_http_client`` (reached
-    via ``core._kernel`` / ``client._session._kernel``).
+    via ``core._collaborators.kernel`` / ``client._collaborators.kernel``).
     """
 
     def test_get_http_client_raises_when_not_initialized(self, auth_tokens):
-        core = build_session_for_tests(auth_tokens)
+        core = build_client_shell_for_tests(auth_tokens)
         with pytest.raises(RuntimeError, match="not initialized"):
-            core._kernel.get_http_client()
+            core._collaborators.kernel.get_http_client()
 
     @pytest.mark.asyncio
     async def test_get_http_client_returns_client_when_initialized(self, auth_tokens):
         async with NotebookLMClient(auth_tokens) as client:
-            http_client = client._session._kernel.get_http_client()
+            http_client = client._collaborators.kernel.get_http_client()
             assert isinstance(http_client, httpx.AsyncClient)
 
 
@@ -353,7 +343,7 @@ class TestGetSourceIds:
     @pytest.mark.asyncio
     async def test_returns_source_ids_from_nested_data(self, auth_tokens):
         async with NotebookLMClient(auth_tokens) as client:
-            core = client._session
+            core = client
             notebooks = client.notebooks
 
             mock_notebook_data = [
@@ -379,7 +369,7 @@ class TestGetSourceIds:
     @pytest.mark.asyncio
     async def test_returns_empty_list_when_data_is_none(self, auth_tokens):
         async with NotebookLMClient(auth_tokens) as client:
-            core = client._session
+            core = client
             notebooks = client.notebooks
 
             with patch.object(
@@ -392,7 +382,7 @@ class TestGetSourceIds:
     @pytest.mark.asyncio
     async def test_returns_empty_list_when_data_is_empty_list(self, auth_tokens):
         async with NotebookLMClient(auth_tokens) as client:
-            core = client._session
+            core = client
             notebooks = client.notebooks
 
             with patch.object(
@@ -405,7 +395,7 @@ class TestGetSourceIds:
     @pytest.mark.asyncio
     async def test_returns_empty_list_when_sources_list_is_empty(self, auth_tokens):
         async with NotebookLMClient(auth_tokens) as client:
-            core = client._session
+            core = client
             notebooks = client.notebooks
 
             # Notebook with no sources
@@ -424,7 +414,7 @@ class TestGetSourceIds:
     @pytest.mark.asyncio
     async def test_returns_empty_list_when_data_is_not_list(self, auth_tokens):
         async with NotebookLMClient(auth_tokens) as client:
-            core = client._session
+            core = client
             notebooks = client.notebooks
 
             with patch.object(
@@ -440,7 +430,7 @@ class TestGetSourceIds:
     @pytest.mark.asyncio
     async def test_returns_empty_list_when_notebook_info_missing_sources(self, auth_tokens):
         async with NotebookLMClient(auth_tokens) as client:
-            core = client._session
+            core = client
             notebooks = client.notebooks
 
             # notebook_data[0] exists but notebook_info[1] is missing
@@ -464,8 +454,8 @@ class TestCrossDomainCookiePreservation:
     async def test_cookies_preserved_on_cross_domain_redirect(self, auth_tokens):
         """Verify cookies persist when redirecting from notebooklm to accounts.google.com."""
         async with NotebookLMClient(auth_tokens) as client:
-            core = client._session
-            http_client = core._kernel.get_http_client()
+            core = client
+            http_client = core._collaborators.kernel.get_http_client()
 
             # Set initial sentinel cookie in the jar
             http_client.cookies.set("REDIRECT_SENTINEL", "survives_refresh", domain=".google.com")
@@ -473,9 +463,9 @@ class TestCrossDomainCookiePreservation:
             # Simulate what happens during a redirect: update_auth_headers merges new cookies
             # without wiping existing ones (like refreshed SID from accounts.google.com).
             # Wave 3 of plan ``host-protocol-removal`` deleted the
-            # Session-level ``update_auth_headers`` forward; call the
+            # NotebookLMClient-level ``update_auth_headers`` forward; call the
             # canonical coordinator method directly with explicit kwargs.
-            core._auth_coord.update_auth_headers(auth=core.auth, kernel=core._kernel)
+            core._collaborators.auth_coord.update_auth_headers(auth=core._auth, kernel=core._collaborators.kernel)
 
             # Verify original cookies are still present (not wiped)
             # httpx.Cookies.get() returns None if cookie not found
@@ -488,8 +478,8 @@ class TestCrossDomainCookiePreservation:
     async def test_update_auth_headers_merges_not_replaces(self, auth_tokens):
         """Verify update_auth_headers merges new cookies, preserving live redirect cookies."""
         async with NotebookLMClient(auth_tokens) as client:
-            core = client._session
-            http_client = core._kernel.get_http_client()
+            core = client
+            http_client = core._collaborators.kernel.get_http_client()
 
             # Simulate a live cookie received from accounts.google.com redirect
             http_client.cookies.set(
@@ -498,9 +488,9 @@ class TestCrossDomainCookiePreservation:
 
             # Now update auth headers (simulating a token refresh).
             # Wave 3 of plan ``host-protocol-removal`` deleted the
-            # Session-level ``update_auth_headers`` forward; call the
+            # NotebookLMClient-level ``update_auth_headers`` forward; call the
             # canonical coordinator method directly with explicit kwargs.
-            core._auth_coord.update_auth_headers(auth=core.auth, kernel=core._kernel)
+            core._collaborators.auth_coord.update_auth_headers(auth=core._auth, kernel=core._collaborators.kernel)
 
             # The EXACT value should still be there (merged, not replaced)
             assert (
@@ -517,8 +507,8 @@ class TestCrossDomainCookiePreservation:
         auth_tokens.cookie_jar.set("SID", "test_sid", domain=".google.com")
 
         async with NotebookLMClient(auth_tokens) as client:
-            core = client._session
-            http = core._kernel.get_http_client()
+            core = client
+            http = core._collaborators.kernel.get_http_client()
 
             # The .googleusercontent.com cookie must remain on its original domain
             assert http.cookies.get("download_token", domain=".googleusercontent.com") == "abc123"
@@ -529,17 +519,17 @@ class TestCrossDomainCookiePreservation:
     async def test_update_auth_headers_preserves_redirect_cookies(self, auth_tokens):
         """update_auth_headers must merge, not replace, preserving redirect cookies."""
         async with NotebookLMClient(auth_tokens) as client:
-            core = client._session
-            http = core._kernel.get_http_client()
+            core = client
+            http = core._collaborators.kernel.get_http_client()
 
             # Simulate Google setting a cookie during a redirect
             http.cookies.set("__Secure-1PSIDCC", "from_redirect", domain=".google.com")
 
             # Now update auth headers.
             # Wave 3 of plan ``host-protocol-removal`` deleted the
-            # Session-level ``update_auth_headers`` forward; call the
+            # NotebookLMClient-level ``update_auth_headers`` forward; call the
             # canonical coordinator method directly with explicit kwargs.
-            core._auth_coord.update_auth_headers(auth=core.auth, kernel=core._kernel)
+            core._collaborators.auth_coord.update_auth_headers(auth=core._auth, kernel=core._collaborators.kernel)
 
             # The redirect cookie must survive
             assert http.cookies.get("__Secure-1PSIDCC", domain=".google.com") == "from_redirect"
@@ -550,7 +540,7 @@ class TestBuildUrlHL:
     batchexecute URL.
 
     This is the load-bearing site for setting the interface language on
-    every RPC call. The Session-level ``_build_url`` thin wrapper was
+    every RPC call. The NotebookLMClient-level ``_build_url`` thin wrapper was
     inlined in PR #4b — callers reach the canonical method through
     ``core._rpc_executor.build_url(...)``.
 
@@ -566,26 +556,26 @@ class TestBuildUrlHL:
         from notebooklm._request_types import AuthSnapshot
 
         return AuthSnapshot(
-            csrf_token=core.auth.csrf_token,
-            session_id=core.auth.session_id,
-            authuser=core.auth.authuser,
-            account_email=core.auth.account_email,
+            csrf_token=core._auth.csrf_token,
+            session_id=core._auth.session_id,
+            authuser=core._auth.authuser,
+            account_email=core._auth.account_email,
         )
 
     def test_build_url_defaults_hl_to_en(self, auth_tokens, monkeypatch):
         monkeypatch.delenv("NOTEBOOKLM_HL", raising=False)
-        core = build_session_for_tests(auth_tokens)
+        core = build_client_shell_for_tests(auth_tokens)
         url = core._rpc_executor.build_url(RPCMethod.LIST_NOTEBOOKS, self._snapshot_for(core))
         assert "hl=en" in url
 
     def test_build_url_includes_hl_from_env(self, auth_tokens, monkeypatch):
         monkeypatch.setenv("NOTEBOOKLM_HL", "ja")
-        core = build_session_for_tests(auth_tokens)
+        core = build_client_shell_for_tests(auth_tokens)
         url = core._rpc_executor.build_url(RPCMethod.LIST_NOTEBOOKS, self._snapshot_for(core))
         assert "hl=ja" in url
 
     def test_build_url_empty_env_falls_back_to_en(self, auth_tokens, monkeypatch):
         monkeypatch.setenv("NOTEBOOKLM_HL", "")
-        core = build_session_for_tests(auth_tokens)
+        core = build_client_shell_for_tests(auth_tokens)
         url = core._rpc_executor.build_url(RPCMethod.LIST_NOTEBOOKS, self._snapshot_for(core))
         assert "hl=en" in url

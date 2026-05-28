@@ -13,7 +13,7 @@ import httpx
 import pytest
 
 from _fixtures.kernel_test_helpers import install_http_client_for_test
-from _helpers.session_factory import build_session_for_tests
+from _helpers.client_factory import build_client_shell_for_tests
 from notebooklm.auth import AuthTokens
 
 
@@ -143,7 +143,7 @@ async def make_core(refresh_callback=None, transport=None, refresh_retry_delay=0
         session_id="SID_OLD",
         cookies={"SID": "old_sid_cookie"},
     )
-    core = build_session_for_tests(
+    core = build_client_shell_for_tests(
         auth=auth,
         refresh_callback=refresh_callback,
         refresh_retry_delay=refresh_retry_delay,
@@ -154,10 +154,10 @@ async def make_core(refresh_callback=None, transport=None, refresh_retry_delay=0
         # can observe real httpx.Request construction (cookie merge, headers).
         # Capture the cookie jar BEFORE aclose() — reading attributes off a
         # closed AsyncClient is brittle across httpx versions.
-        prior_cookies = core._kernel.get_http_client().cookies
-        await core._kernel.get_http_client().aclose()
+        prior_cookies = core._collaborators.kernel.get_http_client().cookies
+        await core._collaborators.kernel.get_http_client().aclose()
         install_http_client_for_test(
-            core._kernel,
+            core._collaborators.kernel,
             httpx.AsyncClient(
                 cookies=prior_cookies,
                 transport=transport,
