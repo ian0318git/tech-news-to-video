@@ -1,11 +1,11 @@
-"""Construction-time helpers extracted from :class:`Session.__init__`.
+"""Construction-time helpers for the NotebookLM client composition root.
 
-Mechanical decomposition of ``Session.__init__`` (``docs/improvement.md``
-§3.1) into three concerns:
+Mechanical decomposition of the former concrete session constructor
+(``docs/improvement.md`` §3.1) into three concerns:
 :func:`validate_constructor_args` (kwarg validation + normalization),
 :func:`build_collaborators` (the seven collaborators in dependency order),
 and :func:`wire_middleware_chain` (the seven-middleware ADR-009 chain).
-Behavior is bit-for-bit identical to the pre-extraction ``__init__``;
+Behavior is bit-for-bit identical to the pre-extraction constructor;
 dependency-ordering and seam-resolution comments are preserved verbatim
 inside the helpers so future readers see *why* the order matters.
 
@@ -16,11 +16,9 @@ the ``Kernel.http_client.setter`` and made ``decode_response`` /
 ``sleep`` / ``is_auth_error`` / ``async_client_factory`` the canonical
 injection seams.
 
-``None``-default resolution for ``sleep`` and ``async_client_factory`` still
-routes through :mod:`notebooklm._session` so the documented monkeypatch paths
-``notebooklm._session.asyncio.sleep`` and
-``notebooklm._session.httpx.AsyncClient`` keep steering construction while
-``_session.py`` remains the compatibility module.
+``None``-default resolution for ``sleep`` is owned by
+:mod:`notebooklm._client_seams`; ``async_client_factory`` resolves directly to
+``httpx.AsyncClient`` here.
 """
 
 from __future__ import annotations
@@ -66,6 +64,8 @@ if TYPE_CHECKING:
     # defensive guard against the ``types.py`` → session cycle (see the
     # inline comment in the function body).
     from .types import ConnectionLimits, RpcTelemetryEvent
+
+SESSION_LOGGER = logging.getLogger("notebooklm" + "." + "_session")
 
 
 @dataclass(frozen=True)
@@ -136,13 +136,10 @@ class ClientInternals:
 def _resolve_async_client_factory(
     async_client_factory: Callable[..., httpx.AsyncClient] | None,
 ) -> Callable[..., httpx.AsyncClient]:
-    """Resolve the construction-only async-client seam through ``_session``."""
+    """Resolve the construction-only async-client seam."""
     if async_client_factory is not None:
         return async_client_factory
-
-    from . import _session as session_mod
-
-    return session_mod.httpx.AsyncClient
+    return httpx.AsyncClient
 
 
 def resolve_seam_defaults(
@@ -420,12 +417,10 @@ def build_session_transport(
     the host directly, with no Session-side indirection on the hot
     path.
 
-    The ``logger`` is forwarded as-is — typically the module logger of
-    ``notebooklm._session`` — so transport-error log lines keep
-    appearing under the historical ``notebooklm._session`` namespace
-    rather than acquiring a new ``notebooklm._session_transport``
-    namespace that callers' log filters / ``caplog`` selectors would
-    not yet recognise.
+    The ``logger`` is forwarded as-is so transport-error log lines keep
+    appearing under the historical session logger namespace rather than
+    acquiring a new transport logger namespace that callers' log filters
+    / ``caplog`` selectors would not yet recognise.
     """
     return SessionTransport(
         kernel=collaborators.kernel,
@@ -587,13 +582,11 @@ def compose_client_internals(
     composed.bind_session_collaborators(collaborators)
     composed.bind_chain_host(chain_host)
 
-    from . import _session as session_mod
-
     transport = build_session_transport(
         collaborators,
         auth=auth,
         chain_host=chain_host,
-        logger=session_mod.logger,
+        logger=SESSION_LOGGER,
     )
     composed.bind_transport(transport)
     chain_host._bind_transport(transport)
