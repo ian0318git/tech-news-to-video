@@ -225,6 +225,28 @@ class NotebookLMClient:
         if storage_path is not None and auth.storage_path != storage_path:
             auth = dataclasses.replace(auth, storage_path=storage_path)
 
+        # Direct client-owned reference to the authoritative ``AuthTokens``
+        # instance. Set AFTER the ``storage_path`` normalization above so it
+        # captures the same (possibly rebound) instance that
+        # :func:`compose_session_internals` then propagates into
+        # :class:`Session`, :class:`CookiePersistence`, the snapshot-provider
+        # lambdas, and :class:`SourceUploadPipeline`. The Auth Instance
+        # Invariant (see
+        # ``.sisyphus/phases/host-protocol-removal/phase-1.md``) requires that
+        # every reference across the live object graph alias this exact same
+        # mutable object so :meth:`AuthRefreshCoordinator.update_auth_tokens`
+        # in-place mutations are observed everywhere.
+        #
+        # Wave 0 of the host-protocol-removal plan only SETS this field; no
+        # production read site exists yet. Wave 2 wires ``refresh_auth()`` to
+        # read it; Wave 3 updates the public ``auth`` property to back off
+        # this field instead of the ``self._session.auth`` reach-through.
+        # The field is set today so the shell-client test helper
+        # (``tests/_helpers/session_factory.build_refresh_client_shell``) can
+        # mirror the production attribute shape from PR 1 onward, keeping
+        # test shells and production aligned across the intermediate PRs.
+        self._auth = auth
+
         # Canonicalize the keepalive storage path so different representations
         # of the same physical file (relative vs absolute, ``~`` shorthand,
         # symlink components) hash to the same key in the in-process rotation
@@ -746,11 +768,17 @@ class NotebookLMClient:
         read-only accessor — rather than from the client's owned
         ``_collaborators`` bundle so a ``NotebookLMClient`` shell built
         via ``__new__`` (used in
-        ``tests/unit/test_concurrency_refresh_race.py``) still works:
-        the test sets ``client._session`` directly and never calls
-        ``__init__``, so ``client._session.lifecycle`` is the only
-        resolution path that works without widening the constructor
-        surface.
+        ``tests/unit/test_concurrency_refresh_race.py``, constructed
+        through the
+        ``tests/_helpers/session_factory.build_refresh_client_shell``
+        helper that wires ``_session`` / ``_auth`` /
+        ``_collaborators`` / ``_rpc_executor`` from the composed
+        bundle) still works: the helper does not call ``__init__``,
+        so ``client._session.lifecycle`` is the resolution path that
+        works without widening the constructor surface. Wave 2 of the
+        host-protocol-removal plan rewires this call site onto
+        ``self._auth`` and an explicit lifecycle collaborator; this
+        docstring will move with the call when that happens.
 
         Returns:
             Updated AuthTokens.
