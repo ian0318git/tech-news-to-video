@@ -28,6 +28,7 @@ from ..rendering import (
 )
 from ..resolve import resolve_source_id, validate_id
 from .confirming_mutation import MutationPlan, run_confirmed_mutation
+from .source_serializers import source_summary_payload
 
 if TYPE_CHECKING:
     from ...client import NotebookLMClient
@@ -505,10 +506,7 @@ async def execute_source_add_drive(
             {
                 "action": "add-drive",
                 "source": {
-                    "id": src.id,
-                    "title": src.title,
-                    "type": str(src.kind),
-                    "url": src.url,
+                    **source_summary_payload(src),
                     "drive_file_id": plan.file_id,
                     "mime_type": plan.mime_type,
                 },
