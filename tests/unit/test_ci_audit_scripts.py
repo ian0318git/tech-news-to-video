@@ -5,6 +5,7 @@ Covers `scripts/check_workflow_permissions.py` and `scripts/check_coverage_thres
 
 from __future__ import annotations
 
+import shlex
 import subprocess
 import sys
 import textwrap
@@ -135,6 +136,21 @@ def test_workflow_permissions_allowlist(tmp_path):
     )
     result = _run([str(SCRIPTS / "check_workflow_permissions.py"), "--workflow-dir", str(wf_dir)])
     assert result.returncode == 0
+
+
+def test_verify_package_e2e_retry_is_scoped_to_last_failed_e2e_tests():
+    """The protected E2E retry must fail closed instead of running an unintended suite."""
+    workflow = REPO_ROOT / ".github" / "workflows" / "verify-package.yml"
+    text = workflow.read_text(encoding="utf-8")
+    marker = "Retry failed E2E tests after 10-min cool-down"
+    assert marker in text
+    retry_step = text.split(marker, 1)[1].split("\n    - name:", 1)[0]
+    retry_args = shlex.split(retry_step)
+
+    assert "uv run pytest tests/e2e" in retry_step
+    assert "--last-failed" in retry_args
+    assert "--last-failed-no-failures=none" in retry_step
+    assert "pytest --last-failed -v" not in retry_step
 
 
 # ---------------------------------------------------------------------------
