@@ -30,7 +30,7 @@ in ``_session_init.wire_middleware_chain``. Integration tests that
 assign ``client._session._chain_host._refresh_retry_delay = 0`` keep
 steering the live delay.
 
-Construction order in :func:`compose_session_internals`:
+Construction order in :func:`compose_client_internals`:
 :func:`notebooklm._session_init.build_session_transport` constructs the
 transport **before** :func:`wire_middleware_chain`. The wired chain
 leaf is :meth:`MiddlewareChainHost._authed_post_chain_terminal` (a

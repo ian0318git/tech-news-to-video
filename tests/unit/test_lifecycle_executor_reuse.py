@@ -9,9 +9,9 @@ executor against the new ``httpx.AsyncClient``.
 
 PR 2 deleted both that null line and the lazy factory itself — the
 executor is bound exactly once by the composition root
-(:func:`notebooklm._session_init.compose_session_internals`) via
-:meth:`Session._bind_executor`, and the same instance survives any
-``close()`` → ``open()`` cycle. This is safe because the executor's
+(:func:`notebooklm._session_init.compose_client_internals`) via
+:class:`notebooklm._client_composed.ClientComposed`, and the same instance
+survives any ``close()`` → ``open()`` cycle. This is safe because the executor's
 transport collaborator (:class:`Kernel`) rebuilds its
 ``httpx.AsyncClient`` lazily on each :meth:`Kernel.open`, so a stale
 executor reference continues to drive RPCs against a fresh transport.
@@ -22,12 +22,8 @@ This module pins three load-bearing invariants:
    a full ``close()`` → ``open()`` cycle.
 2. The reused executor can still execute an RPC after the cycle (it is
    not bound to a stale transport reference).
-3. The same regression vector that the deleted
-   ``test_close_nulls_rpc_executor`` blocked — a follow-up
-   :meth:`open` quietly missing the executor — surfaces as a clean
-   ``RuntimeError`` if the composition contract is ever broken (the
-   :meth:`_require_constructed` guard fires in the executor binding
-   when ``_rpc_executor`` is ``None``).
+3. The one-wave ``Session._rpc_executor`` property forwards to the
+   client-owned composed executor.
 """
 
 from __future__ import annotations
@@ -142,20 +138,8 @@ async def test_rpc_call_succeeds_after_close_then_open_with_same_executor() -> N
     assert core._rpc_executor is executor
 
 
-def test_require_constructed_raises_when_rpc_executor_is_unbound() -> None:
-    """The :meth:`_require_constructed` guard fires if ``_rpc_executor`` is ``None``.
+def test_session_rpc_executor_forwards_to_client_composed() -> None:
+    """The temporary Session executor seam reads through ``ClientComposed``."""
+    core = build_session_for_tests(_make_auth())
 
-    Tests the contract that catches a regression where the composition
-    root forgets to bind ``_rpc_executor`` (or a close-time null is
-    reintroduced and the next :meth:`open` does not rebind). Bypasses
-    the composition root via ``Session.__new__`` to simulate that
-    broken state.
-    """
-    from notebooklm._session import Session
-
-    session = Session.__new__(Session)
-    # ``_rpc_executor`` is unset on a __new__ instance; the guard uses
-    # ``getattr(..., None)`` so missing-attribute and ``None``-bound look
-    # the same to the caller — both raise the actionable message.
-    with pytest.raises(RuntimeError, match="Session not fully constructed: _rpc_executor is None"):
-        session._require_constructed("_rpc_executor")
+    assert core._rpc_executor is core._composed.executor

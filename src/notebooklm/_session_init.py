@@ -126,15 +126,11 @@ class WiredMiddleware:
 
 
 @dataclass(frozen=True)
-class ComposedSession:
-    """Result of :func:`compose_session_internals`."""
+class ClientInternals:
+    """Result of :func:`compose_client_internals`."""
 
-    session: Session
-    transport: SessionTransport
-    executor: RpcExecutor
     collaborators: SessionCollaborators
-    seams: ClientSeams
-    composed: ClientComposed
+    executor: RpcExecutor
 
 
 def _resolve_async_client_factory(
@@ -389,14 +385,10 @@ def build_collaborators(
     )
 
 
-if TYPE_CHECKING:
-    from ._session import Session
-
-
 def build_session_transport(
     collaborators: SessionCollaborators,
     *,
-    host: Session,
+    auth: AuthTokens,
     chain_host: MiddlewareChainHost,
     logger: logging.Logger,
 ) -> SessionTransport:
@@ -407,26 +399,22 @@ def build_session_transport(
     around ``transport.terminal``. The transport reaches the chain
     through a live-binding ``chain_provider`` closure that reads
     ``chain_host._authed_post_chain`` on every authed POST; that
-    attribute is assigned by :func:`compose_session_internals`
+    attribute is assigned by :func:`compose_client_internals`
     immediately after :func:`wire_middleware_chain` returns. Using a
     provider closure (rather than a frozen reference) preserves the
     pre-extraction behavior where tests reassign
     ``core._chain_host._authed_post_chain = fake_chain`` to install a
     fake chain and expect the next call to honor it.
 
-    The ``snapshot_provider`` closure passes ``host.auth`` (re-read on
-    every call) to :meth:`AuthRefreshCoordinator.snapshot` so the
-    coordinator receives the live :class:`AuthTokens` collaborator
-    directly — the Session-shaped ``_AuthRefreshHost`` Protocol was
-    deleted, and the coordinator routes its lock-wait metric through
-    ``self._metrics`` (supplied at construction). The ``bound_loop_check``
-    lambda re-reads ``host.assert_bound_loop`` on every call rather than
-    freezing the bound method at construction time, so a test that
-    reassigns ``core.assert_bound_loop = mock`` after construction still
-    steers the live check. The lookup goes through ``host.assert_bound_loop``
-    rather than the lifecycle's ``_bound_loop`` directly so a Mock-based
-    Session fixture (which sets ``_lifecycle`` to a MagicMock) still
-    short-circuits the guard.
+    The ``snapshot_provider`` closure passes the client-owned
+    :class:`AuthTokens` collaborator directly to
+    :meth:`AuthRefreshCoordinator.snapshot`; the Session-shaped
+    ``_AuthRefreshHost`` Protocol was deleted, and the coordinator routes
+    its lock-wait metric through ``self._metrics`` (supplied at
+    construction). The ``bound_loop_check`` lambda reads through
+    ``collaborators.lifecycle.assert_bound_loop`` at call time, preserving
+    lifecycle method patchability without retaining a Session-level
+    ``assert_bound_loop`` forward.
 
     The ``chain_host`` parameter lets the chain-slot lookup go through
     the host directly, with no Session-side indirection on the hot
@@ -441,10 +429,10 @@ def build_session_transport(
     """
     return SessionTransport(
         kernel=collaborators.kernel,
-        snapshot_provider=lambda: collaborators.auth_coord.snapshot(auth=host.auth),
+        snapshot_provider=lambda: collaborators.auth_coord.snapshot(auth=auth),
         chain_provider=lambda: chain_host._authed_post_chain,
         metrics=collaborators.metrics,
-        bound_loop_check=lambda: host.assert_bound_loop(),
+        bound_loop_check=lambda: collaborators.lifecycle.assert_bound_loop(),
         logger=logger,
     )
 
@@ -519,7 +507,7 @@ def wire_middleware_chain(
     )
 
 
-def compose_session_internals(
+def compose_client_internals(
     *,
     auth: AuthTokens,
     timeout: float = DEFAULT_TIMEOUT,
@@ -543,8 +531,8 @@ def compose_session_internals(
     async_client_factory: Callable[..., httpx.AsyncClient] | None = None,
     seams: ClientSeams | None = None,
     composed: ClientComposed | None = None,
-) -> ComposedSession:
-    """Single entry point that owns the full Session composition sequence."""
+) -> ClientInternals:
+    """Single entry point that owns the client composition sequence."""
     # MUST stay first — preserves the earliest-opportunity refusal that
     # ``test_synthetic_error_transport_guard`` pins.
     _refuse_synthetic_error_outside_test_context()
@@ -596,26 +584,18 @@ def compose_session_internals(
         _server_error_max_retries=config.server_error_max_retries,
         _refresh_retry_delay=config.refresh_retry_delay,
     )
-
-    from ._session import Session
-
-    session: Session = Session(
-        collaborators=collaborators,
-        config=config,
-        auth=auth,
-        chain_host=chain_host,
-    )
-    session._seams = seams
+    composed.bind_session_collaborators(collaborators)
+    composed.bind_chain_host(chain_host)
 
     from . import _session as session_mod
 
     transport = build_session_transport(
         collaborators,
-        host=session,
+        auth=auth,
         chain_host=chain_host,
         logger=session_mod.logger,
     )
-    session._bind_transport(transport)
+    composed.bind_transport(transport)
     chain_host._bind_transport(transport)
 
     wired = wire_middleware_chain(
@@ -627,7 +607,7 @@ def compose_session_internals(
         is_auth_error=lambda *a, **kw: seams.is_auth_error(*a, **kw),
     )
     chain_host._authed_post_chain = wired.authed_post_chain
-    session._bind_chain_metadata(wired)
+    composed.bind_chain_metadata(wired)
 
     executor = RpcExecutor(
         kernel=collaborators.kernel,
@@ -641,30 +621,22 @@ def compose_session_internals(
         refresh_callback_enabled_provider=lambda: collaborators.auth_coord.has_refresh_callback,
         refresh_retry_delay_provider=lambda: chain_host._refresh_retry_delay,
     )
-    session._bind_executor(executor)
+    composed.bind_executor(executor)
 
-    composed.transport = transport
-    composed.executor = executor
-    composed.session_collaborators = collaborators
-
-    return ComposedSession(
-        session=session,
-        transport=transport,
-        executor=executor,
+    return ClientInternals(
         collaborators=collaborators,
-        seams=seams,
-        composed=composed,
+        executor=executor,
     )
 
 
 __all__ = [
-    "ComposedSession",
+    "ClientInternals",
     "SessionCollaborators",
     "ValidatedSessionConfig",
     "WiredMiddleware",
     "build_collaborators",
     "build_session_transport",
-    "compose_session_internals",
+    "compose_client_internals",
     "resolve_seam_defaults",
     "validate_constructor_args",
     "wire_middleware_chain",

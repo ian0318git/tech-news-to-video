@@ -18,26 +18,17 @@ must carry a `retain — <reason>` disposition. No method may be tagged
 `delete in Wave 11` (the cluster deletions have all landed; the
 transitional disposition is gone from the recognised set).
 
-Plan [`host-protocol-removal`](../.sisyphus/phases/host-protocol-removal/phase-1.md)
-closed on 2026-05-28 with Waves 0-4. The retained Session surface is now
-the **Inventory** table below in full: the four lifecycle hot-path
-entries (`open` / `close` / `is_open` / `_keepalive_loop`), the
-`__init__` constructor, the `drain` public-API forward, the
-`assert_bound_loop` provider-closure capture target, and the Stage B1
-composition primitives (`_bind_transport`,
-`_bind_chain_metadata`, `_bind_executor`, `_require_constructed`).
-Stage A accessors (`collaborators` / `session_transport` / `rpc_executor`)
-were deleted in Stage B1 PR 2 of the post-refactoring plan and are
-recorded in the **Deleted** section below; the chain leaf
-(`_authed_post_chain_terminal`) and the retry-budget tunables live on
-`MiddlewareChainHost` per the [Chain-ownership carve-out](#chain-ownership-carve-out-closed)
-section. Wave 4 of `host-protocol-removal` added regression lints
-([`tests/_lint/test_session_runtime_boundaries.py`](../tests/_lint/test_session_runtime_boundaries.py),
-[`tests/_lint/test_client_composition.py::test_client_self_session_access_is_allowlisted`](../tests/_lint/test_client_composition.py),
-[`tests/_lint/test_session_retention.py::test_wave_3_deletions_stay_out_of_live_inventory`](../tests/_lint/test_session_retention.py))
-that pin the post-Wave-3 surface from both directions so neither the
-`_LifecycleHost` / `RefreshAuthCore` host shape nor the deleted
-auth-forward methods can quietly come back.
+Plan [`session-elimination-plan`](../.sisyphus/phases/session-elimination-plan/phase-2.md)
+Phase 2 moved composition runtime state onto `ClientComposed`. The retained
+Session surface is now the **Inventory** table below in full: lifecycle
+hot-path entries (`open` / `close` / `is_open` / `_keepalive_loop`), the
+`__init__` constructor, the `drain` public-API forward, and one-wave
+composition property forwarders (`_transport`, `_rpc_executor`,
+`_chain_builder`, `_middlewares`, `_chain_host`) kept only until Phase 3
+rewrites tests off `build_session_for_tests`. The provider-closure target
+`assert_bound_loop` and the Stage B1 composition primitives
+(`_bind_transport`, `_bind_chain_metadata`, `_bind_executor`,
+`_require_constructed`) are recorded in the **Deleted** section below.
 
 ## Categories
 
@@ -54,6 +45,7 @@ auth-forward methods can quietly come back.
 | `compatibility forward` | One-line forward to a collaborator method; kept only because in-tree callers (mostly tests) reached it via `Session`. Wave 11 (sub-waves 11a, 11b, 11c) deleted every compatibility forward; no row in the live inventory now carries this category. The label is retained in this glossary for the **Deleted** section below and as the disposition lint's vocabulary for any future short-lived forward. |
 | `composition write-once setter` | Stage B1 PR 1 ([post-refactoring plan 2026-05-27](post-refactoring-plan-2026-05-27.md)) primitive: a `_bind_*` method that accepts exactly one bind for a late-bound dependency and raises `RuntimeError` on a second call. Reserved for `compose_session_internals`. DORMANT in PR 1 (Session.__init__ still inline-constructs the transport / chain); becomes the single assignment site in PR 2. |
 | `composition guard` | Stage B1 PR 1 ([post-refactoring plan 2026-05-27](post-refactoring-plan-2026-05-27.md)) primitive: a fail-fast helper that raises `RuntimeError("Session not fully constructed: <attr> is None")` when an entry point runs before the composition root has finished binding required late-bound dependencies. Inert under inline construction (PR 1); load-bearing in PR 2 when the composition root moves into `NotebookLMClient.__init__`. |
+| `composition property forwarder` | Session-elimination Phase 2 temporary property that forwards an old `Session._<slot>` read to `ClientComposed`. Kept only so Phase 3 can rewrite tests separately. |
 
 ## Dispositions
 
@@ -79,12 +71,12 @@ lint at PR time.
 | `close` | lifecycle | retain — drain + transport teardown |
 | `is_open` (property) | lifecycle | retain — public open-state read |
 | `_keepalive_loop` | lifecycle | retain — background task body; introspected by `test_client_keepalive` |
-| `assert_bound_loop` | provider-closure capture target | retain — captured via lambda (`bound_loop_check=lambda: host.assert_bound_loop()`) by `build_session_transport` at [`_session_init.py:395`](../src/notebooklm/_session_init.py); late-bound so a test reassigning `core.assert_bound_loop = mock` still steers the live check |
-| `_bind_transport` | composition write-once setter | retain — Stage B1 composition primitive (post-refactoring plan 2026-05-27); the write-once binder for `Session._transport`. Load-bearing after PR 2 — `Session.__init__` leaves `_transport` at `None` and `compose_session_internals` is the single assignment site. |
-| `_bind_chain_metadata` | composition write-once setter | retain — Stage B1 composition primitive (post-refactoring plan 2026-05-27); the write-once binder for the auxiliary chain artifacts (`_chain_builder` / `_middlewares`). The `_authed_post_chain` slot itself is owned by `MiddlewareChainHost` and assigned exactly once by `compose_session_internals` (`chain_host._authed_post_chain = wired.authed_post_chain`); this binder stores only the auxiliary metadata. Load-bearing — `Session.__init__` leaves the metadata slots at `None` and `compose_session_internals` is the single assignment site. |
-| `_bind_executor` | composition write-once setter | retain — Stage B1 composition primitive (post-refactoring plan 2026-05-27); the write-once binder for `Session._rpc_executor`. Load-bearing after PR 2 — the lazy `_get_rpc_executor` factory was deleted; `compose_session_internals` is the single assignment site and the binding is never re-nulled by `close()`. |
-| `_require_constructed` | composition guard | retain — Stage B1 composition primitive (post-refactoring plan 2026-05-27); fail-fast helper used by `open` / `close` to assert the named binding is non-None. Load-bearing — `Session.__init__` leaves the late-bound slots at `None`, and any caller that exercises a Session outside `compose_session_internals` trips the guard. |
 | `drain` | public API forward | retain — narrow public method (one-line forward to `TransportDrainTracker.drain`). Backs `NotebookLMClient.drain` so the composition root does not dereference the private `_drain_tracker` slot on the session. The Wave 11a deletion row in the **Deleted** section below refers to an earlier compatibility-forward incarnation; this row is the boundary-focused re-introduction (narrow forward, single caller, AST-guarded by `tests/_lint/test_client_composition.py::test_client_does_not_dereference_session_privates`). |
+| `_transport` (property) | composition property forwarder | retain — one-wave Phase 2 forward to `ClientComposed.transport`; Phase 3 rewrites remaining `core._transport` test reads to `client._composed.transport`. |
+| `_rpc_executor` (property) | composition property forwarder | retain — one-wave Phase 2 forward to `ClientComposed.executor`; includes a setter that writes through to the holder so legacy `monkeypatch.setattr(core, "_rpc_executor", fake)` tests keep working until Phase 3 rewrites remaining `core._rpc_executor` / `client._session._rpc_executor` test paths. |
+| `_chain_builder` (property) | composition property forwarder | retain — one-wave Phase 2 forward to `ClientComposed.chain_builder`; Phase 3 rewrites chain metadata tests to the composed holder. |
+| `_middlewares` (property) | composition property forwarder | retain — one-wave Phase 2 forward to `ClientComposed.middlewares`; Phase 3 rewrites middleware list tests to the composed holder. |
+| `_chain_host` (property) | composition property forwarder | retain — one-wave Phase 2 forward to `ClientComposed.chain_host`; Phase 3 rewrites retry/chain-host test patches to `client._composed.chain_host`. |
 
 ## Chain-ownership carve-out (closed)
 
@@ -136,6 +128,16 @@ Wave 11<sub>` row in one of the cluster sub-sections below.
 | Method | Category | Disposition |
 |---|---|---|
 | `_get_rpc_semaphore` | provider-closure capture target | deleted in Phase 1 of plan `session-elimination-plan` — the lazy semaphore state moved to `ClientComposed.get_rpc_semaphore`, and `compose_session_internals` now passes that holder method as `rpc_semaphore_factory`. The moved holder preserves the previous `None` opt-out and lazy-once `asyncio.Semaphore` construction while removing `Session._max_concurrent_rpcs` / `Session._rpc_semaphore` ownership. |
+
+### Session-elimination Phase 2 — client composition owner (2026-05-28)
+
+| Method | Category | Disposition |
+|---|---|---|
+| `assert_bound_loop` | provider-closure capture target | deleted in Phase 2 of plan `session-elimination-plan` — `build_session_transport` now captures `collaborators.lifecycle` and calls `collaborators.lifecycle.assert_bound_loop()` at use time, so the provider no longer needs a Session-level loop-guard forward. |
+| `_bind_transport` | composition write-once setter | deleted in Phase 2 of plan `session-elimination-plan` — write-once transport binding moved to `ClientComposed.bind_transport`; `Session._transport` is now a one-wave property forwarder. |
+| `_bind_chain_metadata` | composition write-once setter | deleted in Phase 2 of plan `session-elimination-plan` — write-once chain-metadata binding moved to `ClientComposed.bind_chain_metadata`; `Session._chain_builder` / `_middlewares` are now one-wave property forwarders. |
+| `_bind_executor` | composition write-once setter | deleted in Phase 2 of plan `session-elimination-plan` — write-once executor binding moved to `ClientComposed.bind_executor`; `Session._rpc_executor` is now a one-wave property forwarder. |
+| `_require_constructed` | composition guard | deleted in Phase 2 of plan `session-elimination-plan` — required-state checks moved to typed `ClientComposed` properties, which raise `RuntimeError("ClientComposed not fully constructed: <attr> is None")` before binding. |
 
 ### Wave 11a — drain-and-operation cluster (commit `80a54fda`)
 

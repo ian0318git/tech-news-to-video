@@ -47,13 +47,14 @@ from ._note_service import NoteService
 from ._notebooks import NotebooksAPI
 from ._notes import NotesAPI
 from ._research import ResearchAPI
+from ._session import Session
 from ._session_config import (
     DEFAULT_KEEPALIVE_MIN_INTERVAL,
     DEFAULT_MAX_CONCURRENT_RPCS,
     DEFAULT_MAX_CONCURRENT_UPLOADS,
     DEFAULT_TIMEOUT,
 )
-from ._session_init import compose_session_internals
+from ._session_init import compose_client_internals
 from ._session_lifecycle import CookieRotator, CookieSaver
 from ._settings import SettingsAPI
 from ._sharing import SharingAPI
@@ -230,7 +231,7 @@ class NotebookLMClient:
         # Direct client-owned reference to the authoritative ``AuthTokens``
         # instance. Set AFTER the ``storage_path`` normalization above so it
         # captures the same (possibly rebound) instance that
-        # :func:`compose_session_internals` then propagates into
+        # :func:`compose_client_internals` then propagates into
         # :class:`Session`, :class:`CookiePersistence`, the snapshot-provider
         # lambdas, and :class:`SourceUploadPipeline`. The Auth Instance
         # Invariant (see
@@ -244,10 +245,10 @@ class NotebookLMClient:
         # rewired the public ``auth`` property and the
         # ``SourceUploadPipeline(auth=...)`` constructor argument to back
         # off this field instead of dereferencing
-        # ``self._session.auth``. The shell-client test helper
-        # (``tests/_helpers/session_factory.build_refresh_client_shell``)
-        # mirrors the production attribute shape so refresh-shell tests
-        # exercise the same code path as production.
+        # ``self._session.auth``. The client shell helper
+        # (``tests/_helpers/client_factory.build_client_for_tests``)
+        # mirrors the production attribute shape so tests exercise the
+        # same code path as production.
         self._auth = auth
 
         # Canonicalize the keepalive storage path so different representations
@@ -293,17 +294,15 @@ class NotebookLMClient:
                 )
 
         # Stage B1 PR 2 of the post-refactoring plan inverted the
-        # composition root — :class:`Session` no longer constructs the
-        # collaborator bundle / transport / chain inline; the
-        # :func:`compose_session_internals` helper does, and feeds them
-        # into a ``Session(*, collaborators, config, auth)`` constructor.
-        # Feature adapters below draw from the returned
-        # :class:`ComposedSession` (no Stage A accessor reads).
+        # composition root. Session-elimination Phase 2 finishes the
+        # ownership move: :func:`compose_client_internals` binds
+        # composition state onto ``self._composed`` and returns only the
+        # collaborators + executor that feature adapters need.
         #
         # The public NotebookLMClient kwarg surface is unchanged — the
         # four seam kwargs (``decode_response`` / ``sleep`` /
         # ``is_auth_error`` / ``async_client_factory``) live on
-        # ``compose_session_internals`` and ``build_session_for_tests``
+        # ``compose_client_internals`` and ``build_session_for_tests``
         # only.
         self._seams = resolve_client_seams(
             decode_response=None,
@@ -312,7 +311,7 @@ class NotebookLMClient:
         )
         self._composed = ClientComposed(max_concurrent_rpcs=max_concurrent_rpcs)
 
-        composed = compose_session_internals(
+        internals = compose_client_internals(
             auth=auth,
             timeout=timeout,
             refresh_callback=self.refresh_auth,
@@ -334,22 +333,27 @@ class NotebookLMClient:
             seams=self._seams,
             composed=self._composed,
         )
-        self._session = composed.session
+        session = Session(
+            collaborators=internals.collaborators,
+            auth=auth,
+            composed=self._composed,
+        )
+        session._seams = self._seams
+        self._session = session
         # Owned reference to the collaborator bundle so
         # :meth:`metrics_snapshot` (and any future
         # NotebookLMClient-side collaborator consumers) read from the
-        # same bundle the Session uses, without going through a Stage A
-        # accessor on the Session.
-        self._collaborators = composed.collaborators
+        # same bundle the Session uses.
+        self._collaborators = internals.collaborators
         # Owned reference to the RPC executor so ``client.rpc_call``
         # dispatches through it directly rather than through a
         # Session-side compatibility wrapper. The executor satisfies the
         # ``RpcCaller`` Protocol and is the same instance the feature
-        # APIs receive (``composed.executor`` is shared with
+        # APIs receive (``internals.executor`` is shared with
         # ``SourcesAPI`` / ``NotebooksAPI`` / ``ArtifactsRuntimeAdapter``
         # / ``ChatAPI`` / etc., so a test that swaps the executor's
         # ``rpc_call`` sees the swap on every feature consumer).
-        self._rpc_executor = composed.executor
+        self._rpc_executor = internals.executor
 
         # ADR-014 Rule 2: the upload pipeline takes its three runtime
         # collaborators (``rpc`` + ``drain`` + ``lifecycle``) directly
@@ -359,10 +363,10 @@ class NotebookLMClient:
         # the composition root that knows these internals;
         # ``SourcesAPI`` no longer reads them back off the session.
         source_uploader = SourceUploadPipeline(
-            rpc=composed.executor,
-            drain=composed.collaborators.drain_tracker,
-            lifecycle=composed.collaborators.lifecycle,
-            kernel=composed.collaborators.kernel,
+            rpc=internals.executor,
+            drain=internals.collaborators.drain_tracker,
+            lifecycle=internals.collaborators.lifecycle,
+            kernel=internals.collaborators.kernel,
             # Wave 3 of plan ``host-protocol-removal``: the upload
             # pipeline now reads the client-owned ``self._auth``
             # reference set above instead of dereferencing
@@ -373,20 +377,19 @@ class NotebookLMClient:
             auth=self._auth,
             upload_timeout=upload_timeout,
             max_concurrent_uploads=max_concurrent_uploads,
-            record_upload_queue_wait=composed.collaborators.metrics.record_upload_queue_wait,
+            record_upload_queue_wait=internals.collaborators.metrics.record_upload_queue_wait,
         )
         # ADR-014 Rule 3 Stage B (Stage B1 PR 2 of the post-refactoring
         # plan): simple features take their RpcCaller dependency directly
-        # from the composition root's :attr:`ComposedSession.executor`,
-        # not from a Stage A accessor on :class:`Session` (those
-        # accessors were deleted in PR 2).
+        # from the composition root's executor, not from a Stage A
+        # accessor on :class:`Session` (those accessors were deleted in PR 2).
         self.sources = SourcesAPI(
-            composed.executor,
+            internals.executor,
             uploader=source_uploader,
             upload_timeout=upload_timeout,
             max_concurrent_uploads=max_concurrent_uploads,
         )
-        self.notebooks = NotebooksAPI(composed.executor, sources_api=self.sources)
+        self.notebooks = NotebooksAPI(internals.executor, sources_api=self.sources)
         # Phase 5 wiring per docs/refactor-history.md Migration Plan steps 6-7:
         # the legacy single-service handoff (``MindMapService(self._session)``
         # passed as ``mind_map_service=``) is replaced with the explicit
@@ -394,7 +397,7 @@ class NotebookLMClient:
         # raw row primitives; NoteBackedMindMapService is the mind-map-only
         # adapter the download path uses; the artifact-generation path uses
         # NoteService.create_note directly to persist a generated mind map.
-        note_service = NoteService(composed.executor)
+        note_service = NoteService(internals.executor)
         mind_maps = NoteBackedMindMapService(note_service)
         # ADR-014 Rule 2: the artifacts API takes its three runtime
         # collaborators (``rpc`` + ``drain`` + ``lifecycle``) directly
@@ -403,9 +406,9 @@ class NotebookLMClient:
         # close-time ``register_drain_hook`` used by the polling
         # service; ``lifecycle`` covers ``assert_bound_loop``.
         self.artifacts = ArtifactsAPI(
-            rpc=composed.executor,
-            drain=composed.collaborators.drain_tracker,
-            lifecycle=composed.collaborators.lifecycle,
+            rpc=internals.executor,
+            drain=internals.collaborators.drain_tracker,
+            lifecycle=internals.collaborators.lifecycle,
             notebooks=self.notebooks,
             mind_maps=mind_maps,
             note_service=note_service,
@@ -419,15 +422,14 @@ class NotebookLMClient:
         #
         # Wave 8 of session-decoupling (ADR-014 Rule 2 Corollary): ChatAPI
         # takes its four direct collaborators (RpcCaller, SessionTransport,
-        # ReqidCounter, LoopGuard) by keyword argument. They are sourced
-        # from the :class:`ComposedSession` returned by the composition
-        # root instead of from Stage A accessors on :class:`Session`
-        # (those accessors were deleted in Stage B1 PR 2).
+        # ReqidCounter, LoopGuard) by keyword argument. The transport is
+        # sourced from ``self._composed``; other runtime fields come from
+        # the :class:`ClientInternals` returned by the composition root.
         self.chat = ChatAPI(
-            rpc=composed.executor,
-            transport=composed.transport,
-            reqid=composed.collaborators.reqid,
-            loop_guard=composed.collaborators.lifecycle,
+            rpc=internals.executor,
+            transport=self._composed.transport,
+            reqid=internals.collaborators.reqid,
+            loop_guard=internals.collaborators.lifecycle,
             notebooks=self.notebooks,
         )
         self.notes = NotesAPI(
@@ -438,11 +440,11 @@ class NotebookLMClient:
         # Pure-RPC features (typed as ``rpc: RpcCaller``). Wave 7 of
         # session-decoupling: pass the ``RpcExecutor`` collaborator
         # directly. Stage B1 PR 2 updated the source from
-        # ``self._session.rpc_executor`` (deleted accessor) to
-        # ``composed.executor``.
-        self.research = ResearchAPI(composed.executor)
-        self.settings = SettingsAPI(composed.executor)
-        self.sharing = SharingAPI(composed.executor)
+        # ``self._session.rpc_executor`` (deleted accessor) to the
+        # composed executor.
+        self.research = ResearchAPI(internals.executor)
+        self.settings = SettingsAPI(internals.executor)
+        self.sharing = SharingAPI(internals.executor)
 
     @property
     def auth(self) -> AuthTokens:
@@ -631,7 +633,7 @@ class NotebookLMClient:
         Stage B1 PR 2 of the post-refactoring plan migrated the read off
         the deleted ``Session.collaborators`` Stage A accessor onto the
         bundle stored by :meth:`__init__` from the composition root's
-        :class:`ComposedSession`.
+        :class:`ClientInternals`.
         """
         return self._collaborators.metrics.snapshot()
 
@@ -794,14 +796,13 @@ class NotebookLMClient:
         ``self._session.<X>`` accessors. The five kwargs mirror the new
         :func:`refresh_auth_session` signature: ``auth`` is the
         client-owned :class:`AuthTokens` instance (the Auth Instance
-        Invariant guarantees this is the same object the composed
+        Invariant guarantees this is the same object the one-wave
         Session also aliases), and the remaining four come from the
         collaborator bundle the composition root produced
-        (:func:`compose_session_internals`). The
-        ``tests/_helpers/session_factory.build_refresh_client_shell``
-        helper wires ``_auth`` and ``_collaborators`` from the composed
-        bundle directly, so test shells observe the same resolution
-        path without going through ``Session``.
+        (:func:`compose_client_internals`). The
+        ``tests/_helpers/client_factory.build_client_for_tests`` helper
+        wires ``_auth`` and ``_collaborators`` from the composed runtime
+        directly, so test shells observe the same resolution path.
 
         Returns:
             Updated AuthTokens.

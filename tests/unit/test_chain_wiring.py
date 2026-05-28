@@ -1,7 +1,7 @@
 """Integration tests for the authed-post middleware chain.
 
 :func:`notebooklm._middleware.build_chain` is wired by
-:func:`compose_session_internals` against the chain leaf on
+:func:`compose_client_internals` against the chain leaf on
 :class:`MiddlewareChainHost`
 (:meth:`MiddlewareChainHost._authed_post_chain_terminal`), which
 consumes the populated ``RpcRequest.url`` / ``headers`` / ``body``

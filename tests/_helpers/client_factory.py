@@ -1,4 +1,4 @@
-"""Canonical :class:`Session` construction helper for tests."""
+"""Canonical :class:`NotebookLMClient` shell construction helper for tests."""
 
 from __future__ import annotations
 
@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from notebooklm._client_composed import ClientComposed
+from notebooklm._client_seams import resolve_client_seams
 from notebooklm._session import Session
 from notebooklm._session_config import (
     DEFAULT_CONNECT_TIMEOUT,
@@ -16,17 +18,17 @@ from notebooklm._session_config import (
     DEFAULT_MAX_CONCURRENT_UPLOADS,
     DEFAULT_TIMEOUT,
 )
+from notebooklm._session_init import compose_client_internals
 from notebooklm._session_lifecycle import CookieRotator, CookieSaver
 from notebooklm.auth import AuthTokens
+from notebooklm.client import NotebookLMClient
 from notebooklm.types import RpcTelemetryEvent
-
-from .client_factory import build_client_for_tests
 
 if TYPE_CHECKING:
     from notebooklm.types import ConnectionLimits
 
 
-def build_session_for_tests(
+def build_client_for_tests(
     auth: AuthTokens,
     timeout: float = DEFAULT_TIMEOUT,
     connect_timeout: float = DEFAULT_CONNECT_TIMEOUT,
@@ -48,14 +50,21 @@ def build_session_for_tests(
     sleep: Callable[[float], Awaitable[Any]] | None = None,
     is_auth_error: Callable[[Exception], bool] | None = None,
     async_client_factory: Callable[..., httpx.AsyncClient] | None = None,
-) -> Session:
-    """Drop-in replacement for the historical ``Session(auth, ...)`` pattern.
+) -> NotebookLMClient:
+    """Build a minimal client shell with composed runtime attributes populated.
 
-    The client test factory owns composition. This helper keeps its existing
-    signature and return type for one more phase, returning the temporary
-    ``client._session`` forwarder that Phase 3 will remove.
+    The helper preserves the historical test-only seam kwargs without adding
+    them to :class:`NotebookLMClient`'s public constructor. It intentionally
+    does not construct feature API attributes; tests that need the public
+    feature surface should instantiate :class:`NotebookLMClient` directly.
     """
-    return build_client_for_tests(
+    seams = resolve_client_seams(
+        decode_response=decode_response,
+        sleep=sleep,
+        is_auth_error=is_auth_error,
+    )
+    composed = ClientComposed(max_concurrent_rpcs=max_concurrent_rpcs)
+    internals = compose_client_internals(
         auth=auth,
         timeout=timeout,
         connect_timeout=connect_timeout,
@@ -72,8 +81,23 @@ def build_session_for_tests(
         on_rpc_event=on_rpc_event,
         cookie_saver=cookie_saver,
         cookie_rotator=cookie_rotator,
-        decode_response=decode_response,
-        sleep=sleep,
-        is_auth_error=is_auth_error,
         async_client_factory=async_client_factory,
-    )._session
+        seams=seams,
+        composed=composed,
+    )
+
+    client = NotebookLMClient.__new__(NotebookLMClient)
+    client._auth = auth
+    client._seams = seams
+    client._composed = composed
+    client._collaborators = internals.collaborators
+    client._rpc_executor = internals.executor
+
+    session = Session(
+        collaborators=internals.collaborators,
+        auth=auth,
+        composed=composed,
+    )
+    session._seams = seams
+    client._session = session
+    return client
