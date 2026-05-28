@@ -411,8 +411,9 @@ class ClientLifecycle:
         close-time ``host._rpc_executor = None`` step. The composition
         root (:func:`notebooklm._session_init.compose_client_internals`)
         binds the executor exactly once via
-        :meth:`notebooklm._client_composed.ClientComposed.bind_executor` and the binding is preserved
-        across ``close()`` → ``open()`` cycles. The executor's
+        :meth:`notebooklm._client_composed.ClientComposed.bind_executor`,
+        and the binding is preserved across ``close()`` → ``open()``
+        cycles. The executor's
         underlying transport collaborator (:class:`Kernel`) rebuilds
         its ``httpx.AsyncClient`` on each :meth:`open`, so the executor
         continues to operate against the fresh transport state without
