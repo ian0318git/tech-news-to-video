@@ -9,22 +9,21 @@ from typing import TYPE_CHECKING
 
 import httpx  # noqa: F401 - compatibility patch surface for AsyncClient defaults
 
-from ._rpc_executor import RpcExecutor
-from ._session_transport import SessionTransport
 from .auth import (
     AuthTokens,
 )
 
 if TYPE_CHECKING:
+    from ._client_composed import ClientComposed
     from ._client_seams import ClientSeams
     from ._middleware import Middleware
     from ._middleware_chain import MiddlewareChainBuilder
     from ._middleware_chain_host import MiddlewareChainHost
+    from ._rpc_executor import RpcExecutor
     from ._session_init import (
         SessionCollaborators,
-        ValidatedSessionConfig,
-        WiredMiddleware,
     )
+    from ._session_transport import SessionTransport
 
     # ADR-014 Rule 5 (Wave 4 of session-decoupling): the compile-time
     # ``Session: RpcOwner`` assertion was removed when the ``RpcOwner``
@@ -81,60 +80,36 @@ class Session:
         self,
         *,
         collaborators: SessionCollaborators,
-        config: ValidatedSessionConfig,
         auth: AuthTokens,
-        chain_host: MiddlewareChainHost,
+        composed: ClientComposed,
     ) -> None:
-        """Initialise a Session from a pre-built collaborator bundle.
+        """Initialise the one-wave Session lifecycle forwarder.
 
-        :class:`Session` does not construct the bundle / transport /
-        chain inline — :func:`compose_session_internals` builds all
-        three, then calls this constructor with the validated config +
-        the bundle + the auth tokens. The transport / chain / executor
-        are written into the late-bound slots by the composition root
-        via the :meth:`_bind_transport` / :meth:`_bind_chain_metadata`
-        / :meth:`_bind_executor` write-once setters.
-
-        ``chain_host`` is the :class:`MiddlewareChainHost` constructed
-        by :func:`compose_session_internals` BEFORE this constructor.
-        The host owns the retry tunables, the installed chain slot,
-        and the chain leaf; :class:`Session` keeps a reference to it
-        as ``self._chain_host`` so feature code and tests that need
-        to rebind one of those slots can reach the host directly
-        (``core._chain_host._rate_limit_max_retries = N``,
-        ``core._chain_host._authed_post_chain = fake_chain``,
-        ``core._chain_host._authed_post_chain_terminal = fake_terminal``).
+        :class:`Session` no longer owns composition state. Phase 2 moves
+        transport, executor, chain host, chain builder, and middleware
+        storage to :class:`ClientComposed`; this class keeps temporary
+        property forwarders so tests that still receive a ``Session``
+        can read ``core._transport`` / ``core._rpc_executor`` /
+        ``core._chain_host`` until Phase 3 performs the mass rewrite.
 
         Production callers DO NOT instantiate :class:`Session` directly
-        — :class:`NotebookLMClient` calls
-        :func:`compose_session_internals` from its own ``__init__`` and
-        feature adapters draw from the returned :class:`ComposedSession`.
+        — :class:`NotebookLMClient` constructs it after
+        :func:`compose_client_internals` has fully bound
+        :class:`ClientComposed`.
         Tests use the canonical
         ``tests/_helpers/session_factory.build_session_for_tests``
-        helper, which forwards through the same composition root.
+        helper, which returns the one-wave ``client._session``.
 
         Args:
             collaborators: The :class:`SessionCollaborators` bundle
                 constructed by :func:`build_collaborators` inside
-                :func:`compose_session_internals`.
-            config: The :class:`ValidatedSessionConfig` constructed by
-                :func:`validate_constructor_args` inside
-                :func:`compose_session_internals`.
+                :func:`compose_client_internals`.
             auth: Authentication tokens from browser login.
-            chain_host: The :class:`MiddlewareChainHost` constructed by
-                :func:`compose_session_internals` for this session. The
-                host owns the chain leaf, the chain slot, and the three
-                retry-budget tunables.
+            composed: Client-owned composition holder. It owns the chain
+                host, transport, middleware metadata, executor, and lazy
+                RPC semaphore state.
         """
-        # ``_chain_host`` owns the retry tunables (``_rate_limit_max_retries``,
-        # ``_server_error_max_retries``, ``_refresh_retry_delay``), the
-        # chain slot (``_authed_post_chain``), and the chain leaf
-        # (``_authed_post_chain_terminal``). :func:`compose_session_internals`
-        # constructed the host with the live values BEFORE this Session
-        # was instantiated, and it remains the canonical owner — there
-        # are no Session-side aliases or descriptor forwards.
-        self._chain_host = chain_host
-
+        self._composed = composed
         self.auth = auth
 
         # The collaborator bundle is stored as a private attribute so
@@ -145,7 +120,7 @@ class Session:
         # ``Session.session_transport`` / ``Session.rpc_executor``) that
         # previously exposed the bundle through the Session surface
         # were deleted in this PR — :class:`NotebookLMClient` reads
-        # from the :class:`ComposedSession` it received instead.
+        # from the :class:`ClientInternals` it received instead.
         self._collaborators = collaborators
         self._metrics_obj = collaborators.metrics
         self._drain_tracker = collaborators.drain_tracker
@@ -155,119 +130,29 @@ class Session:
         self._lifecycle = collaborators.lifecycle
         self.cookie_persistence = collaborators.cookie_persistence
 
-        # Late-bound storage — these slots stay ``None`` until the
-        # composition root in :func:`compose_session_internals` drives
-        # the write-once binders. Entry points (``open`` / ``close``)
-        # guard against use-before-bind via :meth:`_require_constructed`.
-        # Types mirror the corresponding :class:`WiredMiddleware` fields so
-        # downstream readers see precise types rather than ``Any``
-        # (claude[bot] review on PR #1089). The ``_authed_post_chain``
-        # slot is owned by ``_chain_host``; it is not duplicated here.
-        self._transport: SessionTransport | None = None
-        self._chain_builder: MiddlewareChainBuilder | None = None
-        self._middlewares: list[Middleware] | None = None
-        self._rpc_executor: RpcExecutor | None = None
+    @property
+    def _transport(self) -> SessionTransport:
+        return self._composed.transport
 
-    def assert_bound_loop(self) -> None:
-        """Raise if this core is used from a loop other than its open-time loop.
+    @property
+    def _rpc_executor(self) -> RpcExecutor:
+        return self._composed.executor
 
-        Forward to :meth:`ClientLifecycle.assert_bound_loop` per ADR-014
-        Rule 1; ``ClientLifecycle`` satisfies the ``LoopGuard`` capability
-        Protocol directly since Wave 2 of the session-decoupling plan.
-        """
-        self._lifecycle.assert_bound_loop()
+    @_rpc_executor.setter
+    def _rpc_executor(self, executor: RpcExecutor) -> None:
+        self._composed._executor = executor
 
-    # ------------------------------------------------------------------
-    # Write-once binders + fail-fast guards
-    # ------------------------------------------------------------------
-    #
-    # The three ``_bind_*`` setters below accept exactly one bind per
-    # attribute. They are reserved for :func:`compose_session_internals`
-    # (the composition root) and are load-bearing — :meth:`Session.__init__`
-    # leaves ``_transport`` / ``_chain_builder`` / ``_middlewares`` /
-    # ``_rpc_executor`` at ``None``, so the composition root is the
-    # single assignment site for each.
-    #
-    # ``_authed_post_chain`` is owned by :class:`MiddlewareChainHost`;
-    # the composition root installs it via
-    # ``chain_host._authed_post_chain = wired.authed_post_chain``. The
-    # binder below stores only the auxiliary chain artifacts
-    # (``_chain_builder`` / ``_middlewares``) so the chain slot has
-    # exactly one assignment site.
-    #
-    # The executor is reachable directly via ``self._rpc_executor``
-    # (and never re-nulled by ``close()`` — see
-    # ``_session_lifecycle.py:close`` for the corresponding contract).
+    @property
+    def _chain_host(self) -> MiddlewareChainHost:
+        return self._composed.chain_host
 
-    def _bind_transport(self, transport: SessionTransport) -> None:
-        """Write-once setter for :attr:`_transport`.
+    @property
+    def _chain_builder(self) -> MiddlewareChainBuilder:
+        return self._composed.chain_builder
 
-        Raises ``RuntimeError`` on a second bind attempt.
-        :func:`compose_session_internals` calls this after
-        :func:`build_session_transport` returns; it is the single
-        assignment site for :attr:`_transport` (Stage B1 PR 2 onwards).
-        """
-        if getattr(self, "_transport", None) is not None:
-            raise RuntimeError("Session._transport already bound")
-        self._transport = transport
-
-    def _bind_chain_metadata(self, wired: WiredMiddleware) -> None:
-        """Write-once setter for the auxiliary chain-metadata artifacts.
-
-        The canonical install site for ``_authed_post_chain`` is
-        ``chain_host._authed_post_chain = wired.authed_post_chain`` in
-        :func:`compose_session_internals`. This binder is left to store
-        only the *auxiliary* artifacts —
-        :class:`MiddlewareChainBuilder` (introspected by builder-level
-        unit tests) and the ``middlewares`` list (introspected by
-        ``test_chain_wiring.test_chain_seeded_with_final_adr_009_ordering``).
-        Raises ``RuntimeError`` on a second bind attempt.
-
-        Tests that need to swap the live chain after construction
-        rebind ``core._chain_host._authed_post_chain = fake_chain`` so
-        the transport's ``chain_provider`` lambda picks up the fake on
-        the next authed POST; this binder does not participate in that
-        post-construction rebind path.
-        """
-        if getattr(self, "_chain_builder", None) is not None:
-            raise RuntimeError("Session._chain_metadata already bound")
-        self._chain_builder = wired.chain_builder
-        self._middlewares = wired.middlewares
-
-    def _bind_executor(self, executor: RpcExecutor) -> None:
-        """Write-once setter for :attr:`_rpc_executor`.
-
-        Stage B1 PR 2 deleted the legacy lazy ``_get_rpc_executor``
-        factory — :func:`compose_session_internals` is the only
-        producer of an :class:`RpcExecutor`, and it drives this binder
-        exactly once during composition. The slot is NOT re-nulled by
-        :meth:`ClientLifecycle.close`; the executor persists across
-        ``close()`` → ``open()`` cycles because the underlying
-        transport collaborator (:class:`Kernel`) rebuilds its
-        ``httpx.AsyncClient`` lazily on each ``open()``.
-        """
-        if getattr(self, "_rpc_executor", None) is not None:
-            raise RuntimeError("Session._rpc_executor already bound")
-        self._rpc_executor = executor
-
-    def _require_constructed(self, attr_name: str) -> None:
-        """Fail-fast guard for :class:`Session` entry points.
-
-        Raises ``RuntimeError("Session not fully constructed: <attr> is
-        None")`` when a required write-once binding is unset. Load-bearing
-        after Stage B1 PR 2: :class:`Session.__init__` leaves the
-        transport / chain / executor slots at ``None`` and only the
-        composition root (:func:`compose_session_internals`) drives the
-        binders, so this guard catches any path that exercises a
-        :class:`Session` outside that root.
-
-        The lookup uses :func:`getattr` with a ``None`` default so the
-        check works during ``__init__`` itself (before the attribute
-        has been assigned for the first time) — that path raises the
-        same actionable message instead of an obscure ``AttributeError``.
-        """
-        if getattr(self, attr_name, None) is None:
-            raise RuntimeError(f"Session not fully constructed: {attr_name} is None")
+    @property
+    def _middlewares(self) -> list[Middleware]:
+        return self._composed.middlewares
 
     async def open(self) -> None:
         """Open the HTTP client connection.
@@ -291,13 +176,6 @@ class Session:
         and passes them through so the lifecycle never reaches back
         through a Session-shaped host.
         """
-        # Stage B1 PR 2 fail-fast: ensure full composition before
-        # lifecycle work. The composition root
-        # (:func:`compose_session_internals`) drives
-        # :meth:`_bind_transport` before returning, so a ``None``
-        # here means the Session was instantiated outside the
-        # composition root and is unusable.
-        self._require_constructed("_transport")
         await self._lifecycle.open(
             auth=self.auth,
             drain_tracker=self._drain_tracker,
@@ -334,8 +212,6 @@ class Session:
         kwargs; this forwarder unpacks its own collaborator aliases
         and passes them through.
         """
-        # Stage B1 PR 2 fail-fast: same guard as :meth:`open`.
-        self._require_constructed("_transport")
         await self._lifecycle.close(
             auth_coord=self._auth_coord,
             drain_tracker=self._drain_tracker,

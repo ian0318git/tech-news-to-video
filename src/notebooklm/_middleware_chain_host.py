@@ -49,7 +49,7 @@ if TYPE_CHECKING:
 class MiddlewareChainHost:
     """Owner of the middleware-chain mutable state and chain leaf.
 
-    Constructed by :func:`compose_session_internals` BEFORE
+    Constructed by :func:`compose_client_internals` BEFORE
     :class:`Session`. The transport is bound write-once via
     :meth:`_bind_transport` after :func:`build_session_transport`
     returns — this resolves the host ↔ transport construction cycle
@@ -70,7 +70,7 @@ class MiddlewareChainHost:
         _refresh_retry_delay: Backoff between refresh-retry attempts
             in the auth-refresh middleware. Same live-read contract.
         _authed_post_chain: The wired middleware chain. ``None`` until
-            :func:`compose_session_internals` assigns it directly here.
+            :func:`compose_client_internals` assigns it directly here.
             The transport's ``chain_provider`` lambda reads this
             attribute every authed POST.
         _transport: The :class:`SessionTransport` collaborator. ``None``
@@ -90,7 +90,7 @@ class MiddlewareChainHost:
         """Write-once setter for :attr:`_transport`.
 
         Raises :class:`RuntimeError` on a second bind attempt — the
-        composition root (:func:`compose_session_internals`) is the
+        composition root (:func:`compose_client_internals`) is the
         single legitimate caller, and it fires this once after
         :func:`build_session_transport` returns. The same write-once
         shape on :class:`Session` (:meth:`Session._bind_transport`)

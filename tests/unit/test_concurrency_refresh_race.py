@@ -68,10 +68,7 @@ import httpx
 import pytest
 
 from _fixtures.kernel_test_helpers import install_http_client_for_test
-from _helpers.session_factory import (
-    build_composed_session_for_tests,
-    build_refresh_client_shell,
-)
+from _helpers.client_factory import build_client_for_tests
 from notebooklm._middleware_auth_refresh import AuthRefreshMiddleware
 from notebooklm._rpc_executor import RpcExecutor
 from notebooklm._session_auth import AuthRefreshCoordinator
@@ -468,17 +465,16 @@ async def test_concurrent_refresh_does_not_corrupt_inflight_rpc_request(rpc_firs
 
     # Build the same auth scaffold the unit conftest's ``make_core`` produces
     # (CSRF_OLD / SID_OLD / old_sid_cookie) so the OLD/NEW marker assertions
-    # below stay valid. Routed through :func:`build_composed_session_for_tests`
-    # (Wave 0 of the host-protocol-removal plan) so we get the full
-    # :class:`ComposedSession` bundle the shell helper needs — instead of
-    # only the :class:`Session` instance ``make_core`` yields.
+    # below stay valid. Routed through :func:`build_client_for_tests` so the
+    # refresh client shell and one-wave Session forwarder share one composed
+    # runtime.
     auth = AuthTokens(
         csrf_token="CSRF_OLD",
         session_id="SID_OLD",
         cookies={"SID": "old_sid_cookie"},
     )
-    composed = build_composed_session_for_tests(auth=auth, refresh_retry_delay=0.0)
-    core = composed.session
+    client = build_client_for_tests(auth=auth, refresh_retry_delay=0.0)
+    core = client._session
     await core.open()
     try:
         # Swap the auto-built http client for one that uses the test
@@ -495,16 +491,6 @@ async def test_concurrent_refresh_does_not_corrupt_inflight_rpc_request(rpc_firs
                 timeout=httpx.Timeout(connect=1.0, read=5.0, write=5.0, pool=1.0),
             ),
         )
-
-        # ``build_refresh_client_shell`` populates all four runtime
-        # attributes (``_session`` / ``_auth`` / ``_collaborators`` /
-        # ``_rpc_executor``) from the composed bundle so the shell mirrors
-        # production. Pre-Wave-0 this site set only ``client._session = core``,
-        # which left ``client._auth`` unset; that worked because
-        # ``refresh_auth`` reaches through ``self._session.auth``, but it
-        # diverged from production shape and made the later
-        # ``Session.lifecycle`` deletion (Wave 2) require shell rewrites.
-        client = build_refresh_client_shell(composed)
 
         # try/finally ensures the mock-transport handlers are unblocked even
         # if a wait_for times out — otherwise pending tasks dangle in the

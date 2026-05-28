@@ -573,13 +573,12 @@ def test_lifted_core_modules_are_retired() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_compose_session_internals_exposes_constructor_di_seams() -> None:
-    """``compose_session_internals`` MUST expose the four constructor-DI seams.
+def test_compose_client_internals_exposes_constructor_di_seams() -> None:
+    """``compose_client_internals`` MUST expose the four constructor-DI seams.
 
     Stage B1 PR 2 of the post-refactoring plan moved the composition
-    root out of ``Session.__init__`` (which now takes
-    ``(*, collaborators, config, auth)`` only) into
-    ``notebooklm._session_init.compose_session_internals``. The seams live
+    root out of ``Session.__init__`` into
+    ``notebooklm._session_init.compose_client_internals``. The seams live
     on the helper (and on the canonical test builder
     ``build_session_for_tests``), NOT on ``NotebookLMClient.__init__``
     (which preserves the production surface).
@@ -593,12 +592,12 @@ def test_compose_session_internals_exposes_constructor_di_seams() -> None:
     """
     import inspect
 
-    from notebooklm._session_init import compose_session_internals
+    from notebooklm._session_init import compose_client_internals
 
-    sig = inspect.signature(compose_session_internals)
+    sig = inspect.signature(compose_client_internals)
     for name in ("decode_response", "sleep", "is_auth_error", "async_client_factory"):
         assert name in sig.parameters, (
-            f"compose_session_internals must expose constructor-DI kwarg {name!r}"
+            f"compose_client_internals must expose constructor-DI kwarg {name!r}"
         )
         param = sig.parameters[name]
         assert param.kind == inspect.Parameter.KEYWORD_ONLY, (
