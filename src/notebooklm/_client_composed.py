@@ -87,7 +87,7 @@ class ClientComposed:
 
     def bind_chain_metadata(self, wired: WiredMiddleware) -> None:
         if self._chain_builder is not None:
-            raise RuntimeError("ClientComposed._chain_metadata already bound")
+            raise RuntimeError("ClientComposed._chain_builder already bound")
         self._chain_builder = wired.chain_builder
         self._middlewares = wired.middlewares
 

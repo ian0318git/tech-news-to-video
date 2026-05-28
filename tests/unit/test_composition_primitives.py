@@ -370,7 +370,7 @@ def test_client_composed_chain_metadata_binder_raises_on_double_bind() -> None:
         middlewares=holder.middlewares,
         authed_post_chain=holder.chain_host._authed_post_chain,
     )
-    with pytest.raises(RuntimeError, match="_chain_metadata already bound"):
+    with pytest.raises(RuntimeError, match="_chain_builder already bound"):
         holder.bind_chain_metadata(wired)
 
 
