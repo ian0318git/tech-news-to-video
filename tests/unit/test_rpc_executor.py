@@ -7,7 +7,7 @@ from typing import Any
 import httpx
 import pytest
 
-from _helpers.session_factory import build_session_for_tests
+from _helpers.client_factory import build_client_shell_for_tests
 from notebooklm._logging import get_request_id, reset_request_id, set_request_id
 from notebooklm._request_types import AuthSnapshot
 from notebooklm._rpc_executor import RpcExecutor
@@ -148,7 +148,7 @@ def _executor(
 @pytest.mark.asyncio
 async def test_rpc_executor_attribute_is_dispatched_through(monkeypatch) -> None:
     """``core._rpc_executor`` is the canonical RPC dispatch seam."""
-    core = build_session_for_tests(_auth_tokens())
+    core = build_client_shell_for_tests(_auth_tokens())
     calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
 
     class FakeExecutor:
@@ -235,7 +235,7 @@ async def test_constructor_injected_decode_response_drives_executor(monkeypatch)
         decode_calls.append({"raw": raw, "rpc_id": rpc_id, "allow_null": allow_null})
         return {"decoded": rpc_id}
 
-    core = build_session_for_tests(_auth_tokens(), decode_response=fake_decode)
+    core = build_client_shell_for_tests(_auth_tokens(), decode_response=fake_decode)
     executor = core._rpc_executor
 
     async def fake_perform_authed_post(
@@ -251,7 +251,7 @@ async def test_constructor_injected_decode_response_drives_executor(monkeypatch)
     # ``self._transport.perform_authed_post(...)`` directly instead of
     # routing through ``Session._perform_authed_post``. Patch the
     # collaborator the executor actually reaches.
-    monkeypatch.setattr(core._transport, "perform_authed_post", fake_perform_authed_post)
+    monkeypatch.setattr(core._composed.transport, "perform_authed_post", fake_perform_authed_post)
 
     result = await executor._execute_once(
         RPCMethod.LIST_NOTEBOOKS,
@@ -389,7 +389,7 @@ async def test_constructor_injected_sleep_drives_executor(monkeypatch) -> None:
 
     The legacy module-level ``_sleep_late_bound`` wrapper used to re-import
     ``asyncio.sleep`` on every call, so a
-    ``monkeypatch.setattr("notebooklm._session.asyncio.sleep", …)`` after the
+    ``monkeypatch.setattr("notebooklm._session_helpers.asyncio.sleep", …)`` after the
     executor was already constructed still affected the live sleep path.
     The constructor-DI seam (``Session(..., sleep=…)``) intentionally captures
     the callable at construction time — see ``docs/improvement.md`` §4.1.
@@ -405,7 +405,7 @@ async def test_constructor_injected_sleep_drives_executor(monkeypatch) -> None:
     async def fake_sleep(seconds: float) -> None:
         sleep_calls.append(seconds)
 
-    core = build_session_for_tests(
+    core = build_client_shell_for_tests(
         _auth_tokens(),
         refresh_callback=refresh_callback,
         refresh_retry_delay=0.5,
@@ -439,7 +439,7 @@ async def test_constructor_injected_sleep_drives_executor(monkeypatch) -> None:
 
     # ADR-014 Rule 5 (Wave 4): executor calls ``self._auth_refresh.await_refresh()``
     # directly. Patch the collaborator the executor actually reaches.
-    monkeypatch.setattr(core._auth_coord, "await_refresh", fake_await_refresh)
+    monkeypatch.setattr(core._collaborators.auth_coord, "await_refresh", fake_await_refresh)
     monkeypatch.setattr(executor, "rpc_call", fake_rpc_call)
 
     result = await executor.try_refresh_and_retry(

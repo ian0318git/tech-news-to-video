@@ -37,7 +37,7 @@ class Kernel:
         live client via the injected ``async_client_factory``) and
         :meth:`aclose` (which nulls it on teardown). Tests that need to
         substitute the live transport at construction time should inject
-        an ``async_client_factory`` into :class:`notebooklm._session.Session`
+        an ``async_client_factory`` into the client composition helper
         (the factory is forwarded into this kernel's ``__init__``); tests
         that need to swap the live client AFTER ``open()`` should use the
         dedicated test helper at

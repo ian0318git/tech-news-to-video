@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from _helpers.client_factory import build_client_for_tests
+from _helpers.client_factory import build_client_shell_for_tests
 from notebooklm._request_types import AuthSnapshot
 from notebooklm.auth import AuthTokens
 
@@ -21,7 +21,7 @@ def _make_auth() -> AuthTokens:
 async def test_snapshot_provider_captures_client_auth_by_identity() -> None:
     """Transport snapshots must pass the identical client-owned auth object."""
     auth = _make_auth()
-    client = build_client_for_tests(auth)
+    client = build_client_shell_for_tests(auth)
     captured: dict[str, AuthTokens] = {}
 
     async def snapshot(*, auth: AuthTokens) -> AuthSnapshot:

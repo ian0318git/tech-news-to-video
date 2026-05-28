@@ -1,8 +1,8 @@
 """Regression test for the close-cancellation transport-leak shield.
 
 The audit covered whether the ``asyncio.shield`` wrapped around
-``self._kernel.http_client.aclose()`` inside :meth:`notebooklm._session.Session.close`
-correctly survives a cancellation that lands while ``aclose`` itself is
+``self._kernel.http_client.aclose()`` inside lifecycle close correctly
+survives a cancellation that lands while ``aclose`` itself is
 in flight, exercised through the user-facing ``__aexit__`` surface (not
 the bare ``close()`` task path already covered by the companion
 ``test_cancel_mid_close_does_not_leak_transport``).
@@ -26,7 +26,7 @@ a different cancel-injection site:
 - ``__aexit__`` driven through :func:`asyncio.wait_for(timeout=0.1)` so
   the outer cancel reliably arrives while the slowed ``aclose`` is in
   flight — i.e. inside the shielded await.
-- We hold a reference to ``client._session._kernel.http_client`` captured before
+- We hold a reference to ``client._collaborators.kernel.http_client`` captured before
   the cancel (close nulls the attribute on success) and assert
   ``http_client_ref.is_closed`` is true afterwards — proof that the
   shielded ``aclose`` in the outer ``finally`` ran to completion.
@@ -157,7 +157,7 @@ async def test_close_during_keepalive_cancel_does_not_leak_transport(
         # Save the transport ref BEFORE the cancel — successful close
         # sets ``_core._kernel.http_client = None`` (inner finally), so we'd
         # have no handle otherwise.
-        http_client_ref = client._session._kernel.get_http_client()
+        http_client_ref = client._collaborators.kernel.get_http_client()
         assert http_client_ref is not None, "open() must have installed a transport"
 
         # Slow down ``aclose()`` so the outer ``wait_for(timeout=0.1)``
@@ -245,16 +245,16 @@ async def test_cancel_during_drain_in_close_does_not_leak_transport(
 
     Sibling test to ``test_close_during_keepalive_cancel_does_not_leak_transport``
     above. That test covers the shielded inner-close path (cancel lands
-    *inside* ``aclose`` while ``Session.close`` is already running). This
+    *inside* ``aclose`` while lifecycle close is already running). This
     test covers the **outer-wrapper** path (cancel lands while
     ``NotebookLMClient.close()`` is still awaiting ``self.drain(...)``,
-    i.e. BEFORE ``self._session.close()`` is reached). Audit finding I12
+    i.e. BEFORE lifecycle close is reached). Audit finding I12
     (``architecture-audit.md``) flagged that the public wrapper at
     ``client.py:close()`` awaits ``self.drain(...)`` *before* calling
-    ``self._session.close()`` with no protection; if the caller task is
+    lifecycle close with no protection; if the caller task is
     cancelled while drain is parked on an in-flight operation,
     ``CancelledError`` propagates out of ``close()`` and the shielded
-    ``Session.close()`` / ``Kernel.aclose()`` never runs — leaking the
+    lifecycle close / ``Kernel.aclose()`` never runs — leaking the
     live ``httpx.AsyncClient``.
 
     Repro setup:
@@ -262,12 +262,11 @@ async def test_cancel_during_drain_in_close_does_not_leak_transport(
     - Open the client.
     - Capture ``http_client_ref`` BEFORE the cancel (successful close
       nulls the kernel's transport attribute).
-    - Monkeypatch ``client._session._drain_tracker.drain`` to park on an
+    - Monkeypatch ``client._collaborators.drain_tracker.drain`` to park on an
       unset ``asyncio.Event`` so drain() blocks indefinitely; the only
       exit is the ``CancelledError`` injected by the outer ``wait_for``
-      deadline. (Wave 11a of session-decoupling deleted the
-      ``Session.drain`` forward; the public ``NotebookLMClient.drain``
-      reaches the tracker directly.)
+      deadline. The public ``NotebookLMClient.drain`` reaches the
+      tracker directly.
     - Drive ``close(drain=True)`` through ``asyncio.wait_for(timeout=0.1)``
       so the cancel reliably lands while ``drain`` is parked.
 
@@ -275,9 +274,9 @@ async def test_cancel_during_drain_in_close_does_not_leak_transport(
 
     - After the cancel, ``client.is_connected`` must be ``False`` AND
       ``http_client_ref.is_closed`` must be ``True`` — proving the outer
-      wrapper drove ``Session.close()`` to completion despite the cancel
+      wrapper drove lifecycle close to completion despite the cancel
       that fired mid-drain. Pre-fix this assertion fails: cancel exits
-      ``NotebookLMClient.close()`` before ``self._session.close()`` is
+      ``NotebookLMClient.close()`` before lifecycle close is
       reached and the transport stays open.
     """
     client = NotebookLMClient(keepalive_auth)
@@ -290,7 +289,7 @@ async def test_cancel_during_drain_in_close_does_not_leak_transport(
     try:
         # Capture the transport ref BEFORE the cancel — successful close
         # nulls ``_kernel.http_client``, so we'd lose the handle.
-        http_client_ref = client._session._kernel.get_http_client()
+        http_client_ref = client._collaborators.kernel.get_http_client()
         assert http_client_ref is not None, "open() must have installed a transport"
 
         # Park ``drain`` on an unset event. The only way out is the
@@ -305,13 +304,13 @@ async def test_cancel_during_drain_in_close_does_not_leak_transport(
             drain_entered.set()
             await hang_event.wait()
 
-        monkeypatch.setattr(client._session._drain_tracker, "drain", _hanging_drain)
+        monkeypatch.setattr(client._collaborators.drain_tracker, "drain", _hanging_drain)
 
         # Drive ``close(drain=True)`` through a short ``wait_for`` so a
         # cancel lands while ``drain`` is parked. The cancel propagates
         # out of ``wait_for`` as ``TimeoutError``; pre-fix it also
-        # exits ``NotebookLMClient.close()`` before reaching
-        # ``self._session.close()``, leaking the transport.
+        # exits ``NotebookLMClient.close()`` before reaching lifecycle close,
+        # leaking the transport.
         with pytest.raises((TimeoutError, asyncio.TimeoutError)):
             await asyncio.wait_for(
                 client.close(drain=True),
@@ -333,7 +332,7 @@ async def test_cancel_during_drain_in_close_does_not_leak_transport(
         # because close() already abandoned.
         hang_event.set()
 
-        # Bounded poll: the shielded ``Session.close()`` runs as a
+        # Bounded poll: the shielded lifecycle close runs as a
         # background task; give it up to ~1 s to complete on slow CI.
         for _ in range(100):
             if not client.is_connected and http_client_ref.is_closed:
@@ -342,19 +341,19 @@ async def test_cancel_during_drain_in_close_does_not_leak_transport(
 
         # The regression assertions. Pre-fix both fail (is_connected
         # stays True, is_closed stays False) because the cancel skipped
-        # ``self._session.close()`` entirely. Post-fix both hold because
+        # lifecycle close entirely. Post-fix both hold because
         # the ``except asyncio.CancelledError:`` branch in
-        # ``NotebookLMClient.close()`` drives ``asyncio.shield(self._session.close())``
-        # before re-raising the cancel.
+        # ``NotebookLMClient.close()`` drives shielded lifecycle close before
+        # re-raising the cancel.
         assert not client.is_connected, (
             "transport leaked: cancel during drain() left client.is_connected "
-            "= True — NotebookLMClient.close() abandoned cleanup before "
-            "self._session.close() was reached (audit finding I12)"
+            "= True - NotebookLMClient.close() abandoned cleanup before "
+            "lifecycle close was reached (audit finding I12)"
         )
         assert http_client_ref.is_closed, (
             "transport leaked: cancel during drain() left the httpx "
             "AsyncClient open — NotebookLMClient.close() abandoned cleanup "
-            "before Session.close()/Kernel.aclose() were reached (audit "
+            "before lifecycle close / Kernel.aclose() were reached (audit "
             "finding I12)"
         )
         aexit_succeeded = True

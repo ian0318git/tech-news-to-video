@@ -48,7 +48,7 @@ def _is_public_client_rpc_call(node: ast.Call) -> bool:
     Heuristic (validated against repo audit):
     - receiver Name "client" / "nbclient" / "notebook_client" -> match
     - receiver Attribute ending in ".client" (e.g. self.client.rpc_call) -> match
-    - receiver Attribute ending in "._core" / "._session" / ".core" / ".session" -> SKIP
+    - receiver Attribute ending in "._core" / deleted session attr / ".core" / ".session" -> SKIP
     """
     if not isinstance(node.func, ast.Attribute):
         return False

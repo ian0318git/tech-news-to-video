@@ -48,9 +48,7 @@ uv run pytest
 ```
 CLI Layer (cli/)
     ↓
-Client Layer (client.py, _*.py APIs)
-    ↓
-Session Layer (_session.py + session/kernel collaborator modules)
+Client Runtime Layer (client.py + _*.py APIs/collaborators)
     ↓
 RPC Layer (rpc/)
 ```
@@ -60,8 +58,9 @@ RPC Layer (rpc/)
    - `encoder.py`: Request encoding
    - `decoder.py`: Response parsing
 
-2. **Session Layer** (`src/notebooklm/_session.py` + session/kernel collaborators):
-   - `_session.py`: concrete `Session` orchestration
+2. **Client Runtime Layer** (`src/notebooklm/client.py` + runtime collaborators):
+   - `client.py`: `NotebookLMClient` composition root plus public surface
+   - `_client_composed.py`, `_session_init.py`: composition holder and collaborator construction
    - `_request_types.py`, `_transport_errors.py`, `_streaming_post.py`, `_rpc_executor.py`: request construction, transport errors, streaming HTTP, and RPC dispatch
    - `_session_auth.py`, `_cookie_persistence.py`: Auth refresh + cookie storage
    - `_client_metrics.py`, `_transport_drain.py`, `_reqid_counter.py`: Telemetry, drain coordination, request-counter handling
@@ -84,7 +83,8 @@ RPC Layer (rpc/)
 | File | Purpose |
 |------|---------|
 | `client.py` | Main `NotebookLMClient` class |
-| `_session.py` | Concrete `Session` lifecycle root (no longer a compatibility facade as of Waves 5 + 11 of session-decoupling — see [ADR-014](docs/adr/0014-feature-local-runtime-adapters.md)). Constructs the collaborator graph in `__init__`; owns open/close lifecycle; exposes a narrow retention set (Stage-A accessors `collaborators` / `session_transport` / `rpc_executor`, the `_authed_post_chain_terminal` middleware leaf, provider-closure capture targets, and AST-guarded auth surface). Retention list pinned by [`docs/session-method-retention.md`](docs/session-method-retention.md) + [`tests/_lint/test_session_retention.py`](tests/_lint/test_session_retention.py); Stage-A accessor leakage outside `client.py` / `_session.py` / `tests/` blocked by [`tests/_lint/test_client_composition.py`](tests/_lint/test_client_composition.py). |
+| `_client_composed.py` | Client-owned composition holder for transport, executor, chain host, middleware metadata, and session collaborator bundle. |
+| `_session_init.py` | Constructor helpers that validate client runtime kwargs, build collaborators, wire middleware, and bind `ClientComposed`. |
 | `_kernel.py` | Concrete `Kernel` transport core (owns `httpx.AsyncClient` + cookie jar) |
 | `_session_config.py` | `DEFAULT_*` knobs and module-level constants |
 | `_session_helpers.py` | `is_auth_error`, `AUTH_ERROR_PATTERNS`, `_resolve_keepalive_interval` |
@@ -147,7 +147,7 @@ src/notebooklm/
 ├── client.py                    # NotebookLMClient
 ├── auth.py                      # Authentication facade — almost pure re-exports (`enumerate_accounts` exception; ADR-003 flat-re-export goal closed by ADR-014; see file table above)
 ├── types.py                     # Dataclasses
-├── _session.py                  # Concrete Session orchestration (NotebookLMClient internals)
+├── _client_composed.py          # Client-owned composition holder
 ├── _kernel.py                   # Concrete Kernel transport core
 ├── _session_config.py           # DEFAULT_* knobs + module-level constants
 ├── _session_helpers.py          # is_auth_error / AUTH_ERROR_PATTERNS / keepalive helpers

@@ -10,7 +10,6 @@ import httpx
 
 from notebooklm._client_composed import ClientComposed
 from notebooklm._client_seams import resolve_client_seams
-from notebooklm._session import Session
 from notebooklm._session_config import (
     DEFAULT_CONNECT_TIMEOUT,
     DEFAULT_KEEPALIVE_MIN_INTERVAL,
@@ -28,7 +27,7 @@ if TYPE_CHECKING:
     from notebooklm.types import ConnectionLimits
 
 
-def build_client_for_tests(
+def build_client_shell_for_tests(
     auth: AuthTokens,
     timeout: float = DEFAULT_TIMEOUT,
     connect_timeout: float = DEFAULT_CONNECT_TIMEOUT,
@@ -92,12 +91,4 @@ def build_client_for_tests(
     client._composed = composed
     client._collaborators = internals.collaborators
     client._rpc_executor = internals.executor
-
-    session = Session(
-        collaborators=internals.collaborators,
-        auth=auth,
-        composed=composed,
-    )
-    session._seams = seams
-    client._session = session
     return client

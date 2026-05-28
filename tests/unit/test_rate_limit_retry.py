@@ -15,7 +15,7 @@ import httpx
 import pytest
 
 from _fixtures.kernel_test_helpers import install_http_client_for_test
-from _helpers.session_factory import build_session_for_tests
+from _helpers.client_factory import build_client_shell_for_tests
 from conftest import install_post_as_stream
 from notebooklm.rpc import RateLimitError, RPCError, RPCMethod
 
@@ -54,8 +54,8 @@ async def test_rate_limit_retry_success_with_budget(auth_tokens):
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.side_effect = [_build_429("1"), _build_200([["result"]])]
 
-    core = build_session_for_tests(auth_tokens, rate_limit_max_retries=2)
-    install_http_client_for_test(core._kernel, mock_client)
+    core = build_client_shell_for_tests(auth_tokens, rate_limit_max_retries=2)
+    install_http_client_for_test(core._collaborators.kernel, mock_client)
     install_post_as_stream(None, mock_client, mock_client.post)
 
     # Decode may fail on the synthetic 200 — that's fine, what we care about
@@ -77,8 +77,8 @@ async def test_rate_limit_retry_exhausted_with_budget(auth_tokens):
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = _build_429("1")
 
-    core = build_session_for_tests(auth_tokens, rate_limit_max_retries=2)
-    install_http_client_for_test(core._kernel, mock_client)
+    core = build_client_shell_for_tests(auth_tokens, rate_limit_max_retries=2)
+    install_http_client_for_test(core._collaborators.kernel, mock_client)
     install_post_as_stream(None, mock_client, mock_client.post)
 
     with patch("asyncio.sleep", AsyncMock()) as mock_sleep, pytest.raises(RateLimitError):
@@ -104,8 +104,8 @@ async def test_rate_limit_no_retry_if_disabled(auth_tokens):
     mock_client.post.return_value = resp_429
 
     # Explicitly disable retries
-    core = build_session_for_tests(auth_tokens, rate_limit_max_retries=0)
-    install_http_client_for_test(core._kernel, mock_client)
+    core = build_client_shell_for_tests(auth_tokens, rate_limit_max_retries=0)
+    install_http_client_for_test(core._collaborators.kernel, mock_client)
     install_post_as_stream(None, mock_client, mock_client.post)
 
     with pytest.raises(RateLimitError):
@@ -127,8 +127,8 @@ async def test_rate_limit_exp_backoff_fallback_without_header(auth_tokens):
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = _build_429(retry_after=None)
 
-    core = build_session_for_tests(auth_tokens, rate_limit_max_retries=2)
-    install_http_client_for_test(core._kernel, mock_client)
+    core = build_client_shell_for_tests(auth_tokens, rate_limit_max_retries=2)
+    install_http_client_for_test(core._collaborators.kernel, mock_client)
     install_post_as_stream(None, mock_client, mock_client.post)
 
     sleeps: list[float] = []
@@ -153,8 +153,8 @@ async def test_rate_limit_no_retry_without_header_when_disabled(auth_tokens):
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = _build_429(retry_after=None)
 
-    core = build_session_for_tests(auth_tokens, rate_limit_max_retries=0)
-    install_http_client_for_test(core._kernel, mock_client)
+    core = build_client_shell_for_tests(auth_tokens, rate_limit_max_retries=0)
+    install_http_client_for_test(core._collaborators.kernel, mock_client)
     install_post_as_stream(None, mock_client, mock_client.post)
 
     with pytest.raises(RateLimitError):
@@ -166,4 +166,4 @@ async def test_rate_limit_no_retry_without_header_when_disabled(auth_tokens):
 def test_rate_limit_max_retries_negative_raises(auth_tokens):
     """Negative budget is rejected at construction."""
     with pytest.raises(ValueError, match="rate_limit_max_retries must be >= 0"):
-        build_session_for_tests(auth_tokens, rate_limit_max_retries=-1)
+        build_client_shell_for_tests(auth_tokens, rate_limit_max_retries=-1)

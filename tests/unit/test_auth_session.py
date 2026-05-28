@@ -13,7 +13,7 @@ import httpx
 import pytest
 
 from _fixtures.kernel_test_helpers import install_http_client_for_test
-from _helpers.session_factory import build_session_for_tests
+from _helpers.client_factory import build_client_shell_for_tests
 from notebooklm._auth.session import refresh_auth_session
 from notebooklm.auth import AuthTokens
 from notebooklm.client import NotebookLMClient
@@ -310,15 +310,15 @@ async def test_refresh_auth_session_persists_through_client_core_save_cookies(
     # Inject the cookie-saver seam directly (Phase 2 PR 4 — replaces the
     # legacy ``_core.save_cookies_to_storage`` string-target monkeypatch
     # with constructor injection through ``ClientLifecycle._cookie_saver``).
-    core = build_session_for_tests(auth, cookie_saver=fake_save_cookies_to_storage)
+    core = build_client_shell_for_tests(auth, cookie_saver=fake_save_cookies_to_storage)
 
     http_client = httpx.AsyncClient(
         transport=httpx.MockTransport(handler),
         cookies=auth.cookie_jar,
         follow_redirects=True,
     )
-    install_http_client_for_test(core._kernel, http_client)
-    core.cookie_persistence.capture_open_snapshot(http_client.cookies)
+    install_http_client_for_test(core._collaborators.kernel, http_client)
+    core._collaborators.cookie_persistence.capture_open_snapshot(http_client.cookies)
     try:
         # Wave 2 of plan ``host-protocol-removal`` made every dependency
         # of :func:`refresh_auth_session` an explicit keyword-only
@@ -327,15 +327,15 @@ async def test_refresh_auth_session_persists_through_client_core_save_cookies(
         # production ``ClientLifecycle.save_cookies`` → ``CookiePersistence``
         # → ``asyncio.to_thread(fake_save_cookies_to_storage)`` plumbing.
         await refresh_auth_session(
-            auth=core.auth,
-            kernel=core._kernel,
-            auth_coord=core._auth_coord,
-            lifecycle=core._lifecycle,
-            cookie_persistence=core.cookie_persistence,
+            auth=core._auth,
+            kernel=core._collaborators.kernel,
+            auth_coord=core._collaborators.auth_coord,
+            lifecycle=core._collaborators.lifecycle,
+            cookie_persistence=core._collaborators.cookie_persistence,
         )
     finally:
         await http_client.aclose()
-        install_http_client_for_test(core._kernel, None)
+        install_http_client_for_test(core._collaborators.kernel, None)
 
     assert len(calls) == 1
     path, return_result, original_snapshot = calls[0]

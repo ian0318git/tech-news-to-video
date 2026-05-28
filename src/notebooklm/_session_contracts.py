@@ -74,9 +74,9 @@ class RpcCaller(Protocol):
     ``disable_internal_retries`` / ``operation_variant`` parameters are
     preserved as-is.
 
-    A concrete :class:`notebooklm._session.Session` structurally
-    satisfies this Protocol; features that only need to issue RPC
-    calls depend on this narrow surface so they are not coupled to
+    ``NotebookLMClient`` and ``RpcExecutor`` structurally satisfy this
+    Protocol; features that only need to issue RPC calls depend on this
+    narrow surface so they are not coupled to
     transport, loop affinity, or close-time-hook concerns.
     """
 

@@ -38,7 +38,7 @@ def _stub_open(monkeypatch: pytest.MonkeyPatch) -> None:
     `_http_client` whose `aclose()` we can control.
     """
 
-    async def _stub_open(self) -> None:
+    async def _stub_open(self, **_kwargs: object) -> None:
         if self._kernel.http_client is not None:
             return
         # Lazy import keeps the test file dep-free at module load.
@@ -46,7 +46,7 @@ def _stub_open(monkeypatch: pytest.MonkeyPatch) -> None:
 
         install_http_client_for_test(self._kernel, httpx.AsyncClient())
 
-    monkeypatch.setattr("notebooklm._session.Session.open", _stub_open)
+    monkeypatch.setattr("notebooklm._session_lifecycle.ClientLifecycle.open", _stub_open)
 
 
 async def test_body_raises_and_close_raises_body_wins(
@@ -61,28 +61,28 @@ async def test_body_raises_and_close_raises_body_wins(
     client = NotebookLMClient(auth_tokens)
 
     # Capture the http client reference BEFORE entering the cm — successful
-    # close sets `client._session._kernel.http_client = None`, so we need our own ref.
+    # close sets `client._collaborators.kernel.http_client = None`, so we need our own ref.
     async with client:
-        http_client_ref = client._session._kernel.get_http_client()
+        http_client_ref = client._collaborators.kernel.get_http_client()
         assert http_client_ref is not None
 
         # Patch _core.close to raise after closing the transport, so we
         # exercise the exception-arbitration path. Forward to the original
         # close so the leak-shield path also runs.
-        original_close = client._session.close
+        original_close = client.close
 
         async def _close_then_raise() -> None:
             await original_close()
             raise RuntimeError("synthetic close failure")
 
         with (
-            patch.object(client._session, "close", _close_then_raise),
+            patch.object(client, "close", _close_then_raise),
             caplog.at_level(logging.WARNING),
             pytest.raises(ValueError, match="user error"),
         ):
             async with client:
                 # Sanity: client is open here.
-                assert client._session._kernel.http_client is not None
+                assert client._collaborators.kernel.http_client is not None
                 raise ValueError("user error")
 
     # 1. The body's ValueError propagated (verified by pytest.raises above).
@@ -110,7 +110,7 @@ async def test_body_succeeds_and_close_raises_close_propagates(
         raise RuntimeError("close failed")
 
     with (
-        patch.object(client._session, "close", _bad_close),
+        patch.object(client, "close", _bad_close),
         pytest.raises(RuntimeError, match="close failed"),
     ):
         async with client:
@@ -128,12 +128,12 @@ async def test_cancel_mid_close_does_not_leak_transport(
     the cancel.
     """
     client = NotebookLMClient(auth_tokens)
-    await client._session.open()
-    http_client_ref = client._session._kernel.get_http_client()
+    await client.__aenter__()
+    http_client_ref = client._collaborators.kernel.get_http_client()
     assert http_client_ref is not None
 
     # Wrap close() in a task so we can cancel it.
-    close_task = asyncio.create_task(client._session.close())
+    close_task = asyncio.create_task(client.close())
     # Yield once so close() can start, then cancel.
     await asyncio.sleep(0)
     close_task.cancel()

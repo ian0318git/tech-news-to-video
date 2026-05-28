@@ -1,7 +1,7 @@
 """Parity tests for the shared transport pipeline.
 
 Pins down the behavior of :meth:`SessionTransport.perform_authed_post`
-used by the RPC executor path (the ``Session._perform_authed_post``
+used by the RPC executor path (the ``NotebookLMClient._perform_authed_post``
 compatibility forward was deleted in Wave 11c of session-decoupling;
 tests now drive the canonical collaborator method directly):
 
@@ -32,7 +32,7 @@ tests now drive the canonical collaborator method directly):
   (URL + body identical to pre-extraction).
 
 The chat-side error mapping that used to live on
-``Session.query_post`` moved to
+``NotebookLMClient.query_post`` moved to
 :func:`notebooklm._chat_transport.chat_aware_authed_post` in the D2
 cutover; equivalent coverage lives in ``tests/unit/test_chat_transport.py``.
 """
@@ -47,18 +47,18 @@ from typing import Any
 import httpx
 import pytest
 
-from _helpers.session_factory import build_session_for_tests
+from _helpers.client_factory import build_client_shell_for_tests
 from conftest import install_post_as_stream
 from notebooklm._logging import get_request_id
 from notebooklm._middleware import RpcRequest, RpcResponse
 from notebooklm._request_types import AuthSnapshot
-from notebooklm._session import Session
 from notebooklm._transport_errors import (
     TransportAuthExpired,
     TransportRateLimited,
     TransportServerError,
 )
 from notebooklm.auth import AuthTokens
+from notebooklm.client import NotebookLMClient
 from notebooklm.rpc import RPCMethod
 
 
@@ -69,13 +69,11 @@ def _no_backoff_jitter(monkeypatch):
     Production code adds a small ±20% jitter to the exponential backoff to
     reduce thundering-herd effects across clients. These transport tests
     assert exact sleep schedules (``[1, 2, 4, ...]``), so we patch
-    ``random.uniform`` on its canonical importing module
-    :mod:`notebooklm._session` (Phase 2 PR 5 migrated this off the
-    deprecated ``notebooklm._core.random.uniform`` shim) to return 0. The
+    ``random.uniform`` on its canonical importing module to return 0. The
     429 path uses ``Retry-After`` instead of jitter, so this fixture has
     no effect on those tests.
     """
-    monkeypatch.setattr("notebooklm._session.random.uniform", lambda a, b: 0.0)
+    monkeypatch.setattr("notebooklm._backoff._random.uniform", lambda a, b: 0.0)
 
 
 def _make_core(
@@ -83,13 +81,13 @@ def _make_core(
     refresh_callback: Callable[[], Any] | None = None,
     rate_limit_max_retries: int = 0,
     server_error_max_retries: int = 0,
-) -> Session:
+) -> NotebookLMClient:
     auth = AuthTokens(
         csrf_token="CSRF_OLD",
         session_id="SID_OLD",
         cookies={"SID": "sid_cookie"},
     )
-    return build_session_for_tests(
+    return build_client_shell_for_tests(
         auth=auth,
         refresh_callback=refresh_callback,
         refresh_retry_delay=0.0,
@@ -128,7 +126,7 @@ async def test_perform_authed_post_populates_request_envelope_for_chain() -> Non
         captured.append(request)
         return RpcResponse(response=_ok_response(), context=request.context)
 
-    core._chain_host._authed_post_chain = fake_chain
+    core._composed.chain_host._authed_post_chain = fake_chain
 
     calls: list[AuthSnapshot] = []
 
@@ -140,9 +138,9 @@ async def test_perform_authed_post_populates_request_envelope_for_chain() -> Non
             {"X-Test": "yes"},
         )
 
-    await core.open()
+    await core.__aenter__()
     try:
-        response = await core._transport.perform_authed_post(
+        response = await core._composed.transport.perform_authed_post(
             build_request=build,
             log_label="RPC LIST_NOTEBOOKS",
             disable_internal_retries=True,
@@ -175,15 +173,15 @@ async def test_chain_reads_live_retry_budget(monkeypatch):
     mutates the budget AFTER ``open()`` still takes effect — preserving
     the pre-PR-12.7 contract where the retry loop read the same attr live.
     Drives the chain via
-    ``core._transport.perform_authed_post`` so the assertion exercises the
+    ``core._composed.transport.perform_authed_post`` so the assertion exercises the
     production seam ``RpcExecutor._execute_once`` uses.
     """
     core = _make_core(rate_limit_max_retries=0)
-    await core.open()
+    await core.__aenter__()
     try:
         # Mutate AFTER open() — middleware reads via lambda closure so this
         # bump from 0 → 1 grants a single retry on the next chain call.
-        core._chain_host._rate_limit_max_retries = 1
+        core._composed.chain_host._rate_limit_max_retries = 1
         sleeps: list[float] = []
 
         async def fake_sleep(seconds: float) -> None:
@@ -192,7 +190,7 @@ async def test_chain_reads_live_retry_budget(monkeypatch):
         # ``RetryMiddleware`` defaults to ``asyncio.sleep`` resolved at call
         # time, so patching the asyncio module's ``sleep`` reaches it
         # through Python's module identity.
-        monkeypatch.setattr("notebooklm._session.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr("notebooklm._session_helpers.asyncio.sleep", fake_sleep)
 
         def build(snapshot: AuthSnapshot) -> tuple[str, str, dict[str, str]]:
             return "https://example.test/x", "payload", {}
@@ -205,9 +203,11 @@ async def test_chain_reads_live_retry_budget(monkeypatch):
                 raise _status_error(429, retry_after="1")
             return _ok_response()
 
-        install_post_as_stream(monkeypatch, core._kernel.get_http_client(), fake_post)
+        install_post_as_stream(monkeypatch, core._collaborators.kernel.get_http_client(), fake_post)
 
-        response = await core._transport.perform_authed_post(build_request=build, log_label="test")
+        response = await core._composed.transport.perform_authed_post(
+            build_request=build, log_label="test"
+        )
 
         assert response.status_code == 200
         assert call_count["n"] == 2
@@ -224,7 +224,7 @@ async def test_perform_authed_post_requires_open_client():
         return "https://example.test/x", "payload", {}
 
     with pytest.raises(RuntimeError, match="Client not initialized"):
-        await core._transport.perform_authed_post(build_request=build, log_label="test")
+        await core._composed.transport.perform_authed_post(build_request=build, log_label="test")
 
 
 @pytest.mark.asyncio
@@ -314,7 +314,7 @@ async def test_production_chain_drives_refresh_on_real_401(monkeypatch):
         return core.auth
 
     core = _make_core(refresh_callback=refresh)
-    await core.open()
+    await core.__aenter__()
     try:
 
         def build(snapshot: AuthSnapshot) -> tuple[str, str, dict[str, str]]:
@@ -329,14 +329,16 @@ async def test_production_chain_drives_refresh_on_real_401(monkeypatch):
                 raise _status_error(401)
             return _ok_response()
 
-        install_post_as_stream(monkeypatch, core._kernel.get_http_client(), fake_post)
+        install_post_as_stream(monkeypatch, core._collaborators.kernel.get_http_client(), fake_post)
 
-        response = await core._transport.perform_authed_post(build_request=build, log_label="test")
+        response = await core._composed.transport.perform_authed_post(
+            build_request=build, log_label="test"
+        )
 
         assert response.status_code == 200
         assert refresh_calls == [True], (
             "Production chain must drive the refresh-and-retry path on a "
-            "real 401 — proves Session wires AuthRefreshMiddleware with a "
+            "real 401 — proves NotebookLMClient wires AuthRefreshMiddleware with a "
             "predicate that recognises canonical auth errors."
         )
         assert call_count["n"] == 2
@@ -352,15 +354,15 @@ async def test_chain_uses_late_bound_sleep_and_shared_random_uniform(monkeypatch
     historical late-bound seam is preserved end-to-end.
     """
     core = _make_core(server_error_max_retries=1)
-    await core.open()
+    await core.__aenter__()
     try:
         sleeps: list[float] = []
 
         async def fake_sleep(seconds: float) -> None:
             sleeps.append(seconds)
 
-        monkeypatch.setattr("notebooklm._session.asyncio.sleep", fake_sleep)
-        monkeypatch.setattr("notebooklm._session.random.uniform", lambda a, b: 0.2)
+        monkeypatch.setattr("notebooklm._session_helpers.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr("notebooklm._backoff._random.uniform", lambda a, b: 0.2)
 
         def build(snapshot: AuthSnapshot) -> tuple[str, str, dict[str, str]]:
             return "https://example.test/x", "payload", {}
@@ -373,9 +375,11 @@ async def test_chain_uses_late_bound_sleep_and_shared_random_uniform(monkeypatch
                 raise _status_error(503)
             return _ok_response()
 
-        install_post_as_stream(monkeypatch, core._kernel.get_http_client(), fake_post)
+        install_post_as_stream(monkeypatch, core._collaborators.kernel.get_http_client(), fake_post)
 
-        response = await core._transport.perform_authed_post(build_request=build, log_label="test")
+        response = await core._composed.transport.perform_authed_post(
+            build_request=build, log_label="test"
+        )
 
         assert response.status_code == 200
         assert call_count["n"] == 2
@@ -387,14 +391,14 @@ async def test_chain_uses_late_bound_sleep_and_shared_random_uniform(monkeypatch
 @pytest.mark.asyncio
 async def test_perform_authed_post_disable_internal_retries_short_circuits(monkeypatch):
     core = _make_core(server_error_max_retries=2)
-    await core.open()
+    await core.__aenter__()
     try:
         sleeps: list[float] = []
 
         async def fake_sleep(seconds: float) -> None:
             sleeps.append(seconds)
 
-        monkeypatch.setattr("notebooklm._session.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr("notebooklm._session_helpers.asyncio.sleep", fake_sleep)
 
         def build(snapshot: AuthSnapshot) -> tuple[str, str, dict[str, str]]:
             return "https://example.test/x", "payload", {}
@@ -405,10 +409,10 @@ async def test_perform_authed_post_disable_internal_retries_short_circuits(monke
             call_count["n"] += 1
             raise _status_error(503)
 
-        install_post_as_stream(monkeypatch, core._kernel.get_http_client(), fake_post)
+        install_post_as_stream(monkeypatch, core._collaborators.kernel.get_http_client(), fake_post)
 
         with pytest.raises(TransportServerError):
-            await core._transport.perform_authed_post(
+            await core._composed.transport.perform_authed_post(
                 build_request=build,
                 log_label="test",
                 disable_internal_retries=True,
@@ -427,7 +431,7 @@ async def test_build_request_rebuilt_at_terminal_on_happy_path(monkeypatch):
     happy path, so the rebuilt envelope is byte-identical to the
     chain-entry materialization."""
     core = _make_core()
-    await core.open()
+    await core.__aenter__()
     try:
         calls: list[AuthSnapshot] = []
 
@@ -440,9 +444,11 @@ async def test_build_request_rebuilt_at_terminal_on_happy_path(monkeypatch):
             assert content == b"payload"
             return _ok_response()
 
-        install_post_as_stream(monkeypatch, core._kernel.get_http_client(), fake_post)
+        install_post_as_stream(monkeypatch, core._collaborators.kernel.get_http_client(), fake_post)
 
-        response = await core._transport.perform_authed_post(build_request=build, log_label="test")
+        response = await core._composed.transport.perform_authed_post(
+            build_request=build, log_label="test"
+        )
 
         assert response.status_code == 200
         # The terminal freshness rebuild is load-bearing: it runs on every
@@ -465,7 +471,7 @@ async def test_first_terminal_attempt_rebuilds_when_snapshot_changed(monkeypatch
     not send a stale body if auth changed before its first POST attempt.
     """
     core = _make_core()
-    await core.open()
+    await core.__aenter__()
     try:
         snapshots = iter(
             [
@@ -478,7 +484,7 @@ async def test_first_terminal_attempt_rebuilds_when_snapshot_changed(monkeypatch
             # Tightened signature pins the explicit-collaborator contract:
             # the production caller MUST pass ``auth=<live AuthTokens>``,
             # not the legacy positional host. ``auth is core.auth`` proves
-            # the chain captured the same ``AuthTokens`` instance Session
+            # the chain captured the same ``AuthTokens`` instance NotebookLMClient
             # holds (identity-stable per the live-reference contract in
             # ``wire_middleware_chain``).
             assert auth is core.auth
@@ -487,13 +493,13 @@ async def test_first_terminal_attempt_rebuilds_when_snapshot_changed(monkeypatch
             except StopIteration:
                 pytest.fail("unexpected extra auth snapshot")
 
-        # PR #4b inlined ``Session._snapshot``; the production call
+        # PR #4b inlined ``NotebookLMClient._snapshot``; the production call
         # sites now read ``self._auth_coord.snapshot(auth=self.auth)``
-        # directly (the Session-shaped ``_AuthRefreshHost`` was deleted
+        # directly (the NotebookLMClient-shaped ``_AuthRefreshHost`` was deleted
         # in favor of an explicit ``auth: AuthTokens`` kwarg), so this
         # test swaps the canonical coordinator method instead of the
-        # (now-deleted) Session delegate.
-        core._auth_coord.snapshot = fake_snapshot  # type: ignore[method-assign]
+        # (now-deleted) NotebookLMClient delegate.
+        core._collaborators.auth_coord.snapshot = fake_snapshot  # type: ignore[method-assign]
         calls: list[AuthSnapshot] = []
 
         def build(snapshot: AuthSnapshot) -> tuple[str, str, dict[str, str]]:
@@ -504,9 +510,11 @@ async def test_first_terminal_attempt_rebuilds_when_snapshot_changed(monkeypatch
             assert content == b"payload-CSRF_NEW"
             return _ok_response()
 
-        install_post_as_stream(monkeypatch, core._kernel.get_http_client(), fake_post)
+        install_post_as_stream(monkeypatch, core._collaborators.kernel.get_http_client(), fake_post)
 
-        response = await core._transport.perform_authed_post(build_request=build, log_label="test")
+        response = await core._composed.transport.perform_authed_post(
+            build_request=build, log_label="test"
+        )
 
         assert response.status_code == 200
         assert len(calls) == 2
@@ -537,7 +545,7 @@ async def test_build_request_observes_fresh_snapshot_after_401_refresh(monkeypat
         return core.auth
 
     core = _make_core(refresh_callback=refresh)
-    await core.open()
+    await core.__aenter__()
     try:
         snapshots: list[AuthSnapshot] = []
 
@@ -555,9 +563,11 @@ async def test_build_request_observes_fresh_snapshot_after_401_refresh(monkeypat
             assert content == b"body-CSRF_NEW"
             return _ok_response()
 
-        install_post_as_stream(monkeypatch, core._kernel.get_http_client(), fake_post)
+        install_post_as_stream(monkeypatch, core._collaborators.kernel.get_http_client(), fake_post)
 
-        response = await core._transport.perform_authed_post(build_request=build, log_label="test")
+        response = await core._composed.transport.perform_authed_post(
+            build_request=build, log_label="test"
+        )
 
         assert response.status_code == 200
         assert len(refresh_calls) == 1
@@ -625,7 +635,7 @@ async def test_stale_envelope_rebuilt_after_refresh_then_retry(monkeypatch):
     # post-refresh-then-429 retry path actually fires; the regression depends
     # on ``RetryMiddleware`` re-invoking the chain with the original request.
     core = _make_core(refresh_callback=refresh, rate_limit_max_retries=1)
-    await core.open()
+    await core.__aenter__()
     try:
         # Avoid actually sleeping during the 429 backoff.
         sleeps: list[float] = []
@@ -633,7 +643,7 @@ async def test_stale_envelope_rebuilt_after_refresh_then_retry(monkeypatch):
         async def fake_sleep(seconds: float) -> None:
             sleeps.append(seconds)
 
-        monkeypatch.setattr("notebooklm._session.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr("notebooklm._session_helpers.asyncio.sleep", fake_sleep)
 
         def build(snapshot: AuthSnapshot) -> tuple[str, str, dict[str, str]]:
             # Encode CSRF in the body and session-id + authuser in the URL,
@@ -665,9 +675,11 @@ async def test_stale_envelope_rebuilt_after_refresh_then_retry(monkeypatch):
             # must carry the refreshed auth envelope, not the stale one.
             return _ok_response()
 
-        install_post_as_stream(monkeypatch, core._kernel.get_http_client(), fake_post)
+        install_post_as_stream(monkeypatch, core._collaborators.kernel.get_http_client(), fake_post)
 
-        response = await core._transport.perform_authed_post(build_request=build, log_label="test")
+        response = await core._composed.transport.perform_authed_post(
+            build_request=build, log_label="test"
+        )
 
         assert response.status_code == 200
         assert call_count["n"] == 3, "expected three terminal attempts (401, 429, 200)"
@@ -707,7 +719,7 @@ async def test_transport_auth_expired_when_refresh_fails(monkeypatch):
         raise refresh_error
 
     core = _make_core(refresh_callback=refresh)
-    await core.open()
+    await core.__aenter__()
     try:
 
         def build(snapshot: AuthSnapshot) -> tuple[str, str, dict[str, str]]:
@@ -718,10 +730,12 @@ async def test_transport_auth_expired_when_refresh_fails(monkeypatch):
         async def fake_post(*args, **kwargs):
             raise original
 
-        install_post_as_stream(monkeypatch, core._kernel.get_http_client(), fake_post)
+        install_post_as_stream(monkeypatch, core._collaborators.kernel.get_http_client(), fake_post)
 
         with pytest.raises(TransportAuthExpired) as exc_info:
-            await core._transport.perform_authed_post(build_request=build, log_label="test")
+            await core._composed.transport.perform_authed_post(
+                build_request=build, log_label="test"
+            )
 
         assert exc_info.value.original is original
         assert exc_info.value.__cause__ is refresh_error
@@ -732,7 +746,7 @@ async def test_transport_auth_expired_when_refresh_fails(monkeypatch):
 @pytest.mark.asyncio
 async def test_429_retries_exhaust_to_transport_rate_limited(monkeypatch):
     core = _make_core(rate_limit_max_retries=2)
-    await core.open()
+    await core.__aenter__()
     try:
         # Avoid actually sleeping during the retry budget.
         sleeps: list[float] = []
@@ -751,10 +765,12 @@ async def test_429_retries_exhaust_to_transport_rate_limited(monkeypatch):
             call_count["n"] += 1
             raise _status_error(429, retry_after="1")
 
-        install_post_as_stream(monkeypatch, core._kernel.get_http_client(), fake_post)
+        install_post_as_stream(monkeypatch, core._collaborators.kernel.get_http_client(), fake_post)
 
         with pytest.raises(TransportRateLimited) as exc_info:
-            await core._transport.perform_authed_post(build_request=build, log_label="test")
+            await core._composed.transport.perform_authed_post(
+                build_request=build, log_label="test"
+            )
 
         # Initial attempt + 2 retries = 3 total POSTs.
         assert call_count["n"] == 3
@@ -767,7 +783,7 @@ async def test_429_retries_exhaust_to_transport_rate_limited(monkeypatch):
 @pytest.mark.asyncio
 async def test_429_without_retry_budget_raises_immediately(monkeypatch):
     core = _make_core(rate_limit_max_retries=0)
-    await core.open()
+    await core.__aenter__()
     try:
 
         def build(snapshot: AuthSnapshot) -> tuple[str, str, dict[str, str]]:
@@ -776,10 +792,12 @@ async def test_429_without_retry_budget_raises_immediately(monkeypatch):
         async def fake_post(*args, **kwargs):
             raise _status_error(429, retry_after="60")
 
-        install_post_as_stream(monkeypatch, core._kernel.get_http_client(), fake_post)
+        install_post_as_stream(monkeypatch, core._collaborators.kernel.get_http_client(), fake_post)
 
         with pytest.raises(TransportRateLimited) as exc_info:
-            await core._transport.perform_authed_post(build_request=build, log_label="test")
+            await core._composed.transport.perform_authed_post(
+                build_request=build, log_label="test"
+            )
 
         assert exc_info.value.retry_after == 60
     finally:
@@ -797,7 +815,7 @@ async def test_request_id_constant_across_retry_chain(monkeypatch):
         return core.auth
 
     core = _make_core(refresh_callback=refresh)
-    await core.open()
+    await core.__aenter__()
     try:
         observed_request_ids: list[str | None] = []
 
@@ -813,7 +831,7 @@ async def test_request_id_constant_across_retry_chain(monkeypatch):
                 raise _status_error(401)
             return _ok_response()
 
-        install_post_as_stream(monkeypatch, core._kernel.get_http_client(), fake_post)
+        install_post_as_stream(monkeypatch, core._collaborators.kernel.get_http_client(), fake_post)
 
         # Use perform_authed_post directly inside set_request_id to verify
         # the helper itself doesn't reset the id. ``perform_authed_post``
@@ -828,7 +846,9 @@ async def test_request_id_constant_across_retry_chain(monkeypatch):
 
         token = set_request_id("REQ-stable-1234")
         try:
-            await core._transport.perform_authed_post(build_request=build, log_label="test")
+            await core._composed.transport.perform_authed_post(
+                build_request=build, log_label="test"
+            )
         finally:
             reset_request_id(token)
 
@@ -859,7 +879,7 @@ async def test_rpc_call_happy_path_url_and_body_unchanged(monkeypatch):
     """After the rpc_call extraction, ``rpc_call`` must produce the same outgoing
     ``(url, body)`` as pre-extraction for the happy path."""
     core = _make_core()
-    await core.open()
+    await core.__aenter__()
     try:
         captured: dict[str, Any] = {}
 
@@ -873,7 +893,7 @@ async def test_rpc_call_happy_path_url_and_body_unchanged(monkeypatch):
             text = f")]}}'\n{len(chunk)}\n{chunk}\n"
             return _ok_response(text)
 
-        install_post_as_stream(monkeypatch, core._kernel.get_http_client(), fake_post)
+        install_post_as_stream(monkeypatch, core._collaborators.kernel.get_http_client(), fake_post)
 
         await core._rpc_executor.rpc_call(RPCMethod.LIST_NOTEBOOKS, [])
 
@@ -896,14 +916,14 @@ async def test_rpc_call_happy_path_url_and_body_unchanged(monkeypatch):
 async def test_5xx_retries_then_succeeds(monkeypatch):
     """503 followed by 200: server_error_max_retries=3 lets us recover."""
     core = _make_core(server_error_max_retries=3)
-    await core.open()
+    await core.__aenter__()
     try:
         sleeps: list[float] = []
 
         async def fake_sleep(seconds: float) -> None:
             sleeps.append(seconds)
 
-        monkeypatch.setattr("notebooklm._session.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr("notebooklm._session_helpers.asyncio.sleep", fake_sleep)
 
         def build(snapshot: AuthSnapshot) -> tuple[str, str, dict[str, str]]:
             return "https://example.test/x", "payload", {}
@@ -916,9 +936,11 @@ async def test_5xx_retries_then_succeeds(monkeypatch):
                 raise _status_error(503)
             return _ok_response()
 
-        install_post_as_stream(monkeypatch, core._kernel.get_http_client(), fake_post)
+        install_post_as_stream(monkeypatch, core._collaborators.kernel.get_http_client(), fake_post)
 
-        response = await core._transport.perform_authed_post(build_request=build, log_label="test")
+        response = await core._composed.transport.perform_authed_post(
+            build_request=build, log_label="test"
+        )
 
         assert response.status_code == 200
         assert call_count["n"] == 2
@@ -932,14 +954,14 @@ async def test_5xx_retries_then_succeeds(monkeypatch):
 async def test_5xx_exhausts_budget_raises_transport_server_error(monkeypatch):
     """Persistent 502 with budget=3 → 4 total attempts, then TransportServerError."""
     core = _make_core(server_error_max_retries=3)
-    await core.open()
+    await core.__aenter__()
     try:
         sleeps: list[float] = []
 
         async def fake_sleep(seconds: float) -> None:
             sleeps.append(seconds)
 
-        monkeypatch.setattr("notebooklm._session.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr("notebooklm._session_helpers.asyncio.sleep", fake_sleep)
 
         def build(snapshot: AuthSnapshot) -> tuple[str, str, dict[str, str]]:
             return "https://example.test/x", "payload", {}
@@ -950,10 +972,12 @@ async def test_5xx_exhausts_budget_raises_transport_server_error(monkeypatch):
             call_count["n"] += 1
             raise _status_error(502)
 
-        install_post_as_stream(monkeypatch, core._kernel.get_http_client(), fake_post)
+        install_post_as_stream(monkeypatch, core._collaborators.kernel.get_http_client(), fake_post)
 
         with pytest.raises(TransportServerError) as exc_info:
-            await core._transport.perform_authed_post(build_request=build, log_label="test")
+            await core._composed.transport.perform_authed_post(
+                build_request=build, log_label="test"
+            )
 
         # Initial + 3 retries = 4 total attempts.
         assert call_count["n"] == 4
@@ -969,14 +993,14 @@ async def test_5xx_exhausts_budget_raises_transport_server_error(monkeypatch):
 async def test_network_error_retries_then_succeeds(monkeypatch):
     """httpx.RequestError (network blip) follows the server-error retry path."""
     core = _make_core(server_error_max_retries=3)
-    await core.open()
+    await core.__aenter__()
     try:
         sleeps: list[float] = []
 
         async def fake_sleep(seconds: float) -> None:
             sleeps.append(seconds)
 
-        monkeypatch.setattr("notebooklm._session.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr("notebooklm._session_helpers.asyncio.sleep", fake_sleep)
 
         def build(snapshot: AuthSnapshot) -> tuple[str, str, dict[str, str]]:
             return "https://example.test/x", "payload", {}
@@ -989,9 +1013,11 @@ async def test_network_error_retries_then_succeeds(monkeypatch):
                 raise httpx.ReadTimeout("connection blip")
             return _ok_response()
 
-        install_post_as_stream(monkeypatch, core._kernel.get_http_client(), fake_post)
+        install_post_as_stream(monkeypatch, core._collaborators.kernel.get_http_client(), fake_post)
 
-        response = await core._transport.perform_authed_post(build_request=build, log_label="test")
+        response = await core._composed.transport.perform_authed_post(
+            build_request=build, log_label="test"
+        )
 
         assert response.status_code == 200
         assert call_count["n"] == 2
@@ -1005,14 +1031,14 @@ async def test_network_error_exhausts_budget_raises_transport_server_error(monke
     """Repeated httpx.ConnectError → exhausts budget → TransportServerError
     wrapping the underlying RequestError (status_code/response are None)."""
     core = _make_core(server_error_max_retries=2)
-    await core.open()
+    await core.__aenter__()
     try:
         sleeps: list[float] = []
 
         async def fake_sleep(seconds: float) -> None:
             sleeps.append(seconds)
 
-        monkeypatch.setattr("notebooklm._session.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr("notebooklm._session_helpers.asyncio.sleep", fake_sleep)
 
         def build(snapshot: AuthSnapshot) -> tuple[str, str, dict[str, str]]:
             return "https://example.test/x", "payload", {}
@@ -1020,10 +1046,12 @@ async def test_network_error_exhausts_budget_raises_transport_server_error(monke
         async def fake_post(*args, **kwargs):
             raise httpx.ConnectError("connection refused")
 
-        install_post_as_stream(monkeypatch, core._kernel.get_http_client(), fake_post)
+        install_post_as_stream(monkeypatch, core._collaborators.kernel.get_http_client(), fake_post)
 
         with pytest.raises(TransportServerError) as exc_info:
-            await core._transport.perform_authed_post(build_request=build, log_label="test")
+            await core._composed.transport.perform_authed_post(
+                build_request=build, log_label="test"
+            )
 
         # Initial + 2 retries = 3 attempts; 2 sleeps (1, 2).
         assert sleeps == [1, 2]
@@ -1038,14 +1066,14 @@ async def test_network_error_exhausts_budget_raises_transport_server_error(monke
 async def test_server_error_budget_zero_raises_immediately(monkeypatch):
     """server_error_max_retries=0 short-circuits to immediate raise (no sleep)."""
     core = _make_core(server_error_max_retries=0)
-    await core.open()
+    await core.__aenter__()
     try:
         sleeps: list[float] = []
 
         async def fake_sleep(seconds: float) -> None:
             sleeps.append(seconds)
 
-        monkeypatch.setattr("notebooklm._session.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr("notebooklm._session_helpers.asyncio.sleep", fake_sleep)
 
         def build(snapshot: AuthSnapshot) -> tuple[str, str, dict[str, str]]:
             return "https://example.test/x", "payload", {}
@@ -1056,10 +1084,12 @@ async def test_server_error_budget_zero_raises_immediately(monkeypatch):
             call_count["n"] += 1
             raise _status_error(500)
 
-        install_post_as_stream(monkeypatch, core._kernel.get_http_client(), fake_post)
+        install_post_as_stream(monkeypatch, core._collaborators.kernel.get_http_client(), fake_post)
 
         with pytest.raises(TransportServerError) as exc_info:
-            await core._transport.perform_authed_post(build_request=build, log_label="test")
+            await core._composed.transport.perform_authed_post(
+                build_request=build, log_label="test"
+            )
 
         # Exactly one attempt, no sleep.
         assert call_count["n"] == 1
@@ -1073,14 +1103,14 @@ async def test_server_error_budget_zero_raises_immediately(monkeypatch):
 async def test_exponential_backoff_caps_at_30_seconds(monkeypatch):
     """Backoff schedule: 1, 2, 4, 8, 16, 30 — caps at 30 for high attempt counts."""
     core = _make_core(server_error_max_retries=8)
-    await core.open()
+    await core.__aenter__()
     try:
         sleeps: list[float] = []
 
         async def fake_sleep(seconds: float) -> None:
             sleeps.append(seconds)
 
-        monkeypatch.setattr("notebooklm._session.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr("notebooklm._session_helpers.asyncio.sleep", fake_sleep)
 
         def build(snapshot: AuthSnapshot) -> tuple[str, str, dict[str, str]]:
             return "https://example.test/x", "payload", {}
@@ -1088,10 +1118,12 @@ async def test_exponential_backoff_caps_at_30_seconds(monkeypatch):
         async def fake_post(*args, **kwargs):
             raise _status_error(503)
 
-        install_post_as_stream(monkeypatch, core._kernel.get_http_client(), fake_post)
+        install_post_as_stream(monkeypatch, core._collaborators.kernel.get_http_client(), fake_post)
 
         with pytest.raises(TransportServerError):
-            await core._transport.perform_authed_post(build_request=build, log_label="test")
+            await core._composed.transport.perform_authed_post(
+                build_request=build, log_label="test"
+            )
 
         # min(2 ** attempt, 30) for attempt in 0..7 → 1, 2, 4, 8, 16, 30, 30, 30.
         assert sleeps == [1, 2, 4, 8, 16, 30, 30, 30]
@@ -1104,14 +1136,14 @@ async def test_5xx_path_does_not_touch_429_path(monkeypatch):
     """Sanity: a 429 should still hit the rate-limit path, not the 5xx path,
     even when server_error_max_retries is configured."""
     core = _make_core(rate_limit_max_retries=1, server_error_max_retries=3)
-    await core.open()
+    await core.__aenter__()
     try:
         sleeps: list[float] = []
 
         async def fake_sleep(seconds: float) -> None:
             sleeps.append(seconds)
 
-        monkeypatch.setattr("notebooklm._session.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr("notebooklm._session_helpers.asyncio.sleep", fake_sleep)
 
         def build(snapshot: AuthSnapshot) -> tuple[str, str, dict[str, str]]:
             return "https://example.test/x", "payload", {}
@@ -1119,10 +1151,12 @@ async def test_5xx_path_does_not_touch_429_path(monkeypatch):
         async def fake_post(*args, **kwargs):
             raise _status_error(429, retry_after="5")
 
-        install_post_as_stream(monkeypatch, core._kernel.get_http_client(), fake_post)
+        install_post_as_stream(monkeypatch, core._collaborators.kernel.get_http_client(), fake_post)
 
         with pytest.raises(TransportRateLimited) as exc_info:
-            await core._transport.perform_authed_post(build_request=build, log_label="test")
+            await core._composed.transport.perform_authed_post(
+                build_request=build, log_label="test"
+            )
 
         # 429-path sleep uses Retry-After (5), NOT exponential backoff.
         assert sleeps == [5]
@@ -1136,7 +1170,7 @@ async def test_5xx_path_does_not_trigger_auth_refresh(monkeypatch):
     """A 503 must not be misclassified as auth error → refresh path. Refresh
     callback must never be called even when configured."""
     refresh_calls: list[bool] = []
-    captured_core: dict[str, Session] = {}
+    captured_core: dict[str, NotebookLMClient] = {}
 
     async def refresh() -> AuthTokens:
         refresh_calls.append(True)
@@ -1144,14 +1178,14 @@ async def test_5xx_path_does_not_trigger_auth_refresh(monkeypatch):
 
     core = _make_core(refresh_callback=refresh, server_error_max_retries=1)
     captured_core["c"] = core
-    await core.open()
+    await core.__aenter__()
     try:
         sleeps: list[float] = []
 
         async def fake_sleep(seconds: float) -> None:
             sleeps.append(seconds)
 
-        monkeypatch.setattr("notebooklm._session.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr("notebooklm._session_helpers.asyncio.sleep", fake_sleep)
 
         def build(snapshot: AuthSnapshot) -> tuple[str, str, dict[str, str]]:
             return "https://example.test/x", "payload", {}
@@ -1159,10 +1193,12 @@ async def test_5xx_path_does_not_trigger_auth_refresh(monkeypatch):
         async def fake_post(*args, **kwargs):
             raise _status_error(503)
 
-        install_post_as_stream(monkeypatch, core._kernel.get_http_client(), fake_post)
+        install_post_as_stream(monkeypatch, core._collaborators.kernel.get_http_client(), fake_post)
 
         with pytest.raises(TransportServerError):
-            await core._transport.perform_authed_post(build_request=build, log_label="test")
+            await core._composed.transport.perform_authed_post(
+                build_request=build, log_label="test"
+            )
 
         assert refresh_calls == []
     finally:
@@ -1180,18 +1216,18 @@ async def test_rpc_call_maps_transport_server_error_to_server_error(monkeypatch)
     from notebooklm.rpc import ServerError
 
     core = _make_core(server_error_max_retries=1)
-    await core.open()
+    await core.__aenter__()
     try:
 
         async def fake_sleep(seconds: float) -> None:
             pass
 
-        monkeypatch.setattr("notebooklm._session.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr("notebooklm._session_helpers.asyncio.sleep", fake_sleep)
 
         async def fake_post(*args, **kwargs):
             raise _status_error(503)
 
-        install_post_as_stream(monkeypatch, core._kernel.get_http_client(), fake_post)
+        install_post_as_stream(monkeypatch, core._collaborators.kernel.get_http_client(), fake_post)
 
         with pytest.raises(ServerError) as exc_info:
             await core._rpc_executor.rpc_call(RPCMethod.LIST_NOTEBOOKS, [])
@@ -1207,18 +1243,18 @@ async def test_rpc_call_maps_transport_server_error_network_to_network_error(mon
     from notebooklm.rpc import NetworkError
 
     core = _make_core(server_error_max_retries=1)
-    await core.open()
+    await core.__aenter__()
     try:
 
         async def fake_sleep(seconds: float) -> None:
             pass
 
-        monkeypatch.setattr("notebooklm._session.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr("notebooklm._session_helpers.asyncio.sleep", fake_sleep)
 
         async def fake_post(*args, **kwargs):
             raise httpx.ConnectError("nope")
 
-        install_post_as_stream(monkeypatch, core._kernel.get_http_client(), fake_post)
+        install_post_as_stream(monkeypatch, core._collaborators.kernel.get_http_client(), fake_post)
 
         with pytest.raises(NetworkError):
             await core._rpc_executor.rpc_call(RPCMethod.LIST_NOTEBOOKS, [])
@@ -1239,7 +1275,7 @@ def test_server_error_max_retries_negative_raises():
         cookies={"SID": "x"},
     )
     with pytest.raises(ValueError, match="server_error_max_retries must be >= 0"):
-        build_session_for_tests(auth=auth, server_error_max_retries=-1)
+        build_client_shell_for_tests(auth=auth, server_error_max_retries=-1)
 
 
 # ---------------------------------------------------------------------------

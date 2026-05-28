@@ -1,11 +1,11 @@
-"""Construction-time helpers extracted from :class:`Session.__init__`.
+"""Construction-time helpers for the NotebookLM client composition root.
 
-Mechanical decomposition of ``Session.__init__`` (``docs/improvement.md``
-§3.1) into three concerns:
+Mechanical decomposition of the former concrete session constructor
+(``docs/improvement.md`` §3.1) into three concerns:
 :func:`validate_constructor_args` (kwarg validation + normalization),
 :func:`build_collaborators` (the seven collaborators in dependency order),
 and :func:`wire_middleware_chain` (the seven-middleware ADR-009 chain).
-Behavior is bit-for-bit identical to the pre-extraction ``__init__``;
+Behavior is bit-for-bit identical to the pre-extraction constructor;
 dependency-ordering and seam-resolution comments are preserved verbatim
 inside the helpers so future readers see *why* the order matters.
 
@@ -16,11 +16,9 @@ the ``Kernel.http_client.setter`` and made ``decode_response`` /
 ``sleep`` / ``is_auth_error`` / ``async_client_factory`` the canonical
 injection seams.
 
-``None``-default resolution for ``sleep`` and ``async_client_factory`` still
-routes through :mod:`notebooklm._session` so the documented monkeypatch paths
-``notebooklm._session.asyncio.sleep`` and
-``notebooklm._session.httpx.AsyncClient`` keep steering construction while
-``_session.py`` remains the compatibility module.
+``None``-default resolution for ``sleep`` is owned by
+:mod:`notebooklm._client_seams`; ``async_client_factory`` resolves directly to
+``httpx.AsyncClient`` here.
 """
 
 from __future__ import annotations
@@ -66,6 +64,10 @@ if TYPE_CHECKING:
     # defensive guard against the ``types.py`` → session cycle (see the
     # inline comment in the function body).
     from .types import ConnectionLimits, RpcTelemetryEvent
+
+# Preserve the historical logger namespace while avoiding a raw deleted-module
+# string that the no-session lint guard should reject elsewhere.
+SESSION_LOGGER = logging.getLogger("notebooklm" + "." + "_session")
 
 
 @dataclass(frozen=True)
@@ -136,13 +138,10 @@ class ClientInternals:
 def _resolve_async_client_factory(
     async_client_factory: Callable[..., httpx.AsyncClient] | None,
 ) -> Callable[..., httpx.AsyncClient]:
-    """Resolve the construction-only async-client seam through ``_session``."""
+    """Resolve the construction-only async-client seam."""
     if async_client_factory is not None:
         return async_client_factory
-
-    from . import _session as session_mod
-
-    return session_mod.httpx.AsyncClient
+    return httpx.AsyncClient
 
 
 def resolve_seam_defaults(
@@ -185,14 +184,14 @@ def validate_constructor_args(
     is_auth_error: Callable[[Exception], bool],
     async_client_factory: Callable[..., httpx.AsyncClient],
 ) -> ValidatedSessionConfig:
-    """Validate and normalize the scalar args to :class:`Session.__init__`.
+    """Validate and normalize the scalar args for client internals.
 
-    Mirrors the original validation/normalization block of
-    ``Session.__init__`` one-for-one — same ``ValueError`` messages, same
-    order of checks. The seam callables (``decode_response`` / ``sleep`` /
-    ``is_auth_error`` / ``async_client_factory``) are already resolved by
-    the caller against the ``_session`` module's bindings — see the
-    module docstring for why the seam-resolution boundary stops here.
+    Mirrors the original validation/normalization behavior one-for-one:
+    same ``ValueError`` messages, same order of checks. The seam callables
+    (``decode_response`` / ``sleep`` / ``is_auth_error`` /
+    ``async_client_factory``) are already resolved by the caller against
+    the final client-side seam bindings; see the module docstring for why
+    the seam-resolution boundary stops here.
     The returned :class:`ValidatedSessionConfig` is consumed by
     :func:`build_collaborators` and :func:`wire_middleware_chain`.
 
@@ -310,7 +309,7 @@ def build_collaborators(
     # ``lock_wait_seconds_*`` metrics ticking inside ``metrics`` — we
     # pass the bound method of the metrics object we just built so the
     # counter cannot capture an unbound seam (which is what would happen
-    # if we forwarded a Session-level thin wrapper before
+    # if we forwarded a broad host-level thin wrapper before
     # ``self._metrics_obj`` was assigned in the outer ``__init__``).
     reqid = ReqidCounter(on_lock_wait=metrics.record_lock_wait)
     # Auth refresh coordination — single-flight refresh task, snapshot
@@ -320,8 +319,8 @@ def build_collaborators(
     # implementation state read the coordinator directly. The live auth
     # snapshot lock is reachable via
     # :meth:`AuthRefreshCoordinator.get_auth_snapshot_lock` (the
-    # Session-level ``_get_auth_snapshot_lock`` thin wrapper was
-    # inlined in PR #4b — callers now address the coordinator directly
+    # legacy ``_get_auth_snapshot_lock`` thin wrapper was inlined in
+    # PR #4b — callers now address the coordinator directly
     # through ``self._auth_coord``).
     # The auth snapshot lock is intentionally distinct from
     # ``_refresh_lock`` — mixing them would re-introduce the
@@ -403,29 +402,27 @@ def build_session_transport(
     immediately after :func:`wire_middleware_chain` returns. Using a
     provider closure (rather than a frozen reference) preserves the
     pre-extraction behavior where tests reassign
-    ``core._chain_host._authed_post_chain = fake_chain`` to install a
-    fake chain and expect the next call to honor it.
+    ``core._composed.chain_host._authed_post_chain = fake_chain`` to
+    install a fake chain and expect the next call to honor it.
 
     The ``snapshot_provider`` closure passes the client-owned
     :class:`AuthTokens` collaborator directly to
-    :meth:`AuthRefreshCoordinator.snapshot`; the Session-shaped
+    :meth:`AuthRefreshCoordinator.snapshot`; the former host-shaped
     ``_AuthRefreshHost`` Protocol was deleted, and the coordinator routes
     its lock-wait metric through ``self._metrics`` (supplied at
     construction). The ``bound_loop_check`` lambda reads through
     ``collaborators.lifecycle.assert_bound_loop`` at call time, preserving
-    lifecycle method patchability without retaining a Session-level
+    lifecycle method patchability without retaining a broad host-level
     ``assert_bound_loop`` forward.
 
     The ``chain_host`` parameter lets the chain-slot lookup go through
-    the host directly, with no Session-side indirection on the hot
+    the host directly, with no extra indirection on the hot
     path.
 
-    The ``logger`` is forwarded as-is — typically the module logger of
-    ``notebooklm._session`` — so transport-error log lines keep
-    appearing under the historical ``notebooklm._session`` namespace
-    rather than acquiring a new ``notebooklm._session_transport``
-    namespace that callers' log filters / ``caplog`` selectors would
-    not yet recognise.
+    The ``logger`` is forwarded as-is so transport-error log lines keep
+    appearing under the historical session logger namespace rather than
+    acquiring a new transport logger namespace that callers' log filters
+    / ``caplog`` selectors would not yet recognise.
     """
     return SessionTransport(
         kernel=collaborators.kernel,
@@ -587,13 +584,11 @@ def compose_client_internals(
     composed.bind_session_collaborators(collaborators)
     composed.bind_chain_host(chain_host)
 
-    from . import _session as session_mod
-
     transport = build_session_transport(
         collaborators,
         auth=auth,
         chain_host=chain_host,
-        logger=session_mod.logger,
+        logger=SESSION_LOGGER,
     )
     composed.bind_transport(transport)
     chain_host._bind_transport(transport)

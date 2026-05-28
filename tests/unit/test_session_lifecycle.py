@@ -51,7 +51,7 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 
-from _helpers.session_factory import build_session_for_tests
+from _helpers.client_factory import build_client_shell_for_tests
 from notebooklm._session_helpers import _resolve_keepalive_interval
 from notebooklm._session_lifecycle import (
     ClientLifecycle,
@@ -536,10 +536,10 @@ def test_bound_loop_mismatch_via_session_raises_runtime_error() -> None:
     """
 
     auth = AuthTokens(csrf_token="CSRF", session_id="SID", cookies={"SID": "v1"})
-    core = build_session_for_tests(auth=auth)
+    core = build_client_shell_for_tests(auth=auth)
 
     async def _open_on_loop_a() -> None:
-        await core.open()
+        await core.__aenter__()
         # We deliberately do NOT call core.close() because close() resets
         # _http_client (which would let loop B's open() re-bind the loop
         # and skip the guard). The whole point is that the guard fires when
@@ -558,9 +558,9 @@ def test_bound_loop_mismatch_via_session_raises_runtime_error() -> None:
     async def _attempt_post_on_loop_b() -> Exception | None:
         # ``open()`` is idempotent — since loop A left ``_http_client``
         # populated, this is a no-op and ``_bound_loop`` stays bound to loop A.
-        await core.open()
+        await core.__aenter__()
         try:
-            await core._transport.perform_authed_post(
+            await core._composed.transport.perform_authed_post(
                 build_request=_build_request_stub,
                 log_label="test.cross_loop",
             )

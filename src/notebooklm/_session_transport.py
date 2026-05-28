@@ -27,7 +27,7 @@ is owned by ``AuthRefreshMiddleware`` and by
 ``RpcExecutor.try_refresh_and_retry``, both of which read
 ``chain_host._refresh_retry_delay`` live through provider lambdas wired
 in ``_session_init.wire_middleware_chain``. Integration tests that
-assign ``client._session._chain_host._refresh_retry_delay = 0`` keep
+assign ``client._composed.chain_host._refresh_retry_delay = 0`` keep
 steering the live delay.
 
 Construction order in :func:`compose_client_internals`:
@@ -99,9 +99,9 @@ class SessionTransport:
 
     The injected ``logger`` is held so error messages mapped through
     :func:`notebooklm._transport_errors.raise_mapped_post_error` keep
-    appearing under the original ``notebooklm._session`` namespace
-    rather than ``notebooklm._session_transport`` — preserving the
-    log-filter / caplog vocabulary callers may already rely on.
+    appearing under the historical session logger namespace rather than
+    this module's namespace — preserving the log-filter / caplog
+    vocabulary callers may already rely on.
     """
 
     def __init__(
@@ -244,11 +244,9 @@ class SessionTransport:
     ) -> httpx.Response:
         """Authed POST entry point — routes through the middleware chain.
 
-        Compatibility surface preserved on :class:`Session` so
-        ``RpcExecutor._execute_once`` (``_rpc_executor.py``),
-        ``_chat_transport`` (``_chat_transport.py``), and direct
-        callers (``client._session._perform_authed_post(...)``) keep the
-        same keyword-only signature.
+        Shared transport surface used by ``RpcExecutor._execute_once``
+        (``_rpc_executor.py``) and ``_chat_transport``
+        (``_chat_transport.py``); keep the same keyword-only signature.
 
         ``RpcRequest.url`` / ``headers`` / ``body`` are populated through
         :func:`materialize_rpc_request` before the chain sees the

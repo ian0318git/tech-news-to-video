@@ -207,10 +207,9 @@ After migration, `Session` owns:
   no longer the load-bearing dereference on the hot path). The
   long-standing fixture-rebind contract is preserved end-to-end — a test
   that writes `core._<attr> = ...` still steers the live chain because
-  the descriptor's setter writes through to `chain_host._<attr>`. See
-  the [retention doc](../session-method-retention.md#inventory) rows
-  marked `retain — forwards to MiddlewareChainHost` for the per-attr
-  contract. `Session.assert_bound_loop` remains captured via lambda by
+  the descriptor's setter writes through to `chain_host._<attr>`. The
+  per-attr contract is now historical; current code binds the host directly
+  from `ClientComposed`. `Session.assert_bound_loop` remains captured via lambda by
   `build_session_transport`'s `bound_loop_check` (not migrated to the
   host — it forwards to `ClientLifecycle` per Rule 1).
 
@@ -312,7 +311,7 @@ The ADR-013 promotion rule (≥2 consumers ⇒ shared Protocol in
 
 ## Consequences
 
-**Migration outcome:** Migration completed in PRs #1064–#1082; ADR-007 Session-shaped allowlist entries drained; Session reduced to lifecycle root + retention list (see [`docs/session-method-retention.md`](../session-method-retention.md)). The two Wave-7 follow-ups (#1084 Stage B and #1085 MiddlewareChainHost) were closed by the post-refactoring plan 2026-05-27 — Stage B1 (#1086 / #1089 / #1091) and Stage B2 (#1090 / #1092 / this PR) respectively. See [Revision history](#revision-history) for the chain-ownership carve-out introduced under Stage B2.
+**Migration outcome:** Migration completed in PRs #1064–#1082; ADR-007 Session-shaped allowlist entries drained; later Session-elimination work moved the remaining lifecycle/public-surface duties onto `NotebookLMClient` and client-owned collaborators. The two Wave-7 follow-ups (#1084 Stage B and #1085 MiddlewareChainHost) were closed by the post-refactoring plan 2026-05-27 — Stage B1 (#1086 / #1089 / #1091) and Stage B2 (#1090 / #1092 / this PR) respectively. See [Revision history](#revision-history) for the chain-ownership carve-out introduced under Stage B2 and the 2026-05-28 elimination note.
 
 **Wanted:**
 
@@ -400,7 +399,7 @@ properties (`Session.collaborators`, `Session.session_transport`,
 deleted. Feature wiring now reads `composed.collaborators` /
 `composed.transport` / `composed.executor` from the `ComposedSession`
 returned by the helper. The deletion is recorded in the **Deleted**
-section of [`docs/session-method-retention.md`](../session-method-retention.md).
+section of this ADR's revision history.
 
 ### 2026-05-27 — Rule 4 chain-ownership carve-out (post-refactoring plan 2026-05-27 Stage B2, #1090 / #1092)
 
@@ -442,8 +441,7 @@ and tests rebind through `core._chain_host._<attr>` /
 `core._chain_host.await_refresh()`. The Session-side retention list
 keeps only the `_chain_host` reference (so feature code and tests can
 reach the host); the descriptors and the `_await_refresh` delegate
-are recorded in the **Deleted** section of
-[`docs/session-method-retention.md`](../session-method-retention.md).
+are recorded in the historical deletion notes below.
 
 ### 2026-05-27 — Rule 2 adapter retirement (runtime-adapter decision)
 
@@ -481,12 +479,22 @@ auth/lifecycle forwards (`Session.lifecycle`, `Session.update_auth_tokens`,
 `__init__`) and `SourceUploadPipeline(auth=self._auth)` is wired the
 same way. Wave 4 (PR for this revision) added regression lints under
 `tests/_lint/test_session_runtime_boundaries.py` plus extensions to
-`test_client_composition.py` (the `self._session.<X>` allowlist) and
-`test_session_retention.py` (Wave 3 deletion pin) so neither host
+`test_client_composition.py` and `test_no_session.py` so neither host
 Protocol nor the deleted Session forwards can quietly come back.
 The auth-refresh path is now fully explicit-collaborator-driven and
 ADR-014 Rule 3 holds end-to-end on the refresh code path as it
 already did on the feature constructors.
+
+### 2026-05-28 — Session elimination (plan `session-elimination-plan`)
+
+`NotebookLMClient` now owns the final runtime graph directly: `ClientComposed`,
+the `SessionCollaborators` bundle, the `RpcExecutor`, and the public feature
+APIs. The concrete `Session` class and its module were deleted, along with the
+session-method retention document and helper factory. Lifecycle entry points
+(`__aenter__`, `__aexit__`, `close`, `drain`, and `is_connected`) call
+`ClientLifecycle` and `TransportDrainTracker` directly. Static lints now enforce
+that the deleted module, deleted helper names, deleted client attribute, and
+`ClientComposed.collaborators` alias cannot return.
 
 ## Related decisions
 
@@ -498,6 +506,6 @@ already did on the feature constructors.
 - Closes the deferred goal in [ADR-003](./0003-auth-facade-write-through.md)
   by example — `auth.py` follows the same delegate-to-private-module pattern
   Rule 1 applies to collaborators.
-- Supersedes the "Session as facade" framing in
-  [`docs/architecture.md`](../architecture.md#session-as-facade) once the
-  migration completes; that section becomes "Session as lifecycle root".
+- Supersedes the former "Session as facade" and lifecycle-root framing in
+  [`docs/architecture.md`](../architecture.md); the current architecture is
+  "NotebookLMClient as composition root".

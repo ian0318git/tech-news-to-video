@@ -214,9 +214,8 @@ _ALLOWLIST: frozenset[str] = frozenset(
         # `resolve_source_ids`) — module-level CLI seams above the
         # `NotebookLMClient` core.
         "tests/unit/test_generate_service.py",
-        # reason: client __init__ ordering test patches `notebooklm._session.*`
-        # module-level constructors/factories to assert wiring order — verifies
-        # construction sequencing, not a core method seam.
+        # reason: client __init__ ordering test patches construction helpers to
+        # assert wiring order — verifies construction sequencing, not a core method seam.
         "tests/unit/test_init_order.py",
         # reason: storage migration-lock test patches `notebooklm._auth.storage.*`
         # filesystem lock helpers — module-level filesystem seam outside

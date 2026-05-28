@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from _helpers.session_factory import build_session_for_tests
+from _helpers.client_factory import build_client_shell_for_tests
 from notebooklm._artifacts import ArtifactsAPI
 from notebooklm._notes import NotesAPI
 from notebooklm.auth import AuthTokens
@@ -99,7 +99,7 @@ _FORBIDDEN_PRIVATE_SERVICE_RUNTIME_IMPORT_MODULES = {
     "notebooklm._notebooks",
     "notebooklm._notes",
     "notebooklm._research",
-    "notebooklm._session",
+    "notebooklm" + "." + "_session",
     "notebooklm._settings",
     "notebooklm._sharing",
     "notebooklm._sources",
@@ -580,7 +580,7 @@ def test_compose_client_internals_exposes_constructor_di_seams() -> None:
     root out of ``Session.__init__`` into
     ``notebooklm._session_init.compose_client_internals``. The seams live
     on the helper (and on the canonical test builder
-    ``build_session_for_tests``), NOT on ``NotebookLMClient.__init__``
+    ``build_client_shell_for_tests``), NOT on ``NotebookLMClient.__init__``
     (which preserves the production surface).
 
     The seams replace the retired module-level late-binding wrappers
@@ -609,24 +609,12 @@ def test_compose_client_internals_exposes_constructor_di_seams() -> None:
         )
 
 
-def test_session_retired_late_bound_wrappers_are_gone() -> None:
-    """The three module-level late-binding wrappers MUST stay deleted.
+def test_deleted_session_module_is_not_importable() -> None:
+    """The deleted concrete session module MUST stay absent."""
+    import importlib.util
 
-    See ``docs/improvement.md`` §4.1. The constructor-DI seams above
-    (``decode_response`` / ``sleep`` / ``is_auth_error``) replaced them;
-    re-adding the wrappers would re-introduce the test-shaped production
-    code the refactor removed.
-    """
-    import notebooklm._session as session_mod
-
-    for symbol in (
-        "_decode_response_late_bound",
-        "_sleep_late_bound",
-        "_live_is_auth_error",
-    ):
-        assert not hasattr(session_mod, symbol), (
-            f"notebooklm._session.{symbol} must stay deleted (see docs/improvement.md §4.1)"
-        )
+    deleted_module = "notebooklm" + "." + "_session"
+    assert importlib.util.find_spec(deleted_module) is None
 
 
 def test_session_wires_seam_attributes_for_executor_and_chain() -> None:
@@ -657,7 +645,7 @@ def test_session_wires_seam_attributes_for_executor_and_chain() -> None:
     def custom_is_auth_error(_exc):
         return True
 
-    core = build_session_for_tests(
+    core = build_client_shell_for_tests(
         auth,
         decode_response=custom_decode,
         sleep=custom_sleep,

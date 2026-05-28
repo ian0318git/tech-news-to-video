@@ -32,7 +32,7 @@ from typing import Any
 
 import pytest
 
-from _helpers.session_factory import build_session_for_tests
+from _helpers.client_factory import build_client_shell_for_tests
 from notebooklm.auth import AuthTokens
 from notebooklm.rpc import RPCMethod
 
@@ -56,11 +56,11 @@ async def test_executor_identity_survives_close_then_open() -> None:
     adapters that captured the executor at construction time
     (``ChatAPI`` / ``SourcesAPI`` / etc.) do not need to re-grab it.
     """
-    core = build_session_for_tests(_make_auth())
+    core = build_client_shell_for_tests(_make_auth())
     initial_executor = core._rpc_executor
     assert initial_executor is not None, "composition root must bind the executor"
 
-    await core.open()
+    await core.__aenter__()
     try:
         assert core._rpc_executor is initial_executor, (
             "open() must not rebind the executor — it persists from composition"
@@ -74,7 +74,7 @@ async def test_executor_identity_survives_close_then_open() -> None:
         "close() must not null the executor — Stage B1 PR 2 dropped that step"
     )
 
-    await core.open()
+    await core.__aenter__()
     try:
         assert core._rpc_executor is initial_executor, (
             "second open() also leaves the executor alone — same instance "
@@ -97,7 +97,7 @@ async def test_rpc_call_succeeds_after_close_then_open_with_same_executor() -> N
     end-to-end through a stubbed executor to confirm the binding
     survives.
     """
-    core = build_session_for_tests(_make_auth())
+    core = build_client_shell_for_tests(_make_auth())
     executor = core._rpc_executor
     assert executor is not None
 
@@ -117,14 +117,14 @@ async def test_rpc_call_succeeds_after_close_then_open_with_same_executor() -> N
     executor.rpc_call = fake_rpc_call  # type: ignore[method-assign,assignment]
 
     # Drive a full lifecycle cycle.
-    await core.open()
+    await core.__aenter__()
     result1 = await core._rpc_executor.rpc_call(RPCMethod.LIST_NOTEBOOKS, [])
     await core.close()
 
     # Critical re-open + rpc_call — the deleted close-time null would
     # have left ``_rpc_executor`` at ``None`` here, raising from the
     # fail-fast guard.
-    await core.open()
+    await core.__aenter__()
     try:
         result2 = await core._rpc_executor.rpc_call(RPCMethod.LIST_NOTEBOOKS, [])
     finally:
@@ -140,6 +140,6 @@ async def test_rpc_call_succeeds_after_close_then_open_with_same_executor() -> N
 
 def test_session_rpc_executor_forwards_to_client_composed() -> None:
     """The temporary Session executor seam reads through ``ClientComposed``."""
-    core = build_session_for_tests(_make_auth())
+    core = build_client_shell_for_tests(_make_auth())
 
     assert core._rpc_executor is core._composed.executor

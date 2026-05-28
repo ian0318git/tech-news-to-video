@@ -7,6 +7,7 @@ runtime closures may re-read after construction.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -22,10 +23,8 @@ class ClientSeams:
 
 
 def _default_sleep() -> Callable[[float], Awaitable[Any]]:
-    """Resolve sleep through ``notebooklm._session`` for patch compatibility."""
-    from . import _session as session_mod
-
-    return session_mod.asyncio.sleep
+    """Resolve the default async sleep callable."""
+    return asyncio.sleep
 
 
 def _default_decode_response() -> Callable[..., Any]:

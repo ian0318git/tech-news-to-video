@@ -1,4 +1,4 @@
-"""Cookie persistence collaborator for :mod:`notebooklm._session`."""
+"""Cookie persistence collaborator for the NotebookLM client runtime."""
 
 from __future__ import annotations
 

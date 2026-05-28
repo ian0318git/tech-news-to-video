@@ -1072,7 +1072,7 @@ Categorize:
 - **Captured by a provider closure in `_session_init.py` (`wire_middleware_chain` / `build_session_transport`)** → KEEP — load-bearing live seam per ADR-014 Rule 4. Document the capture site.
 - **Real orchestration** → keep
 
-**Step 3:** Write the inventory as a **checked-in** `docs/session-method-retention.md`. This is NOT an ephemeral scratchpad; it becomes the document the next architecture refactor reads first. Format:
+**Step 3:** Write the inventory as a **checked-in** `retired retention document`. This is NOT an ephemeral scratchpad; it becomes the document the next architecture refactor reads first. Format:
 
 ```markdown
 # Session method retention (ADR-014 Rule 4)
@@ -1090,12 +1090,12 @@ Categorize:
 | ... | ... | ... |
 ```
 
-**Step 4:** Add a `tests/_lint/test_session_retention.py` that AST-parses `_session.py`, enumerates the methods, and asserts every method is either listed in the retention doc OR matches a "delete in Task 5.2" disposition (i.e., the method hasn't been deleted yet). Any method added later that is not listed fails the lint at PR time. After Task 5.2 closes, the lint asserts every remaining method is in the "retain" set.
+**Step 4:** Add a `tests/_lint/retired retention lint` that AST-parses `_session.py`, enumerates the methods, and asserts every method is either listed in the retention doc OR matches a "delete in Task 5.2" disposition (i.e., the method hasn't been deleted yet). Any method added later that is not listed fails the lint at PR time. After Task 5.2 closes, the lint asserts every remaining method is in the "retain" set.
 
 **Step 5:** Commit.
 
 ```bash
-git add docs/session-method-retention.md tests/_lint/test_session_retention.py
+git add retired retention document tests/_lint/retired retention lint
 git commit -m "docs+test(session): retention doc + lint guard (Wave 5 inventory)"
 ```
 
@@ -1134,7 +1134,7 @@ For each remaining entry, classify:
 
 ### Task 5.4: Update the retention doc as Task 5.2 PRs land
 
-After each Task 5.2 cluster PR, move the deleted methods from the "delete in Task 5.2" rows of `docs/session-method-retention.md` to a `Deleted` section (or remove them entirely; preserve commit-SHA references in the section header). When all clusters land, the doc should show only the retention list. The lint test (`test_session_retention.py`) keeps it honest.
+After each Task 5.2 cluster PR, move the deleted methods from the "delete in Task 5.2" rows of `retired retention document` to a `Deleted` section (or remove them entirely; preserve commit-SHA references in the section header). When all clusters land, the doc should show only the retention list. The lint test (`retired retention lint`) keeps it honest.
 
 **No ephemeral file is created or deleted in this plan.** Earlier drafts proposed an `_audit.md` scratchpad — that became the checked-in retention doc above.
 
@@ -1178,7 +1178,7 @@ git commit -am "docs(architecture): reflect ADR-014 runtime decoupling"
 Both issues:
 - Reference ADR-014 as motivation
 - Link to the relevant Wave-7 entry in this plan
-- Are linked from `docs/session-method-retention.md` (added in Task 5.1)
+- Are linked from `retired retention document` (added in Task 5.1)
 - Are linked from ADR-014 Status line after flipping to Accepted (`Accepted (#<final PR>; Stage-B issue #<N>; MiddlewareChainHost issue #<M>)`)
 
 Without these tracked items, ADR-014's Rule 4 carve-out becomes the new gravity well (5 attributes survive on `Session` indefinitely "because the middleware chain needs them"), and the three Stage-A accessors become permanent fixtures.
@@ -1187,7 +1187,7 @@ Without these tracked items, ADR-014's Rule 4 carve-out becomes the new gravity 
 
 **Step 2:** Change ADR Status from `Proposed (2026-05-26)` to `Accepted (#<final migration PR>; Stage-B issue #<N>; MiddlewareChainHost issue #<M>)`.
 
-**Step 3:** Add a one-line Consequences confirmation: "Migration completed in #<PR list>; ADR-007 Session-shaped allowlist entries drained; Session reduced to lifecycle + retention list (see `docs/session-method-retention.md`)."
+**Step 3:** Add a one-line Consequences confirmation: "Migration completed in #<PR list>; ADR-007 Session-shaped allowlist entries drained; Session reduced to lifecycle + retention list (see `retired retention document`)."
 
 **Step 4:** Update `docs/adr/README.md` row to `Accepted`.
 
