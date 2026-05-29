@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 import click
+from rich.markup import render as render_markup
 from rich.table import Table
 
 from ..client import NotebookLMClient
@@ -42,8 +43,10 @@ from .rendering import (
     console,
     display_report,
     display_research_sources,
+    emit_status,
     get_source_type_display,
     json_output_response,
+    render_list,
 )
 from .resolve import require_notebook, resolve_notebook_id, resolve_source_id
 from .runtime import is_quiet
@@ -72,10 +75,16 @@ from .services.source_content import (
 from .services.source_listing import SourceListPlan, execute_source_list
 from .services.source_mutations import (
     SourceAddDrivePlan,
+    SourceAddDriveResult,
     SourceDeleteByTitlePlan,
+    SourceDeleteByTitleResult,
     SourceDeletePlan,
+    SourceDeleteResult,
+    SourceMutationError,
     SourceRefreshPlan,
+    SourceRefreshResult,
     SourceRenamePlan,
+    SourceRenameResult,
     execute_source_add_drive,
     execute_source_delete,
     execute_source_delete_by_title,
@@ -374,6 +383,97 @@ def _render_source_stale_result(
         exit_with_code(0)
 
 
+def _handle_source_mutation_error(exc: SourceMutationError, *, json_output: bool) -> NoReturn:
+    """Render a typed source-mutation error through the CLI error contract."""
+    extra = dict(exc.extra) if exc.extra else None
+    hint = None
+    if exc.status_message:
+        plain_status = render_markup(exc.status_message).plain
+        if json_output:
+            extra = extra or {}
+            extra["status_message"] = plain_status
+        else:
+            hint = plain_status
+    _output_error(
+        exc.message,
+        code=exc.code,
+        json_output=json_output,
+        exit_code=1,
+        extra=extra,
+        hint=hint,
+    )
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
+def _render_source_delete_result(
+    result: SourceDeleteResult | SourceDeleteByTitleResult,
+    *,
+    json_output: bool,
+    ctx: click.Context,
+) -> None:
+    if result.status_message:
+        emit_status(result.status_message, json_output=json_output)
+
+    if json_output:
+        json_output_response(result.payload)
+        return
+
+    if result.status == "cancelled":
+        return
+    if result.success:
+        cli_print(f"[green]Deleted source:[/green] {result.source_id}", ctx=ctx)
+    else:
+        cli_print("[yellow]Delete may have failed[/yellow]", ctx=ctx)
+
+
+def _render_source_rename_result(
+    result: SourceRenameResult,
+    *,
+    json_output: bool,
+    ctx: click.Context,
+) -> None:
+    if json_output:
+        json_output_response(result.payload)
+        return
+
+    cli_print(f"[green]Renamed source:[/green] {result.source.id}", ctx=ctx)
+    cli_print(f"[bold]New title:[/bold] {result.source.title}", ctx=ctx)
+
+
+def _render_source_refresh_result(
+    result: SourceRefreshResult,
+    *,
+    json_output: bool,
+    ctx: click.Context,
+) -> None:
+    if json_output:
+        json_output_response(result.payload)
+        return
+
+    refreshed = result.result
+    if refreshed and refreshed is not True:
+        cli_print(f"[green]Source refreshed:[/green] {refreshed.id}", ctx=ctx)
+        cli_print(f"[bold]Title:[/bold] {refreshed.title}", ctx=ctx)
+    elif refreshed is True:
+        cli_print(f"[green]Source refreshed:[/green] {result.source_id}", ctx=ctx)
+    else:
+        cli_print("[yellow]Refresh returned no result[/yellow]", ctx=ctx)
+
+
+def _render_source_add_drive_result(
+    result: SourceAddDriveResult,
+    *,
+    json_output: bool,
+    ctx: click.Context,
+) -> None:
+    if json_output:
+        json_output_response(result.payload)
+        return
+
+    cli_print(f"[green]Added Drive source:[/green] {result.source.id}", ctx=ctx)
+    cli_print(f"[bold]Title:[/bold] {result.source.title}", ctx=ctx)
+
+
 @click.group()
 def source():
     """Source management commands.
@@ -423,8 +523,9 @@ def source_list(ctx, notebook_id, json_output, limit, no_truncate, client_auth):
                 json_output=json_output,
                 limit=limit,
                 no_truncate=no_truncate,
+                source_type_display=get_source_type_display,
             )
-            await execute_source_list(client, plan)
+            render_list(await execute_source_list(client, plan))
 
     return _run()
 
@@ -530,15 +631,15 @@ def source_add(
     async def _run():
         async with NotebookLMClient(client_auth, **client_kwargs) as client:
             nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
-            await execute_source_add(
-                client,
-                SourceAddExecutionPlan(
-                    notebook_id=nb_id_resolved,
-                    plan=plan,
-                    json_output=json_output,
-                ),
-                ctx=ctx,
-            )
+            execution_plan = SourceAddExecutionPlan(notebook_id=nb_id_resolved, plan=plan)
+            if json_output:
+                result = await execute_source_add(client, execution_plan)
+                json_output_response(result.payload)
+                return
+
+            with cli_status(f"Adding {plan.detected_type} source...", ctx=ctx):
+                result = await execute_source_add(client, execution_plan)
+            cli_print(f"[green]Added source:[/green] {result.source.id}", ctx=ctx)
 
     return _run()
 
@@ -583,16 +684,20 @@ def source_delete(ctx, source_id, notebook_id, yes, json_output, client_auth):
     async def _run():
         async with NotebookLMClient(client_auth) as client:
             nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
-            await execute_source_delete(
-                client,
-                SourceDeletePlan(
-                    notebook_id=nb_id_resolved,
-                    source_id=source_id,
-                    yes=yes,
-                    json_output=json_output,
-                ),
-                ctx=ctx,
-            )
+            try:
+                result = await execute_source_delete(
+                    client,
+                    SourceDeletePlan(
+                        notebook_id=nb_id_resolved,
+                        source_id=source_id,
+                        yes=yes,
+                        json_output=json_output,
+                    ),
+                    confirmer=click.confirm,
+                )
+            except SourceMutationError as exc:
+                _handle_source_mutation_error(exc, json_output=json_output)
+            _render_source_delete_result(result, json_output=json_output, ctx=ctx)
 
     return _run()
 
@@ -610,16 +715,20 @@ def source_delete_by_title(ctx, title, notebook_id, yes, json_output, client_aut
     async def _run():
         async with NotebookLMClient(client_auth) as client:
             nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
-            await execute_source_delete_by_title(
-                client,
-                SourceDeleteByTitlePlan(
-                    notebook_id=nb_id_resolved,
-                    title=title,
-                    yes=yes,
-                    json_output=json_output,
-                ),
-                ctx=ctx,
-            )
+            try:
+                result = await execute_source_delete_by_title(
+                    client,
+                    SourceDeleteByTitlePlan(
+                        notebook_id=nb_id_resolved,
+                        title=title,
+                        yes=yes,
+                        json_output=json_output,
+                    ),
+                    confirmer=click.confirm,
+                )
+            except SourceMutationError as exc:
+                _handle_source_mutation_error(exc, json_output=json_output)
+            _render_source_delete_result(result, json_output=json_output, ctx=ctx)
 
     return _run()
 
@@ -637,7 +746,7 @@ def source_rename(ctx, source_id, new_title, notebook_id, json_output, client_au
     async def _run():
         async with NotebookLMClient(client_auth) as client:
             nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
-            await execute_source_rename(
+            result = await execute_source_rename(
                 client,
                 SourceRenamePlan(
                     notebook_id=nb_id_resolved,
@@ -645,8 +754,8 @@ def source_rename(ctx, source_id, new_title, notebook_id, json_output, client_au
                     new_title=new_title,
                     json_output=json_output,
                 ),
-                ctx=ctx,
             )
+            _render_source_rename_result(result, json_output=json_output, ctx=ctx)
 
     return _run()
 
@@ -663,15 +772,17 @@ def source_refresh(ctx, source_id, notebook_id, json_output, client_auth):
     async def _run():
         async with NotebookLMClient(client_auth) as client:
             nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
-            await execute_source_refresh(
-                client,
-                SourceRefreshPlan(
-                    notebook_id=nb_id_resolved,
-                    source_id=source_id,
-                    json_output=json_output,
-                ),
-                ctx=ctx,
+            plan = SourceRefreshPlan(
+                notebook_id=nb_id_resolved,
+                source_id=source_id,
+                json_output=json_output,
             )
+            if json_output:
+                result = await execute_source_refresh(client, plan)
+            else:
+                with cli_status("Refreshing source...", ctx=ctx):
+                    result = await execute_source_refresh(client, plan)
+            _render_source_refresh_result(result, json_output=json_output, ctx=ctx)
 
     return _run()
 
@@ -695,17 +806,18 @@ def source_add_drive(ctx, file_id, title, notebook_id, mime_type, json_output, c
     async def _run():
         async with NotebookLMClient(client_auth) as client:
             nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
-            await execute_source_add_drive(
-                client,
-                SourceAddDrivePlan(
-                    notebook_id=nb_id_resolved,
-                    file_id=file_id,
-                    title=title,
-                    mime_type=mime_type,
-                    json_output=json_output,
-                ),
-                ctx=ctx,
+            plan = SourceAddDrivePlan(
+                notebook_id=nb_id_resolved,
+                file_id=file_id,
+                title=title,
+                mime_type=mime_type,
             )
+            if json_output:
+                result = await execute_source_add_drive(client, plan)
+            else:
+                with cli_status("Adding Drive source...", ctx=ctx):
+                    result = await execute_source_add_drive(client, plan)
+            _render_source_add_drive_result(result, json_output=json_output, ctx=ctx)
 
     return _run()
 
@@ -1188,17 +1300,20 @@ def _dispatch_source_clean_result(
 
     if json_output:
         # P1.T2 bug 3: synthesize structured error when --json + no --yes
-        # left candidates uncleaned. ``require_yes_in_json`` raises
-        # ``SystemExit(1)`` via ``output_error`` — it never returns.
+        # left candidates uncleaned. ``require_yes_in_json`` raises a typed
+        # source-mutation error for the command layer — it never returns.
         if result.status == "cancelled" and not yes:
-            require_yes_in_json(
-                action="clean",
-                extra={
-                    "notebook_id": result.notebook_id,
-                    "candidate_count": result.candidate_count,
-                    "candidates": candidate_payload,
-                },
-            )
+            try:
+                require_yes_in_json(
+                    action="clean",
+                    extra={
+                        "notebook_id": result.notebook_id,
+                        "candidate_count": result.candidate_count,
+                        "candidates": candidate_payload,
+                    },
+                )
+            except SourceMutationError as exc:
+                _handle_source_mutation_error(exc, json_output=json_output)
 
         payload: dict[str, Any] = {
             "action": "clean",
