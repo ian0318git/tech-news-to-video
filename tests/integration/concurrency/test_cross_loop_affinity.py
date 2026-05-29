@@ -279,6 +279,112 @@ def test_capped_client_reopen_on_new_loop_rebinds_semaphore(
     asyncio.run(_reopen_and_dispatch_under_loop_b())
 
 
+def test_upload_pipeline_reopen_on_new_loop_rebinds_semaphore(
+    mock_transport_concurrent: ConcurrentMockTransport,
+) -> None:
+    """Issue #1196 (upload variant): close on loop A, reopen on loop B → upload semaphore rebinds.
+
+    The Sources upload semaphore (``SourceUploadPipeline._upload_semaphore``)
+    is the second lazily-built loop-bound ``asyncio.Semaphore`` in the client,
+    with the exact close→reopen hazard #1196 fixed for the RPC semaphore: it is
+    bound to whichever loop it was first constructed under, but
+    ``ClientLifecycle.open`` did not reset it, so a client reopened on a
+    *different* loop reused a semaphore bound to the now-dead loop — which on
+    Python 3.10/3.11 raises "bound to a different event loop" or misparks
+    waiters on acquire.
+
+    Post-fix ``ClientLifecycle.open`` calls
+    ``SourceUploadPipeline.set_bound_loop`` + ``reset_after_open`` (mirroring
+    the RPC-semaphore reset above), so the upload semaphore is discarded on a
+    loop change and rebuilt fresh on the new loop.
+
+    Like the RPC-semaphore test above, this is intentionally NOT ``async def``:
+    we own two ``asyncio.run`` calls explicitly so the open and the reopen
+    happen on two genuinely distinct loop objects.
+
+    The semaphore is capped at 1 and each loop forces a *blocked* second
+    acquire: ``asyncio.Semaphore.acquire`` only consults ``_get_loop()`` (and
+    thus binds the primitive to a loop) on the contended waiter path — the
+    uncontended fast path returns before touching the loop. Mirroring the
+    cap-2 fan-out the RPC test above uses, the contention here makes the
+    cross-loop binding actually exercise the stale-loop hazard pre-fix.
+    """
+    transport = mock_transport_concurrent
+    transport.set_delay(0.0)
+
+    core = build_client_shell_for_tests(auth=_make_auth(), max_concurrent_uploads=1)
+    uploader = core._source_uploader
+
+    async def _force_contended_acquire(sem: asyncio.Semaphore) -> None:
+        """Drive the blocked-waiter path so ``sem`` binds to the running loop.
+
+        Hold the single slot, start a second ``acquire`` that must block
+        (creating a waiter future via ``_get_loop()`` — the loop-binding
+        step), then release so the waiter proceeds. On a stale cross-loop
+        semaphore this is where 3.10/3.11 raise "bound to a different event
+        loop".
+        """
+        await sem.acquire()
+        waiter = asyncio.ensure_future(sem.acquire())
+        # Yield so the waiter runs far enough to park on the locked semaphore.
+        await asyncio.sleep(0)
+        assert not waiter.done()
+        sem.release()
+        await waiter
+        sem.release()
+
+    async def _open_force_semaphore_and_close_under_loop_a() -> None:
+        await core.__aenter__()
+        prior_cookies = core._collaborators.kernel.get_http_client().cookies
+        await core._collaborators.kernel.get_http_client().aclose()
+        install_http_client_for_test(
+            core._collaborators.kernel,
+            httpx.AsyncClient(
+                cookies=prior_cookies,
+                transport=transport,
+                timeout=httpx.Timeout(connect=1.0, read=5.0, write=5.0, pool=1.0),
+            ),
+        )
+        # Force the upload semaphore to actually be constructed and bound to
+        # loop A — that is the stale primitive a naive reopen reuses. The
+        # contended acquire binds it to loop A via the waiter path.
+        await _force_contended_acquire(uploader.get_upload_semaphore())
+        await core.close()
+
+    asyncio.run(_open_force_semaphore_and_close_under_loop_a())
+    # The reset happens on open(), not close(): the stale semaphore is still
+    # cached here, bound to the now-dead loop A.
+    assert uploader._upload_semaphore is not None
+
+    async def _reopen_and_use_semaphore_under_loop_b() -> None:
+        await core.__aenter__()
+        # reset_after_open() must have discarded the loop-A semaphore so the
+        # next get_upload_semaphore() rebuilds it on loop B.
+        assert uploader._upload_semaphore is None
+        prior_cookies = core._collaborators.kernel.get_http_client().cookies
+        await core._collaborators.kernel.get_http_client().aclose()
+        install_http_client_for_test(
+            core._collaborators.kernel,
+            httpx.AsyncClient(
+                cookies=prior_cookies,
+                transport=transport,
+                timeout=httpx.Timeout(connect=1.0, read=5.0, write=5.0, pool=1.0),
+            ),
+        )
+        try:
+            # Drive a contended acquire on the rebuilt semaphore under loop B.
+            # Pre-fix this would reuse the stale loop-A semaphore and (on
+            # 3.10/3.11) raise the cross-loop RuntimeError on the waiter path;
+            # post-fix the semaphore is fresh and binds cleanly to loop B.
+            sem_b = uploader.get_upload_semaphore()
+            assert sem_b is not None
+            await _force_contended_acquire(sem_b)
+        finally:
+            await core.close()
+
+    asyncio.run(_reopen_and_use_semaphore_under_loop_b())
+
+
 async def test_bound_loop_captured_on_open(
     mock_transport_concurrent: ConcurrentMockTransport,
 ) -> None:
