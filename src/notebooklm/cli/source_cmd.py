@@ -37,6 +37,7 @@ from .options import (
     prompt_file_option,
     wait_polling_options,
 )
+from .polling_ui import status_with_elapsed
 from .rendering import (
     cli_print,
     cli_status,
@@ -1213,6 +1214,13 @@ def source_wait(ctx, source_id, notebook_id, timeout, interval, json_output, cli
                     timeout=float(timeout),
                     interval=float(interval),
                     json_output=json_output,
+                ),
+                wait_context=lambda: status_with_elapsed(
+                    f"Waiting for source {resolved_id} to finish processing...",
+                    json_output=json_output,
+                    # Parallel hint: ``source wait`` has no separate ``source
+                    # poll`` command, so the resume IS re-running the same wait.
+                    resume_hint=f"notebooklm source wait {resolved_id}",
                 ),
             )
             _render_source_wait_outcome(outcome, json_output=json_output)
