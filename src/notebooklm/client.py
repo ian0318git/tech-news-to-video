@@ -553,10 +553,39 @@ class NotebookLMClient:
           ``await asyncio.sleep(0)`` or poll to observe it).
 
         There is no path that leaves a live transport behind.
+
+        Drain-hook ordering (issue #1161): feature-owned cancel hooks
+        (e.g. ``artifacts.polls``) run BEFORE the drain wait, not just in
+        the shielded lifecycle close below. In-flight artifact polls wrap
+        themselves in ``TransportDrainTracker.operation_scope`` (see
+        :meth:`notebooklm._artifact_polling.ArtifactPollingService._run_poll_loop_in_scope`),
+        which increments the same in-flight counter ``drain()`` waits on.
+        Without firing the cancel hooks first, ``drain()`` would block on a
+        poll that the cancel hook is supposed to short-circuit — up to the
+        poll's own 300s timeout. Running the hooks first lets ``drain()``
+        observe a cancelled-then-settled count instead of parking on it. The
+        lifecycle close below still re-runs the hooks; for the only
+        production hook (``artifacts.polls``) that re-run is a cheap no-op
+        because already-settled poll tasks are filtered out of
+        :meth:`notebooklm._polling_registry.PollRegistry.active_tasks`.
+
+        Note: the cancel-hook fire is NOT bounded by ``drain_timeout`` — that
+        deadline budgets the drain *wait*. The production poll-cancel hook
+        settles near-instantly (it cancels its tasks and awaits the
+        cancellation gather), so this is a non-issue in practice; a custom
+        feature hook that blocks indefinitely could still extend shutdown,
+        and such hooks should bound their own work.
         """
         if drain:
             drain_timeout_exc: TimeoutError | None = None
             try:
+                # Fire feature-owned cancel hooks BEFORE the drain wait (see
+                # the "Drain-hook ordering" section of the docstring above for
+                # why). Awaited inside this ``try`` so a *caller* CancelledError
+                # arriving during the hook fire still routes through the I12
+                # shielded-close path below; ``run_drain_hooks`` itself never
+                # re-raises (it gathers with ``return_exceptions=True``).
+                await self._collaborators.drain_tracker.run_drain_hooks()
                 await self.drain(timeout=drain_timeout)
             except TimeoutError as exc:
                 # Drain deadline missed. Hold onto the exception and
