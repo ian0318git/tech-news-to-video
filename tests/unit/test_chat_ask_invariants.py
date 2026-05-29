@@ -22,7 +22,9 @@ import asyncio
 import json
 import re
 import warnings
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
@@ -34,6 +36,7 @@ from notebooklm import NotebookLMClient
 from notebooklm._chat import ChatAPI
 from notebooklm._request_types import AuthSnapshot
 from notebooklm.auth import AuthTokens
+from notebooklm.exceptions import ChatError
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -436,11 +439,13 @@ class TestChatNewConversationLocks:
     def _factory(self) -> ChatAPI:
         from unittest.mock import MagicMock
 
+        loop_guard = MagicMock()
+        loop_guard.assert_bound_loop = MagicMock()
         return ChatAPI(
             rpc=MagicMock(),
             transport=MagicMock(),
             reqid=MagicMock(),
-            loop_guard=MagicMock(),
+            loop_guard=loop_guard,
         )
 
     def test_same_notebook_reuses_new_conversation_lock(self):
@@ -458,6 +463,53 @@ class TestChatNewConversationLocks:
         lock_b = chat._get_new_conversation_lock("nb-2")
 
         assert lock_a is not lock_b
+
+    @pytest.mark.asyncio
+    async def test_failed_post_ask_hptbtc_lookup_releases_new_conversation_lock(self):
+        class HptbtcFailureChatAPI(ChatAPI):
+            def __init__(self, *, lookup_results: list[str | ChatError], **kwargs: Any) -> None:
+                super().__init__(**kwargs)
+                self._lookup_results = iter(lookup_results)
+                self.lookup_count = 0
+
+            async def get_conversation_id(self, notebook_id: str) -> str | None:
+                self.lookup_count += 1
+                result = next(self._lookup_results)
+                if isinstance(result, ChatError):
+                    raise result
+                return result
+
+        async def fake_perform_authed_post(*args: Any, **kwargs: Any) -> httpx.Response:
+            return httpx.Response(
+                200,
+                request=httpx.Request("POST", "https://notebooklm.google.com/_/LabsTailwindUi"),
+                content=_make_answer_response_body(),
+            )
+
+        chat = HptbtcFailureChatAPI(
+            rpc=SimpleNamespace(),
+            transport=SimpleNamespace(
+                perform_authed_post=AsyncMock(side_effect=fake_perform_authed_post)
+            ),
+            reqid=SimpleNamespace(next_reqid=AsyncMock(side_effect=[100000, 200000])),
+            loop_guard=SimpleNamespace(assert_bound_loop=lambda: None),
+            lookup_results=[ChatError("hPTbtc lookup failed"), "conv-after-failure"],
+        )
+        new_conversation_lock = chat._get_new_conversation_lock("nb-1")
+
+        with pytest.raises(ChatError, match="hPTbtc lookup failed"):
+            await chat.ask("nb-1", "first ask", source_ids=["s1"])
+
+        assert not new_conversation_lock.locked()
+
+        result = await asyncio.wait_for(
+            chat.ask("nb-1", "second ask", source_ids=["s1"]),
+            timeout=1.0,
+        )
+
+        assert result.conversation_id == "conv-after-failure"
+        assert result.answer == "Refactor answer is long enough."
+        assert chat.lookup_count == 2
 
 
 class TestBuildChatRequestFactory:

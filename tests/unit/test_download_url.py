@@ -142,6 +142,10 @@ class TestDownloadUrlErrorWrapping:
         "url",
         [
             "https://attacker.evil\\.google.com/file.mp4",
+            "https://attacker.evil%5c.google.com/file.mp4",
+            "https://attacker.evil%5C.google.com/file.mp4",
+            "https://attacker.evil%2f.google.com/file.mp4",
+            "https://attacker.evil%2F.google.com/file.mp4",
             "https://storage.googleapis.com@attacker.evil/file.mp4",
         ],
     )
