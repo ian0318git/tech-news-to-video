@@ -720,6 +720,20 @@ class TestNullResultStatusCodeEnrichment:
             result = decode_response(self._build_raw([code]), self.RPC_ID, allow_null=True)
             assert result is None, f"allow_null=True leaked for code {code}"
 
+    def test_enriched_messages_surface_found_ids(self):
+        """found_ids must appear in the message text, not just the attribute.
+
+        The base RPCError.__str__ does not append found_ids, so embedding it in
+        the message keeps the strongest drift/debug signal visible in plain logs
+        and tracebacks across all three null-result enrichment branches.
+        """
+        for error_info in ([5], [13], [99]):
+            with pytest.raises(RPCError) as exc_info:
+                decode_response(self._build_raw(error_info), self.RPC_ID)
+            message = str(exc_info.value)
+            assert "Found IDs:" in message
+            assert self.RPC_ID in message
+
     def test_boolean_error_info_is_not_treated_as_status_code(self):
         """[true] must not be accepted as code 1 — bool is a subclass of int.
 
@@ -838,6 +852,62 @@ class TestUnknownRPCMethodErrorRouting:
         # raw_response preview cap (80 chars + "..." = 83) preserved by the
         # base RPCError contract (NOTEBOOKLM_DEBUG=1 opts into full body).
         assert len(err.raw_response) <= 83
+
+
+class TestAllowNullDoesNotMaskDrift:
+    """Issue #1158: ``allow_null=True`` must not swallow method-ID drift or
+    anti-bot/redirect walls as a benign ``None``.
+
+    ``allow_null`` only sanctions a ``wrb.fr`` frame that genuinely carried a
+    null payload (the requested ``rpc_id`` *is* present). An *absent* RPC ID
+    (drift) or a body with no RPC frames at all (anti-bot wall) is categorically
+    different and must still raise, even for opt-in callers.
+    """
+
+    def test_allow_null_still_raises_on_method_id_drift(self):
+        """Requested ID missing but another ID present → UnknownRPCMethodError,
+        even with allow_null=True."""
+        requested = "OldMethodId"
+        actual = "NewMethodId"
+        inner = json.dumps([])
+        chunk = json.dumps(["wrb.fr", actual, inner, None, None])
+        raw = f")]}}'\n{len(chunk)}\n{chunk}\n"
+
+        with pytest.raises(UnknownRPCMethodError) as exc_info:
+            decode_response(raw, requested, allow_null=True)
+        err = exc_info.value
+        assert err.method_id == requested
+        assert err.found_ids == [actual]
+        assert "may have changed" in str(err)
+
+    def test_allow_null_still_raises_when_no_rpc_data(self):
+        """Empty/anti-bot body with no RPC frames → RPCError, even with
+        allow_null=True."""
+        raw = ")]}'\n"
+        with pytest.raises(RPCError) as exc_info:
+            decode_response(raw, "AnyId", allow_null=True)
+        assert "response contained no RPC data" in str(exc_info.value)
+        assert not isinstance(exc_info.value, UnknownRPCMethodError)
+
+    def test_allow_null_still_raises_on_non_rpc_json_body(self):
+        """A parseable but non-RPC JSON body (e.g. a redirect/error page) yields
+        no found_ids → RPCError, even with allow_null=True."""
+        chunk = json.dumps({"redirect": "https://accounts.google.com/"})
+        raw = f")]}}'\n{len(chunk)}\n{chunk}\n"
+        with pytest.raises(RPCError) as exc_info:
+            decode_response(raw, RPCMethod.CREATE_ARTIFACT.value, allow_null=True)
+        assert "response contained no RPC data" in str(exc_info.value)
+        assert not isinstance(exc_info.value, UnknownRPCMethodError)
+
+    def test_allow_null_returns_none_for_present_but_null_frame(self):
+        """Regression guard: when the requested ID IS present with a null
+        payload, allow_null=True still returns None (the legitimate use case)."""
+        rpc_id = RPCMethod.CREATE_ARTIFACT.value
+        chunk = json.dumps(["wrb.fr", rpc_id, None, None, None])
+        raw = f")]}}'\n{len(chunk)}\n{chunk}\n"
+
+        result = decode_response(raw, rpc_id, allow_null=True)
+        assert result is None
 
 
 class TestMalformedChunkResilience:
