@@ -11,6 +11,7 @@ from typing import Any
 from ._artifact_listing import find_artifact_row_by_id
 from ._backoff import compute_backoff_delay
 from ._callbacks import maybe_await_callback
+from ._deadline import Monotonic, RuntimeDeadline, Sleep
 from ._polling_registry import PollRegistry
 from ._row_adapters import ArtifactRow
 from ._session_contracts import LoopGuard, OperationScopeProvider
@@ -53,15 +54,25 @@ class ArtifactPollingService:
         loop_guard: LoopGuard,
         op_scope: OperationScopeProvider,
         poll_registry: PollRegistry | None = None,
+        sleep: Sleep | None = None,
+        monotonic: Monotonic | None = None,
     ) -> None:
         self._loop_guard = loop_guard
         self._op_scope = op_scope
         self._poll_registry = poll_registry if poll_registry is not None else PollRegistry()
+        self._sleep = sleep
+        self._monotonic = monotonic
 
     @property
     def poll_registry(self) -> PollRegistry:
         """Return the feature-owned polling registry."""
         return self._poll_registry
+
+    def _resolve_sleep(self) -> Sleep:
+        return asyncio.sleep if self._sleep is None else self._sleep
+
+    def _resolve_monotonic(self) -> Monotonic:
+        return asyncio.get_running_loop().time if self._monotonic is None else self._monotonic
 
     async def drain(self) -> None:
         """Cancel active leader poll tasks and await polling bookkeeping."""
@@ -275,7 +286,7 @@ class ArtifactPollingService:
         on_status_change: StatusChangeCallback | None,
     ) -> GenerationStatus:
         """The actual polling loop. Driven by the leader's shielded task."""
-        start_time = asyncio.get_running_loop().time()
+        deadline = RuntimeDeadline.start(timeout, monotonic=self._resolve_monotonic())
         current_interval = initial_interval
         consecutive_not_found = 0
         total_not_found = 0
@@ -295,20 +306,24 @@ class ArtifactPollingService:
                 # `timeout` parameter.
                 if poll_retry_count >= POLL_MAX_RETRIES:
                     raise
-                remaining = timeout - (asyncio.get_running_loop().time() - start_time)
-                if remaining <= 0:
-                    raise
+                if deadline.expired():
+                    raise _artifact_timeout_error(
+                        notebook_id,
+                        task_id,
+                        timeout,
+                        last_status,
+                        status_transitions,
+                    ) from e
                 poll_retry_count += 1
                 # No jitter here: tests assert exact 2.0/4.0/8.0 sleeps and
                 # the remaining-timeout clamp owns thundering-herd avoidance.
-                backoff = min(
+                backoff = deadline.clamp_sleep(
                     compute_backoff_delay(
                         poll_retry_count,
                         base=1.0,
                         cap=8.0,
                         jitter_ratio=0.0,
-                    ),
-                    remaining,
+                    )
                 )
                 logger.warning(
                     "wait_for_completion: transient %s on poll #%d, retrying in %.1fs",
@@ -316,7 +331,15 @@ class ArtifactPollingService:
                     poll_retry_count,
                     backoff,
                 )
-                await asyncio.sleep(backoff)
+                await self._resolve_sleep()(backoff)
+                if deadline.expired():
+                    raise _artifact_timeout_error(
+                        notebook_id,
+                        task_id,
+                        timeout,
+                        last_status,
+                        status_transitions,
+                    ) from e
                 continue
 
             poll_retry_count = 0  # reset on success
@@ -336,7 +359,7 @@ class ArtifactPollingService:
             if status.status == "not_found":
                 consecutive_not_found += 1
                 total_not_found += 1
-                now = asyncio.get_running_loop().time()
+                now = deadline.now()
                 if first_not_found_time is None:
                     first_not_found_time = now
                 not_found_elapsed = now - first_not_found_time
@@ -376,8 +399,7 @@ class ArtifactPollingService:
             else:
                 consecutive_not_found = 0
 
-            elapsed = asyncio.get_running_loop().time() - start_time
-            if elapsed > timeout:
+            if deadline.exceeded():
                 raise _artifact_timeout_error(
                     notebook_id,
                     task_id,
@@ -386,10 +408,17 @@ class ArtifactPollingService:
                     status_transitions,
                 )
 
-            remaining_time = timeout - elapsed
-            sleep_duration = min(current_interval, remaining_time)
-            if sleep_duration > 0:
-                await asyncio.sleep(sleep_duration)
+            sleep_duration = deadline.clamp_sleep(current_interval)
+            if sleep_duration > 0.0:
+                await self._resolve_sleep()(sleep_duration)
+            elif current_interval > 0.0:
+                raise _artifact_timeout_error(
+                    notebook_id,
+                    task_id,
+                    timeout,
+                    last_status,
+                    status_transitions,
+                )
 
             current_interval = min(current_interval * 2, max_interval)
 
