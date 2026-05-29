@@ -28,20 +28,41 @@ if TYPE_CHECKING:
 ArtifactStalledPhase = Literal["pending", "in_progress"]
 
 
+_PREVIEW_LIMIT = 80
+# Pre-slice cap for the truncated path: scrub at most this many chars before
+# cutting to ``_PREVIEW_LIMIT``. The 10x window gives a boundary-straddling
+# secret ample room to be neutralized before the 80-char cut (mirrors the
+# two-stage slice in ``AuthExtractionError`` below), while bounding the regex
+# sweep at O(800 chars) instead of O(len(raw)) for multi-MB error bodies.
+_PREVIEW_SCRUB_CAP = _PREVIEW_LIMIT * 10
+
+
 def _truncate_response_preview(raw: str | None) -> str | None:
     """Truncate a raw RPC response preview for safe display in error contexts.
 
     Default behavior keeps the preview compact (80 chars + ``"..."`` suffix) so
     error logs and CLI output stay readable. Set ``NOTEBOOKLM_DEBUG=1`` to opt
     into the full untruncated body for deep debugging.
+
+    Credential-shaped substrings (CSRF tokens, session cookies, etc.) are
+    scrubbed *before* truncation in both modes. ``raw_response`` is a public
+    attribute spliced into ``str()``/``repr()`` of RPC errors, so it escapes the
+    logging pipeline's ``RedactingFilter`` and must be sanitized at the source.
+
+    In the default (truncated) path the input is pre-sliced to
+    ``_PREVIEW_SCRUB_CAP`` before scrubbing so a multi-MB error body does not
+    pay for a full regex sweep just to discard all but the first 80 chars. The
+    ``NOTEBOOKLM_DEBUG=1`` path keeps the whole body, so it scrubs the full
+    string.
     """
     if raw is None:
         return None
     if os.environ.get("NOTEBOOKLM_DEBUG") == "1":
-        return raw
-    if len(raw) > 80:
-        return raw[:80] + "..."
-    return raw
+        return scrub_secrets(raw)
+    scrubbed = scrub_secrets(raw[:_PREVIEW_SCRUB_CAP])
+    if len(scrubbed) > _PREVIEW_LIMIT:
+        return scrubbed[:_PREVIEW_LIMIT] + "..."
+    return scrubbed
 
 
 __all__ = [
@@ -226,8 +247,10 @@ class RPCError(NotebookLMError):
     Attributes:
         method_id: The RPC method ID (e.g., "abc123") for debugging.
         raw_response: First 80 chars of raw response for debugging
-            (with ``"..."`` suffix if truncated). Set ``NOTEBOOKLM_DEBUG=1`` to
-            preserve the full body.
+            (with ``"..."`` suffix if truncated). Credential-shaped substrings
+            are scrubbed before truncation, so this attribute is safe to splice
+            into ``str()``/``repr()``. Set ``NOTEBOOKLM_DEBUG=1`` to preserve
+            the full body (still scrubbed).
         rpc_code: Google's internal error code if available.
         found_ids: List of RPC IDs found in the response (for debugging).
     """
@@ -292,7 +315,9 @@ class UnknownRPCMethodError(DecodingError):
         found_ids: When raised by the response-level decoder, the list of RPC
             IDs actually present in the response.
         raw_response: First 80 chars of the raw response, when available
-            (``NOTEBOOKLM_DEBUG=1`` preserves the full body).
+            (``NOTEBOOKLM_DEBUG=1`` preserves the full body). The string branch
+            is secret-scrubbed before truncation; non-string payloads are stored
+            as-is on this subclass.
         data_at_failure: Truncated repr (~200 chars) of the data the helper
             was attempting to index into when descent failed.
     """

@@ -5,6 +5,7 @@ import pytest
 import notebooklm
 from notebooklm._env import DEFAULT_BASE_URL
 from notebooklm.exceptions import (
+    _PREVIEW_SCRUB_CAP,  # noqa: PLC2701 (test of internal)
     ArtifactDownloadError,
     ArtifactError,
     ArtifactFeatureUnavailableError,
@@ -396,6 +397,112 @@ class TestRPCErrorAttributes:
         assert len(e.raw_response) == 83
         assert e.raw_response.endswith("...")
         assert e.raw_response[:-3] == "x" * 80
+
+    def test_rpc_error_scrubs_secrets_in_raw_response(self, monkeypatch):
+        """raw_response is secret-scrubbed before it can leak.
+
+        ``raw_response`` is a public attribute that escapes the logging
+        pipeline's ``RedactingFilter`` — it is spliced into error ``str``/repr
+        and survives serialization. Credential-shaped substrings must therefore
+        be redacted at the source. The default (truncated) path keeps the scrub
+        *before* the 80-char cut so a secret sitting in the first 80 chars can
+        never survive into the preview.
+        """
+        monkeypatch.delenv("NOTEBOOKLM_DEBUG", raising=False)
+        secret = "AF1_QpN-supersecretcsrftoken1234567890abcdefghij"
+        raw = f'{{"SNlM0e":"{secret}"}}'
+        # Realistic splice: callers build the message from the (now scrubbed)
+        # raw_response attribute, which is the surface str(exc) exposes.
+        e = RPCError("decode failed", raw_response=raw)
+        assert e.raw_response is not None
+        assert secret not in e.raw_response
+        assert "***" in e.raw_response
+        # A message built from the scrubbed preview stays clean too.
+        spliced = RPCError(f"decode failed: {e.raw_response}", raw_response=raw)
+        assert secret not in str(spliced)
+
+    def test_rpc_error_scrubs_secrets_in_debug_full_body(self, monkeypatch):
+        """NOTEBOOKLM_DEBUG=1 keeps the full body but still scrubs secrets.
+
+        The deep-debug branch returns the untruncated body; it must scrub THEN
+        return so the full-body opt-in does not become a token leak.
+        """
+        monkeypatch.setenv("NOTEBOOKLM_DEBUG", "1")
+        secret = "AF1_QpN-supersecretcsrftoken1234567890abcdefghij"
+        raw = f'{{"SNlM0e":"{secret}"}}' + "x" * 1000
+        e = RPCError("decode failed", raw_response=raw)
+        assert e.raw_response is not None
+        # Full body preserved (not truncated) but the token is gone.
+        assert len(e.raw_response) > 80
+        assert not e.raw_response.endswith("...")
+        assert secret not in e.raw_response
+        assert "***" in e.raw_response
+        spliced = RPCError(f"decode failed: {e.raw_response}", raw_response=raw)
+        assert secret not in str(spliced)
+
+    def test_rpc_error_scrubs_secret_straddling_truncation_boundary(self, monkeypatch):
+        """A secret straddling the 80-char preview cut is scrubbed, not halved.
+
+        Scrubbing runs on the pre-sliced window *before* the 80-char cut, so a
+        token positioned so that it spans the boundary is neutralized whole — no
+        partial-token suffix can leak into the truncated preview. This is the
+        property the pre-slice (scrub-then-cut) ordering exists to preserve.
+        """
+        monkeypatch.delenv("NOTEBOOKLM_DEBUG", raising=False)
+        secret = "AF1_QpN-supersecretcsrftoken1234567890abcdefghij"
+        # Pad so the secret suffix straddles the 80-char cut.
+        raw = "x" * 70 + secret
+        e = RPCError("decode failed", raw_response=raw)
+        assert e.raw_response is not None
+        assert e.raw_response.endswith("...")
+        # The secret suffix is gone — only the ``AF1_QpN-`` shape hint (a
+        # deliberate non-secret marker) and a ``*`` redaction stub remain.
+        assert "supersecret" not in e.raw_response
+        assert "csrftoken" not in e.raw_response
+        assert "*" in e.raw_response
+
+    def test_rpc_error_preview_drops_secret_beyond_scrub_cap(self, monkeypatch):
+        """A secret past the pre-slice cap is dropped, never partially leaked.
+
+        The truncated path only scrubs the first ``_PREVIEW_SCRUB_CAP`` chars,
+        but anything beyond the cap is also beyond the 80-char preview, so it is
+        discarded rather than exposed. This guards the perf optimization against
+        ever shrinking the redaction surface that reaches the preview.
+        """
+        monkeypatch.delenv("NOTEBOOKLM_DEBUG", raising=False)
+        secret = "AF1_QpN-supersecretcsrftoken1234567890abcdefghij"
+        raw = "x" * (_PREVIEW_SCRUB_CAP + 50) + secret
+        e = RPCError("decode failed", raw_response=raw)
+        assert e.raw_response is not None
+        assert secret not in e.raw_response
+        assert e.raw_response == "x" * 80 + "..."
+
+    def test_unknown_rpc_method_error_scrubs_secrets_in_raw_response(self, monkeypatch):
+        """UnknownRPCMethodError forwards string raw_response through the scrub.
+
+        It splices structured context into ``str``/``repr`` and exposes the
+        public ``raw_response`` attribute, so the same redaction guarantee must
+        hold for the subclass that carries the string branch.
+        """
+        monkeypatch.delenv("NOTEBOOKLM_DEBUG", raising=False)
+        secret = "AF1_QpN-supersecretcsrftoken1234567890abcdefghij"
+        raw = f'{{"SNlM0e":"{secret}"}}'
+        e = UnknownRPCMethodError(
+            "schema drift",
+            method_id="abc123",
+            raw_response=raw,
+        )
+        assert isinstance(e.raw_response, str)
+        assert secret not in e.raw_response
+        assert "***" in e.raw_response
+        # str/repr that splice the scrubbed attribute never leak the token.
+        spliced = UnknownRPCMethodError(
+            f"schema drift: {e.raw_response}",
+            method_id="abc123",
+            raw_response=raw,
+        )
+        assert secret not in str(spliced)
+        assert secret not in repr(spliced)
 
     def test_rpc_error_stores_found_ids(self):
         """RPCError stores found_ids list."""
