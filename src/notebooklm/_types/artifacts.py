@@ -9,7 +9,14 @@ from enum import Enum
 from typing import Any
 
 from .._row_adapters_artifacts import ArtifactRow
-from ..rpc.types import ArtifactStatus, ArtifactTypeCode, artifact_status_to_str
+from ..rpc.types import (
+    FLASHCARDS_VARIANT,
+    INTERACTIVE_MIND_MAP_VARIANT,
+    QUIZ_VARIANT,
+    ArtifactStatus,
+    ArtifactTypeCode,
+    artifact_status_to_str,
+)
 from .common import UnknownTypeWarning, _datetime_from_timestamp
 
 
@@ -62,10 +69,14 @@ def _map_artifact_kind(artifact_type: int, variant: int | None) -> ArtifactType:
     """
     # Handle QUIZ/FLASHCARDS distinction.
     if artifact_type == ArtifactTypeCode.QUIZ.value:
-        if variant == 1:
+        if variant == FLASHCARDS_VARIANT:
             return ArtifactType.FLASHCARDS
-        elif variant == 2:
+        elif variant == QUIZ_VARIANT:
             return ArtifactType.QUIZ
+        elif variant == INTERACTIVE_MIND_MAP_VARIANT:
+            # Interactive mind map: a studio artifact in the type-4 family,
+            # distinct from the note-backed mind map (synthetic type 5).
+            return ArtifactType.MIND_MAP
         else:
             key = (artifact_type, variant)
             if key not in _warned_artifact_types:
@@ -152,7 +163,9 @@ class Artifact:
     status: int  # 1=processing, 2=pending, 3=completed, 4=failed
     created_at: datetime | None = None
     url: str | None = None
-    _variant: int | None = field(default=None, repr=False)  # For type 4: 1=flashcards, 2=quiz
+    _variant: int | None = field(
+        default=None, repr=False
+    )  # For type 4: 1=flashcards, 2=quiz, 4=interactive_mind_map
 
     @property
     def kind(self) -> ArtifactType:
@@ -282,12 +295,29 @@ class Artifact:
     @property
     def is_quiz(self) -> bool:
         """Check if this is a quiz (type 4, variant 2)."""
-        return self._artifact_type == ArtifactTypeCode.QUIZ.value and self._variant == 2
+        return self._artifact_type == ArtifactTypeCode.QUIZ.value and self._variant == QUIZ_VARIANT
 
     @property
     def is_flashcards(self) -> bool:
         """Check if this is flashcards (type 4, variant 1)."""
-        return self._artifact_type == ArtifactTypeCode.QUIZ.value and self._variant == 1
+        return (
+            self._artifact_type == ArtifactTypeCode.QUIZ.value
+            and self._variant == FLASHCARDS_VARIANT
+        )
+
+    @property
+    def is_interactive_mind_map(self) -> bool:
+        """Whether this is an interactive (studio-artifact) mind map.
+
+        Interactive mind maps are studio artifacts in the type-4 family
+        (``type 4 / variant 4``), as opposed to note-backed mind maps which
+        the library surfaces with the synthetic type code 5. Both report
+        ``kind == ArtifactType.MIND_MAP``; this distinguishes the backing.
+        """
+        return (
+            self._artifact_type == ArtifactTypeCode.QUIZ.value
+            and self._variant == INTERACTIVE_MIND_MAP_VARIANT
+        )
 
     @property
     def report_subtype(self) -> str | None:
