@@ -7,7 +7,7 @@ from contextlib import AbstractAsyncContextManager, nullcontext
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from ._loop_affinity import assert_bound_loop
-from ._session_config import DEFAULT_MAX_CONCURRENT_RPCS
+from ._runtime_config import DEFAULT_MAX_CONCURRENT_RPCS
 
 _T = TypeVar("_T")
 
@@ -16,8 +16,8 @@ if TYPE_CHECKING:
     from ._middleware_chain import MiddlewareChainBuilder
     from ._middleware_chain_host import MiddlewareChainHost
     from ._rpc_executor import RpcExecutor
-    from ._session_init import SessionCollaborators, WiredMiddleware
-    from ._session_transport import SessionTransport
+    from ._runtime_init import RuntimeCollaborators, WiredMiddleware
+    from ._runtime_transport import RuntimeTransport
 
 
 class ClientComposed:
@@ -41,14 +41,15 @@ class ClientComposed:
         # to a dead loop. ``None`` is a silent no-op for standalone holders
         # constructed without an ``open()`` (composition / unit fixtures).
         self._bound_loop: asyncio.AbstractEventLoop | None = None
-        self._transport: SessionTransport | None = None
+        self._transport: RuntimeTransport | None = None
         self._executor: RpcExecutor | None = None
         self._chain_host: MiddlewareChainHost | None = None
         self._chain_builder: MiddlewareChainBuilder | None = None
         self._middlewares: list[Middleware] | None = None
         # Avoid a plain `.collaborators` attribute here: the ADR-014 lint
-        # reserves that name for the deleted Stage A Session accessor.
-        self._session_collaborators: SessionCollaborators | None = None
+        # reserves that bare name so feature APIs can't grab the whole
+        # bundle (it formerly backed the deleted Stage A Session accessor).
+        self._runtime_collaborators: RuntimeCollaborators | None = None
 
     @staticmethod
     def _require_bound(attr_name: str, value: _T | None) -> _T:
@@ -57,7 +58,7 @@ class ClientComposed:
         return value
 
     @property
-    def transport(self) -> SessionTransport:
+    def transport(self) -> RuntimeTransport:
         return self._require_bound("_transport", self._transport)
 
     @property
@@ -77,10 +78,10 @@ class ClientComposed:
         return self._require_bound("_middlewares", self._middlewares)
 
     @property
-    def session_collaborators(self) -> SessionCollaborators:
-        return self._require_bound("_session_collaborators", self._session_collaborators)
+    def runtime_collaborators(self) -> RuntimeCollaborators:
+        return self._require_bound("_runtime_collaborators", self._runtime_collaborators)
 
-    def bind_transport(self, transport: SessionTransport) -> None:
+    def bind_transport(self, transport: RuntimeTransport) -> None:
         if self._transport is not None:
             raise RuntimeError("ClientComposed._transport already bound")
         self._transport = transport
@@ -101,10 +102,10 @@ class ClientComposed:
         self._chain_builder = wired.chain_builder
         self._middlewares = wired.middlewares
 
-    def bind_session_collaborators(self, collaborators: SessionCollaborators) -> None:
-        if self._session_collaborators is not None:
-            raise RuntimeError("ClientComposed._session_collaborators already bound")
-        self._session_collaborators = collaborators
+    def bind_runtime_collaborators(self, collaborators: RuntimeCollaborators) -> None:
+        if self._runtime_collaborators is not None:
+            raise RuntimeError("ClientComposed._runtime_collaborators already bound")
+        self._runtime_collaborators = collaborators
 
     def set_bound_loop(self, loop: asyncio.AbstractEventLoop | None) -> None:
         """Capture or clear the event-loop binding for the affinity guard.

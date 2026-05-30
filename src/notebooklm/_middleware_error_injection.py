@@ -28,8 +28,8 @@ built by the injected callable (canonical implementation:
 ``tests/cassette_patterns.build_synthetic_error_response``) — the chain leaf
 (``_perform_authed_post``) is NOT called. The same env-var startup guard
 (:func:`_error_injection._refuse_synthetic_error_outside_test_context`)
-still fires at ``Session`` construction so a leaked deploy env never reaches
-``Session.__init__`` in production; the builder-not-wired default is the
+still fires at client construction (``NotebookLMClient.__init__``) so a leaked
+deploy env never reaches production wiring; the builder-not-wired default is the
 second line of defense closing the issue-#1005 attack surface.
 
 Tier-12 history: PR 12.6 lifted the substitution from the pre-Tier-12
@@ -92,7 +92,7 @@ from . import _error_injection
 from ._error_injection import ERROR_INJECT_ENV_VAR
 from ._middleware import NextCall, RpcRequest, RpcResponse
 from ._middleware_context import RPC_CONTEXT_LOG_LABEL
-from ._session_config import CORE_LOGGER_NAME
+from ._runtime_config import CORE_LOGGER_NAME
 from ._transport_errors import (
     TransportRateLimited,
     TransportServerError,
@@ -145,7 +145,7 @@ class ErrorInjectionMiddleware:
         # exposed an arbitrary-code-exec path keyed off the env var).
         self._builder: _SyntheticBuilder | None = builder
         # Gates the one-shot "injection enabled" log line — preserves the
-        # pre-PR-12.6 ``_session_lifecycle`` log signal that operators running
+        # pre-PR-12.6 ``_runtime_lifecycle`` log signal that operators running
         # cassette-recording flows rely on to confirm their env var was picked up.
         self._logged_activation = False
 
