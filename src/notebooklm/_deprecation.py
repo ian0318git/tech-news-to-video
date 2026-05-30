@@ -21,7 +21,15 @@ Two families live here:
   ``ArtifactsAPI.wait_for_completion``) and accepts the old name as a
   deprecated alias removed in v0.8.0.
 
-Both families share the single ``NOTEBOOKLM_QUIET_DEPRECATIONS`` suppression
+* ``MappingCompatMixin`` — the dict-subscript backward-compat bridge used when
+  a public method that historically returned ``dict[str, Any]`` is upgraded to
+  a typed dataclass (issue #1209). Mixing it into the dataclass keeps the old
+  ``result["key"]`` / ``result.get("key")`` / ``result.keys()`` /
+  ``"key" in result`` access working (each subscript emits a
+  ``DeprecationWarning``) while ``result.key`` becomes the typed, warning-free
+  path. The mixin — and the dict-style access — is removed in v0.8.0.
+
+These families share the single ``NOTEBOOKLM_QUIET_DEPRECATIONS`` suppression
 gate (read live, never cached) and a parameterized ``stacklevel`` so the
 warning's ``filename``/``lineno`` point at the *user's* call site. The warning
 message always names the removal version (so ``scripts/check_deprecation_targets.py``
@@ -34,7 +42,8 @@ from __future__ import annotations
 
 import os
 import warnings
-from typing import TypeVar
+from collections.abc import ItemsView, Iterator, KeysView, ValuesView
+from typing import Any, ClassVar, TypeVar
 
 # Suppression gate. Setting ``NOTEBOOKLM_QUIET_DEPRECATIONS`` to a truthy value
 # silences the warnings emitted through this module. This re-activates the
@@ -207,3 +216,96 @@ def deprecated_kwarg(
     # canonical keyword was passed: return it directly so the static type stays
     # ``_T | None`` rather than the widened ``object`` of ``sentinel``.
     return new_value
+
+
+class MappingCompatMixin:
+    """Give a dataclass deprecated, ``dict``-style read access (issue #1209).
+
+    Several public methods historically returned a plain ``dict[str, Any]``
+    (``research.poll`` / ``research.start`` / ``research.wait_for_completion``,
+    ``artifacts.generate_mind_map``, ``sources.get_guide``). Those returns are
+    being upgraded to typed dataclasses so callers can use attribute access
+    (``result.status``) and static typing. To stay backward-compatible for one
+    MINOR cycle, the dataclass mixes this in: every legacy ``result["status"]``
+    / ``result.get("status")`` / ``result.keys()`` / ``"status" in result`` keeps
+    working against the *historical dict shape*, emitting a single
+    :class:`DeprecationWarning` on each *subscript* access (``__getitem__`` only).
+    The rest of the read-mapping surface — ``get`` / ``keys`` / ``items`` /
+    ``values`` / ``__len__`` / ``__contains__`` / ``__iter__`` — stays silent so
+    callers can probe shape without a warning storm. (``dict(result)`` still
+    works but warns, since the ``dict`` constructor reads each key via
+    ``__getitem__``.) The warning names the **v0.8.0** removal and is
+    suppressible via ``NOTEBOOKLM_QUIET_DEPRECATIONS``. In v0.8.0 the mixin is
+    dropped and the dataclasses become attribute-only.
+
+    The legacy values come from the subclass's ``to_public_dict()`` (the exact
+    historical dict that method used to return) so nested access like
+    ``result["sources"][0]["url"]`` keeps yielding the old dict-of-dicts shape
+    rather than the new typed objects. Subclasses MUST implement
+    ``to_public_dict() -> dict[str, Any]``.
+
+    ``_COMPAT_KEYS`` is an optional key→attribute map used only to phrase the
+    deprecation hint (``use the typed attribute .<attr>``). When a key is absent
+    from the map the hint falls back to the key name itself.
+    """
+
+    # Optional legacy dict-key -> attribute-name map, used only for the warning
+    # hint. Subclasses override when a dict key differs from its attribute name.
+    _COMPAT_KEYS: ClassVar[dict[str, str]] = {}
+
+    def to_public_dict(self) -> dict[str, Any]:  # pragma: no cover - overridden
+        """Return the historical ``dict`` shape. Subclasses must override."""
+        raise NotImplementedError
+
+    def __getitem__(self, key: str) -> Any:
+        """Deprecated dict-style read; warns and returns the legacy dict value."""
+        legacy = self.to_public_dict()
+        if key not in legacy:
+            raise KeyError(key)
+        if not _deprecations_quiet():
+            attr = self._COMPAT_KEYS.get(key, key)
+            warnings.warn(
+                (
+                    f"{type(self).__name__}[{key!r}] dict-style access is "
+                    f"deprecated and will be removed in v{DEFAULT_REMOVAL}; use "
+                    f"the typed attribute .{attr} instead. "
+                    f"Set {_QUIET_ENV_VAR}=1 to silence this warning."
+                ),
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        return legacy[key]
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """Deprecated ``dict.get`` shim. Silent (no warning) like ``dict.get``.
+
+        Returns the legacy dict value when ``key`` is present, otherwise
+        ``default``. Unlike :meth:`__getitem__` this does not warn, so existing
+        ``result.get("status", "")`` shape-probes stay quiet; the migration
+        prompt is reserved for the subscript form.
+        """
+        return self.to_public_dict().get(key, default)
+
+    def keys(self) -> KeysView[str]:
+        """Return the legacy dict keys view (silent)."""
+        return self.to_public_dict().keys()
+
+    def items(self) -> ItemsView[str, Any]:
+        """Return the legacy dict items view (silent)."""
+        return self.to_public_dict().items()
+
+    def values(self) -> ValuesView[Any]:
+        """Return the legacy dict values view (silent)."""
+        return self.to_public_dict().values()
+
+    def __len__(self) -> int:
+        """Return the number of legacy dict keys (silent)."""
+        return len(self.to_public_dict())
+
+    def __contains__(self, key: object) -> bool:
+        """Support ``"key" in result`` against the legacy key set (silent)."""
+        return key in self.to_public_dict()
+
+    def __iter__(self) -> Iterator[str]:
+        """Iterate the legacy dict keys (silent; mirrors ``dict`` iteration)."""
+        return iter(self.to_public_dict())
