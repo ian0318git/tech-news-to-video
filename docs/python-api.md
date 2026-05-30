@@ -1531,6 +1531,47 @@ print(f"Imported {len(imported)} sources")
 
 ---
 
+### MindMapsAPI (`client.mind_maps`)
+
+Unified surface over NotebookLM's **two** mind-map kinds (issue #1256): the
+**note-backed** kind (JSON tree stored as a note) and the newer **interactive**
+kind (a studio artifact, internally `type 4 / variant 4`, created by the web GUI).
+Each operation dispatches to the correct backend; you work with `MindMap` /
+`MindMapKind` and never see the split.
+
+| Method | Args | Returns | Description |
+|--------|------|---------|-------------|
+| `list(notebook_id)` | `str` | `list[MindMap]` | Both kinds, as distinct `MindMap` entries |
+| `get(notebook_id, mind_map_id)` | `str, str` | `MindMap \| None` | Single mind map by id |
+| `generate(notebook_id, source_ids=None, *, kind, language="en", instructions=None, wait=True)` | … | `MindMap` | Note-backed (sync) or interactive (`CREATE_ARTIFACT` + poll) |
+| `rename(notebook_id, mind_map_id, new_title, *, kind=None)` | … | `None` | `UPDATE_NOTE` / `RENAME_ARTIFACT` by kind |
+| `delete(notebook_id, mind_map_id, *, kind=None)` | … | `bool` | `DELETE_NOTE` / `DELETE_ARTIFACT` by kind |
+| `get_tree(notebook_id, mind_map_id, *, kind=None)` | … | `dict \| None` | The `{"name","children"}` node tree |
+
+`MindMap` is a frozen value: `id`, `notebook_id`, `title`, `kind` (`MindMapKind.NOTE_BACKED` / `INTERACTIVE`), `created_at`, and `tree`. `generate(..., wait=True)` returns `tree` populated for **both** kinds (interactive maps are polled to completion, then their tree is fetched). For interactive *list* rows `tree` is `None` — fetch it with `get_tree`. When `kind` is omitted from `rename`/`delete`/`get_tree`, the backing is auto-detected (one extra list call).
+
+```python
+maps = await client.mind_maps.list(nb_id)
+for mm in maps:
+    print(mm.id, mm.title, mm.kind.value)
+
+# Generate the interactive (web-GUI) kind and poll to completion:
+mm = await client.mind_maps.generate(nb_id, kind=MindMapKind.INTERACTIVE)
+tree = await client.mind_maps.get_tree(nb_id, mm.id, kind=mm.kind)
+
+await client.mind_maps.rename(nb_id, mm.id, "Renamed", kind=mm.kind)
+await client.mind_maps.delete(nb_id, mm.id, kind=mm.kind)
+```
+
+In the CLI, mind maps are handled as a **type** within the existing groups (matching
+`audio`/`video`/`quiz`): `artifact list --type mind-map`, `artifact rename`,
+`artifact delete`, `generate mind-map`, and `download mind-map`.
+
+> The kind-specific `artifacts.generate_mind_map()` / `notes.list_mind_maps()` /
+> `notes.delete_mind_map()` remain fully supported for the note-backed kind —
+> they are **not** deprecated. `client.mind_maps.*` is the unified surface that
+> also reaches the interactive kind; use whichever fits.
+
 ### NotesAPI (`client.notes`)
 
 **CLI equivalent:** [Note Commands](cli-reference.md#note-commands-notebooklm-note-cmd) — `notebooklm note list`, `create`, `get`, `save`, `rename`, `delete`.
@@ -1586,7 +1627,7 @@ await client.notes.delete_mind_map(nb_id, mind_map_id)
 
 **Note:** Mind maps are detected by checking if the content contains `'"children":' or `'"nodes":'` keys, which indicate JSON mind map data structure.
 
-**Two mind-map kinds (issue #1256):** NotebookLM has two distinct mind-map objects — the **note-backed** kind above (`list_mind_maps()`), and the newer **interactive** kind the web GUI now creates (a studio artifact, internally `type 4 / variant 4`). As of this release the interactive kind is recognized: it appears in `client.artifacts.list(ArtifactType.MIND_MAP)` (no longer mis-typed as `unknown`), and `Artifact.is_interactive_mind_map` distinguishes the backing. Full read/generate/rename and `download_mind_map` support for the interactive kind arrives with the unified mind-map API; until then, `download_mind_map` raises a clear `ArtifactDownloadError` for an interactive id rather than a misleading "not found".
+**Two mind-map kinds (issue #1256):** NotebookLM has two distinct mind-map objects — the **note-backed** kind above (`list_mind_maps()`), and the newer **interactive** kind the web GUI now creates (a studio artifact, internally `type 4 / variant 4`). Both are first-class: the interactive kind appears in `client.artifacts.list(ArtifactType.MIND_MAP)` (and `Artifact.is_interactive_mind_map` distinguishes the backing), `download_mind_map` exports either kind's JSON tree, and the unified [`client.mind_maps`](#mindmapsapi-clientmind_maps) surface generates/reads/renames/deletes both behind a `MindMapKind` discriminator. The `notes.*_mind_map` helpers here remain fully supported for the note-backed kind.
 
 ---
 

@@ -4804,7 +4804,7 @@
           "default": null,
           "envvar": null,
           "has_custom_shell_complete": false,
-          "help": "Custom instructions for the mind map",
+          "help": "Custom instructions for the mind map (note-backed only)",
           "is_flag": false,
           "kind": "option",
           "multiple": false,
@@ -4816,6 +4816,29 @@
           "secondary_opts": [],
           "type": {
             "name": "text"
+          }
+        },
+        {
+          "default": "note-backed",
+          "envvar": null,
+          "has_custom_shell_complete": false,
+          "help": "Which mind map to generate: 'interactive' (studio artifact, polled to completion) or 'note-backed' (JSON tree, synchronous). The default becomes 'interactive' in v0.8.0.",
+          "is_flag": false,
+          "kind": "option",
+          "multiple": false,
+          "name": "map_kind",
+          "opts": [
+            "--kind"
+          ],
+          "required": false,
+          "secondary_opts": [],
+          "type": {
+            "case_sensitive": true,
+            "choices": [
+              "interactive",
+              "note-backed"
+            ],
+            "name": "choice"
           }
         },
         {

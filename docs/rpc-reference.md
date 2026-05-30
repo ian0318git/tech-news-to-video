@@ -56,7 +56,7 @@
 | `QDyure` | SHARE_NOTEBOOK | Set notebook visibility (restricted/public) | `_sharing.py` |
 | `JFMDGd` | GET_SHARE_STATUS | Get notebook share settings | `_sharing.py` |
 | `ciyUvf` | GET_SUGGESTED_REPORTS | Get AI-suggested report formats | `_artifacts.py` |
-| `v9rmvd` | GET_INTERACTIVE_HTML | Fetch quiz/flashcard HTML content | `_artifacts.py` |
+| `v9rmvd` | GET_INTERACTIVE_HTML | Fetch quiz/flashcard HTML (`[0][9][0]`) / interactive mind-map tree (`[0][9][3]`) | `_artifact_downloads.py` |
 | `fejl7e` | REMOVE_RECENTLY_VIEWED | Remove notebook from recent list | `_notebooks.py` |
 | `ZwVcOc` | GET_USER_SETTINGS | Get user settings including output language | `_settings.py` |
 | `hT54vc` | SET_USER_SETTINGS | Set user settings (e.g., output language) | `_settings.py` |
@@ -859,6 +859,38 @@ params = [
     [2, None, [1]],                               # 7: Fixed config
 ]
 ```
+
+#### Interactive Mind Map (Type 4 / variant 4) - Uses CREATE_ARTIFACT (R7cb6c)
+
+**Source:** `_artifact_payloads.py::build_interactive_mind_map_artifact_params()`, `_mind_maps_api.py::MindMapsAPI.generate()`
+
+NotebookLM's web app now generates an **interactive** mind map — a studio
+artifact in the type-4 family with `variant 4` (distinct from the note-backed
+JSON mind map above, which the library surfaces with the synthetic type code 5).
+Unlike the synchronous note-backed kind, this is created asynchronously via
+`CREATE_ARTIFACT` and polled to completion (issue #1256).
+
+```python
+# RPC: CREATE_ARTIFACT (R7cb6c) — interactive mind map
+params = [
+    [2],
+    notebook_id,
+    [
+        None, None,
+        4,                                        # 2: artifact type (type-4 family)
+        [[[sid]] for sid in source_ids],          # 3: nested source ids
+        None, None, None, None, None,
+        [None, [4]],                              # 9: [_, [variant]] → variant 4 = interactive mind map
+    ],
+]
+```
+
+**Reading the tree:** the interactive map exposes its `{"name", "children"}`
+node tree through `GET_INTERACTIVE_HTML` (v9rmvd) — the same RPC used for
+quiz/flashcard HTML, but the JSON tree lives at **`[0][9][3]`** (the rendered
+HTML body is at `[0][9][0]`). `client.mind_maps.get_tree()` and
+`download_mind_map` both read that position; `client.mind_maps` unifies the two
+kinds behind a single `MindMapKind` discriminator.
 
 ### RPC: LIST_ARTIFACTS (gArtLc)
 
@@ -1749,9 +1781,11 @@ await rpc_call(
 
 ### RPC: GET_INTERACTIVE_HTML (v9rmvd)
 
-**Source:** `_artifacts.py::_get_artifact_content()`
+**Source:** `_artifact_downloads.py::_get_artifact_content()` (quiz/flashcard HTML), `_artifact_downloads.py::_get_interactive_mind_map_tree()` (interactive mind-map tree)
 
-Fetch HTML content for quiz or flashcard artifacts. Used for downloading these artifact types in various formats.
+Fetch the interactive payload for a studio artifact. Used both for quiz/flashcard
+HTML and for the **interactive** mind-map JSON node tree (issue #1256) — the same
+RPC, but the two kinds read different cells of index `9`.
 
 ```python
 params = [artifact_id]  # Just the artifact ID
@@ -1766,12 +1800,17 @@ await rpc_call(
 # Response structure:
 # [[
 #     ...,                    # indices 0-8: metadata
-#     [html_content],         # index 9: HTML content array
+#     [                       # index 9: interactive content array
+#         html_content,       #   [9][0]: rendered HTML body (quiz / flashcard)
+#         ...,
+#         ...,
+#         tree_json,          #   [9][3]: interactive mind-map {"name","children"} tree (JSON string)
+#     ],
 #     ...
 # ]]
 #
-# HTML content contains quiz questions or flashcard data
-# that can be parsed into JSON, Markdown, or kept as HTML.
+# Quiz/flashcard download reads [0][9][0] (HTML → JSON/Markdown/HTML).
+# Interactive mind-map download reads [0][9][3] (the JSON node tree).
 ```
 
 ### RPC: GET_SUGGESTED_REPORTS (ciyUvf)

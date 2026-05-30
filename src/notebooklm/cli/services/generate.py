@@ -35,6 +35,7 @@ and is reused as-is; see phase-3.md → P3.T1 must_not_do).
 from __future__ import annotations
 
 import contextlib
+import os
 from collections.abc import Callable, Mapping
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
@@ -46,6 +47,7 @@ from ...types import (
     InfographicDetail,
     InfographicOrientation,
     InfographicStyle,
+    MindMapKind,
     QuizDifficulty,
     QuizQuantity,
     ReportFormat,
@@ -233,9 +235,15 @@ class GenerationPlan:
             spinner / progress messages.
         params: Kind-specific keyword arguments forwarded to the
             ``client.artifacts.<method>`` call. Already enum-mapped.
-        warnings: Stderr warnings queued during plan construction (e.g.
-            ``--append`` with ``--format custom``). Emitted in order
-            before the API call.
+        warnings: Informational stderr warnings queued during plan
+            construction (e.g. ``--append`` with ``--format custom``, or the
+            v0.8.0 mind-map default-kind transition notice). Emitted in order
+            before the API call, but **only in human (non-JSON) mode** so they
+            never pollute machine-readable output.
+        stderr_warnings: Behavioral warnings that must surface even under
+            ``--json`` because they describe an input the CLI actually dropped
+            (e.g. ``--instructions`` ignored for interactive mind maps).
+            Always written to stderr; stdout stays pure JSON.
     """
 
     kind: GenerationKind
@@ -251,6 +259,7 @@ class GenerationPlan:
     json_output: bool
     params: Mapping[str, Any] = field(default_factory=dict)
     warnings: tuple[str, ...] = ()
+    stderr_warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -623,12 +632,52 @@ def _build_data_table_plan(
     )
 
 
+# Env contract mirrored from ``notebooklm._deprecation._deprecations_quiet``.
+# The CLI may not import the private ``_deprecation`` module (the CLI-boundary
+# guard in ``tests/unit/test_cli_boundary.py``), so the truthy spelling set is
+# kept in sync here. Used only to silence the v0.8.0 mind-map transition notice.
+_QUIET_DEPRECATIONS_ENV = "NOTEBOOKLM_QUIET_DEPRECATIONS"
+
+
+def _deprecations_quieted() -> bool:
+    return os.environ.get(_QUIET_DEPRECATIONS_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _build_mind_map_plan(
     raw_args: Mapping[str, Any],
-    _source: Callable[[str], bool],
+    parameter_explicit: Callable[[str], bool],
     resolve_language: Callable[[str | None], str],
 ) -> GenerationPlan:
     common = _common(raw_args)
+    map_kind = raw_args.get("map_kind") or "note-backed"
+    interactive = map_kind == "interactive"
+    instructions = raw_args.get("instructions")
+    # The interactive (studio-artifact) generator takes only sources — it has no
+    # custom-instruction slot in its CREATE_ARTIFACT payload. This warning is
+    # *behavioral* (we actually drop the user's --instructions), so it goes to
+    # stderr_warnings and surfaces even under --json — silently ignoring an
+    # explicit input would be a nasty surprise for scripted callers.
+    warnings: list[str] = []
+    stderr_warnings: list[str] = []
+    if interactive and instructions:
+        stderr_warnings.append(
+            "Warning: --instructions is ignored for interactive mind maps "
+            "(the interactive generator does not accept custom instructions)."
+        )
+        instructions = None
+    # Managed transition (issue #1256): the default kind flips to interactive in
+    # v0.8.0. Nudge users who did not pick a kind so the switch isn't a surprise.
+    # Suppressible via NOTEBOOKLM_QUIET_DEPRECATIONS; this is an *informational*
+    # notice (no input was dropped), so it stays in ``warnings`` and the plan
+    # layer suppresses it in --json mode to keep machine-readable output clean.
+    if not parameter_explicit("map_kind") and not _deprecations_quieted():
+        warnings.append(
+            "Note: 'generate mind-map' defaults to the note-backed kind today, but "
+            "the default switches to interactive in v0.8.0 (NotebookLM's web app "
+            "already creates interactive maps). Pass --kind note-backed or "
+            "--kind interactive to pin your choice; set NOTEBOOKLM_QUIET_DEPRECATIONS=1 "
+            "to silence."
+        )
     return GenerationPlan(
         kind="mind-map",
         display_name=_DISPLAY_NAME["mind-map"],
@@ -641,7 +690,9 @@ def _build_mind_map_plan(
         interval=common["interval"],
         max_retries=0,
         json_output=common["json_output"],
-        params={"instructions": raw_args.get("instructions")},
+        params={"instructions": instructions, "kind": map_kind},
+        warnings=tuple(warnings),
+        stderr_warnings=tuple(stderr_warnings),
     )
 
 
@@ -846,12 +897,26 @@ async def execute_generation(
         return await api_method(nb_id_resolved, **call_kwargs)
 
     if plan.kind == "mind-map":
+        if plan.params.get("kind") == "interactive":
+            # The interactive kind is a studio artifact (CREATE_ARTIFACT,
+            # variant 4); route through the unified mind-map API, which polls
+            # the async generation to completion and returns a MindMap whose
+            # tree is populated (converged with the note-backed shape).
+            async def _generate_mind_map() -> Any:
+                return await client.mind_maps.generate(
+                    nb_id_resolved,
+                    source_ids=sources,
+                    kind=MindMapKind.INTERACTIVE,
+                    language=plan.language,
+                )
+        else:
+            _generate_mind_map = _generate
         if plan.json_output:
-            result = await _generate()
+            result = await _generate_mind_map()
         else:
             context = mind_map_context or contextlib.nullcontext
             async with context():
-                result = await _generate()
+                result = await _generate_mind_map()
         return GenerationExecutionResult(
             kind=plan.kind,
             display_name=plan.display_name,
