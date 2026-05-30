@@ -13,6 +13,60 @@ from notebooklm.rpc import RPCMethod
 _PLAYWRIGHT_INSTALLED = importlib.util.find_spec("playwright") is not None
 
 
+# Mirror of ``tests/vcr_config._is_vcr_record_mode`` — duplicated (not imported)
+# so the *root* conftest, loaded for every test, stays free of the heavier
+# ``vcr_config`` (vcrpy) import. Kept byte-for-byte identical to the canonical
+# (no ``.strip()``) so the two never disagree on a padded value and split the
+# config into a half-recording state; ``test_home_isolation`` pins the parity.
+# (#1263)
+_VCR_RECORD_ENV = "NOTEBOOKLM_VCR_RECORD"
+
+
+def _vcr_recording() -> bool:
+    """Whether VCR is in record mode (``NOTEBOOKLM_VCR_RECORD`` truthy)."""
+    return os.environ.get(_VCR_RECORD_ENV, "").lower() in ("1", "true", "yes")
+
+
+def _should_use_real_home(*, e2e: bool, vcr: bool, recording: bool) -> bool:
+    """Whether a test should see the developer's real ``~/.notebooklm`` profile
+    rather than an isolated tmp ``NOTEBOOKLM_HOME``.
+
+    - **E2E** tests always use it (they mint live tokens).
+    - **VCR** tests use it only while *recording* (``NOTEBOOKLM_VCR_RECORD=1``):
+      recording captures against the live API and needs real auth, which both
+      ``get_vcr_auth()`` (via ``AuthTokens.from_storage()``) and the CLI auth
+      path read out of ``NOTEBOOKLM_HOME``. Replay runs and non-VCR tests stay
+      isolated, so the suite is reproducible and a stray ``NOTEBOOKLM_VCR_RECORD``
+      on a normal run never lets a test touch the real profile (issue #1263).
+    """
+    return e2e or (vcr and recording)
+
+
+def _isolation_home(request, tmp_path):
+    """The ``NOTEBOOKLM_HOME`` the autouse fixture should pin, or ``None`` to
+    leave the developer's real ``~/.notebooklm`` profile in place.
+
+    Split out from the fixture so the marker/env wiring is directly unit-testable
+    (see ``tests/unit/test_home_isolation.py``) without unwrapping the fixture.
+
+    Keys on the ``vcr`` *marker* only (not the ``@notebooklm_vcr.use_cassette``
+    decorator / ``vcr`` fixture that the integration tier also recognizes): a
+    cassette test must carry ``@pytest.mark.vcr`` to record against the real
+    profile — most do via a module-level ``pytestmark``. Tests that re-pin
+    ``NOTEBOOKLM_HOME`` themselves (e.g. the settings/profile/doctor cli_vcr
+    tests, which isolate config writes on purpose) override this deferral and are
+    not auto-recordable through pytest. Both gaps fail safe (isolated home, not a
+    leaked real one).
+    """
+    if _should_use_real_home(
+        e2e=request.node.get_closest_marker("e2e") is not None,
+        vcr=request.node.get_closest_marker("vcr") is not None,
+        recording=_vcr_recording(),
+    ):
+        return None
+    return str(tmp_path / "notebooklm-home")
+
+
 @pytest.fixture(autouse=True)
 def _isolate_notebooklm_home(request, tmp_path, monkeypatch):
     """Pin ``NOTEBOOKLM_HOME`` at a per-test tmp dir.
@@ -25,12 +79,15 @@ def _isolate_notebooklm_home(request, tmp_path, monkeypatch):
     ``NOTEBOOKLM_HOME`` at a tmp dir gives every test the same empty-storage
     view CI sees, so the suite is reproducible across machines.
 
-    E2E tests opt out: they need the real ``~/.notebooklm/`` profile to mint
-    live tokens, so the marker bypasses this fixture.
+    Two opt-outs use the real ``~/.notebooklm/`` profile instead (see
+    :func:`_should_use_real_home` / :func:`_isolation_home`): ``@pytest.mark.e2e``
+    tests (mint live tokens) and ``@pytest.mark.vcr`` tests while recording
+    (``NOTEBOOKLM_VCR_RECORD=1``) — the latter lets a cassette be recorded
+    through pytest rather than a standalone script (issue #1263).
     """
-    if request.node.get_closest_marker("e2e"):
-        return
-    monkeypatch.setenv("NOTEBOOKLM_HOME", str(tmp_path / "notebooklm-home"))
+    home = _isolation_home(request, tmp_path)
+    if home is not None:
+        monkeypatch.setenv("NOTEBOOKLM_HOME", home)
 
 
 @pytest.fixture(autouse=True)
