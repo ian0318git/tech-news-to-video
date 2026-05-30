@@ -54,7 +54,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -69,6 +69,7 @@ from ._middleware_context import (
     RPC_CONTEXT_BUILD_REQUEST,
     RPC_CONTEXT_DISABLE_INTERNAL_RETRIES,
     RPC_CONTEXT_LOG_LABEL,
+    RPC_CONTEXT_REFRESH_BUDGET,
     RPC_CONTEXT_RPC_METHOD,
     RPC_CONTEXT_RPC_QUEUE_WAIT_SECONDS,
 )
@@ -76,6 +77,7 @@ from ._request_types import AuthSnapshot, BuildRequest
 from ._transport_errors import raise_mapped_post_error
 
 if TYPE_CHECKING:
+    from ._auth_refresh_retry import RefreshBudget
     from ._client_metrics import ClientMetrics
     from ._kernel import Kernel
 
@@ -243,6 +245,7 @@ class RuntimeTransport:
         log_label: str,
         disable_internal_retries: bool = False,
         rpc_method: str | None = None,
+        refresh_budget: RefreshBudget | None = None,
     ) -> httpx.Response:
         """Authed POST entry point — routes through the middleware chain.
 
@@ -255,6 +258,15 @@ class RuntimeTransport:
         request. ``RPC_CONTEXT_BUILD_REQUEST`` remains as the bounded
         rebuild recipe for auth-refresh and pre-terminal freshness
         checks.
+
+        ``refresh_budget`` is an optional
+        :class:`notebooklm._auth_refresh_retry.RefreshBudget` seeded by the
+        RPC executor so the HTTP-status refresh layer
+        (:class:`AuthRefreshMiddleware`) shares its once-per-logical-call
+        refresh allowance with the executor's decoded-RPC refresh layer
+        (issue #1205). Callers that drive the chain without a budget (the
+        chat path) pass ``None``; the middleware then falls back to its
+        per-chain ``RPC_CONTEXT_AUTH_REFRESHED`` boolean.
 
         Raises:
             RuntimeError: if the chain provider returns ``None``. The
@@ -272,12 +284,19 @@ class RuntimeTransport:
         # fixture); it raises only when the currently-running loop differs
         # from the one captured at ``open()``-time.
         self._bound_loop_check()
-        context = {
+        context: dict[str, Any] = {
             RPC_CONTEXT_BUILD_REQUEST: build_request,
             RPC_CONTEXT_LOG_LABEL: log_label,
             RPC_CONTEXT_DISABLE_INTERNAL_RETRIES: disable_internal_retries,
             RPC_CONTEXT_RPC_METHOD: rpc_method,
         }
+        # Only seed the shared refresh budget when one is supplied. Callers
+        # that drive the chain without a budget (the chat path) leave the key
+        # ABSENT, matching the ``RPC_CONTEXT_REFRESH_BUDGET`` docstring; the
+        # auth-refresh middleware then falls back to its per-chain
+        # ``RPC_CONTEXT_AUTH_REFRESHED`` boolean (gemini/claude #1240 review).
+        if refresh_budget is not None:
+            context[RPC_CONTEXT_REFRESH_BUDGET] = refresh_budget
         snapshot = await self._snapshot_provider()
 
         request = materialize_rpc_request(
