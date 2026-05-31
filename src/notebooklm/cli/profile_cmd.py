@@ -220,8 +220,25 @@ def switch_cmd(name):
 
 @profile.command("delete")
 @click.argument("name")
-@click.option("--confirm", is_flag=True, help="Skip confirmation prompt")
-def delete_cmd(name, confirm):
+# ``--yes``/``-y`` is the canonical skip-confirmation flag, matching every other
+# destructive command (notebook/source/note/share delete, source clean).
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    help="Skip confirmation",
+)
+# ``--confirm`` is the legacy spelling, kept as a genuinely hidden (``hidden=True``)
+# deprecated alias so existing scripts and the historical help example keep
+# working without advertising it in ``--help``. It is OR-ed into ``yes`` below.
+@click.option(
+    "--confirm",
+    "confirm",
+    is_flag=True,
+    hidden=True,
+    help="[Deprecated] Alias for --yes/-y.",
+)
+def delete_cmd(name, yes, confirm):
     """Delete a profile and its data.
 
     Removes the profile directory including auth cookies, context, and browser profile.
@@ -229,8 +246,9 @@ def delete_cmd(name, confirm):
 
     \b
     Example:
-      notebooklm profile delete old-account --confirm
+      notebooklm profile delete old-account --yes
     """
+    yes = yes or confirm
     try:
         profile_dir = get_profile_dir(name)
     except ValueError as e:
@@ -248,7 +266,7 @@ def delete_cmd(name, confirm):
     if not profile_dir.exists():
         raise click.ClickException(f"Profile '{name}' not found.")
 
-    if not confirm:
+    if not yes:
         if not click.confirm(f"Delete profile '{name}' and all its data?"):
             console.print("[dim]Cancelled.[/dim]")
             return
