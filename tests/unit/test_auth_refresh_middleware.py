@@ -1,6 +1,6 @@
 """Unit tests for :class:`AuthRefreshMiddleware` (Tier-12 PR 12.8).
 
-Pins the contract documented in ``src/notebooklm/_middleware_auth_refresh.py``
+Pins the contract documented in ``src/notebooklm/_middleware/auth_refresh.py``
 and ADR-009 §"Chain ordering":
 
 - **Pass-through on success.** Single ``next_call``; result returned.
@@ -48,10 +48,10 @@ import pytest
 # import path documented in ``tests/_fixtures/__init__.py``.
 from _fixtures.chain import make_request
 from notebooklm._client_metrics import ClientMetrics
-from notebooklm._middleware import NextCall, RpcRequest, RpcResponse, build_chain
-from notebooklm._middleware_auth_refresh import AuthRefreshMiddleware
+from notebooklm._middleware.auth_refresh import AuthRefreshMiddleware
+from notebooklm._middleware.core import NextCall, RpcRequest, RpcResponse, build_chain
 from notebooklm._request_types import AuthSnapshot
-from notebooklm._runtime_helpers import is_auth_error
+from notebooklm._runtime.helpers import is_auth_error
 from notebooklm._transport_errors import (
     TransportAuthExpired,
     TransportRateLimited,
@@ -692,7 +692,7 @@ async def test_refresh_retry_delay_is_live_bound() -> None:
 
 def test_middleware_satisfies_protocol() -> None:
     """``AuthRefreshMiddleware`` instance is assignable to ``Middleware``."""
-    from notebooklm._middleware import Middleware
+    from notebooklm._middleware.core import Middleware
 
     async def _noop() -> None:
         return None

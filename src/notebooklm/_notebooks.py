@@ -10,8 +10,8 @@ from ._notebook_metadata import (
     NotebookSourceLister,
     create_default_source_lister,
 )
-from ._row_adapters_sources import SourceRow
-from ._runtime_contracts import RpcCaller
+from ._row_adapters.sources import SourceRow
+from ._runtime.contracts import RpcCaller
 from ._settings import build_get_user_settings_params, extract_account_limits
 from ._sharing_manager import ShareManager
 from .exceptions import (
@@ -210,7 +210,7 @@ class NotebooksAPI:
             below and converted to an empty list. Per-row id-envelope
             decoding (including the drive-backed ``[None, True, [id]]``
             shape) is delegated to
-            :class:`notebooklm._row_adapters_sources.SourceRow`; this method only
+            :class:`notebooklm._row_adapters.sources.SourceRow`; this method only
             performs the envelope walk down to ``notebook[0][1]``.
         """
         notebook_data = await self.get_raw(notebook_id)
@@ -253,7 +253,7 @@ class NotebooksAPI:
                 # and stringifies non-string ids. The legacy code here
                 # additionally required ``isinstance(sid, str)``; that
                 # check was inconsistent with the sibling
-                # ``_source_listing._extract_source_id`` path (which
+                # ``_source.listing._extract_source_id`` path (which
                 # accepts any non-None id via ``str(src_id)`` at the
                 # ``Source(id=...)`` boundary). Unifying both call sites
                 # through ``SourceRow.id`` aligns behavior — integer-ids

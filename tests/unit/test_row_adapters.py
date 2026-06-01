@@ -9,9 +9,9 @@ The adapters centralise position knowledge for the ``LIST_ARTIFACTS``,
 open-coding ``data[2]`` / ``data[4]`` / ``data[15]`` / ``row[1][1]`` /
 ``row[1][4]`` / ``data[0][0]`` / ``metadata[4]``. See
 ``docs/improvement.md`` §6.2 for the motivation and
-``src/notebooklm/_row_adapters_artifacts.py``,
-``src/notebooklm/_row_adapters_notes.py``, and
-``src/notebooklm/_row_adapters_sources.py`` for the position contracts.
+``src/notebooklm/_row_adapters/artifacts.py``,
+``src/notebooklm/_row_adapters/notes.py``, and
+``src/notebooklm/_row_adapters/sources.py`` for the position contracts.
 
 These tests cover three layers per adapter:
 
@@ -32,9 +32,9 @@ import json
 
 import pytest
 
-from notebooklm._row_adapters_artifacts import ArtifactRow
-from notebooklm._row_adapters_notes import NoteRow
-from notebooklm._row_adapters_sources import SourceRow, SourceRowShape
+from notebooklm._row_adapters.artifacts import ArtifactRow
+from notebooklm._row_adapters.notes import NoteRow
+from notebooklm._row_adapters.sources import SourceRow, SourceRowShape
 from notebooklm.exceptions import UnknownRPCMethodError
 from notebooklm.rpc.types import ArtifactStatus, ArtifactTypeCode, SourceStatus
 
@@ -629,7 +629,7 @@ class TestNoteRowPositionContract:
     These pin tests fail loudly if anyone edits a position constant.
     When that happens, the failing diff IS the audit trail for the
     Google-side wire reshape. See
-    ``src/notebooklm/_row_adapters_notes.py:NoteRow`` for the shape contract.
+    ``src/notebooklm/_row_adapters/notes.py:NoteRow`` for the shape contract.
     """
 
     def test_id_position_is_0(self) -> None:
@@ -1302,7 +1302,7 @@ class TestSourceRowId:
         """``[None, True, [None]]`` — drive inner element is ``None``.
 
         Both :attr:`id` and :attr:`has_id` must return falsy values so
-        :class:`notebooklm._source_listing.SourceLister` skips the row
+        :class:`notebooklm._source.listing.SourceLister` skips the row
         (matching legacy ``_extract_source_id`` which returned ``None``
         from ``raw_id[2][0] is None``).
         """

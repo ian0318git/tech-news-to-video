@@ -1,14 +1,14 @@
 """Regression guard for the source-upload single-source-of-truth invariant.
 
 Issue #1326 consolidated all resumable-upload / streaming / file-registration
-logic into :class:`notebooklm._source_upload.SourceUploadPipeline`. The public
+logic into :class:`notebooklm._source.upload.SourceUploadPipeline`. The public
 ``SourcesAPI`` surface keeps only *thin delegators* that forward verbatim to the
 pipeline; it must never re-grow a parallel implementation of the Scotty upload
 protocol.
 
 These tests pin three things:
 
-1. ``SourcesAPI._uploader`` is built from ``_source_upload.py`` — the upload
+1. ``SourcesAPI._uploader`` is built from ``_source/upload.py`` — the upload
    implementation collaborator.
 2. Every ``SourcesAPI`` upload entry point (``add_file`` and the private
    ``_register_file_source`` / ``_start_resumable_upload`` /
@@ -32,7 +32,7 @@ import pytest
 
 import notebooklm._sources as sources_module
 from _fixtures.fake_core import make_fake_core
-from notebooklm._source_upload import SourceUploadPipeline
+from notebooklm._source.upload import SourceUploadPipeline
 from notebooklm._sources import SourcesAPI
 
 
@@ -131,7 +131,7 @@ def _make_api_with_recording_pipeline() -> tuple[SourcesAPI, _RecordingPipeline]
 
 @pytest.mark.asyncio
 async def test_uploader_is_the_pipeline() -> None:
-    """SourcesAPI builds its upload collaborator from _source_upload.py."""
+    """SourcesAPI builds its upload collaborator from _source/upload.py."""
     api = _make_sources_api()
     assert isinstance(api._uploader, SourceUploadPipeline)
 
@@ -280,7 +280,7 @@ def test_sources_module_holds_no_scotty_implementation() -> None:
 
     The Scotty upload protocol (resumable start request, x-goog-upload-* headers,
     streaming finalize, shielded background finalize) lives only in
-    ``_source_upload.py``. ``_sources.py`` should reference none of those
+    ``_source/upload.py``. ``_sources.py`` should reference none of those
     implementation tokens in executable code — it only delegates. Docstrings are
     excluded because the delegators legitimately *document* the contract they
     forward to.

@@ -1,7 +1,7 @@
 """Variant-keyed idempotency tests for ADD_SOURCE + ADD_SOURCE_FILE.
 
 Tier 9 Wave 2 (P0-3-sources, P1-2-sources): the previous behavior in
-``_source_add.py``/``_source_upload.py`` relied on the inner transport
+``_source/add.py``/``_source/upload.py`` relied on the inner transport
 retry loop to handle 5xx for mutating create RPCs, which could duplicate
 sources when the server already committed the write before returning the
 5xx. The fix is two-fold:
@@ -628,7 +628,7 @@ async def test_add_text_no_probe_no_retry_under_5xx(
     async def _no_sleep(_seconds: float) -> None:
         return None
 
-    monkeypatch.setattr("notebooklm._runtime_helpers.asyncio.sleep", _no_sleep)
+    monkeypatch.setattr("notebooklm._runtime.helpers.asyncio.sleep", _no_sleep)
 
     transport = httpx.MockTransport(handler)
     client = _make_client_with_transport(transport, auth_tokens)

@@ -1,4 +1,4 @@
-"""Coverage-focused tests for ``_artifact_downloads`` error/edge branches.
+"""Coverage-focused tests for ``_artifact.downloads`` error/edge branches.
 
 These tests target branches not exercised by ``test_artifact_downloads.py`` /
 ``test_download_url.py``: module-level helpers, ``UnknownRPCMethodError`` /
@@ -24,8 +24,8 @@ from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 import httpx
 import pytest
 
-from notebooklm import _artifact_downloads as artifact_downloads
-from notebooklm._artifact_downloads import (
+from notebooklm._artifact import downloads as artifact_downloads
+from notebooklm._artifact.downloads import (
     ArtifactDownloadService,
     _await_writer_exit,
     _download_display_host,

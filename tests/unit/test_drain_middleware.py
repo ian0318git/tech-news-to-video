@@ -1,6 +1,6 @@
 """Unit tests for :class:`DrainMiddleware` (Tier-12 PR 12.5).
 
-Pins the contract documented in ``src/notebooklm/_middleware_drain.py``
+Pins the contract documented in ``src/notebooklm/_middleware/drain.py``
 and ADR-009 §"Chain ordering":
 
 - Pass-through identity: the middleware brackets ``next_call`` but does
@@ -34,13 +34,13 @@ import pytest
 # pytest puts ``tests/`` on ``sys.path``; ``_fixtures.chain`` is the
 # canonical import path documented in ``tests/_fixtures/__init__.py``.
 from _fixtures.chain import make_request
-from notebooklm._middleware import (
+from notebooklm._middleware.core import (
     NextCall,
     RpcRequest,
     RpcResponse,
     build_chain,
 )
-from notebooklm._middleware_drain import DrainMiddleware
+from notebooklm._middleware.drain import DrainMiddleware
 from notebooklm._transport_drain import TransportDrainTracker
 
 

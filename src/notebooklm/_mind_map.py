@@ -12,7 +12,7 @@ The legacy ``MindMapService`` class was retired (see refactor-history.md
 Step 9, ADR-013) along with its module-level compatibility wrappers
 (``create_note``, ``list_mind_maps``, ``update_note``, ...) together
 with the saved-from-chat encoder, which now lives in
-:mod:`_chat_notes`. Only the :class:`NoteBackedMindMapService`
+:mod:`_chat.notes`. Only the :class:`NoteBackedMindMapService`
 adapter remains.
 """
 
@@ -21,7 +21,7 @@ from __future__ import annotations
 from typing import Any
 
 from ._note_service import NoteRowKind, NoteService
-from ._row_adapters_notes import NoteRow
+from ._row_adapters.notes import NoteRow
 
 
 class NoteBackedMindMapService:
