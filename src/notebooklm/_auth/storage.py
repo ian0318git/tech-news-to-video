@@ -335,9 +335,11 @@ def save_cookies_to_storage(
     - **Legacy (``original_snapshot=None``)**: every in-memory cookie whose
       value differs from disk wins. Vulnerable to the stale-overwrite-fresh
       race documented in ``docs/auth-cookie-lifecycle.md`` §3.4.1 and emits a
-      ``DeprecationWarning``. Kept only as a public-API back-compat shim
-      for callers outside this repo; every first-party caller passes
-      ``original_snapshot``.
+      ``RuntimeWarning`` safety advisory about that race (this is a permanent
+      back-compat shim, not a scheduled deprecation, so the advisory is a
+      ``RuntimeWarning`` and is not silenced by ``NOTEBOOKLM_QUIET_DEPRECATIONS``).
+      Kept only as a public-API back-compat shim for callers outside this repo;
+      every first-party caller passes ``original_snapshot``.
     - **Snapshot/delta (``original_snapshot`` provided)**: only cookies
       whose in-memory persisted tuple differs from the snapshot are written, and
       cookies present in the snapshot but no longer in the jar are
@@ -377,12 +379,20 @@ def save_cookies_to_storage(
         return _cookie_save_return(CookieSaveResult(True), return_result=return_result)
 
     if original_snapshot is None:
+        # NOT a deprecation: the original_snapshot=None form is a *permanent*
+        # public-API back-compat shim (docs/auth-cookie-lifecycle.md §3.4.1),
+        # not a scheduled removal — every in-tree caller already passes a
+        # snapshot. The warning is a runtime safety advisory about the
+        # stale-overwrite-fresh race that path is vulnerable to, so it is a
+        # RuntimeWarning, not a DeprecationWarning. It is therefore outside
+        # ADR-0018's scope: no NOTEBOOKLM_QUIET_DEPRECATIONS gate, no removal
+        # version, and emitted directly here rather than via warn_deprecated.
         warnings.warn(
             "save_cookies_to_storage called without original_snapshot; the "
             "legacy full-merge path is vulnerable to the stale-overwrite-fresh "
             "race (docs/auth-cookie-lifecycle.md §3.4.1). Pass an original_snapshot "
             "captured via snapshot_cookie_jar() at jar-open time.",
-            DeprecationWarning,
+            RuntimeWarning,
             stacklevel=2,
         )
 
