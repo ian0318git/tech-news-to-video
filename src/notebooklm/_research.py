@@ -421,9 +421,9 @@ class ResearchAPI:
             selected research task for the notebook. Use attribute access:
             - ``task.task_id``: task/report identifier for the selected task
             - ``task.status``: a :class:`~notebooklm._types.research.ResearchStatus`
-              (``IN_PROGRESS``, ``COMPLETED``, ``FAILED``, or ``NO_RESEARCH``);
-              compares equal to the historical strings (``task.status ==
-              "completed"`` still holds)
+              (``IN_PROGRESS``, ``COMPLETED``, ``FAILED``, ``NO_RESEARCH``, or
+              ``NOT_FOUND``); compares equal to the historical strings
+              (``task.status == "completed"`` still holds)
             - ``task.query``: original research query text
             - ``task.sources``: tuple of
               :class:`~notebooklm._types.research.ResearchSource` for the
@@ -441,20 +441,38 @@ class ResearchAPI:
             Legacy ``result["status"]`` dict-subscript access still works (with
             a ``DeprecationWarning``) until v0.8.0; prefer ``result.status``.
 
-            When ``task_id`` is supplied but no in-flight task matches, the
-            return is ``ResearchTask.empty()`` (status ``NO_RESEARCH``, empty
-            ``tasks``) — the same shape as the empty-poll case.
+            When a non-empty ``task_id`` is supplied but no in-flight task
+            matches, the return is ``ResearchTask.not_found(task_id)`` — status
+            ``NOT_FOUND``, carrying the requested ``task_id``, with empty
+            ``tasks``. This is the *poll-observed absence* of that specific
+            task (a typed lifecycle sentinel, not a raise; ADR-0019 Rule 4),
+            distinct from the unfiltered empty-poll case (``task_id`` ``None``
+            or empty) which stays ``NO_RESEARCH`` ("nothing in flight").
         """
         logger.debug("Polling research status for notebook %s", notebook_id)
         parsed_tasks = self._select_polled_tasks(
             await self._poll_task_models(notebook_id),
             notebook_id=notebook_id,
             task_id=task_id,
-            warn_on_ambiguous=True,
+            # The ambiguity warning only applies to the unfiltered (task_id is
+            # None) path; when a discriminator is pinned, _select_polled_tasks
+            # filters before the warn branch. Gating it here matches
+            # wait_for_completion and keeps the intent explicit.
+            warn_on_ambiguous=task_id is None,
         )
 
         if parsed_tasks:
             return self._public_poll_result(parsed_tasks[0], parsed_tasks)
+
+        # A concrete pinned ``task_id`` that matched nothing is a poll-observed
+        # absence of that specific task — a typed ``NOT_FOUND`` sentinel
+        # carrying the requested id. A falsy ``task_id`` (``None`` for the
+        # unfiltered poll, or the degenerate empty string) is not a meaningful
+        # discriminator, so it stays ``NO_RESEARCH`` ("nothing in flight") and
+        # preserves the legacy empty-poll dict shape. See ADR-0019 Rule 4
+        # (#1346).
+        if task_id:
+            return ResearchTask.not_found(task_id)
 
         return ResearchTask.empty()
 
@@ -498,8 +516,12 @@ class ResearchAPI:
             ``COMPLETED`` or ``FAILED`` statuses. ``NO_RESEARCH`` is returned
             immediately only when no task id is known; for a known/pinned task
             it can be a transient live-API state before the task appears in
-            ``POLL_RESEARCH``. Legacy ``result["status"]`` dict-subscript
-            access still works (with a ``DeprecationWarning``) until v0.8.0.
+            ``POLL_RESEARCH``. Unlike :meth:`poll`, this method never returns
+            ``NOT_FOUND`` — a pinned task that is temporarily absent from a poll
+            is treated as a transient replication-lag condition and keeps
+            polling until it appears, reaches a terminal state, or times out.
+            Legacy ``result["status"]`` dict-subscript access still works (with
+            a ``DeprecationWarning``) until v0.8.0.
 
         Raises:
             ResearchTimeoutError: If research does not reach a terminal status

@@ -466,6 +466,55 @@ class TestResearch:
         assert result.task_id == "task_123"
 
     @pytest.mark.asyncio
+    async def test_wait_for_completion_never_returns_not_found_for_pinned_task(
+        self, auth_tokens, httpx_mock, build_rpc_response, monkeypatch
+    ):
+        """A pinned task absent from an early poll is transient, not NOT_FOUND.
+
+        Regression guard for the insulation guarantee: wait_for_completion
+        drives _select_polled_tasks directly (never poll), so the poll-only
+        NOT_FOUND sentinel cannot leak into the wait loop — a temporarily
+        absent pinned task keeps polling until it appears.
+        """
+
+        async def no_sleep(delay: float) -> None:  # noqa: ARG001
+            return None
+
+        monkeypatch.setattr(research_module.asyncio, "sleep", no_sleep)
+
+        absent = build_rpc_response(RPCMethod.POLL_RESEARCH, [])
+        completed = build_rpc_response(
+            RPCMethod.POLL_RESEARCH,
+            [
+                [
+                    [
+                        "task_pinned",
+                        _build_research_task_payload(
+                            "query",
+                            "https://example.com",
+                            "Result",
+                            status_code=2,
+                        ),
+                    ]
+                ]
+            ],
+        )
+        httpx_mock.add_response(content=absent.encode(), method="POST")
+        httpx_mock.add_response(content=completed.encode(), method="POST")
+
+        async with NotebookLMClient(auth_tokens) as client:
+            result = await client.research.wait_for_completion(
+                "nb_123",
+                task_id="task_pinned",
+                timeout=10,
+                initial_interval=1,
+            )
+
+        assert result.status == "completed"
+        assert result.status != ResearchStatus.NOT_FOUND
+        assert result.task_id == "task_pinned"
+
+    @pytest.mark.asyncio
     async def test_wait_for_completion_returns_failed_terminal_status(
         self, auth_tokens, httpx_mock, build_rpc_response
     ):
@@ -1363,6 +1412,87 @@ class TestResearch:
 
         assert result.status == "no_research"
         assert result.tasks == ()
+
+    @pytest.mark.asyncio
+    async def test_poll_pinned_absent_task_id_returns_not_found(
+        self, auth_tokens, httpx_mock, build_rpc_response
+    ):
+        """A pinned task_id absent from the poll yields the NOT_FOUND sentinel.
+
+        Distinct from the unfiltered empty-poll case (NO_RESEARCH): when the
+        caller explicitly requested a specific task that is not among the
+        polled results, the typed NOT_FOUND status carries the requested id
+        (ADR-0019 Rule 4). The poll does not raise.
+        """
+        other_task = [None, ["other query", 1], 1, [[], ""], 1]
+        response_body = build_rpc_response(RPCMethod.POLL_RESEARCH, [[["task_other", other_task]]])
+        httpx_mock.add_response(content=response_body.encode(), method="POST")
+
+        async with NotebookLMClient(auth_tokens) as client:
+            result = await client.research.poll("nb_123", task_id="task_missing")
+
+        assert result.status is ResearchStatus.NOT_FOUND
+        assert result.status == "not_found"
+        assert result.task_id == "task_missing"
+        assert result.tasks == ()
+
+    @pytest.mark.asyncio
+    async def test_poll_pinned_absent_task_id_empty_response_returns_not_found(
+        self, auth_tokens, httpx_mock, build_rpc_response
+    ):
+        """An empty poll with a pinned task_id is also NOT_FOUND, not NO_RESEARCH.
+
+        Requesting a specific task that the server has not surfaced (here, an
+        entirely empty envelope) is a poll-observed absence of *that* task.
+        """
+        response_body = build_rpc_response(RPCMethod.POLL_RESEARCH, [])
+        httpx_mock.add_response(content=response_body.encode(), method="POST")
+
+        async with NotebookLMClient(auth_tokens) as client:
+            result = await client.research.poll("nb_123", task_id="task_missing")
+
+        assert result.status == "not_found"
+        assert result.task_id == "task_missing"
+        assert result.tasks == ()
+
+    @pytest.mark.asyncio
+    async def test_poll_no_task_id_empty_response_stays_no_research(
+        self, auth_tokens, httpx_mock, build_rpc_response
+    ):
+        """The no-task-in-flight path is unchanged: empty poll → NO_RESEARCH.
+
+        Guards that adding NOT_FOUND did not perturb the existing
+        nothing-in-flight contract for the default (task_id=None) poll.
+        """
+        response_body = build_rpc_response(RPCMethod.POLL_RESEARCH, [])
+        httpx_mock.add_response(content=response_body.encode(), method="POST")
+
+        async with NotebookLMClient(auth_tokens) as client:
+            result = await client.research.poll("nb_123")
+
+        assert result.status == "no_research"
+        assert result.task_id == ""
+        assert result.tasks == ()
+
+    @pytest.mark.asyncio
+    async def test_poll_empty_string_task_id_stays_no_research(
+        self, auth_tokens, httpx_mock, build_rpc_response
+    ):
+        """A degenerate empty-string task_id is not a real discriminator.
+
+        It falls through to the legacy NO_RESEARCH empty-poll shape rather than
+        synthesizing a NOT_FOUND sentinel for a meaningless id, so the existing
+        dict shape is preserved exactly.
+        """
+        response_body = build_rpc_response(RPCMethod.POLL_RESEARCH, [])
+        httpx_mock.add_response(content=response_body.encode(), method="POST")
+
+        async with NotebookLMClient(auth_tokens) as client:
+            result = await client.research.poll("nb_123", task_id="")
+
+        assert result.status == "no_research"
+        assert result.task_id == ""
+        assert result.to_public_dict() == {"status": "no_research", "tasks": []}
 
     @pytest.mark.asyncio
     async def test_poll_unknown_string_result_type_preserved(
