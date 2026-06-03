@@ -22,12 +22,15 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
 
+import notebooklm._atomic_io as _atomic_io
 import notebooklm._auth.refresh as _auth_refresh
 import notebooklm._auth.storage as _auth_storage
+import notebooklm._runtime.lifecycle as _lifecycle
 from _helpers.client_factory import build_client_shell_for_tests
 from notebooklm.auth import (
     AuthTokens,
@@ -731,18 +734,21 @@ class TestSaveReturnsBoolSuccess:
         snapshot = snapshot_cookie_jar(jar)
         _set_cookie_value(jar, "SID", "new")
 
-        # Simulate ENOSPC at the temp-file write step.
-        import tempfile
-
-        real_namedtemp = tempfile.NamedTemporaryFile
+        # Simulate ENOSPC at the temp-file write step. Replace the atomic-writer
+        # module's ``tempfile`` binding (``_atomic_io.tempfile``) with a mock that
+        # wraps the real module and overrides only ``NamedTemporaryFile``, so the
+        # patch lands on the exact reference the production code resolves at call
+        # time without mutating the shared stdlib ``tempfile`` module object.
+        real_namedtemp = _atomic_io.tempfile.NamedTemporaryFile
 
         def boom_namedtemp(*args, **kwargs):
             handle = real_namedtemp(*args, **kwargs)
             handle.write = lambda *a, **k: (_ for _ in ()).throw(OSError("simulated ENOSPC"))
             return handle
 
-        monkeypatch.setattr(tempfile, "NamedTemporaryFile", boom_namedtemp)
-        monkeypatch.setattr("notebooklm._atomic_io.tempfile.NamedTemporaryFile", boom_namedtemp)
+        fake_tempfile = MagicMock(wraps=_atomic_io.tempfile)
+        fake_tempfile.NamedTemporaryFile = boom_namedtemp
+        monkeypatch.setattr(_atomic_io, "tempfile", fake_tempfile)
 
         assert save_cookies_to_storage(jar, storage, original_snapshot=snapshot) is False
         # And the original on-disk value must still be intact.
@@ -1239,8 +1245,6 @@ class TestNoTempFileLeakOnWriteFailure:
     """
 
     def test_temp_file_unlinked_when_write_raises(self, tmp_path, monkeypatch):
-        import tempfile
-
         storage = tmp_path / "storage_state.json"
         _write_storage(storage, [_stored_cookie("SID", "old", http_only=False)])
         jar = httpx.Cookies()
@@ -1248,16 +1252,27 @@ class TestNoTempFileLeakOnWriteFailure:
         snapshot = snapshot_cookie_jar(jar)
         _set_cookie_value(jar, "SID", "new")
 
-        real_namedtemp = tempfile.NamedTemporaryFile
+        real_namedtemp = _atomic_io.tempfile.NamedTemporaryFile
 
         def boom_namedtemp(*args, **kwargs):
             handle = real_namedtemp(*args, **kwargs)
             handle.write = lambda *a, **k: (_ for _ in ()).throw(OSError("simulated ENOSPC"))
             return handle
 
-        monkeypatch.setattr("notebooklm._atomic_io.tempfile.NamedTemporaryFile", boom_namedtemp)
+        # Replace the atomic-writer module's ``tempfile`` binding with a mock that
+        # wraps the real module and overrides only ``NamedTemporaryFile`` (object
+        # form), so the failing handle is what the production write path resolves
+        # at call time without mutating the shared stdlib ``tempfile`` module.
+        fake_tempfile = MagicMock(wraps=_atomic_io.tempfile)
+        fake_tempfile.NamedTemporaryFile = boom_namedtemp
+        monkeypatch.setattr(_atomic_io, "tempfile", fake_tempfile)
 
-        save_cookies_to_storage(jar, storage, original_snapshot=snapshot)
+        # The injected write failure must actually fire (returns False); this
+        # guards that the object-form patch lands on the production write path —
+        # without it the write would succeed and silently exercise the no-leak
+        # assertion on a happy path that never created the temp file.
+        result = save_cookies_to_storage(jar, storage, original_snapshot=snapshot)
+        assert result is False
 
         leftover = list(tmp_path.glob(".storage_state.json.*.tmp"))
         assert leftover == [], (
@@ -1698,7 +1713,10 @@ class TestSaveCookiesSeesLatestBaselineUnderContention:
             await both_submitted.wait()
             return func(*args, **kwargs)
 
-        monkeypatch.setattr("notebooklm._runtime.lifecycle.asyncio.to_thread", fake_to_thread)
+        # Patch ``asyncio.to_thread`` as the lifecycle module resolves it
+        # (object form against ``_lifecycle.asyncio``), so the barrier-instrumented
+        # ``fake_to_thread`` is what ``save_cookies`` dispatches the worker through.
+        monkeypatch.setattr(_lifecycle.asyncio, "to_thread", fake_to_thread)
 
         # Two jars representing distinct post-rotation states. The save that
         # acquires ``_save_lock`` first rotates *PSIDTS away from v0; the
@@ -1738,6 +1756,13 @@ class TestSaveCookiesSeesLatestBaselineUnderContention:
             )
         finally:
             await core.close()
+
+        # The barrier-instrumented ``fake_to_thread`` must have dispatched the
+        # two concurrent saves (a third dispatch may follow from close()'s own
+        # save). This proves the object-form patch landed on the lifecycle
+        # module's ``asyncio.to_thread`` seam — otherwise the deterministic
+        # overlap the assertion below relies on never happens.
+        assert len(submitted) >= 2
 
         psidts_key = CookieSnapshotKey("__Secure-1PSIDTS", ".google.com", "/")
         captured_pairs = [
