@@ -2,8 +2,8 @@
 
 This is a release gate, not a replacement for unit tests. It compares the
 runtime public surface in this checkout against a baseline git ref (by default
-the latest reachable tag) and reports unapproved removals or call-signature
-changes.
+the latest reachable tag) and reports unapproved removals, call-signature
+changes, or return-annotation changes.
 
 Usage:
     uv run python scripts/audit_public_api_compat.py
@@ -38,6 +38,7 @@ EXTRA_PUBLIC_PACKAGES = ("rpc",)
 CLIENT_NAMESPACE_ATTRIBUTES = (
     "artifacts",
     "chat",
+    "mind_maps",
     "notes",
     "notebooks",
     "research",
@@ -126,6 +127,7 @@ import inspect
 import json
 import pathlib
 import sys
+import typing
 import warnings
 
 ROOT = pathlib.Path(sys.argv[1]).resolve()
@@ -151,6 +153,36 @@ def discover_modules() -> list[str]:
     return sorted(modules)
 
 
+class _ReturnProbe:
+    # Tiny carrier so typing.get_type_hints can resolve a lone return string.
+    def __init__(self, annotation):
+        self.__annotations__ = {"return": annotation}
+
+
+def annotation_repr(annotation, obj=None):
+    if annotation is inspect.Signature.empty:
+        return None
+    # `from __future__ import annotations` (PEP 563) yields string annotations
+    # already; non-postponed modules yield live objects. Resolve string
+    # annotations against the owning module's globals so the captured form is
+    # canonical regardless of a module's PEP 563 status (a transition would
+    # otherwise flip e.g. 'MindMap' <-> 'notebooklm.types.MindMap' and surface a
+    # spurious changed-return). Fall back to the raw string when resolution
+    # fails (e.g. TYPE_CHECKING-only names).
+    if isinstance(annotation, str):
+        module_name = getattr(obj, "__module__", None)
+        module = sys.modules.get(module_name) if module_name else None
+        if module is None:
+            return annotation
+        try:
+            annotation = typing.get_type_hints(
+                _ReturnProbe(annotation), globalns=vars(module)
+            )["return"]
+        except Exception:
+            return annotation
+    return inspect.formatannotation(annotation)
+
+
 def signature_payload(obj):
     try:
         sig = inspect.signature(obj)
@@ -168,7 +200,11 @@ def signature_payload(obj):
                 else repr(param.default),
             }
         )
-    return {"text": str(sig), "parameters": params}
+    return {
+        "text": str(sig),
+        "parameters": params,
+        "return_annotation": annotation_repr(sig.return_annotation, obj),
+    }
 
 
 def kind_of(obj) -> str:
@@ -473,6 +509,27 @@ def _signature_breakage(old: dict[str, Any] | None, new: dict[str, Any] | None) 
     return None
 
 
+def _return_breakage(old: dict[str, Any] | None, new: dict[str, Any] | None) -> str | None:
+    """Return a reason when the return annotation changed, else ``None``.
+
+    Older baselines predate return-annotation capture, so a missing
+    ``return_annotation`` key is treated as "unknown" and never reported — only
+    an observed value-to-value change counts as a break. An annotation appearing
+    where there was none before is additive and also ignored. The mirror case —
+    an annotation disappearing (annotated -> unannotated) — *is* reported;
+    acknowledge it via the allowlist if intentional.
+    """
+    if old is None or new is None:
+        return None
+    if "return_annotation" not in old or "return_annotation" not in new:
+        return None
+    old_return = old["return_annotation"]
+    new_return = new["return_annotation"]
+    if old_return is None or old_return == new_return:
+        return None
+    return f"return annotation changed from {old_return!r} to {new_return!r}"
+
+
 def _compare_export(
     module_name: str,
     export_name: str,
@@ -495,6 +552,9 @@ def _compare_export(
         reason = _signature_breakage(old.get("signature"), new.get("signature"))
         if reason:
             breaks.append(ApiBreak("changed-signature", path, reason))
+        return_reason = _return_breakage(old.get("signature"), new.get("signature"))
+        if return_reason:
+            breaks.append(ApiBreak("changed-return", path, return_reason))
 
     for member_name, old_member in old.get("members", {}).items():
         new_member = new.get("members", {}).get(member_name)
@@ -520,6 +580,9 @@ def _compare_export(
         reason = _signature_breakage(old_member.get("signature"), new_member.get("signature"))
         if reason:
             breaks.append(ApiBreak("changed-signature", member_path, reason))
+        return_reason = _return_breakage(old_member.get("signature"), new_member.get("signature"))
+        if return_reason:
+            breaks.append(ApiBreak("changed-return", member_path, return_reason))
 
     for enum_name, old_value in old.get("enum_members", {}).items():
         enum_members = new.get("enum_members", {})
