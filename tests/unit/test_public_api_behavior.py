@@ -140,11 +140,21 @@ def _make_notebooks_api() -> NotebooksAPI:
 
 
 def _arrange_list_miss(api: object) -> None:
-    """Force a miss for the four ``list``-scanning namespaces.
+    """Force a miss for the four non-``notebooks`` namespaces.
 
-    ``sources`` / ``artifacts`` / ``notes`` / ``mind_maps`` all resolve a single
-    ``get`` by scanning ``self.list(...)``, so an empty ``list`` is a uniform,
+    ``sources`` / ``artifacts`` / ``mind_maps`` resolve a single ``get`` by
+    scanning ``self.list(...)``, so stubbing ``list`` to ``[]`` is a uniform,
     backend-agnostic miss (the same lever the existing per-namespace tests pull).
+
+    ``notes`` is the exception: ``NotesAPI.get_or_none`` resolves through
+    ``_get_all_notes_and_mind_maps`` → ``fetch_note_rows``, **not** ``self.list``,
+    so the assigned ``api.list`` stub is a harmless no-op for it. The notes miss
+    comes from its factory (``_make_notes_api``) wiring a fake core whose
+    ``rpc_call`` returns a non-list ``MagicMock`` that ``fetch_note_rows``'
+    container-extraction treats as empty — so the ``get`` still misses. Keeping
+    one shared arranger across all four rows is deliberate: it stays a single
+    table lever even though one namespace reaches the empty result by a different
+    internal path.
     """
     api.list = AsyncMock(return_value=[])  # type: ignore[attr-defined]
 
@@ -254,6 +264,44 @@ def _build_missing(case: LookupCase) -> object:
 
 
 # ---------------------------------------------------------------------------
+# The two error-contract modes the miss path is exercised under
+#
+# ``NOTEBOOKLM_FUTURE_ERRORS`` (v0.7.0 opt-in preview, default off) makes the
+# warn-runway namespaces adopt their v0.8.0 raise-target early (#1247). Both
+# ``get`` test methods run under both modes so the warn path (today's default)
+# and the raise path (the previewed flip, and v0.8.0's eventual default) are
+# pinned in lock-step — and the #1247 flip becomes a one-field edit
+# (``get_warns=False``) that keeps passing under both modes by construction.
+# ---------------------------------------------------------------------------
+
+_FUTURE_MODES = [
+    pytest.param(False, id="future-off"),
+    pytest.param(True, id="future-on"),
+]
+
+
+@pytest.fixture
+def _apply_future_errors(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> bool:
+    """Set/clear ``NOTEBOOKLM_FUTURE_ERRORS`` per the parametrized mode.
+
+    Returns the boolean mode so a test can compute whether a given ``get`` row
+    *raises* (future-on, or already-flipped) or *warns* (the warn-runway under
+    future-off).
+    """
+    # Hermetic both ways: the future-off branch asserts a DeprecationWarning
+    # fires, so a parent process exporting NOTEBOOKLM_QUIET_DEPRECATIONS=1 would
+    # otherwise silence the warn path and fail the warn-runway rows. Clear it so
+    # the matrix is independent of the ambient environment.
+    monkeypatch.delenv("NOTEBOOKLM_QUIET_DEPRECATIONS", raising=False)
+    future_on: bool = request.param
+    if future_on:
+        monkeypatch.setenv("NOTEBOOKLM_FUTURE_ERRORS", "1")
+    else:
+        monkeypatch.delenv("NOTEBOOKLM_FUTURE_ERRORS", raising=False)
+    return future_on
+
+
+# ---------------------------------------------------------------------------
 # The table is pinned to the static gate's lookup set
 # ---------------------------------------------------------------------------
 
@@ -282,15 +330,30 @@ def test_table_covers_all_lookup_namespaces() -> None:
 
 class TestGetMissContract:
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("_apply_future_errors", _FUTURE_MODES, indirect=True)
     @pytest.mark.parametrize("case", _CASES_BY_ID)
-    async def test_get_on_miss_warns_or_raises(self, case: LookupCase) -> None:
+    async def test_get_on_miss_warns_or_raises(
+        self, case: LookupCase, _apply_future_errors: bool
+    ) -> None:
         """``get(<missing>)`` warns + returns ``None`` today; raises post-#1247-flip.
 
-        The single ``get_warns`` field selects the branch, so flipping a
-        namespace with #1247 is one table edit, not a rewrite of this test.
+        Run under both error-contract modes. The effective branch is "warns"
+        only when the namespace is still on its warn-runway (``get_warns``) AND
+        the future-errors preview is off; otherwise the miss must raise the
+        namespace's ``*NotFoundError``. So:
+
+        * future-off + ``get_warns`` → warn + return ``None`` (today's default);
+        * future-on + ``get_warns`` → raise (the ``NOTEBOOKLM_FUTURE_ERRORS``
+          preview of the v0.8.0 flip, #1247);
+        * ``get_warns=False`` (``notebooks``, and any namespace after the #1247
+          flip) → raise under both modes.
+
+        Flipping a namespace with #1247 is one table edit (``get_warns=False``)
+        and this test keeps passing under both modes by construction.
         """
+        future_on = _apply_future_errors
         api = _build_missing(case)
-        if case.get_warns:
+        if case.get_warns and not future_on:
             # Warn-runway: a DeprecationWarning fires AND None comes back.
             with pytest.warns(DeprecationWarning) as record:
                 result = await api.get(*case.get_args)  # type: ignore[attr-defined]
@@ -328,13 +391,20 @@ class TestGetMissContract:
 
 class TestGetOrNoneMissContract:
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("_apply_future_errors", _FUTURE_MODES, indirect=True)
     @pytest.mark.parametrize("case", _CASES_BY_ID)
-    async def test_get_or_none_on_miss_is_silent_and_none(self, case: LookupCase) -> None:
+    async def test_get_or_none_on_miss_is_silent_and_none(
+        self, case: LookupCase, _apply_future_errors: bool
+    ) -> None:
         """Public ``get_or_none(<missing>)`` returns ``None`` with NO DeprecationWarning.
 
         This contract is invariant across the #1247 flip — ``get_or_none`` is the
         sanctioned ``None``-on-miss path for every namespace, before and after
         ``get`` starts raising — so it is asserted unconditionally for all rows.
+        It is also invariant under ``NOTEBOOKLM_FUTURE_ERRORS``: the preview flag
+        only changes the *deprecated* ``get`` runway, never the sanctioned
+        optional-lookup, so ``get_or_none`` must stay silent-and-``None`` in both
+        modes (asserted by running under both ``_FUTURE_MODES``).
         """
         api = _build_missing(case)
         with warnings.catch_warnings():
