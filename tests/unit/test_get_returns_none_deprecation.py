@@ -1,14 +1,15 @@
-"""Tests for the get()-returns-``None`` deprecation layer (#1206).
+"""Tests for the get()-not-found contract (#1206, flipped to raise in #1247).
 
-The deprecation layer makes ``sources.get`` / ``artifacts.get`` / ``notes.get``
-emit a :class:`DeprecationWarning` when they are about to return ``None`` on a
-miss, while keeping the ``None``-returning *behavior* unchanged. The actual flip
-to raising ``*NotFoundError`` lands separately in v0.8.0 (issue #1247).
+As of the v0.8.0 flip (#1247) ``sources.get`` / ``artifacts.get`` / ``notes.get``
+/ ``mind_maps.get`` raise their matching ``*NotFoundError`` on a miss, matching
+``notebooks.get``; ``get_or_none`` is the unchanged ``None``-on-miss lookup. The
+``warn_get_returns_none`` helper (the retired v0.7.0 runway) still has its own
+unit coverage here until it is deleted at the v0.8.0 capstone (#1365).
 
 Covered here:
   * ``warn_get_returns_none`` message shape + ``NOTEBOOKLM_QUIET_DEPRECATIONS``
     suppression (the helper in isolation).
-  * Each public ``get()`` warns on a miss and still returns ``None``.
+  * Each public ``get()`` raises its ``*NotFoundError`` on a miss.
   * The private ``_get_or_none()`` never warns (internal optional-lookup path).
   * ``notebooks.get`` still *raises* ``NotebookNotFoundError`` (unchanged).
   * No internal CLI not-found path self-warns (warnings escalated to errors).
@@ -27,6 +28,12 @@ from notebooklm._mind_map import NoteBackedMindMapService
 from notebooklm._note_service import NoteService
 from notebooklm._notes import NotesAPI
 from notebooklm._sources import SourcesAPI
+from notebooklm.exceptions import (
+    ArtifactNotFoundError,
+    MindMapNotFoundError,
+    NoteNotFoundError,
+    SourceNotFoundError,
+)
 from notebooklm.types import Source
 
 # ---------------------------------------------------------------------------
@@ -185,32 +192,30 @@ def mind_maps_api():
 
 
 # ---------------------------------------------------------------------------
-# Each public get() warns on a miss but still returns None
+# Each public get() raises its *NotFoundError on a miss (v0.8.0 flip, #1247)
 # ---------------------------------------------------------------------------
 #
 # Parametrised over every #1247-cohort namespace (sources / notes / artifacts /
-# mind_maps) so the missing-warning gap that #1358 closed for mind_maps cannot
-# silently recur for any of them: each get() must emit the deprecation warning
-# on a miss. All four lookups iterate ``self.list(...)``, so a mocked-empty
+# mind_maps) so the not-found contract stays uniform across all four — matching
+# notebooks.get. All four lookups iterate ``self.list(...)``, so a mocked-empty
 # ``list`` forces the miss uniformly.
 
-_GET_WARN_CASES = [
-    pytest.param("sources_api", "SourceNotFoundError", id="sources"),
-    pytest.param("notes_api", "NoteNotFoundError", id="notes"),
-    pytest.param("artifacts_api", "ArtifactNotFoundError", id="artifacts"),
-    pytest.param("mind_maps_api", "MindMapNotFoundError", id="mind_maps"),
+_GET_MISS_CASES = [
+    pytest.param("sources_api", SourceNotFoundError, id="sources"),
+    pytest.param("notes_api", NoteNotFoundError, id="notes"),
+    pytest.param("artifacts_api", ArtifactNotFoundError, id="artifacts"),
+    pytest.param("mind_maps_api", MindMapNotFoundError, id="mind_maps"),
 ]
 
 
-class TestPublicGetWarnsOnMiss:
+class TestPublicGetRaisesOnMiss:
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(("api_fixture", "exc_name"), _GET_WARN_CASES)
-    async def test_get_warns_and_returns_none(self, request, api_fixture, exc_name):
+    @pytest.mark.parametrize(("api_fixture", "exc_type"), _GET_MISS_CASES)
+    async def test_get_raises_on_miss(self, request, api_fixture, exc_type):
         api = request.getfixturevalue(api_fixture)
         api.list = AsyncMock(return_value=[])
-        with pytest.warns(DeprecationWarning, match=exc_name):
-            result = await api.get("nb_1", "missing")
-        assert result is None
+        with pytest.raises(exc_type):
+            await api.get("nb_1", "missing")
 
 
 # ---------------------------------------------------------------------------

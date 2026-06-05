@@ -193,28 +193,23 @@ class MindMapsAPI:
                 )
         return result
 
-    async def get(self, notebook_id: str, mind_map_id: str) -> MindMap | None:
-        """Return the mind map with ``mind_map_id``, or ``None`` if absent.
+    async def get(self, notebook_id: str, mind_map_id: str) -> MindMap:
+        """Return the mind map with ``mind_map_id``.
 
-        .. deprecated:: 0.7.0
-            Returning ``None`` for a missing mind map is deprecated and emits a
-            :class:`DeprecationWarning`. In **v0.8.0** this method will raise
-            :class:`~notebooklm.exceptions.MindMapNotFoundError` instead, to
-            match ``notebooks.get`` (issue #1247). Wrap the call in
-            ``try/except MindMapNotFoundError`` to keep handling missing mind
-            maps, or use :meth:`get_or_none` for the sanctioned optional lookup.
-            Suppress the warning with ``NOTEBOOKLM_QUIET_DEPRECATIONS``, or set
-            ``NOTEBOOKLM_FUTURE_ERRORS=1`` to preview the v0.8.0 raise now.
+        Returns:
+            The :class:`~notebooklm.types.MindMap`.
+
+        Raises:
+            MindMapNotFoundError: If no mind map with ``mind_map_id`` exists
+                (matches ``notebooks.get``; issue #1247). Use :meth:`get_or_none`
+                for the sanctioned ``None``-on-miss lookup.
         """
-        # The warn-runway / raise decision is single-sourced in
-        # ``_lookup.resolve_get``: it warns and returns ``None`` today, or
-        # raises ``MindMapNotFoundError`` under ``NOTEBOOKLM_FUTURE_ERRORS``
-        # (the v0.8.0 flip, issue #1247). Internal callers that need the silent
-        # optional-lookup must use ``_get_or_none`` directly.
+        # ``_lookup.resolve_get`` single-sources the raise-on-miss decision
+        # (#1247). Internal callers that need the silent optional-lookup must
+        # use ``_get_or_none`` directly.
         return resolve_get(
             await self.get_or_none(notebook_id, mind_map_id),
             not_found=MindMapNotFoundError(mind_map_id),
-            resource="mind_map",
         )
 
     async def get_or_none(self, notebook_id: str, mind_map_id: str) -> MindMap | None:
@@ -222,9 +217,9 @@ class MindMapsAPI:
 
         The sanctioned ``None``-on-miss lookup (ADR-0019), spanning both
         backings (note-backed JSON + interactive studio-artifact). Unlike
-        :meth:`get` — which is slated to raise
-        :class:`~notebooklm.exceptions.MindMapNotFoundError` on a miss in v0.8.0
-        (issue #1247) — this returns ``None`` for an absence and emits no
+        :meth:`get` — which now raises
+        :class:`~notebooklm.exceptions.MindMapNotFoundError` on a miss
+        (#1247) — this returns ``None`` for an absence and emits no
         deprecation warning. It scans :meth:`list`, so it reflects only what
         ``list`` confirms: a just-created interactive map whose variant slot has
         not yet populated is briefly excluded from ``list`` and therefore reads
@@ -246,7 +241,7 @@ class MindMapsAPI:
 
     # Private alias for internal optional-lookup callers, mirroring
     # ``sources``/``artifacts``/``notes``: the library calls ``_get_or_none``
-    # so it never trips its own ``get()`` deprecation warning (issue #1358).
+    # for a ``None``-on-miss lookup rather than the raising ``get()`` (#1358).
     _get_or_none = get_or_none
 
     async def generate(
