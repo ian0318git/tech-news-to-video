@@ -8,6 +8,7 @@ from enum import Enum
 from typing import Any, ClassVar
 
 from .._types.common import _datetime_from_timestamp
+from ..exceptions import DecodingError
 from ..rpc import RPCMethod, safe_index
 from ..rpc.types import SourceStatus
 
@@ -525,3 +526,39 @@ class SourceRow:
             return SourceStatus(status_code)
         except ValueError:
             return SourceStatus.READY
+
+
+def interpret_source_freshness(result: Any) -> bool:
+    """Decode a ``CHECK_SOURCE_FRESHNESS`` payload into a freshness bool.
+
+    Shapes by source type: ``[]`` or ``[[null, true, [id]]]`` = fresh
+    (URL / Drive); bare ``True`` = fresh; bare ``False`` / ``[[null, false,
+    ...]]`` = stale. A recognized nested shape carries a *boolean* flag at index
+    ``[1]`` (``True`` = fresh, ``False`` = stale).
+
+    Anything else is schema drift, not "stale": ``None``, a bare scalar, a list
+    whose first element is a non-list scalar like ``["x"]``, a nested list too
+    short to carry the flag, or a nested list whose flag is *non-boolean* (e.g.
+    ``[[null, null, ...]]``). Raise ``DecodingError`` so callers can tell a miss
+    from drift (#1344). The payload is passed via ``raw_response`` so the
+    existing scrub/truncate preview applies instead of leaking it into the
+    message.
+    """
+    if result is True:
+        return True
+    if result is False:
+        return False
+    if isinstance(result, list):
+        if len(result) == 0:
+            return True  # empty array = fresh
+        first = result[0]
+        if isinstance(first, list) and len(first) > 1:
+            if first[1] is True:
+                return True
+            if first[1] is False:
+                return False
+    raise DecodingError(
+        "Unrecognized CHECK_SOURCE_FRESHNESS payload shape",
+        raw_response=repr(result),
+        method_id=RPCMethod.CHECK_SOURCE_FRESHNESS.value,
+    )
