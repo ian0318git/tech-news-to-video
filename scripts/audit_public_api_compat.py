@@ -9,10 +9,17 @@ Usage:
     uv run python scripts/audit_public_api_compat.py
     uv run python scripts/audit_public_api_compat.py --baseline-ref v0.4.1
     uv run python scripts/audit_public_api_compat.py --json
+    uv run python scripts/audit_public_api_compat.py --check-stale
+
+``--check-stale`` additionally fails when an ``allowed_breaks`` entry matches no
+current break against the baseline (it is already in the baseline). This keeps
+the allowlist from silently accumulating cruft — prune such entries at each
+release boundary (see ``docs/releasing.md`` → prune-allowlist-at-release).
 
 Exit codes:
-    0  No unapproved compatibility breaks.
-    1  Unapproved public API breakage detected.
+    0  No unapproved compatibility breaks (and, with --check-stale, none stale).
+    1  Unapproved public API breakage detected, or stale allowlist entries
+       under --check-stale.
     2  Script/setup error, bad baseline ref, or import/introspection failure.
 """
 
@@ -715,6 +722,83 @@ def partition_allowed(
     return unapproved, approved
 
 
+def _sibling_object(obj: str) -> str | None:
+    """Return the other path-view of an exported object, or ``None``.
+
+    The audit records the same client-namespace callable under two dotted
+    paths: the re-export view ``notebooklm.X`` and the defining-module view
+    ``notebooklm.client.X``. An allowance is written against one view; this maps
+    between them so the staleness check can treat the pair as a single unit. A
+    glob object (containing ``*``) is left for the caller to handle — the
+    returned sibling is a literal string and is only consulted via an exact
+    lookup, so a glob's sibling never spuriously matches.
+    """
+    client_prefix = f"{PUBLIC_PACKAGE}.client."
+    bare_prefix = f"{PUBLIC_PACKAGE}."
+    if obj.startswith(client_prefix):
+        return bare_prefix + obj[len(client_prefix) :]
+    if obj.startswith(bare_prefix):
+        return client_prefix + obj[len(bare_prefix) :]
+    return None
+
+
+def stale_allowances(
+    breakages: list[ApiBreak],
+    allowances: list[Allowance],
+) -> list[Allowance]:
+    """Return allowances that match no current break against the baseline.
+
+    An allowance is *stale* when it describes a break already baked into the
+    baseline (so it no longer surfaces as a break against it). Such entries are
+    dead weight: harmless to the gate, but the set only ever grows. Pruning them
+    at each release boundary keeps the allowlist scoped to the breaks pending
+    the *next* release (see ``docs/releasing.md`` → prune-allowlist-at-release).
+
+    Pair-aware rule: the two path-views ``notebooklm.X`` and
+    ``notebooklm.client.X`` of the same callable are treated as one unit — a
+    unit is live (kept) if *either* view matches a break. So a non-stale
+    allowance is one that itself matches a break, or whose sibling path-view has
+    *any* matching allowance. Today both views always match together, but a
+    future change that only one view detects must not flag its still load-bearing
+    sibling.
+    """
+    # Per-allowance self-match, keyed by (code, object) so two allowances on the
+    # same object but different codes never collapse onto one another.
+    self_matched: dict[tuple[str, str], bool] = {
+        (allowance.code, allowance.object): any(
+            allowance.matches(breakage) for breakage in breakages
+        )
+        for allowance in allowances
+    }
+    # Per-object aggregate for the sibling lookup: an object is "kept" if *any*
+    # of its allowances (any code) matches a break. The pair stays live as long
+    # as the sibling object has a live allowance, regardless of code.
+    object_kept: dict[str, bool] = {}
+    for (_code, obj), is_match in self_matched.items():
+        object_kept[obj] = object_kept.get(obj, False) or is_match
+
+    def _is_live(allowance: Allowance) -> bool:
+        if self_matched[(allowance.code, allowance.object)]:
+            return True
+        sibling = _sibling_object(allowance.object)
+        return sibling is not None and object_kept.get(sibling, False)
+
+    return [allowance for allowance in allowances if not _is_live(allowance)]
+
+
+def _render_stale(stale: list[Allowance], baseline_ref: str, allowlist_path: Path | str) -> str:
+    lines = [
+        f"Stale allowlist entries — they match no break against the {baseline_ref} "
+        "baseline, so they are already in the baseline:",
+    ]
+    for allowance in stale:
+        lines.append(f"  - [{allowance.code}] {allowance.object}")
+    lines.append(
+        f"Prune them from {allowlist_path} (see docs/releasing.md → prune-allowlist-at-release)."
+    )
+    return "\n".join(lines)
+
+
 def _render_breakages(title: str, breakages: list[ApiBreak]) -> str:
     if not breakages:
         return ""
@@ -751,6 +835,14 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument("--json", action="store_true", help="Print machine-readable output.")
+    parser.add_argument(
+        "--check-stale",
+        action="store_true",
+        help=(
+            "Also fail when an allowlist entry matches no break against the "
+            "baseline (it is already in the baseline — prune it)."
+        ),
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -764,12 +856,18 @@ def main(argv: list[str] | None = None) -> int:
 
         breakages = compare_manifests(baseline_manifest, current_manifest)
         unapproved, approved = partition_allowed(breakages, allowances)
+        stale = stale_allowances(breakages, allowances)
     except RuntimeError as exc:
         if args.json:
             print(json.dumps({"error": str(exc)}, sort_keys=True))
         else:
             print(f"ERROR: {exc}", file=sys.stderr)
         return 2
+
+    allowlist_display = allowlist_path or DEFAULT_ALLOWLIST
+    # ``--check-stale`` promotes stale entries from informational to a gate.
+    stale_blocks = args.check_stale and bool(stale)
+    failed = bool(unapproved) or stale_blocks
 
     if args.json:
         print(
@@ -781,12 +879,15 @@ def main(argv: list[str] | None = None) -> int:
                         for breakage, allowance in approved
                     ],
                     "unapproved": [asdict(item) for item in unapproved],
+                    "stale_allowances": [asdict(allowance) for allowance in stale],
                 },
                 indent=2,
                 sort_keys=True,
             )
         )
-    elif unapproved:
+        return 1 if failed else 0
+
+    if unapproved:
         print(
             textwrap.dedent(
                 f"""\
@@ -796,7 +897,7 @@ def main(argv: list[str] | None = None) -> int:
                 {_render_breakages("Unapproved compatibility breaks:", unapproved)}
 
                 Add back-compat shims, or document an intentional break in
-                {allowlist_path or DEFAULT_ALLOWLIST} with a reviewer-readable reason.
+                {allowlist_display} with a reviewer-readable reason.
                 """
             ).strip(),
             file=sys.stderr,
@@ -804,6 +905,16 @@ def main(argv: list[str] | None = None) -> int:
         approved_text = _render_approved(approved)
         if approved_text:
             print("\n" + approved_text, file=sys.stderr)
+    elif stale_blocks:
+        # Compat surface is clean, but stale allowlist entries fail the gate
+        # under --check-stale. Don't print an "OK:" line that contradicts the
+        # non-zero exit; the stale report below carries the actionable message.
+        print(
+            f"Public API is compatible with {baseline_ref} "
+            f"({len(approved)} reviewed break(s) allowlisted), "
+            "but the allowlist has stale entries.",
+            file=sys.stderr,
+        )
     else:
         print(
             f"OK: public API is compatible with {baseline_ref} "
@@ -813,7 +924,10 @@ def main(argv: list[str] | None = None) -> int:
         if approved_text:
             print(approved_text)
 
-    return 1 if unapproved else 0
+    if stale_blocks:
+        print("\n" + _render_stale(stale, baseline_ref, allowlist_display), file=sys.stderr)
+
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
