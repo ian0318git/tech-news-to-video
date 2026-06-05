@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit, urlunsplit
 
 from . import research as _research_pub
-from ._deprecation import warn_deprecated
 from ._notebook_metadata import NotebookSourceLister, create_default_source_lister
 from ._research_task_parser import parse_research_task_models
 from ._runtime.contracts import RpcCaller
@@ -27,6 +26,7 @@ from ._types.research import (
     ResearchTask,
 )
 from .exceptions import (
+    AmbiguousResearchTaskError,
     DecodingError,
     NetworkError,
     ResearchTaskMismatchError,
@@ -284,32 +284,21 @@ class ResearchAPI:
         *,
         notebook_id: str,
         task_id: str | None,
-        warn_on_ambiguous: bool,
+        raise_on_ambiguous: bool,
     ) -> list[ResearchTask]:
         # Task-id discriminator: when supplied, filter parsed_tasks down to
         # the matched task so callers iterating ``tasks`` don't see siblings.
-        # When omitted but multiple tasks are in flight, surface the latent
-        # cross-wire hazard via a DeprecationWarning while preserving legacy
-        # latest-task selection.
+        # When omitted but multiple tasks are in flight, the selection is
+        # ambiguous (which task did the caller mean?), so raise instead of
+        # silently guessing the latest task (ADR-0019: "ambiguous -> raise,
+        # never silently guess"). A single in-flight task with no task_id is
+        # unambiguous and still returned silently for convenience.
         if task_id is not None:
             return [task for task in parsed_tasks if task.task_id == task_id]
-        if warn_on_ambiguous and len(parsed_tasks) > 1:
-            warn_deprecated(
-                (
-                    f"ResearchAPI.poll(notebook_id={notebook_id!r}) returned "
-                    f"{len(parsed_tasks)} in-flight tasks but no task_id "
-                    f"discriminator was supplied. The latest task is "
-                    f"returned for back-compat, but this is ambiguous and "
-                    f"may surface results for the wrong task. Pass "
-                    f"task_id=<id> (from research.start) to select "
-                    f"explicitly. The None default will be removed in a "
-                    f"future major release."
-                ),
-                # No pinned removal version yet (re-pin tracked by #1363); the
-                # message already says "a future major release".
-                removal=None,
-                # caller -> poll -> _select_polled_tasks -> warn_deprecated.
-                stacklevel=4,
+        if raise_on_ambiguous and len(parsed_tasks) > 1:
+            raise AmbiguousResearchTaskError(
+                notebook_id=notebook_id,
+                task_ids=[task.task_id for task in parsed_tasks],
             )
         return parsed_tasks
 
@@ -420,11 +409,16 @@ class ResearchAPI:
                 When set, the returned ``task_id`` / ``status`` / ``query`` /
                 ``sources`` / ``summary`` / ``report`` fields describe the
                 matched task, and ``tasks`` contains only that task. When
-                ``None`` and multiple tasks are in flight, a
-                :class:`DeprecationWarning` is emitted and the *latest* task is
-                returned (legacy behavior); a single in-flight task is silent.
-                Migration: pass the ``task_id`` from :meth:`start` on every
-                ``poll`` — the ``None`` default is removed in a future major.
+                ``None`` and two or more tasks are in flight, the selection is
+                ambiguous and an
+                :class:`~notebooklm.exceptions.AmbiguousResearchTaskError` is
+                raised — pass the ``task_id`` from :meth:`start` to select
+                explicitly. A single in-flight task is returned silently.
+
+        .. versionchanged:: 0.8.0
+            ``task_id=None`` with two or more in-flight tasks now raises
+            ``AmbiguousResearchTaskError`` instead of warning and returning the
+            latest task (signature unchanged; single task still returned).
 
         Returns:
             A :class:`~notebooklm._types.research.ResearchTask` for the selected
@@ -454,11 +448,11 @@ class ResearchAPI:
             await self._poll_task_models(notebook_id),
             notebook_id=notebook_id,
             task_id=task_id,
-            # The ambiguity warning only applies to the unfiltered (task_id is
+            # The ambiguity raise only applies to the unfiltered (task_id is
             # None) path; when a discriminator is pinned, _select_polled_tasks
-            # filters before the warn branch. Gating it here matches
+            # filters before the raise branch. Gating it here matches
             # wait_for_completion and keeps the intent explicit.
-            warn_on_ambiguous=task_id is None,
+            raise_on_ambiguous=task_id is None,
         )
 
         if parsed_tasks:
@@ -494,7 +488,10 @@ class ResearchAPI:
         Args:
             notebook_id: The notebook ID.
             task_id: Optional research task discriminator. Pass the value
-                returned by :meth:`start` when available.
+                returned by :meth:`start` when available. When ``None`` and two
+                or more tasks are in flight on the first poll,
+                :class:`~notebooklm.exceptions.AmbiguousResearchTaskError` is
+                raised; a single in-flight task is selected and pinned silently.
             timeout: Maximum seconds to wait.
             initial_interval: Seconds between status checks (default: 5). This
                 is the canonical poll-interval keyword, matching
@@ -514,6 +511,8 @@ class ResearchAPI:
             Use attribute access (``result.status``).
 
         Raises:
+            AmbiguousResearchTaskError: If ``task_id`` is ``None`` and two or
+                more tasks are in flight on the first poll (pass ``task_id``).
             ResearchTimeoutError: If research does not reach a terminal status
                 before ``timeout`` elapses. Subclass of
                 :class:`WaitTimeoutError` and the built-in :class:`TimeoutError`,
@@ -548,7 +547,7 @@ class ResearchAPI:
                 await self._poll_task_models(notebook_id),
                 notebook_id=notebook_id,
                 task_id=pinned_task_id,
-                warn_on_ambiguous=pinned_task_id is None,
+                raise_on_ambiguous=pinned_task_id is None,
             )
             selected_task = parsed_tasks[0] if parsed_tasks else None
             if pinned_task_id is None and selected_task is not None:

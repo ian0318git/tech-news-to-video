@@ -11,6 +11,7 @@ import pytest
 
 import notebooklm._research as research_module
 from notebooklm import (
+    AmbiguousResearchTaskError,
     CitedSourceSelection,
     NotebookLMClient,
     ResearchSource,
@@ -424,6 +425,34 @@ class TestResearch:
         assert result.to_public_dict() == {"status": "no_research", "tasks": []}
 
     @pytest.mark.asyncio
+    async def test_wait_for_completion_raises_on_ambiguous_first_poll(
+        self, auth_tokens, httpx_mock, build_rpc_response
+    ):
+        """wait_for_completion(nb) with >=2 tasks in flight and no task_id raises.
+
+        wait_for_completion shares the _select_polled_tasks discriminator with
+        poll(): on the first iteration with no pinned task_id and two or more
+        in-flight tasks, the selection is ambiguous, so it raises
+        AmbiguousResearchTaskError (v0.8.0; #1363) rather than guessing. Pins the
+        contract the wait_for_completion docstring documents.
+        """
+        task_a = _build_research_task_payload("query A", "https://a.example", "A", status_code=1)
+        task_b = _build_research_task_payload("query B", "https://b.example", "B", status_code=1)
+        response_body = build_rpc_response(
+            RPCMethod.POLL_RESEARCH,
+            [[["task_A", task_a], ["task_B", task_b]]],
+        )
+        httpx_mock.add_response(content=response_body.encode(), method="POST")
+
+        async with NotebookLMClient(auth_tokens) as client:
+            with pytest.raises(AmbiguousResearchTaskError) as excinfo:
+                await client.research.wait_for_completion("nb_123", timeout=10)
+
+        err = excinfo.value
+        assert err.notebook_id == "nb_123"
+        assert err.task_ids == ["task_A", "task_B"]
+
+    @pytest.mark.asyncio
     async def test_wait_for_completion_retries_transient_no_research_for_initial_task_id(
         self, auth_tokens, httpx_mock, build_rpc_response, monkeypatch
     ):
@@ -769,8 +798,16 @@ class TestResearch:
         assert result.report == "# Report markdown"
 
     @pytest.mark.asyncio
-    async def test_poll_returns_all_tasks(self, auth_tokens, httpx_mock, build_rpc_response):
-        """Test poll preserves all parsed research tasks in an additive tasks field."""
+    async def test_poll_no_task_id_multiple_in_flight_raises(
+        self, auth_tokens, httpx_mock, build_rpc_response
+    ):
+        """poll() without task_id when >1 task is in flight raises (v0.8.0; #1363).
+
+        The ambiguous case no longer warns and silently returns the latest task
+        — it raises :class:`AmbiguousResearchTaskError` so the caller must pass
+        an explicit ``task_id`` discriminator. Pin both in-flight ids on the
+        error so a future change can't silently drop the discriminator hint.
+        """
         latest_sources = [["http://example.com/latest", "Latest", "Description", 1]]
         older_sources = [["http://example.com/older", "Older", "Description", 1]]
         latest_task = [None, ["latest query", 1], 1, [latest_sources, "Latest summary"], 2]
@@ -782,18 +819,13 @@ class TestResearch:
         httpx_mock.add_response(content=response_body.encode(), method="POST")
 
         async with NotebookLMClient(auth_tokens) as client:
-            # poll() without task_id when >1 task is in flight is the
-            # ambiguous case — pin that the DeprecationWarning fires on this
-            # exact path so a future change can't silently drop it.
-            with pytest.warns(DeprecationWarning, match="task_id"):
-                result = await client.research.poll("nb_123")
+            with pytest.raises(AmbiguousResearchTaskError) as excinfo:
+                await client.research.poll("nb_123")
 
-        assert result.task_id == "task_latest"
-        assert result.query == "latest query"
-        assert len(result.tasks) == 2
-        assert result.tasks[0].task_id == "task_latest"
-        assert result.tasks[1].task_id == "task_older"
-        assert result.tasks[1].query == "older query"
+        err = excinfo.value
+        assert err.notebook_id == "nb_123"
+        assert err.task_ids == ["task_latest", "task_older"]
+        assert "task_id" in str(err)
 
     @pytest.mark.asyncio
     async def test_poll_joins_legacy_report_chunks(
