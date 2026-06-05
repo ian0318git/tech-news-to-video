@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tarfile
@@ -362,6 +363,28 @@ main()
 """
 
 
+_OBJECT_SENTINEL_REPR_RE = re.compile(r"<object object at 0x[0-9a-fA-F]+>")
+
+
+def normalize_default_repr(default_repr: str | None) -> str | None:
+    """Collapse a bare object() sentinel default repr to an address-free form.
+
+    A bare object() sentinel default (e.g. the wait_for_completion
+    initial_interval sentinel) reprs as <object object at 0xADDR>; the hex
+    address differs between the baseline collector process and the current one,
+    so identical code would otherwise read as a changed default. Only the bare
+    object() sentinel (matching the whole repr) is normalized, so two
+    same-identity sentinels compare equal while every other default — including
+    an address-bearing instance or function repr — is left intact and a genuine
+    change is still caught.
+    """
+    if default_repr is None:
+        return None
+    if _OBJECT_SENTINEL_REPR_RE.fullmatch(default_repr):
+        return "<object object at 0x...>"
+    return default_repr
+
+
 def collect_manifest(
     source_root: Path,
     extra_public_names: dict[str, list[str]] | None = None,
@@ -459,15 +482,10 @@ def _signature_breakage(old: dict[str, Any] | None, new: dict[str, Any] | None) 
                 return f"parameter {name!r} no longer accepts keyword calls"
             if old_param["has_default"] and not new_param["has_default"]:
                 return f"optional parameter {name!r} became required"
-            if (
-                old_param["has_default"]
-                and new_param["has_default"]
-                and old_param.get("default_repr") != new_param.get("default_repr")
-            ):
-                return (
-                    f"default for parameter {name!r} changed from "
-                    f"{old_param.get('default_repr')} to {new_param.get('default_repr')}"
-                )
+            old_default = normalize_default_repr(old_param.get("default_repr"))
+            new_default = normalize_default_repr(new_param.get("default_repr"))
+            if old_param["has_default"] and new_param["has_default"] and old_default != new_default:
+                return f"default for parameter {name!r} changed from {old_default} to {new_default}"
 
     old_positional = [param for param in old_params if _accepts_positional(param)]
     new_positional = [param for param in new_params if _accepts_positional(param)]
