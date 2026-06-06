@@ -66,7 +66,6 @@ ALLOWLISTED_CEILINGS: dict[str, int] = {
     "exceptions.py": 1460,
     "_artifacts.py": 1393,
     "_source/upload.py": 1236,
-    "cli/session_cmd.py": 1080,
     "_sources.py": 1007,
     "_artifact/downloads.py": 973,
     "client.py": 973,
