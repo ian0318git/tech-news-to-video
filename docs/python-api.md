@@ -795,6 +795,7 @@ class NotebookLMClient:
     notes: NotesAPI            # User notes
     settings: SettingsAPI      # User settings (language, etc.)
     sharing: SharingAPI        # Notebook sharing
+    labels: LabelsAPI          # Source labels (topic grouping)
     auth: AuthTokens           # Current authentication tokens
     is_connected: bool         # Connection state
 
@@ -1814,6 +1815,77 @@ status = await client.sharing.set_public(notebook_id, False)
 
 ---
 
+### LabelsAPI (`client.labels`)
+
+**CLI equivalent:** [Label Commands](cli-reference.md#label-commands-notebooklm-label-cmd) — `notebooklm label list`, `sources`, `generate`, `create`, `rename`, `emoji`, `add`, `remove`, `delete`.
+
+Source labels group a notebook's sources into topic buckets. A label is a
+standalone, notebook-scoped entity: membership is many-to-many (a source can
+belong to multiple labels), and a label owns a list of source IDs — the source
+carries no back-reference. The dataclass is `Label` (importable as
+`from notebooklm import Label`).
+
+| Method | Parameters | Returns | Description |
+|--------|------------|---------|-------------|
+| `list(notebook_id)` | `str` | `list[Label]` | List all labels in a notebook (with source membership) |
+| `get(notebook_id, label_id)` | `str, str` | `Label` | Get a label by id; raises `LabelNotFoundError` on a miss |
+| `get_or_none(notebook_id, label_id)` | `str, str` | `Label \| None` | Get a label by id, returning `None` when absent |
+| `sources(notebook_id, label_id)` | `str, str` | `list[Source]` | Expand a label to its `Source` objects (group-as-collection accessor); raises `LabelNotFoundError` if absent |
+| `generate(notebook_id, *, scope="unlabeled")` | `str, *, Literal["all", "unlabeled"]` | `list[Label]` | AI-group sources into topic labels (the UI's "Reorganize"). `scope="unlabeled"` (default, safe) labels only unlabeled sources; `scope="all"` is **destructive** — it wipes and regenerates every label with new ids. Returns the full post-op set. |
+| `create(notebook_id, name, emoji="")` | `str, str, str` | `Label` | Create an empty, manually-named label. Locates the new label by id-diff; raises `LabelError` on an ambiguous concurrent create |
+| `rename(notebook_id, label_id, name, *, return_object=True)` | `str, str, str, *, bool` | `Label \| None` | Rename a label (preserves the existing emoji). Raises `LabelNotFoundError` if missing |
+| `set_emoji(notebook_id, label_id, emoji, *, return_object=True)` | `str, str, str, *, bool` | `Label \| None` | Set a label's emoji |
+| `update(notebook_id, label_id, *, name=None, emoji=None, return_object=True)` | `str, str, *, str \| None, str \| None, bool` | `Label \| None` | Set name and/or emoji. Raises `ValueError` if both are `None`; raises `LabelNotFoundError` if the label is missing (in both `return_object` modes) |
+| `add_sources(notebook_id, label_id, source_ids, *, return_object=True)` | `str, str, list[str], *, bool` | `Label \| None` | Add source(s) to a label. **Appends** — existing members survive and overlap with other labels is allowed. One RPC per id (deduped); not atomic across ids. Raises `ValueError` on an empty list |
+| `remove_sources(notebook_id, label_id, source_ids, *, return_object=True)` | `str, str, list[str], *, bool` | `Label \| None` | Un-assign source(s) from a label only — the sources survive in the notebook, and a source in another label stays there. Removing a non-member is a no-op. One RPC per id (deduped). Raises `ValueError` on an empty list |
+| `delete(notebook_id, label_ids)` | `str, str \| list[str]` | `None` | Delete one or more labels (batch). Idempotent — an absent target is a no-op returning `None`. Deleting a label does not delete its sources |
+
+For `rename`/`set_emoji`/`update`/`add_sources`/`remove_sources`, `return_object=False` returns
+`None` without re-hydrating, but the existence preflight still runs and raises
+`LabelNotFoundError` on a missing target.
+
+**Example:**
+```python
+from notebooklm import Label
+
+# AI-group the notebook's unlabeled sources into topic labels (safe default)
+labels = await client.labels.generate(nb_id)
+for label in labels:
+    print(f"{label.id}: {label.emoji or ''}{label.name} ({len(label.source_ids)} sources)")
+
+# Destructive re-label: wipes and regenerates EVERY label with new ids
+labels = await client.labels.generate(nb_id, scope="all")
+
+# Create an empty, manually-named label
+papers = await client.labels.create(nb_id, "Papers", emoji="📄")
+
+# Add sources (append — does not remove them from any other label)
+await client.labels.add_sources(nb_id, papers.id, [source_id])
+
+# Expand a label to its Source objects
+members = await client.labels.sources(nb_id, papers.id)
+for src in members:
+    print(f"{src.id}: {src.title}")
+
+# Read with raise-on-miss vs None-on-miss
+label = await client.labels.get(nb_id, papers.id)          # raises LabelNotFoundError
+maybe = await client.labels.get_or_none(nb_id, "missing")  # -> None
+
+# Rename (emoji preserved) and re-emoji
+await client.labels.rename(nb_id, papers.id, "Research Papers")
+await client.labels.set_emoji(nb_id, papers.id, "📚")
+
+# Delete (idempotent; sources become unlabeled, not deleted)
+await client.labels.delete(nb_id, papers.id)
+```
+
+> **Note:** `add_sources` appends; `remove_sources` un-assigns the source from
+> the label only (it is **not** deleted from the notebook, and stays in any other
+> label it belongs to). Both issue one `UPDATE_LABEL` per id (the wire honours
+> only the first id per call) and are not atomic across ids.
+
+---
+
 ## Data Types
 
 ### Notebook
@@ -1877,6 +1949,22 @@ if source.kind == "pdf":
 # Use in f-strings
 print(f"Type: {source.kind}")  # "Type: pdf"
 ```
+
+### Label
+
+```python
+@dataclass
+class Label:
+    id: str
+    name: str
+    notebook_id: Optional[str] = None
+    emoji: Optional[str] = None
+    source_ids: list[str] = field(default_factory=list)  # empty for a new label
+```
+
+A source `Label` describes source membership only (no artifact members).
+Importable as `from notebooklm import Label`. See
+[LabelsAPI](#labelsapi-clientlabels).
 
 ### Artifact
 

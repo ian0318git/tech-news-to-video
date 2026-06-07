@@ -151,6 +151,9 @@ def test_retry_disabled_entries_are_intentional_and_documented() -> None:
         (RPCMethod.CREATE_NOTE, "plain"): IdempotencyPolicy.NON_IDEMPOTENT_NO_RETRY,
         (RPCMethod.CREATE_NOTE, "saved_from_chat"): IdempotencyPolicy.NON_IDEMPOTENT_NO_RETRY,
         (RPCMethod.SHARE_NOTEBOOK, None): IdempotencyPolicy.PROBE_THEN_CREATE,
+        (RPCMethod.CREATE_LABEL, None): IdempotencyPolicy.NON_IDEMPOTENT_NO_RETRY,
+        (RPCMethod.DELETE_LABEL, None): IdempotencyPolicy.NON_IDEMPOTENT_NO_RETRY,
+        (RPCMethod.UPDATE_LABEL, "add_sources"): IdempotencyPolicy.NON_IDEMPOTENT_NO_RETRY,
     }
     actual = {
         (method, variant): entry.policy
@@ -177,6 +180,32 @@ def test_retry_disabled_entries_are_intentional_and_documented() -> None:
         )
 
 
+def test_update_label_remove_sources_variant_is_idempotent_set_op() -> None:
+    """The ``remove_sources`` UPDATE_LABEL variant is a retry-safe set-op.
+
+    Removing an already-absent member is a confirmed silent no-op (rpc.md
+    2026-06-07), so a blind transport retry that lands twice leaves the same
+    final state — it MUST classify as ``IDEMPOTENT_SET_OP`` (not the NO_RETRY
+    bucket that ``add_sources`` lives in). This is asserted as a positive case
+    rather than via the NO_RETRY ``expected`` table, which filters set-ops out.
+    """
+    entry = IDEMPOTENCY_REGISTRY.get_entry(
+        RPCMethod.UPDATE_LABEL, operation_variant="remove_sources"
+    )
+    assert entry.policy is IdempotencyPolicy.IDEMPOTENT_SET_OP
+    assert entry.notes.strip()
+    # Set-op semantics keep the transport retry loop enabled (caller-False stays False).
+    assert (
+        resolve_effective_disable_internal_retries(
+            IDEMPOTENCY_REGISTRY,
+            RPCMethod.UPDATE_LABEL,
+            caller_disable_internal_retries=False,
+            operation_variant="remove_sources",
+        )
+        is False
+    )
+
+
 def test_non_idempotent_no_retry_entries_document_dedupe_gap() -> None:
     """Hard no-retry methods must explain why blind retry cannot be safe."""
     expected_terms = {
@@ -194,6 +223,9 @@ def test_non_idempotent_no_retry_entries_document_dedupe_gap() -> None:
             "no client-token",
             "no client-visible note_id",
         ),
+        (RPCMethod.CREATE_LABEL, None): ("no client-token", "blind retry"),
+        (RPCMethod.DELETE_LABEL, None): ("no client-token", "blind retry"),
+        (RPCMethod.UPDATE_LABEL, "add_sources"): ("no client-token", "blind retry"),
     }
 
     for (method, variant), terms in expected_terms.items():

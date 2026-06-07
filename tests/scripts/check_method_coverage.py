@@ -89,10 +89,12 @@ _TEST_REFERENCE_EXCLUDES: frozenset[Path] = frozenset(
 
 # Pre-existing gaps grandfathered in when this gate landed; new methods
 # must NOT be added here. See module docstring for the one-way-ratchet
-# policy. The script's bootstrap step (run once locally before commit)
-# populated this set. Each entry is the ``RPCMethod.<NAME>`` member name
-# (without the ``RPCMethod.`` prefix).
-# The set is intentionally empty after backfilling all bootstrap gaps.
+# policy. Each entry is the ``RPCMethod.<NAME>`` member name (without the
+# ``RPCMethod.`` prefix).
+# Intentionally empty: every RPCMethod has full coverage (a test reference +
+# a cassette). The source-label RPCs' cassettes were recorded in this change,
+# so the temporary grandfather entries were removed. Record a cassette for any
+# new method rather than re-adding it here.
 PREEXISTING_GAPS: frozenset[str] = frozenset()
 
 

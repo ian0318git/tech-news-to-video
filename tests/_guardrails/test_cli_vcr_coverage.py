@@ -72,6 +72,7 @@ GROUP_COVERAGE: dict[str, str] = {
     "artifact": "test_artifacts.py",
     "download": "test_downloads.py",
     "generate": "test_generate.py",
+    "label": "test_label.py",
     "language": "test_settings.py",  # `language` commands live in test_settings.py
     "note": "test_notes.py",
     "profile": "test_profile.py",
