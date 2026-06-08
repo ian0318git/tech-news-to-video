@@ -402,78 +402,32 @@ def create_mock_client():
     return mock_client
 
 
-class MultiMockProxy:
-    """Proxy that forwards attribute access to all underlying mocks.
+def inject_client(client, *, recorder=None):
+    """Build the ``CliRunner.invoke(obj=...)`` payload that injects ``client``.
 
-    When you set return_value on this proxy, it propagates to all mocks.
-    Other attribute access is delegated to the primary mock.
+    The dual-path resolver (``cli.auth_runtime.resolve_client_factory``) reads
+    ``ctx.obj["client_factory"]`` first, so seeding it here makes every command
+    construct ``client`` instead of the real ``NotebookLMClient`` -- the
+    replacement for the old ``patch("...X_cmd.NotebookLMClient")`` seam. The
+    factory tolerates the ``client_auth, **client_kwargs`` call shape; when
+    ``recorder`` (a list) is supplied, each ``(auth, kwargs)`` call is appended
+    for assertions (e.g. the ``source add`` / ``chat ask`` timeout passthrough).
+
+    ``client`` must implement the async context-manager protocol
+    (``__aenter__`` / ``__aexit__``); ``create_mock_client()`` provides the
+    standard fake.
+
+    Usage::
+
+        result = runner.invoke(cli, [...], obj=inject_client(mock_client))
     """
 
-    def __init__(self, mocks):
-        object.__setattr__(self, "_mocks", mocks)
-        object.__setattr__(self, "_primary", mocks[0])
+    def factory(auth=None, **kwargs):
+        if recorder is not None:
+            recorder.append((auth, kwargs))
+        return client
 
-    def __getattr__(self, name):
-        return getattr(self._primary, name)
-
-    def __setattr__(self, name, value):
-        if name == "return_value":
-            # Propagate return_value to all mocks
-            for m in self._mocks:
-                m.return_value = value
-        else:
-            setattr(self._primary, name, value)
-
-
-class MultiPatcher:
-    """Context manager that patches ``NotebookLMClient`` in multiple CLI modules.
-
-    Top-level commands are spread across ``notebook_cmd`` / ``chat_cmd`` /
-    ``session_cmd`` / ``share_cmd`` so a single ``patch()`` cannot cover them.
-    Since P3.T0 broke the click-group shadow on the package attributes
-    (modules are now ``*_cmd``), direct string-form ``patch(...)`` works on
-    each module name without needing ``importlib`` indirection.
-    """
-
-    def __init__(self):
-        self.patches = [
-            patch("notebooklm.cli.notebook_cmd.NotebookLMClient"),
-            patch("notebooklm.cli.chat_cmd.NotebookLMClient"),
-            patch("notebooklm.cli.session_cmd.NotebookLMClient"),
-            patch("notebooklm.cli.share_cmd.NotebookLMClient"),
-        ]
-        self.mocks = []
-
-    def __enter__(self):
-        # Start all patches and collect mocks
-        self.mocks = [p.__enter__() for p in self.patches]
-        # Return a proxy that propagates return_value to all mocks
-        return MultiMockProxy(self.mocks)
-
-    def __exit__(self, *args):
-        for p in reversed(self.patches):
-            p.__exit__(*args)
-
-
-def patch_main_cli_client():
-    """Create a context manager that patches NotebookLMClient in CLI command modules.
-
-    After refactoring, top-level commands are in separate modules:
-    - notebook.py: list, create, delete, rename, summary
-    - chat.py: ask, configure, history
-    - session.py: use
-    - share.py: status, public, view-level, add, update, remove
-
-    Returns:
-        A context manager that patches NotebookLMClient in all relevant modules
-
-    Example:
-        with patch_main_cli_client() as mock_cls:
-            mock_client = create_mock_client()
-            mock_cls.return_value = mock_client
-            # ... run test
-    """
-    return MultiPatcher()
+    return {"client_factory": factory}
 
 
 @pytest.fixture

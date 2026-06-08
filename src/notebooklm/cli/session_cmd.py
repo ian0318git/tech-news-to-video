@@ -28,12 +28,11 @@ from __future__ import annotations
 import functools
 import logging
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import click
 import httpx
 
-from ..client import NotebookLMClient
 from ..exceptions import AuthError, NotebookNotFoundError
 from ..paths import get_storage_path
 
@@ -48,7 +47,7 @@ from ._session_render import (
     _render_status,
     _use_notebook_table,
 )
-from .auth_runtime import handle_auth_error, run_client_workflow
+from .auth_runtime import handle_auth_error, resolve_client_factory, run_client_workflow
 from .context import clear_context, set_current_notebook
 from .error_handler import _output_error, exit_with_code, handle_errors
 from .playwright_login_io import (
@@ -97,6 +96,9 @@ from .services.session_context import (
     read_status,
     verify_and_set_notebook,
 )
+
+if TYPE_CHECKING:
+    from ..client import NotebookLMClient
 
 logger = logging.getLogger(__name__)
 
@@ -461,7 +463,7 @@ def register_session_commands(cli):
             command_name="session_use",
             json_output=json_output,
             body=_get,
-            client_factory=NotebookLMClient,
+            client_factory=resolve_client_factory(ctx),
             body_error_handler=_handle_use_verification_error,
         )
 

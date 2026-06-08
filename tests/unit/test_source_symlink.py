@@ -22,7 +22,6 @@ the TOCTOU window).
 
 from __future__ import annotations
 
-import importlib
 import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -34,14 +33,21 @@ from notebooklm import paths as paths_module
 from notebooklm.notebooklm_cli import cli
 from notebooklm.types import Source
 
-# ``cli/__init__.py`` re-exports the ``source`` click Group under that
-# name, which shadows the underlying module. ``import notebooklm.cli.source_cmd``
-# *does* bind to the module via the dotted-path machinery, but
-# ``from notebooklm.cli import source`` would bind to the Group. We use
-# ``importlib.import_module`` here as the explicit, unambiguous form so
-# ``patch.object(_source_module, "NotebookLMClient")`` targets the module
-# attribute the CLI handler actually reads.
-_source_module = importlib.import_module("notebooklm.cli.source_cmd")
+
+def inject_client(client, *, recorder=None):
+    """Local copy of the ``cli/conftest`` helper.
+
+    Defined inline because this test lives in ``tests/unit/`` (outside the
+    ``tests/unit/cli`` package), so it cannot relatively import the shared helper
+    and a cross-package absolute import would be fragile.
+    """
+
+    def factory(auth=None, **kwargs):
+        if recorder is not None:
+            recorder.append((auth, kwargs))
+        return client
+
+    return {"client_factory": factory}
 
 
 @pytest.fixture
@@ -104,9 +110,8 @@ def _make_client() -> MagicMock:
 
 
 def _invoke(runner: CliRunner, mock_client: MagicMock, argv: list[str]):
-    """Run the CLI with NotebookLMClient patched to ``mock_client``."""
-    with patch.object(_source_module, "NotebookLMClient", return_value=mock_client):
-        return runner.invoke(cli, argv, catch_exceptions=False)
+    """Run the CLI with ``mock_client`` injected via ``ctx.obj``."""
+    return runner.invoke(cli, argv, obj=inject_client(mock_client), catch_exceptions=False)
 
 
 class TestAutoDetectFilePath:

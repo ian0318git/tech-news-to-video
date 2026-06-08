@@ -1,6 +1,6 @@
 """Tests for the --prompt-file option across prompt-based CLI commands."""
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import click
 import pytest
@@ -10,7 +10,7 @@ from notebooklm.notebooklm_cli import cli
 from notebooklm.rpc.types import ReportFormat
 from notebooklm.types import AskResult
 
-from .conftest import create_mock_client, research_start
+from .conftest import create_mock_client, inject_client, research_start
 
 
 def make_ask_result(answer: str = "The answer is 42.") -> AskResult:
@@ -99,13 +99,15 @@ class TestAskPromptFile:
         prompt_file = tmp_path / "question.txt"
         prompt_file.write_text("What is 42?", encoding="utf-8")
 
-        with patch("notebooklm.cli.chat_cmd.NotebookLMClient") as mock_client_cls:
-            mock_client = create_mock_client()
-            mock_client.chat.ask = AsyncMock(return_value=make_ask_result())
-            mock_client.chat.get_conversation_id = AsyncMock(return_value=None)
-            mock_client_cls.return_value = mock_client
+        mock_client = create_mock_client()
+        mock_client.chat.ask = AsyncMock(return_value=make_ask_result())
+        mock_client.chat.get_conversation_id = AsyncMock(return_value=None)
 
-            result = runner.invoke(cli, ["ask", "--prompt-file", str(prompt_file), "-n", "nb_123"])
+        result = runner.invoke(
+            cli,
+            ["ask", "--prompt-file", str(prompt_file), "-n", "nb_123"],
+            obj=inject_client(mock_client),
+        )
 
         assert result.exit_code == 0, result.output
         call_args = mock_client.chat.ask.await_args
@@ -125,16 +127,16 @@ class TestGeneratePromptFile:
         prompt_file = tmp_path / "report.txt"
         prompt_file.write_text("Create a white paper about AI trends", encoding="utf-8")
 
-        with patch("notebooklm.cli.generate_cmd.NotebookLMClient") as mock_client_cls:
-            mock_client = create_mock_client()
-            mock_client.artifacts.generate_report = AsyncMock(
-                return_value={"artifact_id": "report_123", "status": "processing"}
-            )
-            mock_client_cls.return_value = mock_client
+        mock_client = create_mock_client()
+        mock_client.artifacts.generate_report = AsyncMock(
+            return_value={"artifact_id": "report_123", "status": "processing"}
+        )
 
-            result = runner.invoke(
-                cli, ["generate", "report", "--prompt-file", str(prompt_file), "-n", "nb_123"]
-            )
+        result = runner.invoke(
+            cli,
+            ["generate", "report", "--prompt-file", str(prompt_file), "-n", "nb_123"],
+            obj=inject_client(mock_client),
+        )
 
         assert result.exit_code == 0, result.output
         call_kwargs = mock_client.artifacts.generate_report.call_args.kwargs
@@ -147,17 +149,16 @@ class TestGeneratePromptFile:
         prompt_file = tmp_path / "table.txt"
         prompt_file.write_text("Compare key concepts", encoding="utf-8")
 
-        with patch("notebooklm.cli.generate_cmd.NotebookLMClient") as mock_client_cls:
-            mock_client = create_mock_client()
-            mock_client.artifacts.generate_data_table = AsyncMock(
-                return_value={"artifact_id": "table_123", "status": "processing"}
-            )
-            mock_client_cls.return_value = mock_client
+        mock_client = create_mock_client()
+        mock_client.artifacts.generate_data_table = AsyncMock(
+            return_value={"artifact_id": "table_123", "status": "processing"}
+        )
 
-            result = runner.invoke(
-                cli,
-                ["generate", "data-table", "--prompt-file", str(prompt_file), "-n", "nb_123"],
-            )
+        result = runner.invoke(
+            cli,
+            ["generate", "data-table", "--prompt-file", str(prompt_file), "-n", "nb_123"],
+            obj=inject_client(mock_client),
+        )
 
         assert result.exit_code == 0, result.output
         call_kwargs = mock_client.artifacts.generate_data_table.call_args.kwargs
@@ -169,25 +170,22 @@ class TestSourceAddResearchPromptFile:
         prompt_file = tmp_path / "research.txt"
         prompt_file.write_text("AI papers", encoding="utf-8")
 
-        with patch("notebooklm.cli.source_cmd.NotebookLMClient") as mock_client_cls:
-            mock_client = create_mock_client()
-            mock_client.research.start = AsyncMock(
-                return_value=research_start({"task_id": "task_123"})
-            )
-            mock_client_cls.return_value = mock_client
+        mock_client = create_mock_client()
+        mock_client.research.start = AsyncMock(return_value=research_start({"task_id": "task_123"}))
 
-            result = runner.invoke(
-                cli,
-                [
-                    "source",
-                    "add-research",
-                    "--prompt-file",
-                    str(prompt_file),
-                    "--no-wait",
-                    "-n",
-                    "nb_123",
-                ],
-            )
+        result = runner.invoke(
+            cli,
+            [
+                "source",
+                "add-research",
+                "--prompt-file",
+                str(prompt_file),
+                "--no-wait",
+                "-n",
+                "nb_123",
+            ],
+            obj=inject_client(mock_client),
+        )
 
         assert result.exit_code == 0, result.output
         mock_client.research.start.assert_awaited_once_with("nb_123", "AI papers", "web", "fast")

@@ -1,17 +1,18 @@
 """Source management CLI commands — thin Click-handler layer (ADR-0008).
 
-Each command builds a ``cli/services/source_*`` plan dataclass and delegates
-to its executor:
+Each command builds a plan dataclass and delegates to its executor. The
+read-only and clean/add cores are transport-neutral (``_app/source_*``); the
+remaining cores still live under ``cli/services/source_*``:
 
+* ``_app/source_content.py``       — data fetchers for get, fulltext, guide, stale
+* ``_app/source_wait.py``          — wait
+* ``_app/source_add.py``           — add
+* ``_app/source_clean.py``         — clean (pure orchestration: classify +
+  batched delete; rendering + exit codes live here in the command layer)
 * ``services/source_listing.py``   — list
 * ``services/source_mutations.py`` — delete, delete-by-title, rename,
   refresh, add-drive
-* ``services/source_content.py``   — data fetchers for get, fulltext, guide, stale
 * ``services/source_research.py``  — add-research
-* ``services/source_wait.py``      — wait
-* ``services/source_add.py``       — add  (pre-T5; T5 added the executor)
-* ``services/source_clean.py``     — clean (pure orchestration: classify +
-  batched delete; rendering + exit codes live here in the command layer)
 
 The full per-command listing lives in the ``source`` click group docstring
 below (it is what ``notebooklm source --help`` shows).
@@ -22,7 +23,27 @@ from typing import Any
 
 import click
 
-from ..client import NotebookLMClient
+from .._app import source_add as source_add_service
+from .._app.source_add import SourceAddExecutionPlan, execute_source_add
+from .._app.source_clean import (
+    SourceCleanResult,
+    candidates_payload,
+    run_source_clean,
+)
+from .._app.source_content import (
+    SourceFulltextPlan,
+    SourceGetPlan,
+    SourceGuidePlan,
+    SourceStalePlan,
+    execute_source_fulltext,
+    execute_source_get,
+    execute_source_guide,
+    execute_source_stale,
+)
+from .._app.source_wait import (
+    SourceWaitPlan,
+    execute_source_wait,
+)
 from ..exceptions import ValidationError
 from ..types import Source
 
@@ -56,7 +77,7 @@ from ._source_render import (  # noqa: F401
     _validate_upload_path,
     source_add_payload,
 )
-from .auth_runtime import with_client
+from .auth_runtime import resolve_client_factory, with_client
 from .error_handler import _output_error, exit_with_code, output_error
 from .input import read_stdin_text, resolve_prompt
 from .options import (
@@ -77,24 +98,7 @@ from .rendering import (
 )
 from .resolve import require_notebook, resolve_notebook_id, resolve_source_id
 from .runtime import is_quiet
-from .services import source_add as source_add_service
 from .services.label_listing import LabelResolutionError
-from .services.source_add import SourceAddExecutionPlan, execute_source_add
-from .services.source_clean import (
-    SourceCleanResult,
-    candidates_payload,
-    run_source_clean,
-)
-from .services.source_content import (
-    SourceFulltextPlan,
-    SourceGetPlan,
-    SourceGuidePlan,
-    SourceStalePlan,
-    execute_source_fulltext,
-    execute_source_get,
-    execute_source_guide,
-    execute_source_stale,
-)
 from .services.source_listing import SourceListPlan, execute_source_list
 from .services.source_mutations import (
     SourceAddDrivePlan,
@@ -114,10 +118,6 @@ from .services.source_research import (
     SourceAddResearchPlan,
     execute_source_add_research,
     validate_add_research_flags,
-)
-from .services.source_wait import (
-    SourceWaitPlan,
-    execute_source_wait,
 )
 
 
@@ -170,7 +170,7 @@ def source_list(ctx, notebook_id, json_output, label_filter, limit, no_truncate,
     nb_id = require_notebook(notebook_id)
 
     async def _run():
-        async with NotebookLMClient(client_auth) as client:
+        async with resolve_client_factory(ctx)(client_auth) as client:
             nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
             plan = SourceListPlan(
                 notebook_id=nb_id_resolved,
@@ -310,7 +310,7 @@ def source_add(
     client_kwargs: dict = {"timeout": timeout} if timeout is not None else {}
 
     async def _run():
-        async with NotebookLMClient(client_auth, **client_kwargs) as client:
+        async with resolve_client_factory(ctx)(client_auth, **client_kwargs) as client:
             nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
             execution_plan = SourceAddExecutionPlan(notebook_id=nb_id_resolved, plan=plan)
             if json_output:
@@ -335,7 +335,7 @@ def source_get(ctx, source_id, notebook_id, json_output, client_auth):
     nb_id = require_notebook(notebook_id)
 
     async def _run():
-        async with NotebookLMClient(client_auth) as client:
+        async with resolve_client_factory(ctx)(client_auth) as client:
             nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
             resolved_id = await resolve_source_id(
                 client, nb_id_resolved, source_id, json_output=json_output
@@ -363,7 +363,7 @@ def source_delete(ctx, source_id, notebook_id, yes, json_output, client_auth):
     nb_id = require_notebook(notebook_id)
 
     async def _run():
-        async with NotebookLMClient(client_auth) as client:
+        async with resolve_client_factory(ctx)(client_auth) as client:
             nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
             try:
                 result = await execute_source_delete(
@@ -394,7 +394,7 @@ def source_delete_by_title(ctx, title, notebook_id, yes, json_output, client_aut
     nb_id = require_notebook(notebook_id)
 
     async def _run():
-        async with NotebookLMClient(client_auth) as client:
+        async with resolve_client_factory(ctx)(client_auth) as client:
             nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
             try:
                 result = await execute_source_delete_by_title(
@@ -425,7 +425,7 @@ def source_rename(ctx, source_id, new_title, notebook_id, json_output, client_au
     nb_id = require_notebook(notebook_id)
 
     async def _run():
-        async with NotebookLMClient(client_auth) as client:
+        async with resolve_client_factory(ctx)(client_auth) as client:
             nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
             result = await execute_source_rename(
                 client,
@@ -451,7 +451,7 @@ def source_refresh(ctx, source_id, notebook_id, json_output, client_auth):
     nb_id = require_notebook(notebook_id)
 
     async def _run():
-        async with NotebookLMClient(client_auth) as client:
+        async with resolve_client_factory(ctx)(client_auth) as client:
             nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
             plan = SourceRefreshPlan(
                 notebook_id=nb_id_resolved,
@@ -485,7 +485,7 @@ def source_add_drive(ctx, file_id, title, notebook_id, mime_type, json_output, c
     nb_id = require_notebook(notebook_id)
 
     async def _run():
-        async with NotebookLMClient(client_auth) as client:
+        async with resolve_client_factory(ctx)(client_auth) as client:
             nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
             plan = SourceAddDrivePlan(
                 notebook_id=nb_id_resolved,
@@ -578,7 +578,7 @@ def source_add_research(
     nb_id = require_notebook(notebook_id)
 
     async def _run():
-        async with NotebookLMClient(client_auth) as client:
+        async with resolve_client_factory(ctx)(client_auth) as client:
             nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
             if not json_output:
                 console.print(f"[yellow]Starting {mode} research on {search_source}...[/yellow]")
@@ -656,7 +656,7 @@ def source_fulltext(
     )
 
     async def _run():
-        async with NotebookLMClient(client_auth) as client:
+        async with resolve_client_factory(ctx)(client_auth) as client:
             nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
             resolved_id = await resolve_source_id(
                 client, nb_id_resolved, source_id, json_output=json_output
@@ -694,7 +694,7 @@ def source_guide(ctx, source_id, notebook_id, json_output, client_auth):
     nb_id = require_notebook(notebook_id)
 
     async def _run():
-        async with NotebookLMClient(client_auth) as client:
+        async with resolve_client_factory(ctx)(client_auth) as client:
             nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
             resolved_id = await resolve_source_id(
                 client, nb_id_resolved, source_id, json_output=json_output
@@ -747,7 +747,7 @@ def source_stale(ctx, source_id, notebook_id, exit_on_stale, json_output, client
     nb_id = require_notebook(notebook_id)
 
     async def _run():
-        async with NotebookLMClient(client_auth) as client:
+        async with resolve_client_factory(ctx)(client_auth) as client:
             nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
             resolved_id = await resolve_source_id(
                 client, nb_id_resolved, source_id, json_output=json_output
@@ -782,7 +782,7 @@ def source_wait(ctx, source_id, notebook_id, timeout, interval, json_output, cli
     nb_id = require_notebook(notebook_id)
 
     async def _run():
-        async with NotebookLMClient(client_auth) as client:
+        async with resolve_client_factory(ctx)(client_auth) as client:
             nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
             resolved_id = await resolve_source_id(
                 client, nb_id_resolved, source_id, json_output=json_output
@@ -822,7 +822,7 @@ def source_clean(ctx, notebook_id, dry_run, yes, json_output, client_auth):
     quiet_mode = is_quiet(ctx)
 
     async def _run():
-        async with NotebookLMClient(client_auth) as client:
+        async with resolve_client_factory(ctx)(client_auth) as client:
             nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
 
             async def _list_sources(notebook_id_inner: str) -> list[Source]:
@@ -879,7 +879,7 @@ def _dispatch_source_clean_result(
     """Render the source-clean outcome and exit per the result's status.
 
     Owns the Click-side rendering + exit-code policy, kept separate from
-    ``execute_source_clean`` in :mod:`.services.source_clean`.
+    ``execute_source_clean`` in :mod:`.._app.source_clean`.
     Keeping presentation here lets the service module stay free of
     ``click`` / ``..rendering`` / ``..error_handler`` imports.
     """

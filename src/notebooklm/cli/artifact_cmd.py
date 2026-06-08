@@ -12,6 +12,10 @@ Commands:
     suggestions Get AI-suggested report topics
 """
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import click
 from rich.table import Table
 
@@ -24,9 +28,8 @@ from .._app.artifacts import (
     retry_artifact,
     wait_for_artifact,
 )
-from ..client import NotebookLMClient
 from ..exceptions import ArtifactNotFoundError
-from .auth_runtime import with_client
+from .auth_runtime import resolve_client_factory, with_client
 from .error_handler import _output_error, exit_with_code
 from .options import json_option, list_options, notebook_option, wait_polling_options
 from .polling_ui import status_with_elapsed
@@ -45,6 +48,9 @@ from .resolve import (
 )
 from .services.confirming_mutation import MutationPlan, run_confirmed_mutation
 from .services.listing import ListSpec, prepare_list
+
+if TYPE_CHECKING:
+    from ..client import NotebookLMClient
 
 
 @click.group()
@@ -108,7 +114,7 @@ def artifact_list(ctx, notebook_id, artifact_type, json_output, limit, no_trunca
     type_filter = cli_name_to_artifact_type(artifact_type)
 
     async def _run():
-        async with NotebookLMClient(client_auth) as client:
+        async with resolve_client_factory(ctx)(client_auth) as client:
             nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
 
             async def envelope_extras(
@@ -172,7 +178,7 @@ def artifact_get(ctx, artifact_id, notebook_id, json_output, client_auth):
     nb_id = require_notebook(notebook_id)
 
     async def _run():
-        async with NotebookLMClient(client_auth) as client:
+        async with resolve_client_factory(ctx)(client_auth) as client:
             nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
             resolved_id = await resolve_artifact_id(
                 client, nb_id_resolved, artifact_id, json_output=json_output
@@ -237,7 +243,7 @@ def artifact_rename(ctx, artifact_id, new_title, notebook_id, json_output, clien
     nb_id = require_notebook(notebook_id)
 
     async def _run():
-        async with NotebookLMClient(client_auth) as client:
+        async with resolve_client_factory(ctx)(client_auth) as client:
             nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
             resolved_id = await resolve_artifact_id(
                 client, nb_id_resolved, artifact_id, json_output=json_output
@@ -273,7 +279,7 @@ def artifact_delete(ctx, artifact_id, notebook_id, yes, json_output, client_auth
     nb_id = require_notebook(notebook_id)
 
     async def _run():
-        async with NotebookLMClient(client_auth) as client:
+        async with resolve_client_factory(ctx)(client_auth) as client:
 
             async def resolve_delete(client):
                 nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
@@ -381,7 +387,7 @@ def artifact_export(ctx, artifact_id, notebook_id, title, export_type, json_outp
     nb_id = require_notebook(notebook_id)
 
     async def _run():
-        async with NotebookLMClient(client_auth) as client:
+        async with resolve_client_factory(ctx)(client_auth) as client:
             nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
             resolved_id = await resolve_artifact_id(
                 client, nb_id_resolved, artifact_id, json_output=json_output
@@ -441,7 +447,7 @@ def artifact_poll(ctx, task_id, notebook_id, json_output, client_auth):
     nb_id = require_notebook(notebook_id)
 
     async def _run():
-        async with NotebookLMClient(client_auth) as client:
+        async with resolve_client_factory(ctx)(client_auth) as client:
             nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
             status = await poll_artifact(client, nb_id_resolved, task_id)
 
@@ -498,7 +504,7 @@ def artifact_wait(ctx, artifact_id, notebook_id, timeout, interval, json_output,
     nb_id = require_notebook(notebook_id)
 
     async def _run():
-        async with NotebookLMClient(client_auth) as client:
+        async with resolve_client_factory(ctx)(client_auth) as client:
             nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
             resolved_id = await resolve_artifact_id(
                 client, nb_id_resolved, artifact_id, json_output=json_output
@@ -606,7 +612,7 @@ def artifact_retry(
     nb_id = require_notebook(notebook_id)
 
     async def _run():
-        async with NotebookLMClient(client_auth) as client:
+        async with resolve_client_factory(ctx)(client_auth) as client:
             nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
             resolved_id = await resolve_artifact_id(
                 client, nb_id_resolved, artifact_id, json_output=json_output
@@ -707,7 +713,7 @@ def artifact_suggestions(ctx, notebook_id, json_output, client_auth):
     nb_id = require_notebook(notebook_id)
 
     async def _run():
-        async with NotebookLMClient(client_auth) as client:
+        async with resolve_client_factory(ctx)(client_auth) as client:
             nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
             suggestions = await client.artifacts.suggest_reports(nb_id_resolved)
 

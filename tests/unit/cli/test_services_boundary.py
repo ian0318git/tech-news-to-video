@@ -111,12 +111,9 @@ FORBIDDEN_ABSOLUTE_TARGETS = frozenset(
 GUARDED_PATHS = {
     "cli/services/auth_diagnostics.py": SERVICES_ROOT / "auth_diagnostics.py",
     "cli/services/auth_source.py": SERVICES_ROOT / "auth_source.py",
-    "cli/services/artifact_generation.py": SERVICES_ROOT / "artifact_generation.py",
-    "cli/services/chat.py": SERVICES_ROOT / "chat.py",
     "cli/services/confirming_mutation.py": SERVICES_ROOT / "confirming_mutation.py",
     "cli/services/download.py": SERVICES_ROOT / "download.py",
     "cli/services/generate.py": SERVICES_ROOT / "generate.py",
-    "cli/services/generate_plans.py": SERVICES_ROOT / "generate_plans.py",
     "cli/services/label_listing.py": SERVICES_ROOT / "label_listing.py",
     "cli/services/listing.py": SERVICES_ROOT / "listing.py",
     "cli/services/login/browser_accounts.py": SERVICES_ROOT / "login" / "browser_accounts.py",
@@ -136,15 +133,10 @@ GUARDED_PATHS = {
     "cli/services/polling.py": SERVICES_ROOT / "polling.py",
     "cli/services/research.py": SERVICES_ROOT / "research.py",
     "cli/services/session_context.py": SERVICES_ROOT / "session_context.py",
-    "cli/services/skill_install.py": SERVICES_ROOT / "skill_install.py",
-    "cli/services/source_clean.py": SERVICES_ROOT / "source_clean.py",
-    "cli/services/source_add.py": SERVICES_ROOT / "source_add.py",
-    "cli/services/source_content.py": SERVICES_ROOT / "source_content.py",
     "cli/services/source_listing.py": SERVICES_ROOT / "source_listing.py",
     "cli/services/source_mutations.py": SERVICES_ROOT / "source_mutations.py",
     "cli/services/source_research.py": SERVICES_ROOT / "source_research.py",
     "cli/services/source_serializers.py": SERVICES_ROOT / "source_serializers.py",
-    "cli/services/source_wait.py": SERVICES_ROOT / "source_wait.py",
 }
 
 # Stage 3 migration inventory. These modules currently own presentation

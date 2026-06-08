@@ -9,8 +9,10 @@ Commands:
     delete  Delete a note
 """
 
+from __future__ import annotations
+
 from dataclasses import asdict
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import click
 
@@ -22,9 +24,8 @@ from .._app.notes import (
     execute_note_save,
     resolve_note_for_delete,
 )
-from ..client import NotebookLMClient
 from ..types import Note
-from .auth_runtime import with_client
+from .auth_runtime import resolve_client_factory, with_client
 from .error_handler import _output_error
 from .input import read_stdin_text
 from .options import json_option, notebook_option
@@ -32,6 +33,9 @@ from .rendering import cli_print, console, json_output_response, render_list
 from .resolve import require_notebook, resolve_note_id, resolve_notebook_id
 from .services.confirming_mutation import MutationPlan, run_confirmed_mutation
 from .services.listing import ListSpec, prepare_list
+
+if TYPE_CHECKING:
+    from ..client import NotebookLMClient
 
 
 @click.group()
@@ -64,7 +68,7 @@ def note_list(ctx, notebook_id, json_output, client_auth):
     nb_id = require_notebook(notebook_id)
 
     async def _run():
-        async with NotebookLMClient(client_auth) as client:
+        async with resolve_client_factory(ctx)(client_auth) as client:
             nb_id_resolved = await resolve_notebook_id(client, nb_id, json_output=json_output)
 
             async def fetch_notes(client: NotebookLMClient, notebook_id: str) -> list[Note]:
@@ -161,7 +165,7 @@ def note_create(ctx, content, content_flag, notebook_id, title, json_output, cli
     nb_id = require_notebook(notebook_id)
 
     async def _run():
-        async with NotebookLMClient(client_auth) as client:
+        async with resolve_client_factory(ctx)(client_auth) as client:
             create_result = await execute_note_create(
                 client,
                 nb_id,
@@ -217,7 +221,7 @@ def note_get(ctx, note_id, notebook_id, json_output, client_auth):
     nb_id = require_notebook(notebook_id)
 
     async def _run():
-        async with NotebookLMClient(client_auth) as client:
+        async with resolve_client_factory(ctx)(client_auth) as client:
             get_result = await execute_note_get(
                 client,
                 nb_id,
@@ -314,7 +318,7 @@ def note_save(ctx, note_id, notebook_id, title, content, json_output, client_aut
     nb_id = require_notebook(notebook_id)
 
     async def _run():
-        async with NotebookLMClient(client_auth) as client:
+        async with resolve_client_factory(ctx)(client_auth) as client:
             save_result = await execute_note_save(
                 client,
                 nb_id,
@@ -360,7 +364,7 @@ def note_rename(ctx, note_id, new_title, notebook_id, json_output, client_auth):
     nb_id = require_notebook(notebook_id)
 
     async def _run():
-        async with NotebookLMClient(client_auth) as client:
+        async with resolve_client_factory(ctx)(client_auth) as client:
             # The rename core resolves both ids, fetches the current note to
             # preserve its content, and performs the update. The note may have
             # disappeared between ``resolve_note_id`` and the content-preserving
@@ -423,7 +427,7 @@ def note_delete(ctx, note_id, notebook_id, yes, json_output, client_auth):
     nb_id = require_notebook(notebook_id)
 
     async def _run():
-        async with NotebookLMClient(client_auth) as client:
+        async with resolve_client_factory(ctx)(client_auth) as client:
 
             async def resolve_delete(client):
                 nb_id_resolved, resolved_id = await resolve_note_for_delete(
