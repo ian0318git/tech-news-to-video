@@ -23,6 +23,7 @@ from typing import Any
 import click
 
 from ..client import NotebookLMClient
+from ..exceptions import ValidationError
 from ..types import Source
 
 # Render/validation helpers live in ``_source_render``; re-exported here so the
@@ -53,6 +54,7 @@ from ._source_render import (  # noqa: F401
     _render_source_wait_outcome,
     _resolve_source_fulltext_output_path,
     _validate_upload_path,
+    source_add_payload,
 )
 from .auth_runtime import with_client
 from .error_handler import _output_error, exit_with_code, output_error
@@ -111,6 +113,7 @@ from .services.source_mutations import (
 from .services.source_research import (
     SourceAddResearchPlan,
     execute_source_add_research,
+    validate_add_research_flags,
 )
 from .services.source_wait import (
     SourceWaitPlan,
@@ -304,9 +307,7 @@ def source_add(
     for warning in plan.warnings:
         click.echo(warning, err=True)
 
-    client_kwargs: dict = {}
-    if timeout is not None:
-        client_kwargs["timeout"] = timeout
+    client_kwargs: dict = {"timeout": timeout} if timeout is not None else {}
 
     async def _run():
         async with NotebookLMClient(client_auth, **client_kwargs) as client:
@@ -314,7 +315,7 @@ def source_add(
             execution_plan = SourceAddExecutionPlan(notebook_id=nb_id_resolved, plan=plan)
             if json_output:
                 result = await execute_source_add(client, execution_plan)
-                json_output_response(result.payload)
+                json_output_response(source_add_payload(result))
                 return
 
             with cli_status(f"Adding {plan.detected_type} source...", ctx=ctx):
@@ -564,20 +565,15 @@ def source_add_research(
     ``--prompt-file``.
     """
     query = resolve_prompt(query, prompt_file, "query", required=True)
-    if cited_only and not import_all:
-        # ADR-0015 §2: under --json route through the typed envelope; preserve
-        # Click's parser-style ``UsageError`` (exit 2 with usage text) in text
-        # mode so interactive callers still see the canonical conflict prose.
-        _emit_add_research_flag_conflict(
-            "--cited-only requires --import-all", json_output=json_output
-        )
-    # --no-wait + --import-all is silently broken — refuse it.
-    if no_wait and import_all:
-        _emit_add_research_flag_conflict(
-            "--import-all requires --wait (the default) or a separate "
-            "'research wait --import-all' after --no-wait.",
-            json_output=json_output,
-        )
+    # Flag-combination rules live in the neutral ``_app`` core as a pure
+    # ``validate_*`` raising ``ValidationError``; the command maps that to the
+    # CLI conflict contract (ADR-0015 §2): under --json route through the typed
+    # envelope, otherwise preserve Click's parser-style ``UsageError`` (exit 2
+    # with usage text) so interactive callers still see the canonical prose.
+    try:
+        validate_add_research_flags(import_all=import_all, cited_only=cited_only, no_wait=no_wait)
+    except ValidationError as exc:
+        _emit_add_research_flag_conflict(str(exc), json_output=json_output)
 
     nb_id = require_notebook(notebook_id)
 
@@ -798,7 +794,6 @@ def source_wait(ctx, source_id, notebook_id, timeout, interval, json_output, cli
                     source_id=resolved_id,
                     timeout=float(timeout),
                     interval=float(interval),
-                    json_output=json_output,
                 ),
                 wait_context=lambda: status_with_elapsed(
                     f"Waiting for source {resolved_id} to finish processing...",
