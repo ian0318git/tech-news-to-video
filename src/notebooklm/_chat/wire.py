@@ -510,6 +510,11 @@ def parse_citations(first: list) -> list[ChatReference]:
         try:
             ref = parse_single_citation(cite)
         except (IndexError, TypeError, AttributeError) as exc:
+            # These three cover the current call graph: parse_single_citation
+            # and its CitationRow/CitationDetail adapters use length-guarded
+            # positional access throughout (no dict access, no int()/explicit
+            # raises), so ValueError/KeyError are unreachable. Revisit this
+            # tuple if those adapters ever gain either.
             logger.warning(
                 "Skipping malformed citation entry (%s: %s; cite=%s) [%s]",
                 type(exc).__name__,
