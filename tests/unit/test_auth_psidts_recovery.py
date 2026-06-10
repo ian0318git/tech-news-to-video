@@ -326,6 +326,65 @@ class TestPsidtsExpiryGate:
         assert len(fresh) == 1
 
     @pytest.mark.no_default_keepalive_mock
+    def test_in_memory_split_state_emits_one_row_per_sidts(self, httpx_mock: HTTPXMock):
+        """Split-state recovery must not write a DUPLICATE SIDTS row (issue #1523).
+
+        Trigger: ``__Secure-1PSIDTS`` missing/expired so recovery fires, but a
+        fresh ``__Secure-3PSIDTS`` is already in the source jar. RotateCookies
+        rotates BOTH; the append loop must end with EXACTLY ONE row per
+        ``(name, domain, path)`` carrying the ROTATED value — no second
+        ``__Secure-3PSIDTS`` (or ``__Secure-1PSIDTS``) row that has no analog in
+        any real browser jar.
+        """
+        now = time.time()
+        cookies = [
+            {"name": "SID", "value": "s", "domain": ".google.com", "path": "/"},
+            {"name": "APISID", "value": "a", "domain": ".google.com", "path": "/"},
+            {"name": "SAPISID", "value": "sa", "domain": ".google.com", "path": "/"},
+            # __Secure-1PSIDTS expired → recovery fires.
+            {
+                "name": "__Secure-1PSIDTS",
+                "value": "stale_1psidts",
+                "domain": ".google.com",
+                "path": "/",
+                "expires": now - 3600,
+            },
+            # __Secure-3PSIDTS fresh and already present → would duplicate.
+            {
+                "name": "__Secure-3PSIDTS",
+                "value": "stale_3psidts",
+                "domain": ".google.com",
+                "path": "/",
+                "expires": now + 3600,
+            },
+        ]
+        httpx_mock.add_response(url=_ROTATE_URL_RE, **_make_psidts_response())
+
+        assert psidts_recovery.recover_psidts_in_memory(cookies) is True
+
+        for name, rotated in (
+            ("__Secure-1PSIDTS", "fresh_psidts_value"),
+            ("__Secure-3PSIDTS", "fresh_3psidts_value"),
+        ):
+            rows = [c for c in cookies if c["name"] == name]
+            assert len(rows) == 1, f"{name} duplicated: {rows}"
+            assert rows[0]["value"] == rotated, f"{name} did not carry the rotated value"
+
+        # The resulting storage_state must likewise hold exactly one row each.
+        from notebooklm._auth import cookies as _auth_cookies
+
+        state = _auth_cookies.convert_rookiepy_cookies_to_storage_state(cookies)
+        for name in ("__Secure-1PSIDTS", "__Secure-3PSIDTS"):
+            state_rows = [c for c in state["cookies"] if c["name"] == name]
+            assert len(state_rows) == 1, f"{name} duplicated on disk: {state_rows}"
+
+        # Auth-relevant binding cookies are all still present and correct.
+        names = {c["name"]: c["value"] for c in cookies}
+        assert names["SID"] == "s"
+        assert names["APISID"] == "a"
+        assert names["SAPISID"] == "sa"
+
+    @pytest.mark.no_default_keepalive_mock
     def test_in_memory_present_and_fresh_skips_recovery(self, httpx_mock: HTTPXMock):
         now = time.time()
         cookies = [

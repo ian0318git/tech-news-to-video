@@ -73,6 +73,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per-product `OSID` cookie on `notebooklm.google.com` and
   `myaccount.google.com` as distinct jar entries.
 
+- **Split-state PSIDTS recovery no longer writes a duplicate
+  `__Secure-3PSIDTS` row to `storage_state.json`** (#1523). On the
+  `--browser-cookies` path, when `__Secure-1PSIDTS` is missing/expired (so
+  recovery fires) but a fresh `__Secure-3PSIDTS` is already in the source jar,
+  Google's `RotateCookies` POST returns both rotated SIDTS cookies and the
+  in-memory recovery append loop emitted a second `__Secure-3PSIDTS` (and a
+  stale `__Secure-1PSIDTS` twin) entry with no analog in any real browser jar.
+  Auth still worked (the row is deduped on load), but the on-disk artifact
+  diverged from the true cookie set. `recover_psidts_in_memory` now keys the
+  source jar by RFC 6265 identity `(name, domain, path)` (path normalized via
+  `or "/"`, matching every loader) and overwrites the existing row in place
+  with the rotated occurrence instead of appending — exactly one row per key,
+  carrying the fresh value, mirroring the last-occurrence-wins dedup added to
+  `filter_storage_state_cookies_by_domain_policy` in #1513.
+
 - **`sources.add_text` no longer swallows typed transport errors into
   `SourceAddError`.** Its bare `except RPCError` wrapped *everything* —
   including the `RPCError` subclasses `RateLimitError`, `AuthError`, and
