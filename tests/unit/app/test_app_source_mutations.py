@@ -24,6 +24,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from notebooklm._app.resolve import resolve_ref
 from notebooklm._app.source_mutations import (
     SourceAddDrivePlan,
     SourceDeleteByTitlePlan,
@@ -150,12 +151,46 @@ class TestResolveSourceForDelete:
         assert resolution.status_message is None
 
     @pytest.mark.asyncio
+    async def test_exact_match_wins_over_prefix_ambiguity(self) -> None:
+        # "abc" is an exact (case-insensitive) match for the first source AND a
+        # strict prefix of "abcdef" — exact must win and not report ambiguity,
+        # mirroring resolve_ref / resolve_partial_id_in_items Rule 3 so delete
+        # stays in lockstep with get/rename/refresh (issue #1522).
+        client = _client(
+            sources=[Source(id="abc", title="Exact"), Source(id="abcdef", title="Prefixed")]
+        )
+        resolution = await resolve_source_for_delete(client, "nb_1", "abc")
+        assert resolution.source_id == "abc"
+        # An exact match is not a partial expansion, so no "Matched:" prose.
+        assert resolution.status_message is None
+
+    @pytest.mark.asyncio
+    async def test_exact_match_wins_case_insensitive(self) -> None:
+        # Exact match is case-insensitive and returns the source's canonical id.
+        client = _client(
+            sources=[Source(id="ABC", title="Exact"), Source(id="abcdef", title="Prefixed")]
+        )
+        resolution = await resolve_source_for_delete(client, "nb_1", "abc")
+        assert resolution.source_id == "ABC"
+        assert resolution.status_message is None
+
+    @pytest.mark.asyncio
     async def test_ambiguous_partial_raises(self) -> None:
         client = _client(
             sources=[Source(id="src_aaa111", title="One"), Source(id="src_aaa222", title="Two")]
         )
         with pytest.raises(SourceMutationError) as exc:
             await resolve_source_for_delete(client, "nb_1", "src_aaa")
+        assert exc.value.code == "AMBIGUOUS_ID"
+
+    @pytest.mark.asyncio
+    async def test_genuine_ambiguity_without_exact_still_raises(self) -> None:
+        # Two strict prefixes and NO exact match → genuine ambiguity is preserved.
+        client = _client(
+            sources=[Source(id="abc111", title="One"), Source(id="abc222", title="Two")]
+        )
+        with pytest.raises(SourceMutationError) as exc:
+            await resolve_source_for_delete(client, "nb_1", "abc")
         assert exc.value.code == "AMBIGUOUS_ID"
 
     @pytest.mark.asyncio
@@ -172,6 +207,17 @@ class TestResolveSourceForDelete:
         with pytest.raises(SourceMutationError) as exc:
             await resolve_source_for_delete(client, "nb_1", "zzz")
         assert exc.value.code == "NOT_FOUND"
+
+    @pytest.mark.asyncio
+    async def test_exact_match_parity_with_shared_resolver(self) -> None:
+        # Parity guard (issue #1522): delete's bespoke resolver must agree with
+        # the canonical resolve_ref on the exact-match-wins outcome, the rule
+        # get/rename/refresh already get for free via resolve_source_id.
+        sources = [Source(id="abc", title="Exact"), Source(id="abcdef", title="Prefixed")]
+        client = _client(sources=sources)
+        resolution = await resolve_source_for_delete(client, "nb_1", "abc")
+        shared = resolve_ref("abc", sources, id_of=lambda s: s.id, title_of=lambda s: s.title)
+        assert resolution.source_id == shared.id == "abc"
 
     @pytest.mark.asyncio
     async def test_injected_validate_id_runs_first(self) -> None:

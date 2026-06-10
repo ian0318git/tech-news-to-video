@@ -74,6 +74,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   This is the production sibling of the timezone slip pinned out of the #1511
   golden VCR test.
 
+- **`source delete` now honors exact-id-wins over prefix matching, in lockstep
+  with `source get` / `rename` / `refresh`** (#1522). The delete-path resolver
+  (`_app/source_mutations.resolve_source_for_delete`) built its prefix-match
+  list and branched solely on `len(matches)` with no exact-id short-circuit, so
+  `source delete abc` raised `AMBIGUOUS_ID` when a notebook held both `abc` and
+  `abcdef` — even though the shared resolvers (`cli.resolve.resolve_partial_id_in_items`
+  and its `_app` twin `_app.resolve.resolve_ref`) both return on an exact
+  (case-insensitive) id match before evaluating prefixes, so the other verbs
+  resolved the same input. The delete resolver now mirrors that Rule 3: a
+  source whose id equals the input (case-insensitively) wins over any
+  longer-id prefix match (and is not treated as a partial expansion, so no
+  "Matched:" prose is emitted). Genuine prefix ambiguity (two strict prefixes,
+  no exact match) and the not-found / title-instead-of-id paths are unchanged.
 - **Playwright login: closing the browser during the final storage-state
   capture now shows the browser-closed help instead of a bug-report prompt**
   (#1514, deferred from the #1512 review). Every in-flow Playwright call in

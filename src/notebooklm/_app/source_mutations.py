@@ -224,7 +224,22 @@ async def resolve_source_for_delete(
         return SourceIdResolution(source_id=source_id)
 
     sources = await client.sources.list(notebook_id)
-    matches = [item for item in sources if item.id.lower().startswith(source_id.lower())]
+    # Exact (case-insensitive) id match wins over prefix matching — mirroring
+    # the shared resolvers' Rule 3 (``_app.resolve.resolve_ref`` /
+    # ``cli.resolve.resolve_partial_id_in_items``) so ``source delete X`` stays
+    # in lockstep with ``source get/rename/refresh X``. Without this, a
+    # short-but-complete id that is also a strict prefix of another source's id
+    # (e.g. ``abc`` vs ``abcdef``) would be reported as AMBIGUOUS_ID here while
+    # the other verbs resolve it (issue #1522). An exact match is not a partial
+    # expansion, so no "Matched:" status prose is emitted.
+    source_id_lower = source_id.lower()
+    matches = []
+    for item in sources:
+        item_id_lower = item.id.lower()
+        if item_id_lower == source_id_lower:
+            return SourceIdResolution(source_id=item.id)
+        if item_id_lower.startswith(source_id_lower):
+            matches.append(item)
 
     if len(matches) == 1:
         status_message = None
