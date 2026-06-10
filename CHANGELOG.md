@@ -134,6 +134,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   friendly-message + exit-1 CLI contract. The `--json profile list` path keeps
   its existing `handle_errors` envelope (an unexpected `OSError` there stays the
   `UNEXPECTED_ERROR` / exit-2 contract automation relies on).
+- **Runtime secret redaction now derives from one canonical registry, closing
+  several credential-disclosure gaps** (#1517, #1518). The logging redaction
+  cookie-name alternation in `_logging.py` was hand-enumerated and had drifted
+  from the project's own cassette sanitizer: the session cookies `NID`,
+  `LSOLH`, and `__Host-GAPS` (classified must-scrub by
+  `tests/cassette_patterns.py`) were absent, so a bare `NID=g.a000-…` token —
+  exactly what `_auth/refresh.py` logs at DEBUG from refresh-command
+  stdout/stderr through the redacting logger — passed through `scrub_secrets`
+  verbatim (#1517). Google API keys (`AIza…`) and any future `__Secure-*` /
+  `__Host-*` cookie carrying an opaque (non-token-shaped) value were also not
+  redacted at runtime. Separately, `UnknownRPCMethodError.data_at_failure` was
+  spliced unscrubbed with `!r` into `__str__` / `__repr__` / tracebacks (a
+  string splice that bypasses the logging `RedactingFilter`), unlike the
+  sibling `raw_response` which was already scrubbed, so a credential-shaped
+  indexed value leaked through every rendering regardless of `NOTEBOOKLM_DEBUG`
+  (#1518). All are fixed by a single canonical runtime registry
+  (`notebooklm._secrets`): `RUNTIME_SESSION_COOKIES` (the bare must-scrub cookie
+  names the redaction alternation now derives from), `SECURE_HOST_UMBRELLA_PATTERNS`
+  (`__Secure-*` / `__Host-*` prefix umbrellas whose name class spans the full
+  RFC 6265 `token` charset — any future secure/host cookie name fails closed by
+  construction), and `AUTH_TOKEN_SHAPE_PATTERNS` (carrier-agnostic
+  `g.a000-` / `sidts-` / `ya29.` token catch-alls plus the `AIza…` Google
+  API-key shape, ported from the cassette registry as defense in depth so a
+  secret under an unknown carrier name still fails closed). `data_at_failure`
+  (and the already-scrubbed `AuthExtractionError.payload_preview`) are routed
+  through `scrub_secrets`, so all three additions cover the exception surfaces
+  too. Every name-anchored value pattern (cookies, the `__Secure-*`/`__Host-*`
+  umbrellas, and the `at=`/`csrf=`/`f.sid=`/`upload_id=`/OAuth/`Bearer` query +
+  header forms) now also redacts an RFC 6265 / JSON **double-quoted** value
+  (`SID="opaque"`, `f.sid="opaque"`): the value class excluded `"`, so a quoted
+  value made the whole pattern miss and leaked verbatim — the optional
+  surrounding quotes redact the inner value while preserving the quotes. A
+  parity guardrail
+  (`tests/_guardrails/test_runtime_secret_registry_parity.py`) asserts the
+  runtime registry stays in lockstep with the cassette sanitizer on every axis:
+  bare-cookie superset, secure/host umbrella coverage by construction, and
+  regex-string equality of the credential-shape set — so a new must-scrub shape
+  added to the cassette registry forces the runtime registry to keep up.
 - **Playwright login: closing the browser during the final storage-state
   capture now shows the browser-closed help instead of a bug-report prompt**
   (#1514, deferred from the #1512 review). Every in-flow Playwright call in
