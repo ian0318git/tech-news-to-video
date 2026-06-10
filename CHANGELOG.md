@@ -73,6 +73,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only the rendered string changes (now offset-aware, identical everywhere).
   This is the production sibling of the timezone slip pinned out of the #1511
   golden VCR test.
+- **Artifact downloads re-validate every redirect hop against the trusted-host
+  allowlist (SSRF-adjacent)** (#1521). Both download clients
+  (`download_url` single + `download_urls_batch`) use
+  `follow_redirects=True`, but the host-allowlist + HTTPS gate validated only
+  the *initial* URL. A trusted Google URL whose `Location` pointed
+  off-allowlist — a non-HTTPS hop, or a private/link-local host such as
+  `169.254.169.254` / `localhost` — was followed and its body written to the
+  caller's `output_path`, defeating the explicit allowlist. (Google session
+  cookies were already not leaked to a non-Google redirect host — the stdlib
+  cookie policy is domain-scoped — so this never exposed credentials; the
+  residual harm was attacker-influenced bytes landing on the filesystem.) Both
+  clients now attach an httpx `request` event hook that re-checks every hop's
+  host + scheme **before the request is sent**, raising `ArtifactDownloadError`
+  on the first off-allowlist or non-HTTPS hop so the untrusted host never
+  receives a connection. Legitimate trusted→trusted redirects (Google
+  signed-URL CDNs already on the allowlist) are unaffected. The host-allowlist
+  check (`_is_trusted_download_host`) also no longer percent-decodes the host
+  before matching: decoding created a parser differential where
+  `evil%2egoogleapis.com` (`%2e`→`.`) was judged trusted while httpx connected
+  to the raw, non-Google host — the guard now matches the exact host httpx
+  connects to and rejects any host containing `%`.
 
 - **`source delete` now honors exact-id-wins over prefix matching, in lockstep
   with `source get` / `rename` / `refresh`** (#1522). The delete-path resolver

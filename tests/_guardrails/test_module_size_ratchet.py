@@ -80,7 +80,17 @@ ALLOWLISTED_CEILINGS: dict[str, int] = {
     "_artifacts.py": 1451,
     "_source/upload.py": 1236,
     "_sources.py": 1007,
-    "_artifact/downloads.py": 1033,
+    # _artifact/downloads.py: raised for the #1521 per-redirect-hop revalidation
+    # fix. The new *logic* (host+scheme hop guard + httpx event-hook factory) was
+    # *split out* into the sibling ``_artifact/_redirect_guard.py`` per this
+    # gate's "split out the new bulk" rule; the residual growth is irreducible
+    # in-place edits: call-site wiring (one import + the ``event_hooks=`` kwarg on
+    # each of the two ``httpx.AsyncClient(...)`` constructions) plus a security
+    # comment in ``_is_trusted_download_host`` documenting the percent-encode
+    # parser-differential bypass the re-review caught (dropping the ``unquote``
+    # decode + rejecting any ``%`` in the host). New ceiling is the measured
+    # post-fix LOC.
+    "_artifact/downloads.py": 1041,
     # client.py dropped below the budget when its ``__init__`` body moved to
     # ``_client_assembly.py`` (the shared constructor/test-factory seam), so
     # its ceiling entry was removed per the one-way-ratchet rule.
