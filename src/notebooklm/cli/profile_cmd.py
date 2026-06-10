@@ -112,7 +112,17 @@ def list_cmd(json_output):
         with handle_errors(json_output=True):
             _run_list_cmd(json_output=True)
         return
-    _run_list_cmd(json_output=False)
+    # The text path was previously unwrapped, so a filesystem failure while
+    # enumerating profiles escaped as a raw traceback. Mirror ``switch_cmd``'s
+    # OSError handling for a friendly message + exit 1. (The ``--json`` path
+    # above keeps its ``handle_errors`` envelope, which classifies an unexpected
+    # OSError as the exit-2 ``UNEXPECTED_ERROR`` contract automation relies on.)
+    try:
+        _run_list_cmd(json_output=False)
+    except OSError as e:
+        raise click.ClickException(  # cli-input-validation: profile list filesystem failure
+            f"Failed to list profiles: {e}"
+        ) from None
 
 
 def _run_list_cmd(*, json_output: bool) -> None:
@@ -191,7 +201,15 @@ def create_cmd(name):
             f"Profile '{name}' already exists."
         )
 
-    get_profile_dir(name, create=True)
+    # Mirror ``switch_cmd``'s OSError handling: a filesystem failure while
+    # materializing the profile directory (read-only mount, permissions) yields
+    # a friendly message + exit 1 via Click, never a raw traceback.
+    try:
+        get_profile_dir(name, create=True)
+    except OSError as e:
+        raise click.ClickException(  # cli-input-validation: profile create filesystem failure
+            f"Failed to create profile '{name}': {e}"
+        ) from None
     console.print(f"[green]Profile '{name}' created.[/green]")
     console.print(f"[dim]Run 'notebooklm -p {name} login' to authenticate.[/dim]")
 
@@ -293,7 +311,16 @@ def delete_cmd(name, yes, confirm):
             console.print("[dim]Cancelled.[/dim]")
             return
 
-    shutil.rmtree(profile_dir)
+    # Mirror ``switch_cmd``'s OSError handling: a pure-filesystem failure (a
+    # locked or half-deleted profile directory — common on Windows when the
+    # browser profile is held by AV/the browser) yields a friendly message +
+    # exit 1 via Click, never a raw traceback.
+    try:
+        shutil.rmtree(profile_dir)
+    except OSError as e:
+        raise click.ClickException(  # cli-input-validation: profile delete filesystem failure
+            f"Failed to delete profile '{name}': {e}"
+        ) from None
     console.print(f"[green]Profile '{name}' deleted.[/green]")
 
 
@@ -326,7 +353,18 @@ def rename_cmd(old_name, new_name):
             f"Profile '{new_name}' already exists."
         )
 
-    os.rename(old_dir, new_dir)
+    # Mirror ``switch_cmd``'s OSError handling: a failure moving the profile
+    # directory (a locked browser-profile file held by AV/the browser on
+    # Windows, a cross-device rename) yields a friendly message + exit 1 via
+    # Click, never a raw traceback. The config retarget below only runs once the
+    # directory move succeeded, so a failed rename never leaves a dangling
+    # ``default_profile`` pointer.
+    try:
+        os.rename(old_dir, new_dir)
+    except OSError as e:
+        raise click.ClickException(  # cli-input-validation: profile rename filesystem failure
+            f"Failed to rename profile '{old_name}': {e}"
+        ) from None
 
     # Update config if renamed profile was the effective default. This is
     # always serialized through the locked mutator — there is NO pre-read
