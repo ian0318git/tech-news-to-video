@@ -47,14 +47,13 @@ from __future__ import annotations
 
 import os
 import reprlib
-from contextlib import asynccontextmanager
-from typing import Any
 
 import pytest
-from tests.integration.conftest import get_vcr_auth, skip_no_cassettes
+from tests.integration._golden_assert import assert_decoded_equals
+from tests.integration._vcr_helpers import vcr_client
+from tests.integration.conftest import skip_no_cassettes
 from tests.vcr_config import notebooklm_vcr
 
-from notebooklm import NotebookLMClient
 from notebooklm.types import Artifact, ArtifactType, Source, SourceType
 
 # Skip all tests in this module if cassettes are not available.
@@ -80,37 +79,10 @@ MUTABLE_NOTEBOOK_ID = os.environ.get(
 _CHAT_MATCH_ON = ["method", "scheme", "host", "port", "path", "freq"]
 
 
-@asynccontextmanager
-async def vcr_client():
-    """Authenticated client bound to VCR replay (mock auth in replay mode)."""
-    auth = await get_vcr_auth()
-    async with NotebookLMClient(auth) as client:
-        yield client
-
-
-# =============================================================================
-# Golden helper
-# =============================================================================
-
-
-def assert_decoded_equals(actual: Any, expected: Any, *, field: str) -> None:
-    """Pin one decoded leaf value, with a decode-drift-flavoured failure message.
-
-    A thin wrapper over ``assert actual == expected`` whose only value is the
-    message: when a golden value diverges it is almost always a *decoder*
-    regression (a positional column mis-map or a leaf-shape change in the
-    recorded response), not a test bug — the message says so, and names the
-    field, so the failure points at the right place. ``field`` is a
-    human-readable label like ``"artifacts_list[0].kind"``.
-    """
-    assert actual == expected, (
-        f"Decoded golden value drift for {field}: "
-        f"expected {reprlib.repr(expected)}, got {reprlib.repr(actual)}. "
-        "The cassette replayed but the decoder produced a different leaf value than the "
-        "golden recording — likely a positional mis-map (row-adapter column moved) or a "
-        "leaf-shape change in the recorded response. If the cassette was deliberately "
-        "re-recorded against a different notebook, refresh the golden value here."
-    )
+# ``assert_decoded_equals`` and ``vcr_client`` live in
+# ``tests/integration/_golden_assert.py`` / ``_vcr_helpers.py`` so the
+# expansion module (``test_golden_decoded_vcr_expansion.py``) can share them
+# without a cross-test-module import.
 
 
 # =============================================================================
