@@ -306,4 +306,5 @@ class NotesAPI:
             notebook_id=notebook_id,
             title=row.title,
             content=row.content or "",
+            created_at=row.created_at,
         )

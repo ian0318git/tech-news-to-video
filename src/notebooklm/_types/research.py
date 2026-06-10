@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from datetime import datetime
 from enum import Enum
 from typing import Any
 
@@ -223,7 +224,9 @@ class MindMapResult:
     ``mind_map`` is the parsed mind-map structure (a dict when the backend
     returned JSON, the raw value otherwise, or ``None`` on an empty response).
     ``note_id`` is the id of the note the mind map was persisted to, or
-    ``None`` when persistence did not yield a usable id.
+    ``None`` when persistence did not yield a usable id. ``created_at`` is the
+    persisted note's creation time when the CREATE_NOTE response carried it
+    (issue #1529), else ``None``.
 
     Use attribute access (``result.mind_map``); the dict-subscript back-compat
     bridge was removed in v0.8.0 (issue #1251).
@@ -231,6 +234,7 @@ class MindMapResult:
 
     mind_map: Any = None
     note_id: str | None = None
+    created_at: datetime | None = None
 
     def to_public_dict(self) -> dict[str, Any]:
         """Return the historical compatibility dictionary shape."""

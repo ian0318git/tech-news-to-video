@@ -261,6 +261,11 @@ class NoteService:
         )
 
         note_id: str | None = None
+        # The CREATE_NOTE row carries the creation timestamp in the same
+        # metadata sub-structure NoteRow decodes for list rows; capture the
+        # bare inner envelope here so we can read it through the adapter
+        # (rather than the field staying silently ``None`` — issue #1529).
+        created_inner_row: list[Any] | None = None
         if result and isinstance(result, list) and len(result) > 0:
             # CREATE_NOTE returns either ``[[id, ...], ...]`` (id-envelope row) or
             # a bare ``[id, ...]``. Bind the first element so the id read is a
@@ -269,8 +274,16 @@ class NoteService:
             first = result[0]
             if isinstance(first, list) and len(first) > 0:
                 note_id = first[0]
+                created_inner_row = first
             elif isinstance(first, str):
                 note_id = first
+                # Flat shape: ``result`` IS the inner envelope
+                # (``[id, content, metadata, None, title]``), so the
+                # timestamp lives at ``result[2][2][0]`` — the same slot the
+                # wrapped path reads at ``first[2][2][0]``. Capture ``result``
+                # so the NoteRow([note_id, inner]) wrapping descent below
+                # decodes it (issue #1529).
+                created_inner_row = result
 
         if not note_id:
             # CREATE_NOTE returned a payload we cannot extract a note id
@@ -330,11 +343,21 @@ class NoteService:
             cleanup_task.add_done_callback(_cleanup_tasks.discard)
             raise
 
+        # Wrap the bare CREATE_NOTE inner envelope into the current row
+        # shape (``[id, [id, content, metadata, None, title]]``) so the
+        # NoteRow adapter's centralised ``row[1][2][2][0]`` descent reads
+        # the creation timestamp; absent / legacy shapes degrade to None.
+        created_at = (
+            NoteRow([note_id, created_inner_row]).created_at
+            if created_inner_row is not None
+            else None
+        )
         return Note(
             id=note_id,
             notebook_id=notebook_id,
             title=title,
             content=content,
+            created_at=created_at,
         )
 
     async def _delete_note_best_effort(self, notebook_id: str, note_id: str) -> None:

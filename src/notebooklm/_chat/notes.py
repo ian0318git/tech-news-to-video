@@ -17,6 +17,7 @@ import logging
 import re
 from typing import TYPE_CHECKING, Any, Protocol
 
+from .._row_adapters.notes import NoteRow
 from ..rpc import RPCMethod
 from ..types import Note
 
@@ -351,9 +352,17 @@ async def save_chat_answer_as_note(
     if not note_id:
         raise RuntimeError("CREATE_NOTE returned no note ID for saved-from-chat request")
 
+    # ``note_data`` is the inner note envelope (``[id, content, metadata, ...]``);
+    # wrap it into the ``[id, inner]`` current-row shape so NoteRow's centralised
+    # ``row[1][2][2][0]`` descent decodes the creation timestamp — the same
+    # extraction ``create_note`` uses (issue #1529). Absent / malformed shapes
+    # degrade to None.
+    created_at = NoteRow([note_id, note_data]).created_at
+
     return Note(
         id=note_id,
         notebook_id=notebook_id,
         title=server_title,
         content=answer_text,
+        created_at=created_at,
     )

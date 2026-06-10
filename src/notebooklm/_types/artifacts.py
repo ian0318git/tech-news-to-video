@@ -20,7 +20,7 @@ from ..rpc.types import (
     ArtifactTypeCode,
     artifact_status_to_str,
 )
-from .common import UnknownTypeWarning, _datetime_from_timestamp
+from .common import UnknownTypeWarning
 
 logger = logging.getLogger(__name__)
 
@@ -263,22 +263,12 @@ class Artifact:
                 reprlib.repr(data),
             )
 
-        # Title comes through the adapter (current-shape ``row[1][4]``;
-        # ``""`` for legacy/short/deleted shapes). Timestamp extraction below
-        # keeps its historical inline descent.
+        # Title and the creation timestamp both come through the adapter:
+        # the timestamp slot (``row[1][2][2][0]``) is the SAME one ``NoteRow``
+        # decodes for the note path (issue #1529), so the position knowledge
+        # lives in one place rather than re-open-coding the inner descent here.
         title = row.title
-        created_at = None
-
-        if len(data) > 1 and isinstance(data[1], list):
-            inner = data[1]
-            # Timestamp is at [2][2][0]. Bind the ``[2]`` metadata block first so
-            # the ``[2]`` descent into it is a single-level index, not a chained
-            # ``inner[2][2]`` (an absent block legitimately leaves created_at None).
-            metadata_block = inner[2] if len(inner) > 2 and isinstance(inner[2], list) else None
-            if metadata_block is not None and len(metadata_block) > 2:
-                ts_data = metadata_block[2]
-                if isinstance(ts_data, list) and len(ts_data) > 0:
-                    created_at = _datetime_from_timestamp(ts_data[0])
+        created_at = row.created_at
 
         return cls(
             id=row.id,

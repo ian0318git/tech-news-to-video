@@ -179,6 +179,7 @@ class MindMapsAPI:
                     notebook_id=notebook_id,
                     title=note_row.title,
                     kind=MindMapKind.NOTE_BACKED,
+                    created_at=note_row.created_at,
                     tree=_parse_tree(self._mind_maps.extract_content(row)),
                 )
             )
@@ -305,6 +306,7 @@ class MindMapsAPI:
                 notebook_id=notebook_id,
                 title=title,
                 kind=MindMapKind.NOTE_BACKED,
+                created_at=res.created_at,
                 tree=tree,
             )
 

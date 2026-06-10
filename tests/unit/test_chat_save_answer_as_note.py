@@ -203,3 +203,45 @@ class TestSaveAnswerAsNote:
         note = await chat_api.save_answer_as_note("nb-1", ask_result)
         assert note.content == "The answer is X [1]."
         assert note.notebook_id == "nb-1"
+
+    @pytest.mark.asyncio
+    async def test_created_at_populated_wrapped_shape(
+        self, chat_api: ChatAPI, mock_rpc: MagicMock
+    ) -> None:
+        """``save_answer_as_note`` decodes the creation timestamp from the
+        note metadata envelope (``note[2][2][0]``) in the wrapped shape
+        (issue #1529). Pin the EPOCH INT (TZ-invariant), not a wall-time
+        string."""
+        mock_rpc.rpc_call.return_value = [
+            [
+                "note-id",
+                "One fruit mentioned is apples [1].",
+                [2, "400237754469", [1778936820, 976814000]],
+                [[]],
+                "ServerTitle",
+                [],
+            ]
+        ]
+        ask_result = _make_ask_result()
+        note = await chat_api.save_answer_as_note("nb-1", ask_result)
+        assert note.created_at is not None
+        assert int(note.created_at.timestamp()) == 1778936820
+
+    @pytest.mark.asyncio
+    async def test_created_at_populated_flat_shape(
+        self, chat_api: ChatAPI, mock_rpc: MagicMock
+    ) -> None:
+        """``save_answer_as_note`` decodes the timestamp from the FLAT
+        response shape too (``result`` is the inner envelope; issue #1529)."""
+        mock_rpc.rpc_call.return_value = [
+            "note-id",
+            "answer",
+            [2, "400237754469", [1778936820, 976814000]],
+            [[]],
+            "ServerTitle",
+            [],
+        ]
+        ask_result = _make_ask_result()
+        note = await chat_api.save_answer_as_note("nb-1", ask_result)
+        assert note.created_at is not None
+        assert int(note.created_at.timestamp()) == 1778936820

@@ -137,3 +137,11 @@ async def test_save_answer_as_note_wire_round_trip(
     assert note.notebook_id == notebook_id
     # Content is the answer text WITH [N] markers (rich anchors live server-side).
     assert note.content == ask_result.answer
+    # The captured response carries the creation timestamp in the note metadata
+    # envelope (``note[2][2][0]``); save_answer_as_note now decodes it through
+    # NoteRow.created_at (issue #1529). Pin the EPOCH INT (TZ-invariant) — the
+    # fixture's [1778936820, 976814000] timestamp — never the wall-time string.
+    expected_epoch = response_note[2][2][0]
+    assert expected_epoch == 1778936820
+    assert note.created_at is not None
+    assert int(note.created_at.timestamp()) == expected_epoch

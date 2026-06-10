@@ -149,6 +149,9 @@ SINGLE_LEVEL_EXCLUDED_FILES = frozenset({"utils.py", "_version_check.py"})
 # this list so the gate re-protects it. ``_artifacts.py`` keeps its remaining
 # envelope-unwrap / request-param reads (only its ``suggest_reports`` row decode
 # moved behind ``ReportSuggestionRow``), so it stays listed for now.
+# ``_types/artifacts.py`` is likewise ABSENT: ``Artifact.from_mind_map``'s last
+# inline ``[1][2][2][0]`` timestamp descent moved behind ``NoteRow.created_at``
+# (issue #1529), so the gate re-protects it.
 #
 # DO NOT add new entries to grow the debt. The burndown (drain this list by
 # migrating each file behind ``_row_adapters/`` + ``safe_index``, or binding the
@@ -171,7 +174,6 @@ SINGLE_LEVEL_ALLOWLIST: frozenset[str] = frozenset(
         "_source/content.py",
         "_source/listing.py",
         "_source/upload.py",
-        "_types/artifacts.py",
         "_types/notebooks.py",
         "_types/sharing.py",
         "_types/sources.py",

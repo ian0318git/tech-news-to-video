@@ -87,6 +87,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   longer-id prefix match (and is not treated as a partial expansion, so no
   "Matched:" prose is emitted). Genuine prefix ambiguity (two strict prefixes,
   no exact match) and the not-found / title-instead-of-id paths are unchanged.
+- **`Note.created_at` and note-backed `MindMap.created_at` are now populated**
+  (#1529). Both fields were declared `datetime | None` but never filled in,
+  even though the raw `GET_NOTES_AND_MIND_MAPS` / `CREATE_NOTE` responses carry
+  the creation timestamp in the note metadata envelope at `row[1][2][2][0]` —
+  the same slot the artifact path already decodes. `NoteRow` gains a
+  `created_at_raw` / `created_at` property pair (mirroring `ArtifactRow`) that
+  centralizes the descent behind named position constants, and every
+  note-creation surface now reads it: `notes.list` / `notes.get`,
+  `notes.create` (both the wrapped `[[id, …]]` and the flat
+  `[id, …]` CREATE_NOTE response shapes), `chat.save_answer_as_note`, and the
+  note-backed `mind_maps.list_note_backed` / `mind_maps.generate`.
+  `Artifact.from_mind_map` was lifted to reuse the shared `NoteRow` extraction
+  so the position knowledge lives in one place. Additive: absent / legacy
+  rows still yield `None`; no signature change.
 - **`profile` filesystem commands now surface a friendly error + exit 1
   instead of a raw traceback** (#1520). The `profile delete` (`shutil.rmtree`),
   `profile create` (directory materialization), `profile rename` (`os.rename`),

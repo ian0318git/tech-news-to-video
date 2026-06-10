@@ -219,7 +219,7 @@ class ArtifactRow:
             method_id=self.method_id,
             source="ArtifactRow.created_at_raw",
         )
-        return value if isinstance(value, (int, float)) else None
+        return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
     @property
     def created_at(self) -> datetime | None:

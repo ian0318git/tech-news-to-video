@@ -39,6 +39,7 @@ from notebooklm._row_adapters.sources import (
     SourceRowShape,
     interpret_source_freshness,
 )
+from notebooklm._types.common import _datetime_from_timestamp
 from notebooklm.exceptions import DecodingError, UnknownRPCMethodError
 from notebooklm.rpc.types import ArtifactStatus, ArtifactTypeCode, SourceStatus
 
@@ -651,21 +652,33 @@ class TestNoteRowPositionContract:
     def test_inner_title_position_is_4(self) -> None:
         assert NoteRow._INNER_TITLE_POS == 4
 
+    def test_inner_meta_position_is_2(self) -> None:
+        assert NoteRow._INNER_META_POS == 2
+
+    def test_meta_timestamp_position_is_2(self) -> None:
+        assert NoteRow._META_TIMESTAMP_POS == 2
+
+    def test_ts_seconds_position_is_0(self) -> None:
+        assert NoteRow._TS_SECONDS_POS == 0
+
     def test_deleted_sentinel_is_2(self) -> None:
         assert NoteRow._DELETED_SENTINEL == 2
 
     def test_all_positions_at_once(self) -> None:
         """A single tuple pin so a sweeping reshape (e.g. Google inserts
         a new leading element shifting every position by one) fails with
-        one informative assertion rather than six."""
+        one informative assertion rather than several."""
         assert (
             NoteRow._ID_POS,
             NoteRow._CONTENT_POS,
             NoteRow._STATUS_POS,
             NoteRow._INNER_CONTENT_POS,
             NoteRow._INNER_TITLE_POS,
+            NoteRow._INNER_META_POS,
+            NoteRow._META_TIMESTAMP_POS,
+            NoteRow._TS_SECONDS_POS,
             NoteRow._DELETED_SENTINEL,
-        ) == (0, 1, 2, 1, 4, 2)
+        ) == (0, 1, 2, 1, 4, 2, 2, 0, 2)
 
 
 # ---------------------------------------------------------------------------
@@ -941,6 +954,122 @@ class TestNoteRowTitle:
         contract."""
         row = ["id", ["id", "content", None, None, 999]]
         assert NoteRow(row).title == ""
+
+
+# ---------------------------------------------------------------------------
+# NoteRow — created_at (current-shape only; issue #1529)
+# ---------------------------------------------------------------------------
+
+
+def _timestamped_note_row(
+    note_id: str = "note_id",
+    *,
+    seconds: int = 1768311078,
+    nanos: int = 286553000,
+) -> list:
+    """Current shape carrying a real metadata + ``[seconds, nanos]`` block.
+
+    Mirrors the production ``GET_NOTES_AND_MIND_MAPS`` row shape
+    ``[id, [id, content, [marker, srcref, [seconds, nanos], ...], None, title]]``
+    — the timestamp lives at ``row[1][2][2][0]``, the exact slot
+    ``Artifact.from_mind_map`` already decodes.
+    """
+    metadata = [2, "400237754469", [seconds, nanos], 5, [[]]]
+    return [note_id, [note_id, "{}", metadata, None, "Title"]]
+
+
+class TestNoteRowCreatedAtRaw:
+    """``created_at_raw`` returns the exact decoded epoch (TZ-invariant)."""
+
+    def test_raw_epoch_from_current_shape(self) -> None:
+        # Pin the EXACT epoch from the real notes_list.yaml mind-map row —
+        # an int, so the assertion is timezone-invariant (#1511/#1519).
+        assert NoteRow(_timestamped_note_row(seconds=1768311078)).created_at_raw == 1768311078
+
+    def test_raw_epoch_from_create_note_wrapped_shape(self) -> None:
+        """The CREATE_NOTE bare inner envelope, wrapped into the current
+        shape as ``[note_id, inner]`` (how ``create_note`` reads it),
+        exposes the create-time epoch at ``row[1][2][2][0]``."""
+        inner = ["3ba71644", "", [1, "400237754469", [1768312234, 146794000]], None, "New Note"]
+        assert NoteRow(["3ba71644", inner]).created_at_raw == 1768312234
+
+    def test_raw_float_epoch_preserved(self) -> None:
+        row = _timestamped_note_row(seconds=1768311078)
+        row[1][2][2][0] = 1768311078.5
+        assert NoteRow(row).created_at_raw == 1768311078.5
+
+    def test_legacy_shape_returns_none(self) -> None:
+        """Legacy ``[id, content_string]`` has no metadata block."""
+        assert NoteRow(_legacy_note_row()).created_at_raw is None
+
+    def test_deleted_row_returns_none(self) -> None:
+        assert NoteRow(_deleted_note_row()).created_at_raw is None
+
+    def test_empty_row_returns_none(self) -> None:
+        assert NoteRow([]).created_at_raw is None
+
+    def test_id_only_row_returns_none(self) -> None:
+        assert NoteRow(["id"]).created_at_raw is None
+
+    def test_inner_too_short_for_metadata_returns_none(self) -> None:
+        """``inner = [id, content]`` (length 2) predates the metadata
+        block — soft absence, not drift."""
+        assert NoteRow(["id", ["id", "body"]]).created_at_raw is None
+
+    def test_metadata_non_list_returns_none(self) -> None:
+        """A non-list metadata slot (e.g. an int row-status marker)
+        carries no timestamp — degrade to ``None``."""
+        assert NoteRow(["id", ["id", "body", 5, None, "Title"]]).created_at_raw is None
+
+    def test_metadata_too_short_for_timestamp_returns_none(self) -> None:
+        """Metadata present but too short to carry the timestamp list at
+        ``[2]`` — soft absence."""
+        assert NoteRow(["id", ["id", "body", [2, "ref"], None, "Title"]]).created_at_raw is None
+
+    def test_empty_timestamp_list_returns_none(self) -> None:
+        row = ["id", ["id", "body", [2, "ref", []], None, "Title"]]
+        assert NoteRow(row).created_at_raw is None
+
+    def test_non_numeric_timestamp_returns_none(self) -> None:
+        row = ["id", ["id", "body", [2, "ref", ["oops"]], None, "Title"]]
+        assert NoteRow(row).created_at_raw is None
+
+    def test_bool_timestamp_returns_none(self) -> None:
+        """``bool`` is an ``int`` subclass — a boolean in the seconds slot
+        must NOT be mistaken for an epoch (else ``True`` decodes to
+        ``1970-01-01T00:00:01``)."""
+        row = ["id", ["id", "body", [2, "ref", [True]], None, "Title"]]
+        assert NoteRow(row).created_at_raw is None
+
+    def test_short_inner_is_not_drift_in_strict_mode(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A short inner envelope (no metadata block) is a legitimate
+        production shape — length-guarded to ``None`` WITHOUT invoking
+        ``safe_index``, so strict mode does not raise."""
+        monkeypatch.setenv("NOTEBOOKLM_STRICT_DECODE", "1")
+        assert NoteRow(["id", ["id", "body"]]).created_at_raw is None
+
+
+class TestNoteRowCreatedAt:
+    """``created_at`` decodes ``created_at_raw`` into a ``datetime``."""
+
+    def test_returns_datetime_for_present_timestamp(self) -> None:
+        created = NoteRow(_timestamped_note_row(seconds=1768311078)).created_at
+        assert created is not None
+        # TZ-robust: compare the round-tripped epoch, not a wall-time string.
+        # ``_datetime_from_timestamp`` builds a tz-aware UTC datetime (#1519),
+        # whose ``.timestamp()`` round-trips back to the original epoch on any host.
+        assert int(created.timestamp()) == 1768311078
+
+    def test_matches_datetime_from_timestamp_decoder(self) -> None:
+        """``created_at`` is exactly what the shared decoder produces for
+        ``created_at_raw`` — no independent (drift-prone) conversion."""
+        row = NoteRow(_timestamped_note_row(seconds=1768311078))
+        assert row.created_at == _datetime_from_timestamp(row.created_at_raw)
+
+    def test_none_when_timestamp_absent(self) -> None:
+        assert NoteRow(_legacy_note_row()).created_at is None
+        assert NoteRow([]).created_at is None
+        assert NoteRow(_deleted_note_row()).created_at is None
 
 
 # ---------------------------------------------------------------------------

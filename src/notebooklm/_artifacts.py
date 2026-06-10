@@ -754,13 +754,13 @@ class ArtifactsAPI:
                 # shape, but the empty-id case now surfaces as an error
                 # rather than a silent ``{"note_id": None}``.
                 note = await self._note_service.create_note(
-                    notebook_id,
-                    title=title,
-                    content=mind_map_json,
+                    notebook_id, title=title, content=mind_map_json
                 )
-                note_id = note.id or None
-
-                return MindMapResult(mind_map=mind_map_data, note_id=note_id)
+                return MindMapResult(
+                    mind_map=mind_map_data,
+                    note_id=note.id or None,
+                    created_at=note.created_at,
+                )
 
         return MindMapResult(mind_map=None, note_id=None)
 

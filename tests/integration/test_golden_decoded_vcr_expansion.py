@@ -371,6 +371,17 @@ class TestNotesGoldenDecoded:
             "This is a test note created by VCR recording.",
             field="notes_create.content",
         )
+        # The CREATE_NOTE response carries the creation timestamp in the note
+        # metadata envelope (``row[1][2][2][0]``; issue #1529). Pin the decoded
+        # EPOCH INT — not the wall-time string — so the assertion is identical
+        # on every CI timezone (#1511/#1519 lesson). The round-tripped
+        # ``created_at.timestamp()`` is the same TZ-invariant int.
+        assert note.created_at is not None
+        assert_decoded_equals(
+            int(note.created_at.timestamp()),
+            1768312234,
+            field="notes_create.created_at (epoch seconds)",
+        )
 
 
 # =============================================================================
@@ -771,6 +782,32 @@ class TestMindMapsGoldenDecoded:
 
     @pytest.mark.vcr
     @pytest.mark.asyncio
+    @notebooklm_vcr.use_cassette("notes_list.yaml")
+    async def test_note_backed_list_created_at_decoded_golden(self):
+        """``mind_maps.list_note_backed`` decodes the note-backed creation time.
+
+        The ``GET_NOTES_AND_MIND_MAPS`` (cFji9) payload carries the timestamp in
+        the note metadata envelope at ``row[1][2][2][0]`` — the SAME slot the
+        artifact path decodes. Pin the decoded EPOCH INT (not the wall-time
+        string) so the assertion is timezone-invariant (#1511/#1519; #1529).
+        """
+        async with vcr_client() as client:
+            maps = await client.mind_maps.list_note_backed(READONLY_NOTEBOOK_ID)
+
+        assert_decoded_equals(len(maps), 1, field="note_backed list length")
+        mind_map = maps[0]
+        assert_decoded_equals(
+            mind_map.kind, MindMapKind.NOTE_BACKED, field="note_backed list[0].kind"
+        )
+        assert mind_map.created_at is not None
+        assert_decoded_equals(
+            int(mind_map.created_at.timestamp()),
+            1768311078,
+            field="note_backed list[0].created_at (epoch seconds)",
+        )
+
+    @pytest.mark.vcr
+    @pytest.mark.asyncio
     @notebooklm_vcr.use_cassette("generate_mind_map_chain.yaml")
     async def test_generate_mind_map_decoded_golden(self):
         """``artifacts.generate_mind_map`` decodes the generated tree + note id (yyryJe).
@@ -799,6 +836,15 @@ class TestMindMapsGoldenDecoded:
             6,
             field="generate_mind_map_chain.mind_map children count",
         )
+        # The chained CREATE_NOTE response carries the persisted note's creation
+        # time, threaded onto MindMapResult.created_at (issue #1529). Pin the
+        # decoded EPOCH INT — TZ-invariant — not the wall-time string.
+        assert result.created_at is not None
+        assert_decoded_equals(
+            int(result.created_at.timestamp()),
+            1778851315,
+            field="generate_mind_map_chain.created_at (epoch seconds)",
+        )
 
 
 # =============================================================================
@@ -815,17 +861,23 @@ def test_golden_values_visible_in_cassette_bytes() -> None:
     recording-derived (not synthesized by the client).
     """
     cassette_dir = Path(__file__).resolve().parent.parent / "cassettes"
-    samples = {
-        "notebooks_create.yaml": "afefc562-f8d1-41ec-a5d5-c197efdf52e1",
-        "notes_create.yaml": "3ba71644-5e30-4330-96d8-d29f5f1ecef4",
-        "settings_get_user_tier.yaml": "NOTEBOOKLM_TIER_PRO_CONSUMER_USER",
-        "artifacts_export_report.yaml": "1bAgBGlybk82LZfbz6IPCwpQ12E4hlDQsuWTVWJVEHfM",
-        "research_poll.yaml": "32b1e6c3-863f-4502-8509-fe9d5801db14",
-        "generate_mind_map_chain.yaml": "208ac8c0-5206-4e93-ae24-4b83ce14084b",
-    }
+    # ``(cassette, value)`` pairs — a list (not a dict) so a cassette can be
+    # sampled more than once (e.g. an id AND a created_at epoch).
+    samples = [
+        ("notebooks_create.yaml", "afefc562-f8d1-41ec-a5d5-c197efdf52e1"),
+        ("notes_create.yaml", "3ba71644-5e30-4330-96d8-d29f5f1ecef4"),
+        # created_at epochs pinned above (issue #1529) — provably recording-derived.
+        ("notes_create.yaml", "1768312234"),
+        ("notes_list.yaml", "1768311078"),
+        ("generate_mind_map_chain.yaml", "1778851315"),
+        ("settings_get_user_tier.yaml", "NOTEBOOKLM_TIER_PRO_CONSUMER_USER"),
+        ("artifacts_export_report.yaml", "1bAgBGlybk82LZfbz6IPCwpQ12E4hlDQsuWTVWJVEHfM"),
+        ("research_poll.yaml", "32b1e6c3-863f-4502-8509-fe9d5801db14"),
+        ("generate_mind_map_chain.yaml", "208ac8c0-5206-4e93-ae24-4b83ce14084b"),
+    ]
     missing = {
-        name: value
-        for name, value in samples.items()
+        f"{name}:{value}": value
+        for name, value in samples
         if value not in (cassette_dir / name).read_text(encoding="utf-8")
     }
     assert missing == {}, (
