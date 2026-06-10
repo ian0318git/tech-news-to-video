@@ -136,20 +136,32 @@ class TestNotebooksGoldenDecoded:
         assert_decoded_equals(
             actual_head, _NOTEBOOKS_LIST_GOLDEN_HEAD, field="notebooks_list[:3] rows"
         )
-        # The created_at slot decodes to a real timestamp (not a fabricated
-        # default) — pin the first row's to catch a timestamp-column slip.
-        # The decoder now renders tz-aware UTC (``fromtimestamp(.., tz=utc)``,
+        # The created_at / modified_at slots decode to real timestamps (not
+        # fabricated defaults) — pin the first row's to catch a timestamp-column
+        # slip. ``created_at`` is the CREATION instant (``data[5][8][0]``) and
+        # ``modified_at`` is the LAST-MODIFIED instant (``data[5][5][0]``); the
+        # two were historically swapped (created_at exposed the modified time).
+        # The decoder renders tz-aware UTC (``fromtimestamp(.., tz=utc)``,
         # #1519), so the round-tripped epoch is identical on every timezone/CI
-        # host. We still pin the epoch (not a wall-time string), and additionally
-        # assert tz-awareness so a regression back to naive host-local time fails.
+        # host. We pin the epoch (not a wall-time string) and assert tz-awareness
+        # so a regression back to naive host-local time fails.
         first = notebooks[0]
         assert first.created_at is not None
         assert first.created_at.tzinfo is not None
         assert_decoded_equals(
             int(first.created_at.timestamp()),
-            1768311605,
+            1768174413,  # data[5][8][0] — true creation instant
             field="notebooks_list[0].created_at (epoch seconds)",
         )
+        assert first.modified_at is not None
+        assert first.modified_at.tzinfo is not None
+        assert_decoded_equals(
+            int(first.modified_at.timestamp()),
+            1768311605,  # data[5][5][0] — last-modified instant
+            field="notebooks_list[0].modified_at (epoch seconds)",
+        )
+        # Creation precedes last modification in the recorded row.
+        assert first.created_at < first.modified_at
 
     @pytest.mark.vcr
     @pytest.mark.asyncio
@@ -169,6 +181,24 @@ class TestNotebooksGoldenDecoded:
         )
         assert_decoded_equals(notebook.sources_count, 2, field="notebooks_get.sources_count")
         assert_decoded_equals(notebook.is_owner, True, field="notebooks_get.is_owner")
+        # created_at is the CREATION instant (``data[5][8][0]``); modified_at is
+        # the LAST-MODIFIED instant (``data[5][5][0]``). Pin both epochs (TZ-
+        # invariant per #1511/#1519) to lock the previously-swapped slots.
+        assert notebook.created_at is not None
+        assert notebook.created_at.tzinfo is not None
+        assert_decoded_equals(
+            int(notebook.created_at.timestamp()),
+            1767921609,  # data[5][8][0] — true creation instant
+            field="notebooks_get.created_at (epoch seconds)",
+        )
+        assert notebook.modified_at is not None
+        assert notebook.modified_at.tzinfo is not None
+        assert_decoded_equals(
+            int(notebook.modified_at.timestamp()),
+            1768963937,  # data[5][5][0] — last-modified instant
+            field="notebooks_get.modified_at (epoch seconds)",
+        )
+        assert notebook.created_at < notebook.modified_at
 
     @pytest.mark.vcr
     @pytest.mark.asyncio
@@ -870,6 +900,12 @@ def test_golden_values_visible_in_cassette_bytes() -> None:
         ("notes_create.yaml", "1768312234"),
         ("notes_list.yaml", "1768311078"),
         ("generate_mind_map_chain.yaml", "1778851315"),
+        # Notebook created_at/modified_at epochs (swapped-slot fix): created_at
+        # comes from data[5][8][0], modified_at from data[5][5][0].
+        ("notebooks_list.yaml", "1768174413"),  # list[0].created_at
+        ("notebooks_list.yaml", "1768311605"),  # list[0].modified_at
+        ("notebooks_get.yaml", "1767921609"),  # get.created_at
+        ("notebooks_get.yaml", "1768963937"),  # get.modified_at
         ("settings_get_user_tier.yaml", "NOTEBOOKLM_TIER_PRO_CONSUMER_USER"),
         ("artifacts_export_report.yaml", "1bAgBGlybk82LZfbz6IPCwpQ12E4hlDQsuWTVWJVEHfM"),
         ("research_poll.yaml", "32b1e6c3-863f-4502-8509-fe9d5801db14"),

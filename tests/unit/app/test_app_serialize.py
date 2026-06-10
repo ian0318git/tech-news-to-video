@@ -135,6 +135,7 @@ def test_real_notebooklm_type_round_trips() -> None:
         "created_at": "2026-06-08T00:00:00+00:00",
         "sources_count": 3,
         "is_owner": True,
+        "modified_at": None,
     }
     json.dumps(result)
 

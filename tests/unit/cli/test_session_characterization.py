@@ -259,6 +259,7 @@ class TestUseCharacterization:
                 "title": "JSON Char Notebook",
                 "is_owner": False,
                 "created_at": "2024-02-01T00:00:00",
+                "modified_at": None,
             },
         }
 

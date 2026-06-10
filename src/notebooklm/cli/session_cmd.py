@@ -483,6 +483,7 @@ def register_session_commands(cli):
                         "title": nb.title,
                         "is_owner": nb.is_owner,
                         "created_at": nb.created_at.isoformat() if nb.created_at else None,
+                        "modified_at": nb.modified_at.isoformat() if nb.modified_at else None,
                     },
                 }
             )

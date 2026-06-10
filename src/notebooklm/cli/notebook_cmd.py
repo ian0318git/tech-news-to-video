@@ -57,6 +57,7 @@ def register_notebook_commands(cli):
                         "title": nb.title,
                         "is_owner": nb.is_owner,
                         "created_at": nb.created_at.isoformat() if nb.created_at else None,
+                        "modified_at": nb.modified_at.isoformat() if nb.modified_at else None,
                     },
                     columns=["ID", "Title", "Owner", "Created"],
                     row=lambda nb: [
@@ -112,6 +113,7 @@ def register_notebook_commands(cli):
                             "id": nb.id,
                             "title": nb.title,
                             "created_at": nb.created_at.isoformat() if nb.created_at else None,
+                            "modified_at": nb.modified_at.isoformat() if nb.modified_at else None,
                         }
                     }
                     # When --use switched the active context, surface the new

@@ -351,22 +351,110 @@ class TestNotebook:
         assert notebook.sources_count == 0
 
     def test_from_api_response_with_timestamp(self):
-        """Test parsing notebook with timestamp."""
-        ts = 1704067200  # 2024-01-01 00:00:00 UTC
+        """Test parsing notebook with timestamp.
+
+        ``created_at`` is read from ``meta[8]`` (the creation slot), so the
+        creation epoch is placed there. ``meta[5]`` carries the now-distinct
+        last-modified slot.
+        """
+        created_ts = 1704067200  # 2024-01-01 00:00:00 UTC
+        modified_ts = 1704153600  # 2024-01-02 00:00:00 UTC
         data = [
             "Timestamped Notebook",
             [],
             "nb_456",
             "📘",
             None,
-            [None, None, None, None, None, [ts, 0]],
+            # meta[5] = modified slot, meta[8] = creation slot
+            [None, None, None, None, None, [modified_ts, 0], None, None, [created_ts, 0]],
         ]
         notebook = Notebook.from_api_response(data)
 
         assert notebook.id == "nb_456"
         assert notebook.created_at is not None
         # Check timestamp value rather than year (timezone-independent)
-        assert notebook.created_at.timestamp() == ts
+        assert notebook.created_at.timestamp() == created_ts
+        assert notebook.modified_at is not None
+        assert notebook.modified_at.timestamp() == modified_ts
+
+    def test_from_api_response_created_modified_not_swapped(self):
+        """``created_at`` is ``meta[8]`` and ``modified_at`` is ``meta[5]``.
+
+        Regression pin for the swapped-slots bug: the metadata block exposes the
+        creation instant at ``data[5][8][0]`` (pinned across edits) and the
+        last-modified instant at ``data[5][5][0]`` (advances on each edit). The
+        pre-fix code read ``meta[5]`` for ``created_at`` and so surfaced the
+        last-modified time as the creation time.
+        """
+        created_ts = 1767921609  # 2026-01-09 — earlier (true creation)
+        modified_ts = 1768963937  # 2026-01-21 — later (last edit)
+        data = [
+            "Swap Probe Notebook",
+            [],
+            "nb_swap",
+            "📓",
+            None,
+            [None, None, None, None, None, [modified_ts, 1], None, None, [created_ts, 2]],
+        ]
+        notebook = Notebook.from_api_response(data)
+
+        # created_at == the meta[8] instant (NOT meta[5])
+        assert notebook.created_at is not None
+        assert notebook.created_at.timestamp() == created_ts
+        # modified_at == the meta[5] instant
+        assert notebook.modified_at is not None
+        assert notebook.modified_at.timestamp() == modified_ts
+        # The two are distinct and ordered created < modified (sanity).
+        assert notebook.created_at < notebook.modified_at
+
+    def test_from_api_response_short_meta_leaves_both_timestamps_none(self):
+        """A ``meta`` block too short to carry the slots soft-degrades to None.
+
+        ``meta[8]`` is absent (len 6) so ``created_at`` is None; ``meta[5]`` is
+        also degraded here (None payload) so ``modified_at`` is None too.
+        """
+        data = [
+            "Short Meta Notebook",
+            [],
+            "nb_short",
+            "📓",
+            None,
+            [None, None, None, None, None, None],  # len 6: meta[8] absent, meta[5] None
+        ]
+        notebook = Notebook.from_api_response(data)
+
+        assert notebook.created_at is None
+        assert notebook.modified_at is None
+
+    def test_from_api_response_short_meta_keeps_modified_but_not_created(self):
+        """A ``meta`` block carrying ``meta[5]`` but too short for ``meta[8]``.
+
+        Locks the length-guard policy: ``created_at`` (``meta[8]``) soft-degrades
+        to None rather than falling back to ``meta[5]`` (which would re-introduce
+        the swap bug), while ``modified_at`` (``meta[5]``) is still populated.
+        """
+        modified_ts = 1768311605
+        data = [
+            "Modified-Only Notebook",
+            [],
+            "nb_modonly",
+            "📓",
+            None,
+            [None, None, None, None, None, [modified_ts, 0]],  # len 6: meta[5] set, meta[8] absent
+        ]
+        notebook = Notebook.from_api_response(data)
+
+        assert notebook.created_at is None
+        assert notebook.modified_at is not None
+        assert notebook.modified_at.timestamp() == modified_ts
+
+    def test_from_api_response_missing_meta_leaves_both_timestamps_none(self):
+        """No metadata block at all → both timestamps None."""
+        data = ["No Meta Notebook", [], "nb_nometa", "📓"]
+        notebook = Notebook.from_api_response(data)
+
+        assert notebook.created_at is None
+        assert notebook.modified_at is None
 
     def test_from_api_response_strips_thought_prefix(self):
         """Test that 'thought\\n' prefix is stripped from title."""
@@ -399,18 +487,23 @@ class TestNotebook:
         assert notebook.is_owner is True
 
     def test_from_api_response_invalid_timestamp(self):
-        """Test parsing with invalid timestamp data."""
+        """Test parsing with invalid timestamp data.
+
+        ``created_at`` reads ``meta[8]`` and ``modified_at`` reads ``meta[5]``;
+        both invalid payloads soft-degrade to ``None``.
+        """
         data = [
             "Notebook",
             [],
             "nb_123",
             "📓",
             None,
-            [None, None, None, None, None, ["invalid", 0]],
+            [None, None, None, None, None, ["invalid", 0], None, None, ["invalid", 0]],
         ]
         notebook = Notebook.from_api_response(data)
 
         assert notebook.created_at is None
+        assert notebook.modified_at is None
 
     def test_from_api_response_out_of_range_timestamp(self):
         """Platform timestamp range errors should not escape notebook parsing."""
@@ -420,13 +513,16 @@ class TestNotebook:
             "nb_123",
             "📓",
             None,
-            [None, None, None, None, None, [1704067200, 0]],
+            [None, None, None, None, None, [1704067200, 0], None, None, [1704067200, 0]],
         ]
 
+        # Both the creation slot (meta[8]) and modified slot (meta[5]) overflow.
+        data[5][8][0] = float("inf")
         data[5][5][0] = float("inf")
         notebook = Notebook.from_api_response(data)
 
         assert notebook.created_at is None
+        assert notebook.modified_at is None
 
     def test_from_api_response_non_string_title(self):
         """Test parsing when title is not a string."""
@@ -1980,6 +2076,7 @@ class TestNotebookMetadata:
             title="Test Notebook",
             created_at=datetime(2024, 1, 1, 12, 0),
             is_owner=True,
+            modified_at=datetime(2024, 1, 2, 9, 30),
         )
         metadata = NotebookMetadata(
             notebook=notebook,
@@ -1994,6 +2091,7 @@ class TestNotebookMetadata:
             "id": "nb_123",
             "title": "Test Notebook",
             "created_at": "2024-01-01T12:00:00",
+            "modified_at": "2024-01-02T09:30:00",
             "is_owner": True,
             "sources": [
                 {"type": "pdf", "title": "test.pdf", "url": None},
@@ -2012,12 +2110,14 @@ class TestNotebookMetadata:
             title="Proxy Test",
             created_at=datetime(2024, 2, 1),
             is_owner=False,
+            modified_at=datetime(2024, 3, 1),
         )
         metadata = NotebookMetadata(notebook=notebook)
 
         assert metadata.id == "nb_456"
         assert metadata.title == "Proxy Test"
         assert metadata.created_at == datetime(2024, 2, 1)
+        assert metadata.modified_at == datetime(2024, 3, 1)
         assert metadata.is_owner is False
 
     def test_to_dict_with_none_created_at(self):

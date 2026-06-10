@@ -46,6 +46,9 @@ class Notebook:
     created_at: datetime | None = None
     sources_count: int = 0
     is_owner: bool = True
+    # ``modified_at`` is appended at the END of the field list so positional
+    # construction stays unaffected (additive, defaults to ``None``).
+    modified_at: datetime | None = None
 
     @classmethod
     def from_api_response(cls, data: list[Any]) -> Notebook:
@@ -78,11 +81,24 @@ class Notebook:
         # ``data[5][...]`` (the legitimately-absent block defaults below).
         meta = data[5] if len(data) > 5 and isinstance(data[5], list) else None
 
+        # ``meta[8]`` (``data[5][8][0]``) is the CREATION instant: a controlled
+        # probe (create → add source @T0 → add source @T1) showed this slot
+        # stayed pinned at the creation time across modifications, while
+        # ``meta[5]`` advanced on each edit. The two slots were historically
+        # swapped — ``created_at`` read ``meta[5]`` and so exposed the
+        # last-modified time. ``meta[5]`` (``data[5][5][0]``) is now correctly
+        # surfaced as ``modified_at``.
         created_at = None
+        if meta is not None and len(meta) > 8:
+            created_ts = meta[8]
+            if isinstance(created_ts, list) and len(created_ts) > 0:
+                created_at = _datetime_from_timestamp(created_ts[0])
+
+        modified_at = None
         if meta is not None and len(meta) > 5:
-            ts_data = meta[5]
-            if isinstance(ts_data, list) and len(ts_data) > 0:
-                created_at = _datetime_from_timestamp(ts_data[0])
+            modified_ts = meta[5]
+            if isinstance(modified_ts, list) and len(modified_ts) > 0:
+                modified_at = _datetime_from_timestamp(modified_ts[0])
 
         is_owner = True
         if meta is not None and len(meta) > 1:
@@ -95,6 +111,7 @@ class Notebook:
             created_at=created_at,
             sources_count=sources_count,
             is_owner=is_owner,
+            modified_at=modified_at,
         )
 
 
@@ -149,6 +166,11 @@ class NotebookMetadata:
         return self.notebook.created_at
 
     @property
+    def modified_at(self) -> datetime | None:
+        """Get last-modified timestamp."""
+        return self.notebook.modified_at
+
+    @property
     def is_owner(self) -> bool:
         """Get owner status."""
         return self.notebook.is_owner
@@ -159,6 +181,7 @@ class NotebookMetadata:
             "id": self.id,
             "title": self.title,
             "created_at": self.created_at.isoformat() if self.created_at else None,
+            "modified_at": self.modified_at.isoformat() if self.modified_at else None,
             "is_owner": self.is_owner,
             "sources": [s.to_dict() for s in self.sources],
         }

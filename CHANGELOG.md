@@ -59,6 +59,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`Notebook.created_at` now reflects the true creation time instead of the
+  last-modified time; `Notebook.modified_at` is newly exposed.** The notebook
+  metadata block carries two timestamps — the creation instant at
+  `data[5][8][0]` (pinned across edits) and the last-modified instant at
+  `data[5][5][0]` (advances on every modification). `Notebook.from_api_response`
+  read the *modified* slot (`data[5][5]`) and labeled it `created_at`, so the
+  field — and everything built on it (`--json` output, `metadata` export, the
+  `Created` table column) — silently reported the last edit time. `created_at`
+  now reads the creation slot (`data[5][8]`), and the last-modified time is
+  surfaced additively as `Notebook.modified_at` (new field, defaults to `None`,
+  appended at the end so positional construction is unaffected; also added to
+  `NotebookMetadata.to_dict()` and the notebook `--json` envelopes). This
+  applies to both `notebooks.get()` and `notebooks.list()` (the homepage/recent
+  feed), which share the decode path. No signature change — `created_at` keeps
+  its type, only its source value is corrected — so this is a behavioral fix,
+  not an API-compat break, and `modified_at` is purely additive.
 - **Decoded `created_at` timestamps are now tz-aware UTC instead of naive
   host-local time** (#1519). The shared decoder `_datetime_from_timestamp`
   (backing `Notebook`/`Source`/`Artifact`/`MindMap.created_at`) called

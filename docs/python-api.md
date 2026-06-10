@@ -1896,9 +1896,10 @@ await client.labels.delete(nb_id, papers.id)
 class Notebook:
     id: str
     title: str
-    created_at: Optional[datetime]
+    created_at: Optional[datetime]   # creation time (tz-aware UTC)
     sources_count: int
     is_owner: bool
+    modified_at: Optional[datetime]  # last-modified time (tz-aware UTC)
 ```
 
 ### Source
