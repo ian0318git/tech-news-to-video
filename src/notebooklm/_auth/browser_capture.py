@@ -566,8 +566,21 @@ def run_browser_capture(
                         "Or use the default Chromium browser: notebooklm login"
                     )
                     io.fail(1)
-            # Diagnostic stays at debug level; the bare ``raise`` propagates to
-            # ``handle_errors`` → friendly ``Unexpected error: <msg>`` + exit 2.
+            # Last-resort TargetClosed mapping for anything that escapes the
+            # in-flow guards (recover_page, the navigation retry loop,
+            # wait_for_url, cookie-forcing) — in practice the final
+            # ``context.storage_state()`` capture (#1514). Those paths already
+            # map TargetClosed to BROWSER_CLOSED_HELP + exit 1; mirror them
+            # here so the user gets the same friendly help instead of the
+            # exit-2 bug-report hint. (The launch branch above never falls
+            # through for handled not-found errors — it io.fail(1)s — and
+            # launch failures are not TargetClosed.)
+            if isinstance(e, PlaywrightError) and TARGET_CLOSED_ERROR in str(e):
+                io.emit(BROWSER_CLOSED_HELP)
+                io.fail(1)
+            # For everything else, the diagnostic stays at debug level; the bare
+            # ``raise`` propagates to ``handle_errors`` → friendly
+            # ``Unexpected error: <msg>`` + exit 2.
             logger.debug("Login failed: %s", e, exc_info=True)
             raise
         finally:

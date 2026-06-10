@@ -300,6 +300,11 @@ class TestLoginCommand:
             mock_page = MagicMock()
             mock_page.url = "https://notebooklm.google.com/"
             mock_context.pages = [mock_page]
+            # Real Playwright pages expose their owning BrowserContext via
+            # ``page.context``; wire it so tests can reach the context from the
+            # yielded page (e.g. to make ``storage_state()`` raise) without
+            # rebuilding this harness.
+            mock_page.context = mock_context
             # storage_state() now returns a dict; atomic_write_json writes it.
             mock_context.storage_state.return_value = {"cookies": [], "origins": []}
             mock_launch = (
@@ -1396,6 +1401,57 @@ class TestLoginCommand:
 
         assert result.exit_code == 1
         assert "browser" in result.output.lower() and "closed" in result.output.lower()
+
+    @pytest.mark.requires_playwright
+    def test_login_browser_closed_during_storage_capture_shows_help(
+        self, runner, mock_login_browser_with_storage
+    ):
+        """TargetClosed at the final ``storage_state()`` capture surfaces BROWSER_CLOSED_HELP (#1514).
+
+        Every in-flow Playwright call (recover_page, the navigation retry
+        loop, wait_for_url, cookie-forcing) already maps TargetClosedError to
+        BROWSER_CLOSED_HELP + exit 1. Closing the browser in the narrow window
+        before ``context.storage_state()`` used to fall through the outer
+        handler's bare ``raise`` instead — exit 2 + "Unexpected error" + the
+        bug-report hint, for something that isn't a bug.
+        """
+        from playwright.sync_api import Error as PlaywrightError
+
+        mock_page = mock_login_browser_with_storage
+        mock_page.context.storage_state.side_effect = PlaywrightError(
+            "BrowserContext.storage_state: Target page, context or browser has been closed"
+        )
+
+        result = runner.invoke(cli, ["login"])
+
+        assert result.exit_code == 1
+        assert "browser window was closed" in result.output.lower()
+        assert "Unexpected error" not in result.output
+        assert "Authentication saved" not in result.output
+
+    @pytest.mark.requires_playwright
+    def test_login_non_target_closed_error_during_storage_capture_propagates(
+        self, runner, mock_login_browser_with_storage
+    ):
+        """A non-TargetClosed failure at ``storage_state()`` keeps the exit-2 contract.
+
+        Counter-case for the #1514 fix: only TargetClosed gets the friendly
+        browser-closed help; any other failure at the capture site still
+        propagates through the outer handler's bare ``raise`` to
+        ``handle_errors`` ("Unexpected error: ..." + exit 2).
+        """
+        from playwright.sync_api import Error as PlaywrightError
+
+        mock_page = mock_login_browser_with_storage
+        mock_page.context.storage_state.side_effect = PlaywrightError(
+            "BrowserContext.storage_state: Protocol error (Storage.getCookies)"
+        )
+
+        result = runner.invoke(cli, ["login"])
+
+        assert result.exit_code == 2
+        assert "Unexpected error" in result.output
+        assert "browser window was closed" not in result.output.lower()
 
 
 class TestLoginNoTraceback:

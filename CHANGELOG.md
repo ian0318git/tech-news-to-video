@@ -42,6 +42,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Playwright login: closing the browser during the final storage-state
+  capture now shows the browser-closed help instead of a bug-report prompt**
+  (#1514, deferred from the #1512 review). Every in-flow Playwright call in
+  the login flow (page recovery, the navigation retry loop, the login wait,
+  cookie-forcing) already mapped `TargetClosedError` to the friendly
+  `BROWSER_CLOSED_HELP` text + exit 1, but a closure in the narrow window
+  during the final `context.storage_state()` capture fell through the outer
+  handler's bare `raise` and exited 2 ("Unexpected error … please report a
+  bug"). The outer handler in `run_browser_capture` now recognizes
+  TargetClosed and surfaces the same help + exit 1; every other unexpected
+  failure keeps the exit-2 bug-report contract.
+
 - **`sources.add_text` no longer swallows typed transport errors into
   `SourceAddError`.** Its bare `except RPCError` wrapped *everything* —
   including the `RPCError` subclasses `RateLimitError`, `AuthError`, and
