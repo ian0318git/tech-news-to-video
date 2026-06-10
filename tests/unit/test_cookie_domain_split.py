@@ -27,6 +27,12 @@ from unittest.mock import patch
 import pytest
 from click.testing import CliRunner
 
+from notebooklm._auth.cookie_policy import (
+    build_cookie_domain_allowlist as _neutral_build_cookie_domain_allowlist,
+)
+from notebooklm._auth.cookie_policy import (
+    resolve_optional_cookie_domains as _neutral_resolve_optional_cookie_domains,
+)
 from notebooklm.auth import (
     ALLOWED_COOKIE_DOMAINS,
     OPTIONAL_COOKIE_DOMAINS,
@@ -41,6 +47,51 @@ from notebooklm.cli.services.login import (
 )
 from notebooklm.cli.session_cmd import _parse_include_domains
 from notebooklm.notebooklm_cli import cli
+
+
+class TestNeutralBuilderMatchesCliBuilder:
+    """Drift canary: the neutral cookie-domain builder in
+    ``notebooklm._auth.cookie_policy`` (consumed by the Playwright
+    browser-capture filter) must stay equivalent to the CLI extractor builder
+    ``cli.services.login._build_google_cookie_domains`` (consumed by the
+    rookiepy / Firefox paths). Both derive from the same shared constants; this
+    pins that they never silently diverge, so the on-disk ``storage_state.json``
+    cookie set is identical regardless of which login path wrote it.
+    """
+
+    @pytest.mark.parametrize(
+        "include_optional, include_domains",
+        [
+            (False, None),
+            (True, None),
+            (False, set()),
+            (False, {"youtube"}),
+            (False, {"docs"}),
+            (False, {"myaccount"}),
+            (False, {"mail"}),
+            (False, {"youtube", "docs"}),
+            (False, {"youtube", "docs", "myaccount", "mail"}),
+            (False, {"all"}),
+        ],
+    )
+    def test_builders_produce_identical_domain_sets(self, include_optional, include_domains):
+        cli_domains = _build_google_cookie_domains(
+            include_optional=include_optional, include_domains=include_domains
+        )
+        neutral_domains = _neutral_build_cookie_domain_allowlist(
+            include_optional=include_optional, include_domains=include_domains
+        )
+        # Order is not significant for the allowlist; compare as sets.
+        assert set(cli_domains) == set(neutral_domains)
+
+    @pytest.mark.parametrize(
+        "labels",
+        [set(), {"youtube"}, {"docs", "mail"}, {"all"}],
+    )
+    def test_optional_resolvers_match(self, labels):
+        assert _resolve_optional_cookie_domains(labels) == (
+            _neutral_resolve_optional_cookie_domains(labels)
+        )
 
 
 class TestRequiredVsOptional:

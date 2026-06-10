@@ -289,6 +289,72 @@ OPTIONAL_COOKIE_DOMAINS: frozenset[str] = frozenset().union(
     *OPTIONAL_COOKIE_DOMAINS_BY_LABEL.values()
 )
 
+# Sentinel ``--include-domains`` label meaning "every optional sibling-product
+# domain". Lives here (with the domain constants) so both the CLI extractor
+# builder and the neutral browser-capture filter share one source of truth.
+INCLUDE_DOMAINS_ALL = "all"
+
+
+def resolve_optional_cookie_domains(labels: set[str]) -> frozenset[str]:
+    """Resolve ``--include-domains`` labels to the union of their domain sets.
+
+    ``labels`` is expected to be pre-validated (every entry a key of
+    :data:`OPTIONAL_COOKIE_DOMAINS_BY_LABEL`, or the literal
+    :data:`INCLUDE_DOMAINS_ALL`). The dict lookup is unguarded by design — a
+    ``KeyError`` here would signal a validation bug upstream, not user input.
+    """
+    if not labels:
+        return frozenset()
+    if INCLUDE_DOMAINS_ALL in labels:
+        return frozenset().union(*OPTIONAL_COOKIE_DOMAINS_BY_LABEL.values())
+    selected: set[str] = set()
+    for label in labels:
+        selected.update(OPTIONAL_COOKIE_DOMAINS_BY_LABEL[label])
+    return frozenset(selected)
+
+
+def build_cookie_domain_allowlist(
+    *,
+    include_optional: bool = False,
+    include_domains: set[str] | None = None,
+) -> list[str]:
+    """Return the cookie-domain allowlist for the configured opt-in policy.
+
+    Single source of truth for the domain set both the CLI rookiepy/Firefox
+    extractors (``rookiepy.load(domains=...)``) and the Playwright
+    browser-capture cookie filter consume. Defaults to
+    :data:`REQUIRED_COOKIE_DOMAINS` plus every regional ``.google.<ccTLD>``
+    variant; sibling-product cookies (YouTube, Docs, myaccount, Mail) are
+    excluded unless the caller opts in via ``include_optional=True`` or a
+    non-empty ``include_domains`` label set (``"all"`` = every label).
+
+    Args:
+        include_optional: When ``True``, include every optional sibling domain
+            (equivalent to ``--include-domains=all``).
+        include_domains: Optional-domain labels; each expands via
+            :data:`OPTIONAL_COOKIE_DOMAINS_BY_LABEL`. ``"all"`` is a shortcut
+            for every label.
+
+    Returns:
+        A list of cookie-domain strings. Order is not significant; callers that
+        need set semantics build a ``frozenset`` from it.
+    """
+    selected_optional: frozenset[str]
+    if include_domains:
+        selected_optional = resolve_optional_cookie_domains(include_domains)
+    elif include_optional:
+        selected_optional = frozenset().union(*OPTIONAL_COOKIE_DOMAINS_BY_LABEL.values())
+    else:
+        selected_optional = frozenset()
+
+    domains: list[str] = list(REQUIRED_COOKIE_DOMAINS | selected_optional)
+    for cctld in GOOGLE_REGIONAL_CCTLDS:
+        domain = f".google.{cctld}"
+        if domain not in domains:
+            domains.append(domain)
+    return domains
+
+
 # Backward-compatible union — preserves the old constant name so external
 # imports keep working. Internal code should prefer ``REQUIRED_*`` /
 # ``OPTIONAL_*`` so the security tier is explicit at the call site.

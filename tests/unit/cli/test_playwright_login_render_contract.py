@@ -55,6 +55,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import notebooklm._auth.browser_capture as _bc
 import notebooklm.cli.services.playwright_login as _pl
 from notebooklm.notebooklm_cli import cli
 
@@ -231,7 +232,9 @@ def _drive_login(
                 _pl, "shutil", _wrapped_module(shutil, rmtree=MagicMock(side_effect=rmtree_side))
             )
         )
-        stack.enter_context(patch.object(_pl, "time", _wrapped_module(time, sleep=MagicMock())))
+        # ``time`` (retry backoff) moved into the neutral browser-capture core,
+        # so its consuming binding now lives on ``_bc`` (#browser-capture-core).
+        stack.enter_context(patch.object(_bc, "time", _wrapped_module(time, sleep=MagicMock())))
         mock_pw = stack.enter_context(patch("playwright.sync_api.sync_playwright"))
         stack.enter_context(
             patch.object(_pl, "get_storage_path", return_value=_fake_path(_STORAGE))
@@ -246,9 +249,11 @@ def _drive_login(
         stack.enter_context(patch("notebooklm.paths.resolve_profile", return_value=_PROFILE_NAME))
         # Pin the base host so ``connection_error_help()`` (which reads
         # ``NOTEBOOKLM_BASE_URL`` via ``get_base_host()``) renders the default
-        # host regardless of any env var set in the test runner.
+        # host regardless of any env var set in the test runner. ``get_base_host``
+        # is consumed by the URL helpers that moved into the neutral
+        # browser-capture core, so patch its ``_bc`` binding.
         stack.enter_context(
-            patch.object(_pl, "get_base_host", return_value="notebooklm.google.com")
+            patch.object(_bc, "get_base_host", return_value="notebooklm.google.com")
         )
         stack.enter_context(patch("notebooklm.cli.session_cmd._sync_server_language_to_config"))
         if patch_repair:
@@ -256,8 +261,10 @@ def _drive_login(
                 patch("notebooklm.cli.services.playwright_login.repair_playwright_account_metadata")
             )
         # The synthetic ``_STORAGE`` path is never created on disk; stub the
-        # atomic write so the success paths don't touch the filesystem.
-        stack.enter_context(patch("notebooklm.cli.services.playwright_login.atomic_write_json"))
+        # atomic write so the success paths don't touch the filesystem. The
+        # persist step moved into the neutral browser-capture core, so its
+        # ``atomic_write_json`` binding now lives on ``_bc``.
+        stack.enter_context(patch.object(_bc, "atomic_write_json"))
 
         mock_context = MagicMock()
         page = MagicMock()

@@ -497,7 +497,7 @@ class TestLoginCommand:
 
         mock_page.goto.side_effect = goto_side_effect
 
-        with patch("notebooklm.cli.services.playwright_login.time.sleep"):
+        with patch("time.sleep"):
             result = runner.invoke(cli, ["login"])
 
         assert result.exit_code == 0
@@ -525,7 +525,7 @@ class TestLoginCommand:
 
         mock_page.goto.side_effect = goto_side_effect
 
-        with patch("notebooklm.cli.services.playwright_login.time.sleep"):
+        with patch("time.sleep"):
             result = runner.invoke(cli, ["login"])
 
         assert result.exit_code == 0
@@ -544,7 +544,7 @@ class TestLoginCommand:
 
         mock_page.goto.side_effect = goto_side_effect
 
-        with patch("notebooklm.cli.services.playwright_login.time.sleep"):
+        with patch("time.sleep"):
             result = runner.invoke(cli, ["login"])
 
         assert result.exit_code == 1
@@ -569,7 +569,7 @@ class TestLoginCommand:
 
         mock_page.goto.side_effect = goto_side_effect
 
-        with patch("notebooklm.cli.services.playwright_login.time.sleep"):
+        with patch("time.sleep"):
             result = runner.invoke(cli, ["login"])
 
         assert result.exit_code != 0
@@ -592,7 +592,7 @@ class TestLoginCommand:
 
         mock_page.goto.side_effect = goto_side_effect
 
-        with patch("notebooklm.cli.services.playwright_login.time.sleep"):
+        with patch("time.sleep"):
             result = runner.invoke(cli, ["login"])
 
         assert result.exit_code == 1
@@ -1172,7 +1172,7 @@ class TestLoginCommand:
             )
             mock_launch.return_value = mock_context
 
-            with patch("notebooklm.cli.services.playwright_login.time.sleep"):
+            with patch("time.sleep"):
                 result = runner.invoke(cli, ["login"])
 
         assert result.exit_code == 0
@@ -1331,7 +1331,7 @@ class TestLoginCommand:
             )
             mock_launch.return_value = mock_context
 
-            with patch("notebooklm.cli.services.playwright_login.time.sleep"):
+            with patch("time.sleep"):
                 result = runner.invoke(cli, ["login"])
 
         assert result.exit_code == 1
