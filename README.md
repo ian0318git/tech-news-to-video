@@ -90,19 +90,27 @@ These features are available via API/CLI but not exposed in NotebookLM's web int
 
 The full install guide — six personas (agent, end-user, library, headless, contributor, power-user), optional extras matrix, platform notes — lives in **[docs/installation.md](docs/installation.md)**.
 
-**Quickest start** (CLI users and AI agents):
+**Quickest start** (CLI users and AI agents) — install the CLI with `uv tool` (recommended) or `pipx`:
 
 ```bash
-pip install "notebooklm-py[browser]"   # core + Playwright
-playwright install chromium             # ~170 MB; no progress bar — be patient (30–90 s)
-notebooklm login                        # opens browser for Google sign-in
-notebooklm auth check --test --json     # verify: expect "status": "ok"
+uv tool install "notebooklm-py[browser]"   # or: pipx install "notebooklm-py[browser]"
+notebooklm login                           # first run auto-downloads Chromium (~170 MB), then Google sign-in
+notebooklm auth check --test --json        # verify: expect "status": "ok"
+```
+
+**Why `uv tool` / `pipx`?** They install the CLI into its own isolated environment and put `notebooklm` on your `PATH` — no dependency clashes with other tools, a one-line upgrade (`uv tool upgrade notebooklm-py`) or uninstall, and, crucially, they work on modern macOS (Homebrew Python) and Debian/Ubuntu where a system-wide `pip install` is blocked with `error: externally-managed-environment` ([PEP 668](https://peps.python.org/pep-0668/)). No `uv` yet? `curl -LsSf https://astral.sh/uv/install.sh | sh` (or `brew install uv` / `winget install astral-sh.uv`).
+
+**Prefer plain `pip`?** It works the same **inside a virtualenv** (and directly on Windows, where Python isn't externally-managed):
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install "notebooklm-py[browser]"
 ```
 
 **As a library** (embedded in your app — no Playwright, no Chromium):
 
 ```bash
-pip install notebooklm-py               # ~10 MB; ship a pre-acquired storage_state.json
+uv add notebooklm-py                    # or, inside a virtualenv: pip install notebooklm-py
 ```
 
 If `playwright install chromium` fails on Linux with `TypeError: onExit is not a function`, see the [Linux workaround](docs/troubleshooting.md#linux). **Contributors:** see [CONTRIBUTING.md](CONTRIBUTING.md).
