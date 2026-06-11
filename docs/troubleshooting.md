@@ -1,7 +1,7 @@
 # Troubleshooting
 
 **Status:** Active
-**Last Updated:** 2026-05-14
+**Last Updated:** 2026-06-11
 
 Common issues, known limitations, and workarounds for `notebooklm-py`.
 
@@ -231,16 +231,67 @@ from notebooklm import NotebookLMClient
 The value must be exactly `"1"` — `"0"`, `"true"`, etc. are treated as
 unset (still truncated).
 
-#### "RPCError: [3]" or "UserDisplayableError"
+#### "RPCError: [3]" (Invalid argument) / "UserDisplayableError"
 
-**Cause:** Google API returned an error, typically:
-- Invalid parameters
-- Resource not found
+**Cause:** Google's API rejected the request. Common cases:
+- Invalid parameters or a not-found resource ID
+- Account quota exceeded (for `create`, status `[3]` is also the notebook-limit signal)
 - Rate limiting
 
 **Solution:**
 - Check that notebook/source IDs are valid
 - Add delays between operations (see Rate Limiting section)
+
+**If it only affects _write_ operations** (`create`, `source add`, `generate`) while reads (`list`, `ask`) keep working — **and the web UI still works** — the likely cause is that Google changed the request payload (wire format) for those RPCs and `notebooklm-py` is still sending the old shape. Google rolls these out gradually, so it can hit some accounts before others.
+
+> **First, rule out a mis-decoded success.** Re-run the failing action, then check `notebooklm list`: if the resource was actually **created** despite the error, it's a *response*-decoding issue (share the **Response** below). If it was **not** created, Google rejected our **request** (share the **Payload** below).
+
+**Help us fix it — share the web UI's payload (no cookies needed).** Either option below leaks nothing: cookies, the `at=` CSRF token, and `Set-Cookie` live in request/response *headers*, never inside the `f.req` payload.
+
+> **⚠️ Never paste the raw `.har` itself.** A HAR contains your cookies, the `at=` CSRF token, and the full NotebookLM page HTML — which embeds API keys, the CSRF token, and your account email. Only ever share the **scrubber's output** below (or the single `f.req` line from Option B). The scrubber processes only `/batchexecute` calls and redacts every value, so the page HTML never reaches its output.
+
+**Option A — thorough, auto-scrubbed (recommended; captures every RPC + its response).**
+
+This walkthrough takes ~2 minutes. You never copy a cookie, a token, or the raw HAR — a small bundled script does the redaction for you.
+
+1. **Open DevTools on the Network tab.** In Chrome/Edge press <kbd>F12</kbd> (or <kbd>Cmd</kbd>+<kbd>Opt</kbd>+<kbd>I</kbd> on macOS); in Firefox press <kbd>F12</kbd>. Click the **Network** tab at the top of the panel.
+2. **Arm the capture.** Tick **Preserve log** (Chrome) / **Persist Logs** (Firefox) so a page reload doesn't wipe the capture, and confirm the round **● Record** button is red (it usually is by default).
+3. **Reproduce the failure.** In the NotebookLM tab, perform the exact action that fails — e.g. create a notebook, or add a source. You'll see `batchexecute?rpcids=…` rows appear in the Network list. You can stop as soon as the action errors.
+4. **Export the session to a file:**
+   - **Chrome/Edge:** click the ⤓ **Export HAR…** download icon in the Network toolbar (or right-click any row → **Save all as HAR with content**).
+   - **Firefox:** click the ⚙️ gear / **…** menu in the Network toolbar → **Save All As HAR**.
+
+   Save it as `capture.har`. (The "with content" variant matters — it's what includes the *response* bodies the scrubber reports.)
+5. **Scrub it.** From your `notebooklm-py` checkout, run the bundled script (stdlib-only — no install needed):
+
+   ```console
+   $ python scripts/scrub_rpc_har.py capture.har
+   NotebookLM RPC capture — string values → <str:N>; cookies / headers / at= / Set-Cookie never read:
+
+   CCqFvf  (CREATE_NOTEBOOK)
+     request : ["<str:7>",null,null,[2],[1]]
+     response: HTTP 200 | status_code=[3] | result=null
+
+   1 call(s). Safe to share — no cookies / CSRF / session tokens are present (they live in headers, which this tool never reads).
+   ```
+
+   Narrow to a single RPC with `--rpcid` if the capture is noisy:
+
+   ```console
+   $ python scripts/scrub_rpc_har.py capture.har --rpcid CCqFvf
+   ```
+
+   The script reads **only** each request's `f.req` field and the response body — never the headers/cookies arrays, never the non-`batchexecute` page HTML — and replaces every text value with its length (`<str:7>`). It refuses to print if any raw string ever slips through, so the output is safe by construction.
+6. **Paste that output** into the issue. Read it back first as a sanity check: every value should be `<str:N>`, never readable text.
+
+   - `status_code=[3]` with `result=null` → Google rejected our **request** (a payload/wire-format change). This is what we need to fix it.
+   - A non-null `result` → the call actually worked and this is a **response**-decode issue; share it just the same.
+
+**Option B — quick, one RPC by hand (no script).** Use this if you can't run the script.
+
+1. In DevTools → **Network**, click the `batchexecute?rpcids=…` POST for the failing call (e.g. `rpcids=CCqFvf` for create, `izAoDd` for add-source).
+2. Open the **Payload** tab (Chrome) / **Request** tab (Firefox), copy **only** the `f.req` value — **not** the `at=` field beside it, and don't open the **Cookies**/**Headers** tabs.
+3. Replace any free text (title, URL) with `REDACTED` and paste it. We diff it against what the library sends — `["<title>", null, null, [2], [1]]` for create — and update the payload.
 
 ### Generation Failures
 
