@@ -10,6 +10,7 @@ import os
 import queue
 import tempfile
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -42,13 +43,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _TRUSTED_DOWNLOAD_DOMAINS = (".google.com", ".googleusercontent.com", ".googleapis.com")
-
 # Bounded queue between the async chunk producer and the single writer
 # thread. Small enough to provide back-pressure (the producer awaits when
 # the writer falls behind) but large enough to keep the writer hot across
 # a brief read stall. 8 slots × 64 KiB ≈ 512 KiB of in-flight buffering.
 _DOWNLOAD_WRITER_QUEUE_SIZE = 8
-
 # ``_PREFETCH_NOTE`` — referenced by the per-method docstrings below. Each
 # ``download_<x>`` accepts an optional pre-fetched list (``artifacts_data`` raw
 # studio rows / ``artifacts`` typed list / ``mind_maps`` note-backed rows). When
@@ -174,11 +173,12 @@ class ArtifactDownloadService:
         listing: ArtifactListingService,
         mind_maps: NoteBackedMindMapService,
         storage_path: Path | None = None,
+        cookie_loader: Callable[[Any], Any] = _load_httpx_cookies,
     ) -> None:
         self._rpc = rpc
         self._listing = listing
         self._mind_maps = mind_maps
-        self._storage_path = storage_path
+        self._storage_path, self._cookie_loader = storage_path, cookie_loader
 
     async def _list_raw(self, notebook_id: str) -> list[Any]:
         """List raw artifacts through the injected listing service."""
@@ -714,7 +714,7 @@ class ArtifactDownloadService:
         """Download multiple files using httpx with proper cookie handling."""
         result = DownloadResult()
 
-        cookies = await asyncio.to_thread(_load_httpx_cookies, self._storage_path)
+        cookies = await asyncio.to_thread(self._cookie_loader, self._storage_path)
 
         async with httpx.AsyncClient(
             cookies=cookies,
@@ -814,7 +814,7 @@ class ArtifactDownloadService:
         temp_file = Path(temp_path_str)
 
         try:
-            cookies = await asyncio.to_thread(_load_httpx_cookies, self._storage_path)
+            cookies = await asyncio.to_thread(self._cookie_loader, self._storage_path)
             timeout = httpx.Timeout(connect=10.0, read=30.0, write=30.0, pool=30.0)
 
             try:

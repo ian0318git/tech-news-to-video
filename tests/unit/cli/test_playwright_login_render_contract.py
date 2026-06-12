@@ -44,13 +44,18 @@ import time
 from contextlib import ExitStack
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
+from rich.console import Console, ConsoleDimensions
 
 import notebooklm._auth.browser_capture as _bc
+import notebooklm.auth as auth_module
 import notebooklm.cli.services.playwright_login as _pl
+import notebooklm.cli.session_cmd as session_cmd_module
+import notebooklm.paths as paths_module
 from notebooklm.notebooklm_cli import cli
+from tests._fixtures import patch_session_login_dual
 
 # Fixed, synthetic paths keep the snapshots byte-stable across the OS test matrix
 # (ubuntu / macos / windows). They are rendered only through :func:`_fake_path`
@@ -77,18 +82,16 @@ def _fixed_console_width():
     contract. The single shared ``console`` instance is reused by the service,
     ``session_cmd`` and the error paths, so pinning its size once covers every
     render site while still writing through to ``CliRunner``'s captured stdout.
-    Rich's ``Console.size`` only honours the pinned dimensions when **both**
-    ``_width`` and ``_height`` are set (otherwise it falls back to terminal /
-    ``COLUMNS`` detection — exactly the OS-divergent path being avoided), so both
-    are patched. The wide 400 keeps every rendered line on one physical row even
-    after the ``- legacy_windows`` adjustment Rich applies on Windows, so nothing
-    ever reflows.
+    Patching ``Console.size`` at the class level pins the dimensions observed by
+    every shared console. The wide 400 keeps every rendered line on one physical
+    row even after the ``- legacy_windows`` adjustment Rich applies on Windows,
+    so nothing ever reflows.
     """
-    from notebooklm.cli import rendering
-
-    with (
-        patch.object(rendering.console, "_width", 400),
-        patch.object(rendering.console, "_height", 100),
+    with patch.object(
+        Console,
+        "size",
+        new_callable=PropertyMock,
+        return_value=ConsoleDimensions(400, 100),
     ):
         yield
 
@@ -231,7 +234,9 @@ def _drive_login(
                 return_value=_fake_path(profile_dir, exists=fresh_profile_exists),
             )
         )
-        stack.enter_context(patch("notebooklm.paths.resolve_profile", return_value=_PROFILE_NAME))
+        stack.enter_context(
+            patch.object(paths_module, "resolve_profile", return_value=_PROFILE_NAME)
+        )
         # Pin the base host so ``connection_error_help()`` (which reads
         # ``NOTEBOOKLM_BASE_URL`` via ``get_base_host()``) renders the default
         # host regardless of any env var set in the test runner. ``get_base_host``
@@ -240,11 +245,9 @@ def _drive_login(
         stack.enter_context(
             patch.object(_bc, "get_base_host", return_value="notebooklm.google.com")
         )
-        stack.enter_context(patch("notebooklm.cli.session_cmd._sync_server_language_to_config"))
+        stack.enter_context(patch_session_login_dual("_sync_server_language_to_config"))
         if patch_repair:
-            stack.enter_context(
-                patch("notebooklm.cli.services.playwright_login.repair_playwright_account_metadata")
-            )
+            stack.enter_context(patch.object(_pl, "repair_playwright_account_metadata"))
         # The synthetic ``_STORAGE`` path is never created on disk; stub the
         # atomic write so the success paths don't touch the filesystem. The
         # persist step moved into the neutral browser-capture core, so its
@@ -292,21 +295,21 @@ def _drive_refresh(runner, *, enumerate_accounts: Any, args: list[str]):
     with ExitStack() as stack:
         stack.enter_context(patch.object(_pl, "get_storage_path", return_value=storage))
         stack.enter_context(
-            patch("notebooklm.cli.session_cmd.get_storage_path", return_value=storage)
+            patch.object(session_cmd_module, "get_storage_path", return_value=storage)
         )
         mock_fetch = stack.enter_context(
-            patch("notebooklm.cli.session_cmd.fetch_tokens_with_domains", new_callable=AsyncMock)
+            patch.object(session_cmd_module, "fetch_tokens_with_domains", new_callable=AsyncMock)
         )
         mock_fetch.return_value = ("csrf_ok", "session_ok")
-        stack.enter_context(patch("notebooklm.auth.read_account_metadata", return_value={}))
+        stack.enter_context(patch.object(auth_module, "read_account_metadata", return_value={}))
         # Repair collaborators (file-touching) stubbed; only enumeration varies.
-        stack.enter_context(patch("notebooklm.auth.enumerate_accounts", new=enumerate_accounts))
+        stack.enter_context(patch.object(auth_module, "enumerate_accounts", new=enumerate_accounts))
         stack.enter_context(
-            patch("notebooklm.auth.build_httpx_cookies_from_storage", return_value=MagicMock())
+            patch.object(auth_module, "build_httpx_cookies_from_storage", return_value=MagicMock())
         )
-        stack.enter_context(patch("notebooklm.auth.write_account_metadata"))
-        stack.enter_context(patch("notebooklm.auth.clear_account_metadata"))
-        stack.enter_context(patch("notebooklm.auth.extract_email_from_html", return_value=None))
+        stack.enter_context(patch.object(auth_module, "write_account_metadata"))
+        stack.enter_context(patch.object(auth_module, "clear_account_metadata"))
+        stack.enter_context(patch.object(auth_module, "extract_email_from_html", return_value=None))
         return runner.invoke(cli, args)
 
 
@@ -617,10 +620,10 @@ class TestLoginProgressSuccess:
             return [Account(authuser=0, email="alice@example.com", is_default=True)]
 
         with (
-            patch("notebooklm.auth.enumerate_accounts", new=_enum),
-            patch("notebooklm.auth.build_httpx_cookies_from_storage", return_value=MagicMock()),
-            patch("notebooklm.auth.write_account_metadata"),
-            patch("notebooklm.auth.extract_email_from_html", return_value=None),
+            patch.object(auth_module, "enumerate_accounts", new=_enum),
+            patch.object(auth_module, "build_httpx_cookies_from_storage", return_value=MagicMock()),
+            patch.object(auth_module, "write_account_metadata"),
+            patch.object(auth_module, "extract_email_from_html", return_value=None),
         ):
             result, _ = _drive_login(
                 runner,

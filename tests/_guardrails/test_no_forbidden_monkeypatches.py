@@ -252,6 +252,19 @@ _PATTERN_PATCH_OBJECT_PRIVATE_ATTR = re.compile(
     r"[rRfFuUbB]*[\"']_(?!_\w*__[\"'])"
 )
 
+# (h) ``patch(f"{MODULE}.attr")`` — computed string-target ``patch``.
+#
+# The string-patch ratchet counts literal ``patch("notebooklm…")`` targets,
+# but f-string targets can hide the same module-layout coupling behind a
+# constant such as ``REFRESH = "notebooklm.cli.services.login.refresh"``.
+# They also defeat the private-target regexes when the private leaf is
+# assembled as ``f"{REFRESH}._helper"``. Any test that needs this should use
+# a locally-imported object reference or an explicit dependency seam instead.
+_PATTERN_MOCK_PATCH_FSTRING_TARGET = re.compile(
+    r"(?<![\w.])(?:[\w]+\.)*patch\(\s*(?:target\s*=\s*)?"
+    r"[rRuUbB]*[fF][rRuUbB]*[\"']"
+)
+
 # NOTE: patterns (f) and (g) are deliberately NOT in this tuple — it drives
 # the drained-to-zero global gate (``_ALLOWLIST`` + stays-empty guard), while
 # (f)/(g) run under their own baselined-allowlist regime via
@@ -270,6 +283,7 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         "patch.object into private module (forbidden by ADR-0007)",
         _PATTERN_MOCK_PATCH_OBJECT_PRIVATE,
     ),
+    ("mock.patch f-string target (forbidden by ADR-0007)", _PATTERN_MOCK_PATCH_FSTRING_TARGET),
 )
 
 
@@ -313,42 +327,10 @@ _ALLOWLIST: frozenset[str] = frozenset()
 # ---------------------------------------------------------------------------
 
 # Files containing deep-leaf private string-target patches (pattern f).
-_DEEP_LEAF_ALLOWLIST: frozenset[str] = frozenset(
-    {
-        "tests/unit/cli/_session_helpers.py",
-        "tests/unit/cli/conftest.py",
-        "tests/unit/cli/test_auth_subcommands.py",
-        "tests/unit/cli/test_encoding.py",
-        "tests/unit/cli/test_helpers.py",
-        "tests/unit/cli/test_login.py",
-        "tests/unit/cli/test_login_chromium_fanout.py",
-        "tests/unit/cli/test_login_multi_account.py",
-        "tests/unit/cli/test_playwright_login_render_contract.py",
-        "tests/unit/cli/test_session_characterization.py",
-        "tests/unit/test_cookie_domain_split.py",
-        "tests/unit/test_json_error_exit.py",
-    }
-)
+_DEEP_LEAF_ALLOWLIST: frozenset[str] = frozenset()
 
 # Files containing private-attribute ``patch.object`` patches (pattern g).
-_PATCH_OBJECT_PRIVATE_ATTR_ALLOWLIST: frozenset[str] = frozenset(
-    {
-        "tests/integration/concurrency/test_download_blocks_loop.py",
-        "tests/integration/test_artifacts_integration.py",
-        "tests/integration/test_sources_integration.py",
-        "tests/unit/cli/conftest.py",
-        "tests/unit/cli/test_agent.py",
-        "tests/unit/cli/test_cli_contract.py",
-        "tests/unit/cli/test_completion.py",
-        "tests/unit/cli/test_cookie_writes.py",
-        "tests/unit/cli/test_firefox_accounts.py",
-        "tests/unit/cli/test_playwright_login_render_contract.py",
-        "tests/unit/cli/test_profile.py",
-        "tests/unit/test_artifact_downloads.py",
-        "tests/unit/test_artifact_downloads_coverage.py",
-        "tests/unit/test_source_status.py",
-    }
-)
+_PATCH_OBJECT_PRIVATE_ATTR_ALLOWLIST: frozenset[str] = frozenset()
 
 
 # ---------------------------------------------------------------------------
@@ -675,6 +657,29 @@ def test_deep_leaf_pattern_detects_known_shapes() -> None:
     )
     assert (
         _match_lines('dispatch("notebooklm.cli.helpers._x")', _PATTERN_MOCK_PATCH_DEEP_PRIVATE)
+        == []
+    )
+
+
+def test_fstring_patch_pattern_detects_computed_targets() -> None:
+    """Pattern (h) catches computed string-target ``patch`` calls."""
+    assert _match_lines('patch(f"{REFRESH}._helper")', _PATTERN_MOCK_PATCH_FSTRING_TARGET) == [1]
+    assert _match_lines(
+        'mock.patch(target=fr"{MODULE}.public_attr")',
+        _PATTERN_MOCK_PATCH_FSTRING_TARGET,
+    ) == [1]
+    assert (
+        _match_lines(
+            'patch.object(module, "public_attr")',
+            _PATTERN_MOCK_PATCH_FSTRING_TARGET,
+        )
+        == []
+    )
+    assert (
+        _match_lines(
+            'patch("notebooklm.cli.helpers.get_context_path")',
+            _PATTERN_MOCK_PATCH_FSTRING_TARGET,
+        )
         == []
     )
 

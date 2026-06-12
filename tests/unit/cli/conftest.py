@@ -2,11 +2,18 @@
 
 import math
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
 from click.testing import CliRunner
+from rich.console import Console, ConsoleDimensions
 
+import notebooklm.auth as auth_module
+import notebooklm.cli._chromium_profiles as chromium_profiles
+import notebooklm.cli.context as context_module
+import notebooklm.cli.helpers as helpers_module
+import notebooklm.cli.resolve as resolve_module
+import notebooklm.cli.services.session_context as session_context_module
 from notebooklm.types import (
     MindMapResult,
     ResearchSource,
@@ -31,9 +38,8 @@ def _pin_cli_console_width():
     (the real render contract). The single shared ``console`` is reused by the
     services, ``session_cmd`` and the error paths, so pinning its size once
     covers every render site while still writing through to ``CliRunner``'s
-    captured stdout. ``Console.size`` only honours the pinned dimensions when
-    **both** ``_width`` and ``_height`` are set (otherwise it falls back to the
-    OS-divergent terminal/``COLUMNS`` detection), so both are patched.
+    captured stdout. Patch ``Console.size`` at the class level so every shared
+    console observes the same deterministic dimensions.
 
     ``rendering`` exposes a *second* console — ``stderr_console`` (a
     ``Console(stderr=True)`` for diagnostic/status output in ``--json`` mode) —
@@ -41,13 +47,11 @@ def _pin_cli_console_width():
     the same way (#1410). Pin both consoles to the same wide, fixed dimensions
     so stderr assertions are as deterministic as stdout ones.
     """
-    from notebooklm.cli import rendering
-
-    with (
-        patch.object(rendering.console, "_width", 400),
-        patch.object(rendering.console, "_height", 100),
-        patch.object(rendering.stderr_console, "_width", 400),
-        patch.object(rendering.stderr_console, "_height", 100),
+    with patch.object(
+        Console,
+        "size",
+        new_callable=PropertyMock,
+        return_value=ConsoleDimensions(400, 100),
     ):
         yield
 
@@ -68,13 +72,11 @@ def narrow_console():
     width-dependent stderr rendering exercised by these tests stays
     deterministic too (#1410).
     """
-    from notebooklm.cli import rendering
-
-    with (
-        patch.object(rendering.console, "_width", 80),
-        patch.object(rendering.console, "_height", 100),
-        patch.object(rendering.stderr_console, "_width", 80),
-        patch.object(rendering.stderr_console, "_height", 100),
+    with patch.object(
+        Console,
+        "size",
+        new_callable=PropertyMock,
+        return_value=ConsoleDimensions(80, 100),
     ):
         yield
 
@@ -192,8 +194,9 @@ def _disable_chromium_profile_fanout():
     target relocates. Now uses ``patch(...)`` which raises
     ``AttributeError`` on missing targets.
     """
-    with patch(
-        "notebooklm.cli._chromium_profiles.discover_chromium_profiles",
+    with patch.object(
+        chromium_profiles,
+        "discover_chromium_profiles",
         lambda *a, **kw: [],
     ):
         yield
@@ -212,7 +215,7 @@ def mock_auth():
     After CLI refactoring, auth is loaded via cli.helpers module.
     We patch both the main CLI and the helpers module for full coverage.
     """
-    with patch("notebooklm.cli.helpers.load_auth_from_storage") as mock:
+    with patch.object(helpers_module, "load_auth_from_storage") as mock:
         mock.return_value = {
             "SID": "test",
             # ``__Secure-1PSIDTS`` is required by ``MINIMUM_REQUIRED_COOKIES``
@@ -244,8 +247,8 @@ def mock_fetch_tokens():
     mock_jar.set("SID", "test", domain=".google.com")
 
     with (
-        patch("notebooklm.auth.fetch_tokens_with_domains", new_callable=AsyncMock) as mock,
-        patch("notebooklm.cli.helpers.build_cookie_jar", return_value=mock_jar),
+        patch.object(auth_module, "fetch_tokens_with_domains", new_callable=AsyncMock) as mock,
+        patch.object(helpers_module, "build_cookie_jar", return_value=mock_jar),
     ):
         mock.return_value = ("csrf_token", "session_id")
         yield mock
@@ -463,11 +466,12 @@ def mock_context_file(tmp_path):
     """
     context_file = tmp_path / "context.json"
     with (
-        patch("notebooklm.cli.helpers.get_context_path", return_value=context_file),
-        patch("notebooklm.cli.context.get_context_path", return_value=context_file),
-        patch("notebooklm.cli.resolve.get_context_path", return_value=context_file),
-        patch(
-            "notebooklm.cli.services.session_context.get_context_path",
+        patch.object(helpers_module, "get_context_path", return_value=context_file),
+        patch.object(context_module, "get_context_path", return_value=context_file),
+        patch.object(resolve_module, "get_context_path", return_value=context_file),
+        patch.object(
+            session_context_module,
+            "get_context_path",
             return_value=context_file,
         ),
     ):
