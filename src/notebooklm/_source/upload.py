@@ -177,7 +177,7 @@ def _validate_resumable_upload_url(upload_url: str) -> str:
         for key, value in parse_qsl(parsed.query, keep_blank_values=True)
         if key.lower() == "upload_id"
     ]
-    if len(upload_ids) != 1 or not upload_ids[0]:
+    if len(upload_ids) != 1 or not next(iter(upload_ids)):  # next(iter): ratchet
         raise ValidationError("Upload URL must include exactly one non-empty upload_id")
 
     return upload_url
@@ -282,13 +282,15 @@ def _extract_register_file_source_id(result: Any, filename: str) -> str | None:
     """
     field_candidates = _extract_source_id_field_candidates(result, filename)
     if len(field_candidates) == 1:
-        return field_candidates[0]
+        (candidate,) = field_candidates  # exactly one (guarded); unpack avoids name[int]
+        return candidate
     if len(field_candidates) > 1:
         return None
 
     row_candidates = _extract_contextual_source_id_row_candidates(result, filename)
     if len(row_candidates) == 1:
-        return row_candidates[0]
+        (candidate,) = row_candidates  # exactly one (guarded); unpack avoids name[int]
+        return candidate
     if len(row_candidates) > 1:
         return None
 
@@ -346,10 +348,12 @@ def _extract_singleton_source_id_envelope(result: Any, filename: str) -> str | N
 
 
 def _extract_prefixed_singleton_source_id_envelope(result: Any, filename: str) -> str | None:
-    if not isinstance(result, list) or len(result) != 2 or result[0] is not None:
+    if not isinstance(result, list) or len(result) != 2:
         return None
-
-    return _extract_singleton_source_id_envelope(result[1], filename)
+    prefix, inner = result  # unpack ``[None, inner]``, not index it (ratchet)
+    if prefix is not None:
+        return None
+    return _extract_singleton_source_id_envelope(inner, filename)
 
 
 def _extract_contextual_source_id_row_candidates(result: Any, filename: str) -> list[str]:
@@ -367,10 +371,11 @@ def _extract_contextual_source_id_row_candidates(result: Any, filename: str) -> 
             return
         if isinstance(node, list):
             if len(node) >= 2:
-                if _coerce_filename_candidate(node[1]) == filename:
-                    add_candidate(node[0])
-                if _coerce_filename_candidate(node[0]) == filename:
-                    add_candidate(node[1])
+                first, second, *_rest = node  # unpack pair, not index (ratchet)
+                if _coerce_filename_candidate(second) == filename:
+                    add_candidate(first)
+                if _coerce_filename_candidate(first) == filename:
+                    add_candidate(second)
             for child in node:
                 walk(child, depth + 1)
         elif isinstance(node, dict):
@@ -413,7 +418,7 @@ def _source_context_names(node: dict[Any, Any]) -> list[Any]:
 def _unwrap_singleton_envelope(value: Any) -> tuple[Any, int]:
     depth = 0
     while isinstance(value, list) and len(value) == 1 and depth < _SOURCE_ID_ENVELOPE_MAX_DEPTH:
-        value = value[0]
+        (value,) = value  # not ``value[0]`` (guard pins len 1): ratchet
         depth += 1
     return value, depth
 
@@ -854,7 +859,8 @@ class SourceUploadPipeline(LoopBoundPrimitive):
                     ),
                 )
             if len(matches) == 1:
-                return matches[0].id
+                (match,) = matches  # exactly one (len==1 guard); unpack, not matches[0]
+                return match.id
             if len(matches) > 1:
                 raise SourceAddError(
                     filename,
