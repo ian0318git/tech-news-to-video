@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Retrieve the generation prompt behind an artifact** (#1571). New
+  `client.artifacts.get_prompt(notebook_id, artifact_id)` returns the free-text
+  prompt an artifact was generated from, and a matching `artifact get-prompt`
+  CLI command prints it (with `--json`). Works for every studio artifact type —
+  audio, report, video, quiz, flashcards, interactive mind map, infographic,
+  slide deck, and data table — by reading the prompt already present in the
+  `LIST_ARTIFACTS` response through the new `ArtifactRow.generation_prompt`
+  accessor (no new RPC). Returns `None` for an artifact with no stored prompt
+  (e.g. a note-backed mind map) and raises `ArtifactNotFoundError` for an
+  unknown id. The transport-neutral `_app.artifacts.get_artifact_prompt` exposes
+  the same behaviour to the MCP/HTTP adapters.
 - **Custom prompt for interactive mind maps.** `instructions` is now sent for
   interactive (studio-artifact) mind maps, not just note-backed ones. The
   interactive `CREATE_ARTIFACT` payload carries the free-text prompt at the
