@@ -7,10 +7,18 @@ id that is present in the bundle but not parsed must NOT be reported as a rotati
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
-from scripts.capture_rpc_registry import diff, extract_registry, main, parse_ids_from_text
+from scripts.capture_rpc_registry import (
+    _service_of,
+    classify_service,
+    diff,
+    extract_registry,
+    main,
+    parse_ids_from_text,
+)
 
 # Mixed quote styles on purpose — exercises the quote-agnostic parsing of both
 # the enum (CREATE is single-quoted) and the bundle (the CCqFvf registration).
@@ -92,3 +100,54 @@ def test_main_bundle_file_mode(tmp_path: Path, capsys: pytest.CaptureFixture[str
 
     # --check turns the ABSENT id (ZZxxYY/GONE) into a non-zero exit
     assert main(["--bundle-file", str(bundle), "--types", str(types), "--check"]) == 1
+
+
+def test_service_of() -> None:
+    assert _service_of("/LabsTailwindOrchestrationService.AddSources") == (
+        "LabsTailwindOrchestrationService"
+    )
+    # Leading slash optional; only the segment before the first dot is the service.
+    assert _service_of("NotebookService.CreateNotebook") == "NotebookService"
+
+
+def test_classify_service() -> None:
+    # `current_services` is what the run discovered empirically (services our
+    # CONFIRMED ids resolve to) — it always wins, even for a name we'd otherwise
+    # bucket elsewhere.
+    current = {"LabsTailwindOrchestrationService", "DasherGrowthPromotionService"}
+
+    # Empirical hit -> current.
+    assert classify_service("LabsTailwindOrchestrationService", current) == "current"
+    # A current-hit on a non-LabsTailwind name still wins via the empirical set.
+    assert classify_service("DasherGrowthPromotionService", current) == "current"
+    # Old family by prefix (not in the empirical set this run) -> current.
+    assert classify_service("LabsTailwindSharingService", current) == "current"
+    # Known Discovery-Engine domain services -> enterprise (Agentspace/Vertex surface).
+    assert classify_service("NotebookService", current) == "enterprise"
+    assert classify_service("SourceService", current) == "enterprise"
+    # Anything else is an unclassified drift signal -> other.
+    assert classify_service("InteractionEventService", current) == "other"
+    # Empirical precedence: when a known DE service IS in the empirical current set,
+    # "current" wins over the DE-name rule — locks the documented empirical-first
+    # ordering (the ``in current_services`` check must precede the DE-set check).
+    assert classify_service("NotebookService", {"NotebookService"}) == "current"
+
+
+def test_main_json_includes_unmapped_family(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--json carries the per-id unmapped ``{method, family}`` schema (contract guard)."""
+    types = tmp_path / "types.py"
+    types.write_text(_TYPES, encoding="utf-8")
+    bundle = tmp_path / "bundle.js"
+    bundle.write_text(_BUNDLE, encoding="utf-8")
+
+    rc = main(["--bundle-file", str(bundle), "--types", str(types), "--json"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert rc == 0
+    # NewOne (/Svc.Brand) is bundle-declared but absent from our enum -> unmapped.
+    # ``Svc`` is the service our CONFIRMED ids resolve to (wXbhsf/CCqFvf -> /Svc.List,
+    # /Svc.Create), so empirical-first classification tags this family "current" — this
+    # also exercises the empirical path through the --json output, not just the schema.
+    assert payload["unmapped"]["NewOne"] == {"method": "/Svc.Brand", "family": "current"}
