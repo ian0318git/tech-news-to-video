@@ -48,7 +48,13 @@ from ..rpc import (
     RPCMethod,
     safe_index,
 )
-from ..types import AskResult, ChatMode, ChatReference, ConversationTurn, Note
+from ..types import (
+    AskResult,
+    ChatMode,
+    ChatReference,
+    ConversationTurn,
+    Note,
+)
 
 logger = logging.getLogger(__name__)
 
