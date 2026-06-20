@@ -561,6 +561,54 @@ class ResearchAPI:
             if sleep_for > 0:
                 await asyncio.sleep(sleep_for)
 
+    async def cancel(self, notebook_id: str, run_id: str) -> None:
+        """Cancel an in-flight research (DiscoverSources) run.
+
+        Fire-and-forget. An IN_PROGRESS run transitions to a terminal
+        ``FAILED`` state shortly after this call; cancelling an
+        already-terminal run is a silent no-op.
+
+        Args:
+            notebook_id: Routing context only (sets the request ``source-path``).
+                **Not a scoping or authorization boundary**: the server keys the
+                cancel solely on ``run_id`` — live-verified that a valid
+                ``run_id`` is cancelled even when ``notebook_id`` names a
+                different / non-existent notebook (or is empty). Pass the run's
+                real notebook for correct routing, but do not rely on it to
+                prevent cancelling a run from the "wrong" notebook.
+            run_id: The **poll-level** run id — i.e. ``task.task_id`` from
+                :meth:`poll` (equivalently ``ResearchTask.task_id``). For a
+                **deep** research run started via :meth:`start`, this is the
+                ``report_id`` returned by ``start`` — live-verified: deep's
+                ``start().task_id`` is a *sessionId* that :meth:`poll` reports as
+                ``NOT_FOUND``, and cancelling with it is a silent no-op (the run
+                keeps running); only ``report_id`` actually stops a deep run. For
+                a **fast** run it is ``start().task_id`` (fast returns no
+                ``report_id``). When in doubt, pass the ``task_id`` surfaced by
+                :meth:`poll` — for both modes that is the value the server
+                accepts.
+
+        Returns:
+            ``None``. This is **fire-and-forget**: the server returns an empty
+            payload (``[]``) unconditionally and does **not** validate ``run_id``
+            (an unknown / garbage id also yields ``[]``), so the response carries
+            no success signal and this method never raises on an unknown id. The
+            only way to confirm a cancel took effect is to :meth:`poll`
+            afterward — live-verified that a cancelled IN_PROGRESS run surfaces
+            as ``FAILED`` within a few seconds, and that re-cancelling an
+            already-terminal run is a silent no-op.
+        """
+        logger.debug("Cancelling research run %s in notebook %s", run_id, notebook_id)
+        # Field 3 carries the run id; the optional field-1 client context is
+        # omitted to match ``_poll_task_models`` (``[None, None, <id>]``). Routed
+        # through ``self._rpc_call`` so a post-construction override of the RPC
+        # caller (advanced tests / instrumentation) is honoured.
+        await self._rpc_call(
+            RPCMethod.CANCEL_RESEARCH,
+            [None, None, run_id],
+            source_path=f"/notebook/{notebook_id}",
+        )
+
     async def import_sources(
         self,
         notebook_id: str,

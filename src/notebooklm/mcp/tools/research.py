@@ -101,6 +101,32 @@ def register(mcp: Any) -> None:
             }
 
     @mcp.tool
+    async def research_cancel(ctx: Context, notebook: str, run_id: str) -> dict[str, Any]:
+        """Cancel an in-flight research run in a notebook.
+
+        Accepts a notebook name or ID and the ``run_id`` to cancel: pass the
+        ``task_id`` reported by ``research_status``. (For a **deep** run that is
+        the ``report_id`` returned by ``research_start``, NOT its ``task_id``,
+        which is a sessionId — so prefer the ``research_status`` value to avoid
+        the trap.)
+
+        Fire-and-forget: the server returns nothing to confirm the cancel and
+        does not validate ``run_id``, so this always reports
+        ``{"cancelled": true}`` without asserting the run existed. Poll
+        ``research_status`` afterward to confirm — a cancelled in-progress run
+        surfaces as ``failed``.
+
+        The ``notebook`` is routing context only, not a scoping boundary: the
+        server keys the cancel on ``run_id`` alone, so a valid ``run_id`` is
+        cancelled regardless of which notebook is named.
+        """
+        client = get_client(ctx)
+        with mcp_errors():
+            nb_id = await resolve_notebook(client, notebook)
+            await client.research.cancel(nb_id, run_id)
+            return {"notebook_id": nb_id, "run_id": run_id, "cancelled": True}
+
+    @mcp.tool
     async def research_import(ctx: Context, notebook: str, task_id: str) -> dict[str, Any]:
         """Import a completed research task's sources into the notebook.
 
