@@ -92,6 +92,7 @@ def test_unauthorized_on_each_verb(raw_client: TestClient) -> None:
     h = {"Host": "127.0.0.1"}
     base = "/v1/notebooks/nb-1/notes"
     assert raw_client.get(base, headers=h).status_code == 401
+    assert raw_client.get(f"{base}/n-1", headers=h).status_code == 401
     assert raw_client.post(base, json={"title": "x"}, headers=h).status_code == 401
     assert (
         raw_client.put(f"{base}/n-1", json={"title": "x", "content": "y"}, headers=h).status_code
