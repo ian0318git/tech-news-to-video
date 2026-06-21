@@ -35,7 +35,7 @@ from ._auth import require_auth
 from ._context import AppState
 from ._errors import http_error_response, install_exception_handlers
 from ._pending import PendingRegistry
-from .routes import artifacts, chat, notebooks, share, sources
+from .routes import artifacts, chat, notebooks, notes, share, sources
 from .routes.sources import MAX_UPLOAD_BYTES
 
 __all__ = ["SERVER_NAME", "create_app"]
@@ -130,6 +130,7 @@ def create_app(*, client_factory: ClientFactory | None = None) -> FastAPI:
     v1 = APIRouter(prefix="/v1", dependencies=[Depends(require_auth)])
     v1.include_router(notebooks.router)
     v1.include_router(sources.router)
+    v1.include_router(notes.router)
     v1.include_router(chat.router)
     v1.include_router(artifacts.router)
     v1.include_router(share.router)

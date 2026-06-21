@@ -19,9 +19,10 @@ from typing import Any
 from notebooklm._types.artifacts import Artifact, GenerationState, GenerationStatus
 from notebooklm._types.chat import AskResult
 from notebooklm._types.notebooks import Notebook
+from notebooklm._types.notes import Note
 from notebooklm._types.sharing import SharedUser, ShareStatus
 from notebooklm._types.sources import Source
-from notebooklm.exceptions import NotebookNotFoundError
+from notebooklm.exceptions import NotebookNotFoundError, NoteNotFoundError
 from notebooklm.rpc.types import ShareAccess, SharePermission, ShareViewLevel, SourceStatus
 
 #: download-spec kind -> internal artifact type-code.
@@ -114,6 +115,52 @@ class FakeSources:
         if not self._s.hide_new_sources:
             bucket[src.id] = src
         return src
+
+
+class FakeNotes:
+    def __init__(self, state: FakeClient) -> None:
+        self._s = state
+
+    async def list(self, notebook_id: str) -> list[Note]:
+        return list(self._s.notes_store.get(notebook_id, {}).values())
+
+    async def get_or_none(self, notebook_id: str, note_id: str) -> Note | None:
+        return self._s.notes_store.get(notebook_id, {}).get(note_id)
+
+    async def get(self, notebook_id: str, note_id: str) -> Note:
+        note = await self.get_or_none(notebook_id, note_id)
+        if note is None:
+            raise NoteNotFoundError(note_id)
+        return note
+
+    async def create(self, notebook_id: str, title: str, content: str) -> Note:
+        bucket = self._s.notes_store.setdefault(notebook_id, {})
+        note = Note(
+            id=f"note-{self._s.next_note}",
+            notebook_id=notebook_id,
+            title=title,
+            content=content,
+        )
+        self._s.next_note += 1
+        bucket[note.id] = note
+        return note
+
+    async def update(self, notebook_id: str, note_id: str, content: str, title: str) -> None:
+        # Mirror the facade: a missing note fails loud (drives the 404 path).
+        existing = await self.get_or_none(notebook_id, note_id)
+        if existing is None:
+            raise NoteNotFoundError(note_id)
+        self._s.notes_store[notebook_id][note_id] = Note(
+            id=note_id,
+            notebook_id=notebook_id,
+            title=title,
+            content=content,
+            created_at=existing.created_at,
+        )
+
+    async def delete(self, notebook_id: str, note_id: str) -> None:
+        # Idempotent-on-missing (the public delete contract).
+        self._s.notes_store.get(notebook_id, {}).pop(note_id, None)
 
 
 class FakeChat:
@@ -232,6 +279,7 @@ class FakeClient:
     def __init__(self) -> None:
         self.notebooks_store: dict[str, Notebook] = {}
         self.sources_store: dict[str, dict[str, Source]] = {}
+        self.notes_store: dict[str, dict[str, Note]] = {}
         self.artifacts_store: dict[str, dict[str, Artifact]] = {}
         self.poll_states: dict[tuple[str, str], GenerationState] = {}
         self.public_shares: dict[str, bool] = {}
@@ -247,11 +295,13 @@ class FakeClient:
 
         self.next_task = 1
         self.next_source = 1
+        self.next_note = 1
         self.uploaded_paths: list[str] = []
         self.last_ask: dict[str, Any] | None = None
 
         self.notebooks = FakeNotebooks(self)
         self.sources = FakeSources(self)
+        self.notes = FakeNotes(self)
         self.chat = FakeChat(self)
         self.artifacts = FakeArtifacts(self)
         self.sharing = FakeSharing(self)
