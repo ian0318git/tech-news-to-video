@@ -33,6 +33,7 @@ jobs:
         # triggering ref for push/pull_request (input is empty there).
         ref: ${{ inputs.custom_branch || github.ref }}
         fetch-depth: 0
+        persist-credentials: false
 
     - name: Set up Python
       uses: actions/setup-python@v6
@@ -148,6 +149,7 @@ jobs:
     - uses: actions/checkout@v6
       with:
         ref: ${{ inputs.custom_branch || github.ref }}
+        persist-credentials: false
 
     - name: Set up Python
       uses: actions/setup-python@v6
@@ -210,6 +212,7 @@ jobs:
     - uses: actions/checkout@v6
       with:
         ref: ${{ inputs.custom_branch || github.ref }}
+        persist-credentials: false
 
     - name: Set up Python
       uses: actions/setup-python@v6
@@ -274,6 +277,7 @@ jobs:
         # Honor the workflow_dispatch custom_branch input; falls back to the
         # triggering ref for push/pull_request (input is empty there).
         ref: ${{ inputs.custom_branch || github.ref }}
+        persist-credentials: false
 
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v6
