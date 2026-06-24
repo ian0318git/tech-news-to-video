@@ -7,6 +7,7 @@ helpers live in ``_session_helpers.py``; the proxy-block-aware
 """
 
 import json
+import stat
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -23,6 +24,252 @@ from ._session_helpers import (
     _multiaccount_rookiepy_mock,
     _read_account,
 )
+
+
+def _valid_cookie_export(extra_cookies=None):
+    cookies = [
+        {"name": "SID", "value": "fixture-sid", "domain": ".google.com", "path": "/"},
+        {
+            "name": "__Secure-1PSIDTS",
+            "value": "fixture-psidts",
+            "domain": ".google.com",
+            "path": "/",
+        },
+        {"name": "APISID", "value": "fixture-apisid", "domain": ".google.com", "path": "/"},
+        {"name": "SAPISID", "value": "fixture-sapisid", "domain": ".google.com", "path": "/"},
+    ]
+    if extra_cookies:
+        cookies.extend(extra_cookies)
+    return cookies
+
+
+class TestAuthImportCookiesCommand:
+    """Tests for the 'auth import-cookies' command."""
+
+    def test_import_cookies_accepts_bare_cookie_list_and_storage_override(self, runner, tmp_path):
+        input_path = tmp_path / "cookies.json"
+        storage_path = tmp_path / "storage_state.json"
+        input_path.write_text(
+            json.dumps(
+                _valid_cookie_export(
+                    [
+                        {
+                            "name": "UNRELATED",
+                            "value": "should-not-persist",
+                            "domain": ".example.com",
+                            "path": "/",
+                        }
+                    ]
+                )
+            ),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(
+            cli, ["--storage", str(storage_path), "auth", "import-cookies", str(input_path)]
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "imported" in result.output
+        stored = json.loads(storage_path.read_text(encoding="utf-8"))
+        stored_names = {cookie["name"] for cookie in stored["cookies"]}
+        assert {"SID", "__Secure-1PSIDTS", "APISID", "SAPISID"} <= stored_names
+        assert "UNRELATED" not in stored_names
+
+    def test_import_cookies_accepts_playwright_storage_state_from_stdin(self, runner, tmp_path):
+        storage_path = tmp_path / "storage_state.json"
+        payload = {"cookies": _valid_cookie_export(), "origins": []}
+
+        result = runner.invoke(
+            cli,
+            ["--storage", str(storage_path), "auth", "import-cookies", "-", "--json"],
+            input=json.dumps(payload),
+        )
+
+        assert result.exit_code == 0, result.output
+        output = json.loads(result.output)
+        assert output["success"] is True
+        assert output["cookie_count"] == 4
+        assert json.loads(storage_path.read_text(encoding="utf-8"))["cookies"]
+
+    def test_import_cookies_drops_origins_from_playwright_storage_state(self, runner, tmp_path):
+        input_path = tmp_path / "playwright-storage-state.json"
+        storage_path = tmp_path / "storage_state.json"
+        input_path.write_text(
+            json.dumps(
+                {
+                    "cookies": _valid_cookie_export(),
+                    "origins": [
+                        {
+                            "origin": "https://evil.example.com",
+                            "localStorage": [{"name": "token", "value": "do-not-persist"}],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(
+            cli, ["--storage", str(storage_path), "auth", "import-cookies", str(input_path)]
+        )
+
+        assert result.exit_code == 0, result.output
+        stored = json.loads(storage_path.read_text(encoding="utf-8"))
+        assert stored["cookies"]
+        assert stored["origins"] == []
+
+    def test_import_cookies_rejects_env_auth_json_interlock(self, runner, tmp_path, monkeypatch):
+        input_path = tmp_path / "cookies.json"
+        input_path.write_text(json.dumps(_valid_cookie_export()), encoding="utf-8")
+        monkeypatch.setenv("NOTEBOOKLM_AUTH_JSON", json.dumps({"cookies": []}))
+
+        result = runner.invoke(cli, ["auth", "import-cookies", str(input_path)])
+
+        assert result.exit_code != 0
+        assert "auth import-cookies" in result.output
+        assert "NOTEBOOKLM_AUTH_JSON" in result.output
+
+    def test_import_cookies_rejects_malformed_json(self, runner, tmp_path):
+        input_path = tmp_path / "cookies.json"
+        storage_path = tmp_path / "storage_state.json"
+        input_path.write_text("{not valid json", encoding="utf-8")
+
+        result = runner.invoke(
+            cli, ["--storage", str(storage_path), "auth", "import-cookies", str(input_path)]
+        )
+
+        assert result.exit_code != 0
+        assert "Invalid JSON" in result.output
+        assert not storage_path.exists()
+
+    def test_import_cookies_rejects_unsupported_json_shape(self, runner, tmp_path):
+        input_path = tmp_path / "cookies.json"
+        storage_path = tmp_path / "storage_state.json"
+        input_path.write_text(json.dumps({"not_cookies": []}), encoding="utf-8")
+
+        result = runner.invoke(
+            cli, ["--storage", str(storage_path), "auth", "import-cookies", str(input_path)]
+        )
+
+        assert result.exit_code != 0
+        assert "Cookie JSON must be either" in result.output
+        assert not storage_path.exists()
+
+    def test_import_cookies_include_domains_opts_into_sibling_product_cookies(
+        self, runner, tmp_path
+    ):
+        input_path = tmp_path / "cookies.json"
+        storage_path = tmp_path / "storage_state.json"
+        input_path.write_text(
+            json.dumps(
+                _valid_cookie_export(
+                    [
+                        {
+                            "name": "DOCS_PREF",
+                            "value": "docs-cookie",
+                            "domain": "docs.google.com",
+                            "path": "/",
+                        }
+                    ]
+                )
+            ),
+            encoding="utf-8",
+        )
+
+        result_default = runner.invoke(
+            cli, ["--storage", str(storage_path), "auth", "import-cookies", str(input_path)]
+        )
+
+        assert result_default.exit_code == 0, result_default.output
+        default_names = {
+            cookie["name"]
+            for cookie in json.loads(storage_path.read_text(encoding="utf-8"))["cookies"]
+        }
+        assert "DOCS_PREF" not in default_names
+
+        result_optin = runner.invoke(
+            cli,
+            [
+                "--storage",
+                str(storage_path),
+                "auth",
+                "import-cookies",
+                str(input_path),
+                "--include-domains",
+                "docs",
+            ],
+        )
+
+        assert result_optin.exit_code == 0, result_optin.output
+        optin_names = {
+            cookie["name"]
+            for cookie in json.loads(storage_path.read_text(encoding="utf-8"))["cookies"]
+        }
+        assert "DOCS_PREF" in optin_names
+
+    def test_import_cookies_sets_private_file_and_directory_permissions(self, runner, tmp_path):
+        if sys.platform == "win32":
+            pytest.skip("POSIX permission bits are not stable on Windows")
+        input_path = tmp_path / "cookies.json"
+        auth_dir = tmp_path / "profile"
+        storage_path = auth_dir / "storage_state.json"
+        input_path.write_text(json.dumps(_valid_cookie_export()), encoding="utf-8")
+
+        result = runner.invoke(
+            cli, ["--storage", str(storage_path), "auth", "import-cookies", str(input_path)]
+        )
+
+        assert result.exit_code == 0, result.output
+        assert stat.S_IMODE(auth_dir.stat().st_mode) == 0o700
+        assert stat.S_IMODE(storage_path.stat().st_mode) == 0o600
+
+    def test_import_cookies_rejects_empty_required_cookie_values(self, runner, tmp_path):
+        input_path = tmp_path / "cookies.json"
+        storage_path = tmp_path / "storage_state.json"
+        cookies = _valid_cookie_export()
+        for cookie in cookies:
+            if cookie["name"] == "SID":
+                cookie["value"] = ""
+        input_path.write_text(json.dumps(cookies), encoding="utf-8")
+
+        result = runner.invoke(
+            cli, ["--storage", str(storage_path), "auth", "import-cookies", str(input_path)]
+        )
+
+        assert result.exit_code != 0
+        assert "Required cookies must have non-empty string values" in result.output
+        assert "SID" in result.output
+        assert not storage_path.exists()
+
+    def test_import_cookies_rejects_missing_required_cookies_without_leaking_values(
+        self, runner, tmp_path
+    ):
+        input_path = tmp_path / "cookies.json"
+        storage_path = tmp_path / "storage_state.json"
+        secret_value = "super-secret-cookie-value"
+        input_path.write_text(
+            json.dumps(
+                [
+                    {
+                        "name": "APISID",
+                        "value": secret_value,
+                        "domain": ".google.com",
+                        "path": "/",
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(
+            cli, ["--storage", str(storage_path), "auth", "import-cookies", str(input_path)]
+        )
+
+        assert result.exit_code != 0
+        assert "Missing required cookies" in result.output
+        assert secret_value not in result.output
+        assert not storage_path.exists()
 
 
 class TestAuthCheckCommand:

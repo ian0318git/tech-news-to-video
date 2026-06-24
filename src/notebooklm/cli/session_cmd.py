@@ -14,17 +14,14 @@ auth diagnostics, and auth-source precedence. Command-side wrappers in
 exit, and async-runner seams for the Playwright and browser-cookie login
 services.
 
-Body-used names that *moved* into those services are re-imported here as
-the command layer's own bindings. A handful are also bound on the
-``notebooklm.cli.session_cmd`` namespace by tests that pre-date ADR-0008's
-services-side patching convention (e.g. ``_sync_server_language_to_config``,
-``_login_browser_cookies_single``); those names stay because they are
-referenced from this module's body.
+Body-used names that moved into services are re-imported here as command-layer
+bindings and legacy patch seams.
 """
 
 from __future__ import annotations
 
 import functools
+import json
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -32,12 +29,13 @@ from typing import TYPE_CHECKING, Any
 import click
 import httpx
 
+from .. import auth
+from ..auth import cookie_names_from_storage, extract_cookies_from_storage, missing_cookies_hint
 from ..exceptions import AuthError, NotebookNotFoundError
+from ..io import atomic_write_json
 from ..paths import get_storage_path
 
-# Render helpers live in a sibling module to keep this file small; they are
-# imported back so ``register_session_commands`` calls them through this
-# module's own namespace (see ADR-0008).
+# Render helpers stay in a sibling module; command registration calls them here.
 from ._session_render import (
     _render_auth_check_result,
     _render_auth_inspect,
@@ -62,15 +60,9 @@ from .services.auth_diagnostics import (
     plan_from_click_context,
     run_auth_check,
 )
-from .services.auth_source import AUTH_JSON_ENV_NAME, has_env_auth_json
+from .services.auth_source import AUTH_JSON_ENV_NAME, auth_source_from_ctx, has_env_auth_json
 
 # Direct imports replace the D1-PR-3-retired forwarding wrappers; see ADR-0008.
-# These names are all called from this module's body. Several also serve as
-# ``notebooklm.cli.session_cmd.*`` monkeypatch surfaces for tests that pre-date
-# ADR-0008's services-side patching convention (e.g.
-# ``_sync_server_language_to_config``, ``_login_browser_cookies_single``,
-# ``_refresh_from_browser_cookies``, ``_enumerate_browser_accounts``); those
-# patches keep working because the body-used name stays bound here.
 from .services.login import (
     _enumerate_browser_accounts,
     _login_all_accounts_from_browser,
@@ -78,9 +70,7 @@ from .services.login import (
     _refresh_from_browser_cookies,
     _sync_server_language_to_config,
 )
-from .services.login import (
-    cookie_domains as _cookie_domains,
-)
+from .services.login import cookie_domains as _cookie_domains
 from .services.login.exceptions import LoginConfigurationError
 from .services.login.outcomes import BrowserCookieOutcome, NetworkFailure
 from .services.playwright_login import (
@@ -88,6 +78,7 @@ from .services.playwright_login import (
 )
 from .services.playwright_login import (
     PlaywrightLoginPlan,
+    filter_storage_state_cookies_by_domain_policy,
 )
 from .services.session_context import (
     UseNotebookResult,
@@ -164,6 +155,104 @@ def _is_valid_account_metadata(metadata: dict[str, Any]) -> bool:
     if raw_email is None:
         return True
     return isinstance(raw_email, str) and bool(raw_email.strip())
+
+
+def _read_auth_json_input(path: str) -> Any:
+    """Read a cookie JSON payload from a file path or stdin (``-``)."""
+    try:
+        if path == "-":
+            return json.loads(click.get_text_stream("stdin").read())
+        return json.loads(Path(path).expanduser().read_text(encoding="utf-8"))
+    except UnicodeDecodeError as exc:
+        raise click.ClickException(  # cli-input-validation: import-cookies text decode failure
+            f"Could not decode {path!r} as UTF-8: {exc}"
+        ) from None
+    except json.JSONDecodeError as exc:
+        raise click.ClickException(  # cli-input-validation: import-cookies JSON parse failure
+            f"Invalid JSON: {exc}"
+        ) from None
+    except OSError as exc:
+        raise click.ClickException(  # cli-input-validation: import-cookies JSON read failure
+            f"Could not read {path!r}: {exc}"
+        ) from None
+
+
+def _coerce_cookie_json_to_storage_state(payload: Any) -> dict[str, Any]:
+    """Normalize supported cookie JSON shapes to Playwright storage_state."""
+    if isinstance(payload, dict) and isinstance(payload.get("cookies"), list):
+        # Import only cookies: a storage_state's ``origins`` (localStorage /
+        # sessionStorage) bypass the cookie-domain allowlist, so drop them rather
+        # than persist unrelated site data. Matches the bare-list branch below.
+        return {
+            "cookies": [_normalize_imported_cookie(cookie) for cookie in payload["cookies"]],
+            "origins": [],
+        }
+    if isinstance(payload, list):
+        return {
+            "cookies": [_normalize_imported_cookie(cookie) for cookie in payload],
+            "origins": [],
+        }
+    raise click.ClickException(  # cli-input-validation: import-cookies JSON shape validation
+        "Cookie JSON must be either a Playwright storage_state object "
+        "with a 'cookies' list or a bare list of cookie objects."
+    )
+
+
+def _normalize_imported_cookie(cookie: Any) -> Any:
+    """Translate common browser-export cookie fields toward storage_state."""
+    if not isinstance(cookie, dict):
+        return cookie
+
+    normalized = dict(cookie)
+    if "expires" not in normalized:
+        # EditThisCookie / Cookie-Editor style exports usually call this field
+        # ``expirationDate``. Playwright storage_state uses ``expires``.
+        normalized["expires"] = normalized.pop("expirationDate", -1)
+    normalized.setdefault("path", "/")
+    normalized.setdefault("httpOnly", False)
+    normalized.setdefault("secure", False)
+    normalized.setdefault("sameSite", "None")
+    return normalized
+
+
+def _import_cookie_json(
+    *,
+    payload: Any,
+    storage_path: Path,
+    include_domains: set[str],
+    include_optional: bool,
+) -> dict[str, Any]:
+    """Validate, filter, and persist cookie JSON to ``storage_state.json``."""
+    storage_state = _coerce_cookie_json_to_storage_state(payload)
+    filtered_state = filter_storage_state_cookies_by_domain_policy(
+        storage_state,
+        include_optional=include_optional,
+        include_domains=include_domains,
+    )
+    cookie_names = cookie_names_from_storage(filtered_state)
+    try:
+        # This validates required cookies and catches malformed cookie shapes
+        # using the same loader later runtime calls use.
+        extracted_cookies = extract_cookies_from_storage(filtered_state)
+    except ValueError as exc:
+        hint = missing_cookies_hint(cookie_names)
+        raise click.ClickException(  # cli-input-validation: import-cookies required-cookie validation
+            f"{exc}\n\n{hint}"
+        ) from None
+
+    empty_required = sorted(
+        name
+        for name in auth.MINIMUM_REQUIRED_COOKIES
+        if not isinstance(extracted_cookies.get(name), str) or not extracted_cookies[name]
+    )
+    if empty_required:
+        raise click.ClickException(  # cli-input-validation: import-cookies required-cookie value validation
+            "Required cookies must have non-empty string values: " + ", ".join(empty_required)
+        )
+
+    storage_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    atomic_write_json(storage_path, filtered_state)
+    return filtered_state
 
 
 # Legacy thin alias kept for the small set of session-cmd-internal helpers
@@ -643,6 +732,81 @@ def register_session_commands(cli):
             _render_auth_inspect_error(enum_result, json_output=json_output)
         _, accounts = enum_result
         _render_auth_inspect(browser_name, list(accounts), json_output=json_output, verbose=verbose)
+
+    @auth_group.command("import-cookies")
+    @click.argument("json_path", type=click.Path(exists=False))
+    @click.option(
+        "--include-domains",
+        "include_domains_raw",
+        multiple=True,
+        default=(),
+        help=(
+            "Opt in to persisting sibling-product cookies. Same syntax as "
+            "'notebooklm login --include-domains': youtube, docs, myaccount, "
+            "mail, all. By default, only required Google auth/Drive/NotebookLM "
+            "cookie domains are kept."
+        ),
+    )
+    @click.option(
+        "--include-optional",
+        is_flag=True,
+        default=False,
+        help="Persist all optional sibling-product cookie domains.",
+    )
+    @click.option("--json", "json_output", is_flag=True, help="Output as JSON")
+    @click.option("--quiet", "quiet", is_flag=True, help="Suppress success output")
+    @click.pass_context
+    def auth_import_cookies(
+        ctx, json_path, include_domains_raw, include_optional, json_output, quiet
+    ):
+        """Import authentication cookies from JSON and save them persistently.
+
+        Accepts either a Playwright ``storage_state`` object (``{"cookies": [...]}``)
+        or a bare JSON list of cookie objects, including JSON exported from many
+        browser-cookie tools. Use ``-`` to read JSON from stdin.
+
+        The imported cookies are filtered through the same domain allowlist used
+        by browser login, validated locally for NotebookLM-required cookies, and
+        written atomically to the active profile's ``storage_state.json`` (or the
+        root ``--storage`` override) with private file permissions.
+
+        Examples:
+          notebooklm auth import-cookies cookies.json
+          notebooklm -p work auth import-cookies playwright-storage-state.json
+          cat cookies.json | notebooklm auth import-cookies -
+        """
+        with handle_errors():
+            auth_source = auth_source_from_ctx(ctx)
+            if auth_source.has_env_auth:
+                raise click.ClickException(  # cli-input-validation: import-cookies env-auth conflict
+                    f"'auth import-cookies' is incompatible with {AUTH_JSON_ENV_NAME}. "
+                    "Unset the env var first so the imported cookies can be used "
+                    "from storage_state.json."
+                )
+
+            include_domains = _parse_include_domains(include_domains_raw)
+            storage_path = auth_source.storage_path_for_diagnostics()
+
+            imported = _import_cookie_json(
+                payload=_read_auth_json_input(json_path),
+                storage_path=storage_path,
+                include_domains=include_domains,
+                include_optional=include_optional,
+            )
+
+            if json_output:
+                json_output_response(
+                    {
+                        "success": True,
+                        "storage_path": str(storage_path),
+                        "cookie_count": len(imported.get("cookies", [])),
+                    }
+                )
+            elif not quiet:
+                console.print(
+                    f"[green]ok[/green] imported {len(imported.get('cookies', []))} "
+                    f"cookies to: {storage_path}"
+                )
 
     @auth_group.command("check")
     @click.option(
