@@ -9,7 +9,9 @@ import pytest
 from notebooklm._url_utils import (
     contains_google_auth_redirect,
     is_google_auth_redirect,
+    is_notebooklm_unavailable_redirect,
     is_youtube_url,
+    notebooklm_unavailable_location,
 )
 
 
@@ -181,3 +183,78 @@ class TestUrlParsingExceptionPaths:
         # swallowed.
         text = f"redirecting to {self.MALFORMED_IPV6} signin"
         assert contains_google_auth_redirect(text) is False
+
+    def test_is_notebooklm_unavailable_redirect_swallows_parse_error(self):
+        assert is_notebooklm_unavailable_redirect(self.MALFORMED_IPV6) is False
+
+    def test_notebooklm_unavailable_location_swallows_parse_error(self):
+        assert notebooklm_unavailable_location(self.MALFORMED_IPV6) is None
+
+
+class TestIsNotebookLMUnavailableRedirect:
+    """Tests for is_notebooklm_unavailable_redirect() — the region/anti-abuse gate (#1630)."""
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://notebooklm.google",
+            "https://notebooklm.google/",
+            "https://notebooklm.google/?location=unsupported",
+            "https://www.notebooklm.google/?location=unsupported",
+            "http://notebooklm.google",
+        ],
+    )
+    def test_marketing_host_is_gate(self, url: str):
+        assert is_notebooklm_unavailable_redirect(url) is True
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            # The APP host (with .com) is NOT the gate — the whole point.
+            "https://notebooklm.google.com",
+            "https://notebooklm.google.com/",
+            "https://notebooklm.google.com/notebook/abc",
+            "https://accounts.google.com/ServiceLogin",
+            # Spoofed lookalikes must not match.
+            "https://notebooklm.google.evil.com/",
+            "https://evil.com/notebooklm.google",
+            "https://fakenotebooklm.google/",
+            "",
+        ],
+    )
+    def test_non_gate_urls(self, url: str):
+        assert is_notebooklm_unavailable_redirect(url) is False
+
+
+class TestNotebookLMUnavailableLocation:
+    """Tests for notebooklm_unavailable_location() — surfaces the ?location= diagnostic."""
+
+    def test_extracts_location(self):
+        assert (
+            notebooklm_unavailable_location("https://notebooklm.google/?location=unsupported")
+            == "unsupported"
+        )
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://notebooklm.google/",
+            "https://notebooklm.google",
+            "https://notebooklm.google/?foo=bar",
+        ],
+    )
+    def test_no_location_returns_none(self, url: str):
+        assert notebooklm_unavailable_location(url) is None
+
+    def test_sanitizes_injected_value(self):
+        # The value lands in a user-facing error string: control chars / spaces /
+        # URL-shaped content are stripped, and the result is length-bounded.
+        assert (
+            notebooklm_unavailable_location(
+                "https://notebooklm.google/?location=un%0Asupported%20hi"
+            )
+            == "unsupportedhi"
+        )
+        assert notebooklm_unavailable_location("https://notebooklm.google/?location=%0A%20") is None
+        long = notebooklm_unavailable_location("https://notebooklm.google/?location=" + "a" * 200)
+        assert long is not None and len(long) == 64

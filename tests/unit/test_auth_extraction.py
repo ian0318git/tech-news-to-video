@@ -718,3 +718,71 @@ class TestExtractSessionIdRedirect:
 
         with pytest.raises(ValueError, match="Authentication expired"):
             extract_session_id_from_html(html)
+
+
+class TestUnavailableRedirectClassification:
+    """A redirect to notebooklm.google is the region/anti-abuse gate, not a drift (#1630)."""
+
+    _MARKETING_HTML = "<html><body>NotebookLM marketing splash — no WIZ_global_data.</body></html>"
+
+    def test_csrf_classifies_location_unsupported_redirect(self):
+        with pytest.raises(ValueError) as exc:
+            extract_csrf_from_html(
+                self._MARKETING_HTML, "https://notebooklm.google/?location=unsupported"
+            )
+        msg = str(exc.value)
+        assert "region / anti-abuse access gate" in msg
+        assert "location=unsupported" in msg  # the diagnostic is surfaced, not swallowed
+        assert "page structure" not in msg  # NOT the misleading file-a-bug message
+
+    def test_session_id_classifies_redirect(self):
+        with pytest.raises(ValueError) as exc:
+            extract_session_id_from_html(self._MARKETING_HTML, "https://notebooklm.google")
+        msg = str(exc.value)
+        assert "region / anti-abuse access gate" in msg
+        assert "page structure" not in msg
+
+    def test_app_host_drift_still_says_page_structure(self):
+        # A token-less response from the real APP host (not the gate) keeps the
+        # original "page structure" message — the gate branch must not capture it.
+        with pytest.raises(ValueError, match="page structure"):
+            extract_csrf_from_html(self._MARKETING_HTML, "https://notebooklm.google.com/")
+
+    # The real notebooklm.google gate page carries an accounts.google.com sign-in
+    # link; the authoritative final-URL gate check must win over the body scan,
+    # otherwise it mis-routes to "Authentication expired" (the codex finding).
+    _GATE_HTML_WITH_SIGNIN = (
+        '<html><body>NotebookLM <a href="https://accounts.google.com/ServiceLogin">'
+        "Sign in</a></body></html>"
+    )
+
+    def test_csrf_gate_wins_over_accounts_link_in_body(self):
+        with pytest.raises(ValueError) as exc:
+            extract_csrf_from_html(
+                self._GATE_HTML_WITH_SIGNIN, "https://notebooklm.google/?location=unsupported"
+            )
+        msg = str(exc.value)
+        assert "region / anti-abuse access gate" in msg
+        assert "Authentication expired" not in msg
+
+    def test_session_id_gate_wins_over_accounts_link_in_body(self):
+        with pytest.raises(ValueError) as exc:
+            extract_session_id_from_html(
+                self._GATE_HTML_WITH_SIGNIN, "https://notebooklm.google/?location=unsupported"
+            )
+        msg = str(exc.value)
+        assert "region / anti-abuse access gate" in msg
+        assert "Authentication expired" not in msg
+
+    def test_gate_message_does_not_trigger_auto_refresh(self):
+        # An environmental gate must NOT match the auth-error signals that drive
+        # NOTEBOOKLM_REFRESH_CMD — re-auth can't fix it, so refreshing is futile.
+        # Pin it so a careless reword of the message can't silently re-enable it.
+        from notebooklm._auth.refresh import _AUTH_ERROR_SIGNALS
+
+        with pytest.raises(ValueError) as exc:
+            extract_csrf_from_html(
+                self._GATE_HTML_WITH_SIGNIN, "https://notebooklm.google/?location=unsupported"
+            )
+        lowered = str(exc.value).lower()
+        assert not any(signal in lowered for signal in _AUTH_ERROR_SIGNALS)
