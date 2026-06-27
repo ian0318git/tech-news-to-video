@@ -8,6 +8,7 @@ from .conftest import requires_auth
 @requires_auth
 class TestNotebookOperations:
     @pytest.mark.asyncio
+    @pytest.mark.impersonate_smoke
     async def test_list_notebooks(self, client):
         notebooks = await client.notebooks.list()
         assert isinstance(notebooks, list)
@@ -47,6 +48,7 @@ class TestNotebookOperations:
 @requires_auth
 class TestNotebookAsk:
     @pytest.mark.asyncio
+    @pytest.mark.impersonate_smoke
     async def test_ask_notebook(self, client, read_only_notebook_id):
         result = await client.chat.ask(read_only_notebook_id, "What is this notebook about?")
         assert result.answer is not None

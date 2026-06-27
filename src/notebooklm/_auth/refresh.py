@@ -727,7 +727,9 @@ async def _fetch_tokens_with_jar(
     """
     logger.debug("Fetching CSRF and session tokens from NotebookLM")
 
-    async with httpx.AsyncClient(cookies=cookie_jar) as client:
+    from .._curl_cffi_transport import resolve_transport_factory
+
+    async with resolve_transport_factory()(cookies=cookie_jar) as client:
         if poke:
             await _poke_session(client, storage_path)
 

@@ -14,11 +14,12 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from urllib.parse import ParseResult, urlparse
+from urllib.parse import urlparse
 
 import httpx
 
 from .._auth.cookies import load_httpx_cookies
+from .._curl_cffi_transport import resolve_transport_factory
 from .._mind_maps_api import extract_interactive_tree_leaf
 from .._row_adapters.notes import NoteRow
 from ..exceptions import UnknownRPCMethodError, ValidationError
@@ -31,6 +32,11 @@ from ..types import (
     ArtifactParseError,
     ArtifactType,
 )
+from ._download_client import (  # re-exported (moved out per ADR-0008 size ratchet)
+    _download_display_host,
+    _is_trusted_download_host,
+    _make_download_client,
+)
 from ._redirect_guard import redirect_revalidation_hooks
 from .formatters import _extract_app_data, _format_interactive_content, _parse_data_table
 
@@ -42,7 +48,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_TRUSTED_DOWNLOAD_DOMAINS = (".google.com", ".googleusercontent.com", ".googleapis.com")
 # Bounded queue between the async chunk producer and the single writer
 # thread. Small enough to provide back-pressure (the producer awaits when
 # the writer falls behind) but large enough to keep the writer hot across
@@ -121,27 +126,27 @@ def _load_httpx_cookies(storage_path: Any) -> Any:
     return load_httpx_cookies(path=storage_path)
 
 
-def _is_trusted_download_host(hostname: str | None) -> bool:
-    if hostname is None:
-        return False
-    # Match the EXACT host httpx connects to. httpx does NOT percent-decode
-    # ``request.url.host``, so the guard must not either: decoding made
-    # ``evil%2egoogleapis.com`` (%2e -> '.') read as trusted while the
-    # connection went to the raw non-Google host (#1521). A real Google host
-    # never contains ``%``, so reject any (defense-in-depth w/ the slash guards).
-    hostname = hostname.lower()
-    if "%" in hostname or "\\" in hostname or "/" in hostname:
-        return False
-    return any(
-        hostname == domain.lstrip(".") or hostname.endswith(domain)
-        for domain in _TRUSTED_DOWNLOAD_DOMAINS
-    )
+def _reject_html_download(response: httpx.Response) -> None:
+    """Reject an HTML body served where a media file was expected (usually expired auth).
+
+    Shared by both ``download_url`` transport branches (curl_cffi buffered + httpx
+    streaming), which detect this the same way and raise the same guidance.
+    """
+    if "text/html" in response.headers.get("content-type", ""):
+        raise ArtifactDownloadError(
+            "media",
+            details="Download failed: received HTML instead of media file. "
+            "Authentication may have expired. Run 'notebooklm login'.",
+        )
 
 
-def _download_display_host(parsed: ParseResult) -> str:
-    if parsed.hostname is not None:
-        return parsed.hostname
-    return parsed.netloc.rsplit("@", 1)[-1]
+def _reject_empty_download(total_bytes: int) -> None:
+    """Reject a zero-byte download (the remote file is missing or empty)."""
+    if total_bytes == 0:
+        raise ArtifactDownloadError(
+            "media",
+            details="Download produced 0 bytes -- the remote file may be missing or empty",
+        )
 
 
 class ArtifactDownloadService:
@@ -703,12 +708,8 @@ class ArtifactDownloadService:
 
         cookies = await asyncio.to_thread(self._cookie_loader, self._storage_path)
 
-        async with httpx.AsyncClient(
-            cookies=cookies,
-            follow_redirects=True,
-            timeout=60.0,
-            event_hooks=redirect_revalidation_hooks(_is_trusted_download_host),  # #1521
-        ) as client:
+        client, _guarded_get = _make_download_client(cookies, timeout=60.0)
+        async with client:
             for url, output_path in urls_and_paths:
                 display_host = ""
                 parsed_path = ""
@@ -726,7 +727,7 @@ class ArtifactDownloadService:
                             details=f"Untrusted download domain: {display_host}",
                         )
 
-                    response = await client.get(url)
+                    response = await _guarded_get(url)
                     if response.status_code in (401, 403):
                         raise ArtifactDownloadError(
                             "media",
@@ -805,6 +806,35 @@ class ArtifactDownloadService:
             timeout = httpx.Timeout(connect=10.0, read=30.0, write=30.0, pool=30.0)
 
             try:
+                # Transport selection is inlined here (rather than via
+                # _make_download_client) because the httpx path below streams to
+                # disk via the producer/consumer writer queue; _make_download_client
+                # returns a buffering GET suited to download_urls_batch.
+                factory = resolve_transport_factory()
+                if factory is not httpx.AsyncClient:
+                    # curl_cffi opt-in: libcurl's internal redirect loop can't host
+                    # the #1521 per-hop event hook, so use the manual guarded GET
+                    # (same trusted-host allowlist, re-checked per hop). It buffers
+                    # rather than streams — acceptable for the opt-in transport,
+                    # which already buffers RPC and upload bodies.
+                    async with factory(
+                        cookies=cookies, follow_redirects=False, timeout=timeout
+                    ) as client:
+                        response = await client.get_guarded(
+                            url, is_trusted_host=_is_trusted_download_host
+                        )
+                        response.raise_for_status()
+                        _reject_html_download(response)
+                        _reject_empty_download(len(response.content))
+                        await asyncio.to_thread(temp_file.write_bytes, response.content)
+                    os.replace(temp_file, output_file)
+                    logger.debug(
+                        "Downloaded %s%s (%d bytes)",
+                        display_host,
+                        parsed.path,
+                        len(response.content),
+                    )
+                    return output_path
                 async with httpx.AsyncClient(  # noqa: SIM117
                     cookies=cookies,
                     follow_redirects=True,
@@ -813,14 +843,7 @@ class ArtifactDownloadService:
                 ) as client:
                     async with client.stream("GET", url) as response:
                         response.raise_for_status()
-
-                        content_type = response.headers.get("content-type", "")
-                        if "text/html" in content_type:
-                            raise ArtifactDownloadError(
-                                "media",
-                                details="Download failed: received HTML instead of media file. "
-                                "Authentication may have expired. Run 'notebooklm login'.",
-                            )
+                        _reject_html_download(response)
 
                         # Producer/consumer split: one dedicated ``threading.Thread``
                         # (not ``asyncio.to_thread``, which would tie up a default-
@@ -928,14 +951,7 @@ class ArtifactDownloadService:
                             await _await_writer_exit(writer_thread)
                             raise
 
-                        if total_bytes == 0:
-                            raise ArtifactDownloadError(
-                                "media",
-                                details=(
-                                    "Download produced 0 bytes -- the remote file may "
-                                    "be missing or empty"
-                                ),
-                            )
+                        _reject_empty_download(total_bytes)
 
                         os.replace(temp_file, output_file)
                         logger.debug(

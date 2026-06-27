@@ -39,6 +39,7 @@ def is_mp4(path: str) -> bool:
 class TestDownloadAudio:
     @pytest.mark.asyncio
     @pytest.mark.readonly
+    @pytest.mark.impersonate_smoke
     async def test_download_audio(self, client, read_only_notebook_id):
         """Downloads existing audio artifact - read-only.
 

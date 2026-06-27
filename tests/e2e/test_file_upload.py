@@ -576,6 +576,7 @@ class TestFileUpload:
         )
 
     @pytest.mark.asyncio
+    @pytest.mark.impersonate_smoke
     async def test_add_text_file(self, client, temp_notebook):
         """Test uploading a text file."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:

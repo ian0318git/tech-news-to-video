@@ -287,7 +287,14 @@ class SourceUploadPipeline(LoopBoundPrimitive):
         return self._upload_timeout if self._upload_timeout is not None else default
 
     def _client_factory(self) -> AsyncClientFactory:
-        return self._async_client_factory or httpx.AsyncClient
+        if self._async_client_factory is not None:
+            return self._async_client_factory
+        # Keep the upload leg on the SAME transport as the main session — the
+        # /upload/ endpoint 500s on a curl_cffi-session + httpx-upload mix
+        # (fingerprint/session correlation).
+        from .._curl_cffi_transport import resolve_transport_factory
+
+        return resolve_transport_factory()
 
     def _authuser_query(self) -> str:
         return authuser_query(self._auth.authuser, self._auth.account_email)
@@ -887,7 +894,23 @@ class SourceUploadPipeline(LoopBoundPrimitive):
                     cookies=self._live_cookies(),
                 ) as client:
                     finalize_started = True
-                    response = await client.post(upload_url, headers=headers, content=file_stream())
+                    # The curl_cffi transport streams the request body from disk via
+                    # low-level libcurl (no full-file buffer); httpx streams natively
+                    # through the async-generator ``content=`` path. isinstance (not
+                    # duck-typing) because test mocks auto-spawn any attribute.
+                    from .._curl_cffi_transport import CurlCffiAsyncClient
+
+                    if isinstance(client, CurlCffiAsyncClient) and total_bytes is not None:
+                        source = path_fallback if path_fallback is not None else file_obj
+                        response = await client.stream_upload(
+                            upload_url, source, total_bytes=total_bytes, headers=headers
+                        )
+                        if on_progress is not None:
+                            await maybe_await_callback(on_progress, progress_total, progress_total)
+                    else:
+                        response = await client.post(
+                            upload_url, headers=headers, content=file_stream()
+                        )
                     response.raise_for_status()
 
             def _on_finalize_done(t: asyncio.Task[None]) -> None:
