@@ -324,14 +324,28 @@ def _extract_chunk_with_parseable(
 
         inner_json = frame.inner_json
         if not isinstance(inner_json, str):
-            # item[2] is null — check item[5] for a server-side error payload.
-            # Don't flip ``parseable`` here: a null inner_json without a
-            # recognized error payload is not a successfully decoded
-            # envelope. The error-payload path raises, so flow only
-            # reaches the next iteration when item[5] was absent/unusable.
+            # item[2] is null — this ``wrb.fr`` carries no answer JSON. In real
+            # traffic that only happens when the server rejected the request and
+            # put a status/error payload at item[5] instead (a successful
+            # answer/heartbeat frame always has a *string* at item[2]; no live
+            # capture has ever shown a null-item[2] ``wrb.fr`` on success).
+            # Surface it rather than silently skipping, which collapsed every
+            # rejection into the generic "no parseable chunks" failure
+            # (issue #1472). The error code is NOT the ``["e", ...]`` /
+            # ``["di", ...]`` / ``["af.httprm", ...]`` frames elsewhere in the
+            # response — those are batchexecute stream bookkeeping and their
+            # trailing number is a running byte count, not a code.
+            #
+            # Don't flip ``parseable`` here: a null inner_json is not a
+            # successfully decoded envelope. Both raise paths below are
+            # ``NoReturn``, and any present payload (``is not None`` — even an
+            # empty ``[]``, which ``_raise_chat_rejection`` reports without a
+            # status) is treated as a rejection, so flow only reaches the next
+            # iteration when item[5] was absent or a non-list.
             error_payload = frame.error_payload
             if error_payload is not None:
                 raise_if_rate_limited(error_payload)
+                _raise_chat_rejection(error_payload)
             continue
 
         try:
@@ -402,6 +416,29 @@ def _extract_chunk_with_parseable(
         # "API drift" / ``ChatResponseParseError``.
 
     return None, False, refs, None, parseable
+
+
+def _raise_chat_rejection(error_payload: list) -> NoReturn:
+    """Surface a ``wrb.fr`` request-rejection (status at item[5]) as a ``ChatError``.
+
+    A streamed-chat ``wrb.fr`` frame with a null inner JSON (no answer) but a
+    non-empty payload at item[5] is a server rejection — e.g. an over-long
+    question yields ``["wrb.fr", None, None, None, None, [3]]`` (issue #1472),
+    where ``[3]`` is a grpc-style status (``3`` == ``INVALID_ARGUMENT``). The
+    caller has already run :func:`raise_if_rate_limited` for the richer
+    ``UserDisplayableError`` shape, so this is the catch-all for the bare-status
+    rejection that previously collapsed into the generic "no parseable chunks"
+    error. The status is echoed so callers see the real failure. ``ErrorPayloadRow``
+    centralises the ``error_payload[0]`` position (issue #1491).
+    """
+    status = ErrorPayloadRow(error_payload).status_code
+    detail = f" (status {status!r})" if status is not None else ""
+    raise ChatError(
+        f"Chat request was rejected by the server{detail}. "
+        "This usually means the request was malformed or too large — most often "
+        "an over-long question past the server-side size limit; shorten it and "
+        "try again."
+    )
 
 
 def _raise_chat_error_frame(item: list) -> NoReturn:
