@@ -47,6 +47,11 @@ cookies = ["rookiepy>=0.1.0,<1"]
 # impersonation (NOTEBOOKLM_TRANSPORT=curl_cffi). Native wheels, so excluded from
 # `all` like `cookies`. Opt in via pip install "notebooklm-py[impersonate]".
 impersonate = ["curl_cffi>=0.11,<1"]
+# Headless master-token auth: mint web cookies from a durable Google master
+# token, no per-session browser (docs/installation.md#headless). gpsoauth is
+# pure-Python (no native wheels), so it is safe in `all`. >=1.1.0 for
+# exchange_token; no <2 cap so the 2.0.0 ServiceDisabled fix installs.
+headless = ["gpsoauth>=1.1.0"]
 mcp = ["fastmcp>=2.14,<4"]
 # Optional single-tenant REST server (the third _app adapter, after cli/ and
 # mcp/). EXPERIMENTAL: the /v1 surface may change in a minor release; it is
@@ -77,7 +82,7 @@ dev = [
 ]
 # `all` deliberately excludes `cookies` — rookiepy has install issues on Python 3.13+
 # (see CHANGELOG [0.4.1]). Opt in explicitly via `pip install "notebooklm-py[cookies]"`.
-all = ["notebooklm-py[browser,dev,markdown,mcp,server]"]
+all = ["notebooklm-py[browser,dev,headless,markdown,mcp,server]"]
 
 [project.scripts]
 notebooklm = "notebooklm.notebooklm_cli:main"

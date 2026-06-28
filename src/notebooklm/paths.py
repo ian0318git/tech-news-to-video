@@ -301,6 +301,21 @@ def get_storage_path(profile: str | None = None) -> Path:
     return _legacy_fallback(profile_path, "storage_state.json", resolved)
 
 
+def get_master_token_path(profile: str | None = None) -> Path:
+    """Get the master_token.json path for a profile (headless master-token auth).
+
+    Sibling of storage_state.json. Holds the durable ``aas_et/`` master token at
+    mode 0600; cookies minted from it are written to storage_state.json.
+
+    Args:
+        profile: Profile name. If None, uses the active profile.
+
+    Returns:
+        Path to master_token.json (may not exist).
+    """
+    return get_profile_dir(resolve_profile(profile)) / "master_token.json"
+
+
 def get_context_path(
     profile: str | None = None,
     *,

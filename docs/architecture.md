@@ -536,6 +536,7 @@ the default dependency.
 | [`_auth/refresh.py`](../src/notebooklm/_auth/refresh.py) | Token refresh driver (external login command, coalesced runs, secret redaction). |
 | [`_auth/keepalive.py`](../src/notebooklm/_auth/keepalive.py) | Cookie keepalive + `__Secure-1PSIDTS` rotation. |
 | [`_auth/psidts_recovery.py`](../src/notebooklm/_auth/psidts_recovery.py) | Inline PSIDTS recovery for cold-start (see issue #865). |
+| [`_auth/master_token.py`](../src/notebooklm/_auth/master_token.py) | Headless master-token auth: mint/persist web cookies from a durable Google master token; layer-4 re-mint recovery (ADR-0023). |
 
 The cookie lifecycle — what gets written, who rotates, what the
 keepalive contract is — is documented separately in
@@ -639,6 +640,7 @@ The cross-command helpers form a small internal CLI stack:
 |--------|------|
 | [`cli/runtime.py`](../src/notebooklm/cli/runtime.py) | Leaf runtime helpers: root `--quiet` lookup and the single `asyncio.run(...)` bridge for sync Click handlers. |
 | [`cli/auth_runtime.py`](../src/notebooklm/cli/auth_runtime.py) | Shared auth bootstrap, command-body error wrapping, and optional opened-client workflow helper. |
+| [`cli/master_token_login.py`](../src/notebooklm/cli/master_token_login.py) | Command driver for `notebooklm login --master-token[-refresh]`, rendering over the master-token login service [`cli/services/login/master_token.py`](../src/notebooklm/cli/services/login/master_token.py) (mint/persist/refresh + browser `oauth_token` capture; ADR-0023). |
 | [`cli/services/auth_source.py`](../src/notebooklm/cli/services/auth_source.py) | Single resolver for CLI auth-source precedence (`--storage`, `NOTEBOOKLM_AUTH_JSON`, active profile). |
 | [`cli/context.py`](../src/notebooklm/cli/context.py) | Profile/storage-scoped `context.json` persistence for active notebook, conversation, and account metadata. |
 | [`cli/resolve.py`](../src/notebooklm/cli/resolve.py) | Notebook/source/artifact/note ID resolution, including partial-ID matching against public client list calls. |
@@ -1140,6 +1142,7 @@ src/notebooklm/
 │   ├── storage.py               # Profile/state persistence on disk
 │   ├── keepalive.py             # Cookie keepalive + __Secure-1PSIDTS rotation
 │   ├── psidts_recovery.py       # Inline PSIDTS recovery for cold-start (issue #865)
+│   ├── master_token.py          # Headless master-token auth: mint cookies + layer-4 re-mint (ADR-0023)
 │   ├── refresh.py               # Token refresh driver (external login cmd, coalesced runs, redaction)
 │   └── tokens.py                # AuthTokens container + load_auth_from_storage loader
 ├── _types/                      # Dataclass implementation package re-exported by types.py
@@ -1215,6 +1218,7 @@ src/notebooklm/
     ├── input.py                 # CLI prompt and stdin input helpers
     ├── label_cmd.py             # label list/sources/generate/create/rename/emoji/add/remove/delete
     ├── language_cmd.py          # Language configuration CLI commands
+    ├── master_token_login.py    # Command driver for `login --master-token[-refresh]` (ADR-0023)
     ├── mcp_cmd.py               # `mcp install <client>` command — thin Click adapter over `_app/mcp_install.py`; resolves the client config path (`--config-path` override) and applies the merge inside `notebooklm.io.atomic_update_json` (locked, crash-safe, merge-not-clobber)
     ├── notebook_cmd.py          # list, create, delete, rename
     ├── note_cmd.py              # note commands
@@ -1250,6 +1254,7 @@ src/notebooklm/
         │   ├── exceptions.py
         │   ├── firefox_accounts.py
         │   ├── io_seam.py        # Caller-injected LoginIO Protocol + resolver (#1393)
+        │   ├── master_token.py   # Headless master-token bootstrap/refresh + browser oauth_token capture (ADR-0023)
         │   ├── outcomes.py
         │   ├── profile_targets.py
         │   ├── refresh.py

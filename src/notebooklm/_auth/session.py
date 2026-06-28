@@ -96,6 +96,12 @@ async def refresh_auth_session(
         # env-gated); on a successful re-mint, reload cookies and retry once.
         if await _try_headless_reauth(auth=auth, kernel=kernel, allow_headless=allow_headless):
             extracted = await _get_and_extract()
+        # Layer-4: master-token re-mint. When a master_token.json sits beside
+        # this profile's storage, re-mint a fresh session from the durable token
+        # — the headless-auth recovery that replaces "run 'notebooklm login'"
+        # (directive A). Fires only after L1/L2/L3 are exhausted.
+        if extracted is None and await _try_master_token_reauth(auth=auth, kernel=kernel):
+            extracted = await _get_and_extract()
         if extracted is None:
             raise ValueError("Authentication expired. Run 'notebooklm login' to re-authenticate.")
     csrf, sid = extracted
@@ -210,4 +216,71 @@ async def _try_headless_reauth(
         return False
     _replace_cookie_jar(kernel.get_http_client().cookies, fresh_jar)
     logger.info("Headless re-auth succeeded; reloaded re-minted cookies for retry.")
+    return True
+
+
+async def _try_master_token_reauth(*, auth: AuthTokens, kernel: Kernel) -> bool:
+    """Layer-4 recovery: re-mint a fresh session from a durable master token.
+
+    When ``master_token.json`` sits beside this profile's ``storage_state.json``,
+    mint a brand-new cookie session from the master token, persist it, and reload
+    it into the live HTTP client so the caller's homepage GET retries with fresh
+    cookies. This is the headless-auth recovery that the standard
+    ``RotateCookies``/headless-browser ladder can't provide off-device — it fires
+    only after L1/L2/L3 are exhausted (directive A; #1638).
+
+    Returns ``True`` only on a successful re-mint + reload. Every honest failure
+    (no token file, revoked token, reload failure) returns ``False`` so the
+    original dead-cookie ``ValueError`` stands. No secrets are logged.
+
+    Env-var auth (``auth.storage_path is None``) has no backing file to re-mint
+    into, so this declines there — symmetric with L2/L3.
+    """
+    storage_path = auth.storage_path
+    if storage_path is None:
+        return False
+    master_token_path = storage_path.parent / "master_token.json"
+    if not master_token_path.exists():
+        return False
+
+    from .cookies import _replace_cookie_jar, build_httpx_cookies_from_storage
+    from .master_token import MasterTokenError, mint_cookies, persist_minted_jar, read_master_token
+
+    try:
+        rec = await asyncio.to_thread(read_master_token, master_token_path)
+        if rec is None:
+            return False
+        jar = await mint_cookies(rec["email"], rec["master_token"], rec["android_id"])
+    except MasterTokenError as exc:
+        # MasterTokenError messages are credential-free by construction (see the
+        # module docstring), so log the full message — it carries the actionable
+        # reason (revoked / missing cookies / re-bootstrap).
+        logger.warning("Master-token re-mint failed (%s); 'Authentication expired' stands.", exc)
+        return False
+
+    # persist_minted_jar takes the storage filelock (blocking, up to 10s) — keep
+    # it off the live client's event loop. A persist failure (I/O / lock timeout)
+    # must surface as a non-success, not a low-level error replacing the intended
+    # "Authentication expired".
+    try:
+        await asyncio.to_thread(persist_minted_jar, storage_path, jar, email=rec.get("email"))
+    except OSError as exc:
+        logger.warning(
+            "Master-token re-mint persisted storage failed (%s); 'Authentication expired' stands.",
+            exc,
+        )
+        return False
+    # Reload through the recovery-aware loader so inline PSIDTS recovery mints
+    # __Secure-1PSIDTS from the fresh SID + secondary binding.
+    try:
+        fresh_jar = await asyncio.to_thread(build_httpx_cookies_from_storage, storage_path)
+    except (ValueError, OSError) as exc:
+        logger.warning(
+            "Master-token re-mint wrote storage but the cookies failed to load (%s); "
+            "treating as a non-success.",
+            type(exc).__name__,
+        )
+        return False
+    _replace_cookie_jar(kernel.get_http_client().cookies, fresh_jar)
+    logger.info("Master-token re-mint succeeded; reloaded fresh cookies for retry.")
     return True

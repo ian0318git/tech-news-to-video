@@ -234,7 +234,8 @@ def register_session_commands(cli):
         default=None,
         help=(
             "Pick a signed-in Google account by email when several are present "
-            "in the browser. Only valid with --browser-cookies."
+            "in the browser. Required with --master-token; otherwise only valid "
+            "with --browser-cookies."
         ),
     )
     @click.option(
@@ -290,6 +291,51 @@ def register_session_commands(cli):
             "labels: youtube, docs, myaccount, mail, all."
         ),
     )
+    @click.option(
+        "--master-token",
+        "master_token",
+        is_flag=True,
+        default=False,
+        help=(
+            "Headless auth: bootstrap a durable Google master token (one browser "
+            "sign-in), then mint web cookies from it with no per-session browser. "
+            "Requires --account EMAIL. Needs pip install 'notebooklm-py[headless]'; "
+            "the browser oauth_token capture also needs [browser] — or skip it by "
+            "passing --oauth-token. See docs/installation.md#headless."
+        ),
+    )
+    @click.option(
+        "--master-token-refresh",
+        "master_token_refresh",
+        is_flag=True,
+        default=False,
+        help="Re-mint web cookies from the stored master token (no prompt). For recovery / cron.",
+    )
+    @click.option(
+        "--oauth-token",
+        "oauth_token",
+        default=None,
+        help="Single-use EmbeddedSetup oauth_token for --master-token (else captured via browser).",
+    )
+    @click.option(
+        "--android-id",
+        "android_id",
+        default=None,
+        help="Override the per-install Android id for --master-token (default: generated/persisted).",
+    )
+    @click.option(
+        "--cdp-url",
+        "cdp_url",
+        default=None,
+        help="Attach oauth_token capture to a running Chrome via CDP (e.g. http://localhost:9222).",
+    )
+    @click.option(
+        "--force",
+        "force",
+        is_flag=True,
+        default=False,
+        help="With --master-token: overwrite even if the profile belongs to a different account.",
+    )
     @click.pass_context
     def login(
         ctx,
@@ -302,6 +348,12 @@ def register_session_commands(cli):
         profile_name,
         fresh,
         include_domains_raw,
+        master_token,
+        master_token_refresh,
+        oauth_token,
+        android_id,
+        cdp_url,
+        force,
     ):
         """Log in to NotebookLM via browser.
 
@@ -329,6 +381,22 @@ def register_session_commands(cli):
                     f"  2. Continue using {AUTH_JSON_ENV_NAME} for authentication"
                 )
                 exit_with_code(1)
+
+            if master_token or master_token_refresh:
+                from .master_token_login import run_master_token_login
+
+                run_master_token_login(
+                    ctx,
+                    storage=storage,
+                    browser=browser,
+                    account_email=account_email,
+                    oauth_token=oauth_token,
+                    android_id=android_id,
+                    cdp_url=cdp_url,
+                    refresh=master_token_refresh,
+                    force=force,
+                )
+                return
 
             validate_flags_or_exit(
                 browser_cookies=browser_cookies,

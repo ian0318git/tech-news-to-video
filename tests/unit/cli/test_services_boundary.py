@@ -124,6 +124,7 @@ GUARDED_PATHS = {
     "cli/services/login/exceptions.py": SERVICES_ROOT / "login" / "exceptions.py",
     "cli/services/login/firefox_accounts.py": SERVICES_ROOT / "login" / "firefox_accounts.py",
     "cli/services/login/io_seam.py": SERVICES_ROOT / "login" / "io_seam.py",
+    "cli/services/login/master_token.py": SERVICES_ROOT / "login" / "master_token.py",
     "cli/services/login/outcomes.py": SERVICES_ROOT / "login" / "outcomes.py",
     "cli/services/login/profile_targets.py": SERVICES_ROOT / "login" / "profile_targets.py",
     "cli/services/login/refresh.py": SERVICES_ROOT / "login" / "refresh.py",

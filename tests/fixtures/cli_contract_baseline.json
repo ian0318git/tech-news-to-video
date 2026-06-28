@@ -7299,7 +7299,7 @@
           "default": null,
           "envvar": null,
           "has_custom_shell_complete": false,
-          "help": "Pick a signed-in Google account by email when several are present in the browser. Only valid with --browser-cookies.",
+          "help": "Pick a signed-in Google account by email when several are present in the browser. Required with --master-token; otherwise only valid with --browser-cookies.",
           "is_flag": false,
           "kind": "option",
           "multiple": false,
@@ -7401,6 +7401,114 @@
           "secondary_opts": [],
           "type": {
             "name": "text"
+          }
+        },
+        {
+          "default": false,
+          "envvar": null,
+          "has_custom_shell_complete": false,
+          "help": "Headless auth: bootstrap a durable Google master token (one browser sign-in), then mint web cookies from it with no per-session browser. Requires --account EMAIL. Needs pip install 'notebooklm-py[headless]'; the browser oauth_token capture also needs [browser] \u2014 or skip it by passing --oauth-token. See docs/installation.md#headless.",
+          "is_flag": true,
+          "kind": "option",
+          "multiple": false,
+          "name": "master_token",
+          "opts": [
+            "--master-token"
+          ],
+          "required": false,
+          "secondary_opts": [],
+          "type": {
+            "name": "boolean"
+          }
+        },
+        {
+          "default": false,
+          "envvar": null,
+          "has_custom_shell_complete": false,
+          "help": "Re-mint web cookies from the stored master token (no prompt). For recovery / cron.",
+          "is_flag": true,
+          "kind": "option",
+          "multiple": false,
+          "name": "master_token_refresh",
+          "opts": [
+            "--master-token-refresh"
+          ],
+          "required": false,
+          "secondary_opts": [],
+          "type": {
+            "name": "boolean"
+          }
+        },
+        {
+          "default": null,
+          "envvar": null,
+          "has_custom_shell_complete": false,
+          "help": "Single-use EmbeddedSetup oauth_token for --master-token (else captured via browser).",
+          "is_flag": false,
+          "kind": "option",
+          "multiple": false,
+          "name": "oauth_token",
+          "opts": [
+            "--oauth-token"
+          ],
+          "required": false,
+          "secondary_opts": [],
+          "type": {
+            "name": "text"
+          }
+        },
+        {
+          "default": null,
+          "envvar": null,
+          "has_custom_shell_complete": false,
+          "help": "Override the per-install Android id for --master-token (default: generated/persisted).",
+          "is_flag": false,
+          "kind": "option",
+          "multiple": false,
+          "name": "android_id",
+          "opts": [
+            "--android-id"
+          ],
+          "required": false,
+          "secondary_opts": [],
+          "type": {
+            "name": "text"
+          }
+        },
+        {
+          "default": null,
+          "envvar": null,
+          "has_custom_shell_complete": false,
+          "help": "Attach oauth_token capture to a running Chrome via CDP (e.g. http://localhost:9222).",
+          "is_flag": false,
+          "kind": "option",
+          "multiple": false,
+          "name": "cdp_url",
+          "opts": [
+            "--cdp-url"
+          ],
+          "required": false,
+          "secondary_opts": [],
+          "type": {
+            "name": "text"
+          }
+        },
+        {
+          "default": false,
+          "envvar": null,
+          "has_custom_shell_complete": false,
+          "help": "With --master-token: overwrite even if the profile belongs to a different account.",
+          "is_flag": true,
+          "kind": "option",
+          "multiple": false,
+          "name": "force",
+          "opts": [
+            "--force"
+          ],
+          "required": false,
+          "secondary_opts": [],
+          "type": {
+            "name": "boolean"
           }
         }
       ],

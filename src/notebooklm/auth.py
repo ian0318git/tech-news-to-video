@@ -44,6 +44,20 @@ from ._auth import psidts_recovery as _auth_psidts_recovery
 from ._auth import refresh as _auth_refresh
 from ._auth import storage as _auth_storage
 from ._auth import tokens as _auth_tokens
+
+# Master-token (headless) auth. Re-exported here as the public boundary the CLI
+# consumes (cli/ may not import private ``_auth.*`` modules — see
+# tests/_guardrails/test_cli_boundary.py) and as the documented programmatic
+# headless-auth surface (docs/python-api.md). Blessed in ``__all__`` below.
+from ._auth.master_token import (  # noqa: F401
+    MasterTokenError,
+    exchange_master_token,
+    generate_android_id,
+    mint_cookies,
+    persist_minted_jar,
+    read_master_token,
+    write_master_token,
+)
 from ._auth.tokens import AuthTokens
 from .paths import get_storage_path  # noqa: F401  # kept as a module-level compat alias
 
@@ -128,21 +142,28 @@ __all__ = [
     "convert_rookiepy_cookies_to_storage_state",
     "cookie_names_from_storage",
     "enumerate_accounts",
+    "exchange_master_token",
     "extract_cookies_from_storage",
     "extract_cookies_with_domains",
     "extract_email_from_html",
     "fetch_tokens_passive",
     "fetch_tokens_with_domains",
+    "generate_android_id",
     "get_account_email_for_storage",
     "get_authuser_for_storage",
     "GOOGLE_REGIONAL_CCTLDS",
+    "MasterTokenError",
+    "mint_cookies",
     "missing_cookies_hint",
     "OPTIONAL_COOKIE_DOMAINS",
     "OPTIONAL_COOKIE_DOMAINS_BY_LABEL",
+    "persist_minted_jar",
     "read_account_metadata",
+    "read_master_token",
     "REQUIRED_COOKIE_DOMAINS",
     "validate_with_recovery",
     "write_account_metadata",
+    "write_master_token",
 ]
 
 

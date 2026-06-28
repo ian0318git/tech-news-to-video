@@ -37,6 +37,9 @@ ALLOWED_EDGES: dict[str, set[str]] = {
     "outcomes": set(),
     "cookie_domains": set(),
     "rookiepy_errors": set(),
+    # master_token: bootstrap/refresh service; imports only from notebooklm.auth /
+    # notebooklm.client (outside this package), so it is a login-package leaf.
+    "master_token": set(),
     "io_seam": set(),
     "cookie_jar": {
         "outcomes",
