@@ -12,19 +12,29 @@ httpx), so this tier is local-server-backed, not cassette-backed — hence
 
 from __future__ import annotations
 
+import importlib.util
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import httpx
 import pytest
 
-pytest.importorskip("curl_cffi", reason="requires the optional [impersonate] extra")
+from notebooklm._curl_cffi_transport import CurlCffiAsyncClient
+from notebooklm._runtime.init import _resolve_async_client_factory
+from notebooklm._streaming_post import stream_post_with_size_cap
 
-from notebooklm._curl_cffi_transport import CurlCffiAsyncClient  # noqa: E402
-from notebooklm._runtime.init import _resolve_async_client_factory  # noqa: E402
-from notebooklm._streaming_post import stream_post_with_size_cap  # noqa: E402
-
-pytestmark = pytest.mark.allow_no_vcr
+# Keep this module COLLECTED even when the optional extra is absent (the imports
+# above don't need curl_cffi at import time) so its ``allow_no_vcr`` marker stays
+# visible to the test-taxonomy inventory. A module-level ``importorskip`` would
+# drop the file from collection, making its allowlist entry look stale. The
+# ``skipif`` instead skips at runtime when curl_cffi isn't installed.
+pytestmark = [
+    pytest.mark.allow_no_vcr,
+    pytest.mark.skipif(
+        importlib.util.find_spec("curl_cffi") is None,
+        reason="requires the optional [impersonate] extra",
+    ),
+]
 
 
 class _Handler(BaseHTTPRequestHandler):

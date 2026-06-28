@@ -23,6 +23,7 @@ curl_cffi bypasses VCR (libcurl, not httpx) so this is local-server-backed
 from __future__ import annotations
 
 import gzip
+import importlib.util
 import json
 import threading
 from contextlib import contextmanager
@@ -33,12 +34,21 @@ import httpx
 import pytest
 import yaml
 
-pytest.importorskip("curl_cffi", reason="requires the optional [impersonate] extra")
+from notebooklm._curl_cffi_transport import CurlCffiAsyncClient
+from notebooklm._streaming_post import stream_post_with_size_cap
 
-from notebooklm._curl_cffi_transport import CurlCffiAsyncClient  # noqa: E402
-from notebooklm._streaming_post import stream_post_with_size_cap  # noqa: E402
-
-pytestmark = pytest.mark.allow_no_vcr
+# Keep this module COLLECTED even when the optional extra is absent (the imports
+# above don't need curl_cffi at import time) so its ``allow_no_vcr`` marker stays
+# visible to the test-taxonomy inventory. A module-level ``importorskip`` would
+# drop the file from collection, making its allowlist entry look stale. The
+# ``skipif`` instead skips at runtime when curl_cffi isn't installed.
+pytestmark = [
+    pytest.mark.allow_no_vcr,
+    pytest.mark.skipif(
+        importlib.util.find_spec("curl_cffi") is None,
+        reason="requires the optional [impersonate] extra",
+    ),
+]
 
 _CASSETTE_DIR = Path(__file__).resolve().parent.parent / "cassettes"
 
