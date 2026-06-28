@@ -1,0 +1,64 @@
+# Remote notebooklm-mcp behind a Cloudflare Tunnel.
+#
+#   cp .env.example .env   # then set NOTEBOOKLM_MCP_TOKEN + CF_TUNNEL_TOKEN
+#   # by default it mounts ~/.notebooklm/profiles/default (override via
+#   # NOTEBOOKLM_PROFILE_DIR); runs as your uid so no chown is needed
+#   docker compose up -d
+#
+# No host ports are published — the ONLY way in is through Cloudflare, which
+# terminates TLS with its own cert (no CA cert for you to manage). See README.md.
+services:
+  notebooklm-mcp:
+    build:
+      # Context is the repo root so the image can install THIS checkout (dev).
+      context: ..
+      dockerfile: deploy/Dockerfile
+      # For a published release instead of this checkout, uncomment:
+      # args:
+      #   NOTEBOOKLM_SPEC: "notebooklm-py[mcp,headless]==0.8.0"
+    # image: ghcr.io/...   # or pull a prebuilt image instead of building
+    restart: unless-stopped
+    # Run as YOUR uid:gid so the mounted profile's files (owned by you on the
+    # host) are readable AND writable with NO chown — and your own `notebooklm`
+    # CLI keeps owning them. Defaults to 1000:1000; `make` fills these from
+    # `id -u`/`id -g` automatically, or set them in .env.
+    user: "${NOTEBOOKLM_UID:-1000}:${NOTEBOOKLM_GID:-1000}"
+    environment:
+      # Bearer token clients must present (Authorization: Bearer ...). Env-only.
+      NOTEBOOKLM_MCP_TOKEN: ${NOTEBOOKLM_MCP_TOKEN:?set NOTEBOOKLM_MCP_TOKEN in .env}
+      # Binds 0.0.0.0 (for the cloudflared sidecar) → makes the token MANDATORY.
+      NOTEBOOKLM_MCP_ALLOW_EXTERNAL_BIND: "1"
+      # Point the app at the mounted profile, independent of the (arbitrary) uid's
+      # home. The host dir is always mounted as the profile literally named
+      # "server"; NOTEBOOKLM_HOME/profiles/server is where the app reads+writes.
+      NOTEBOOKLM_HOME: /data
+      NOTEBOOKLM_PROFILE: server
+      # HOME points at the writable mount too, so an arbitrary uid with no
+      # /etc/passwd entry never trips a `~` / getpwuid lookup.
+      HOME: /data/profiles/server
+    volumes:
+      # READ-WRITE: keepalive/recovery rotates cookies into storage_state.json
+      # (+ its .lock). A read-only mount kills the session ~1h in.
+      # Defaults to your local "default" profile; override with NOTEBOOKLM_PROFILE_DIR
+      # in .env to point at a different profile dir (e.g. a dedicated/throwaway one).
+      # Treat the dir as a secret — master_token.json is a full-account credential.
+      - "${NOTEBOOKLM_PROFILE_DIR:-${HOME}/.notebooklm/profiles/default}:/data/profiles/server:rw"
+    # No `ports:` — not reachable except via the tunnel.
+
+  cloudflared:
+    # Pinnable for reproducibility: set CLOUDFLARED_VERSION in .env to a release
+    # from github.com/cloudflare/cloudflared/releases. Defaults to `latest` (the
+    # tunnel connector is backward-compatible and is what Cloudflare recommends
+    # running), so the template works without choosing a tag.
+    image: cloudflare/cloudflared:${CLOUDFLARED_VERSION:-latest}
+    restart: unless-stopped
+    command: tunnel run
+    environment:
+      # From the Cloudflare Zero Trust dashboard (Networks → Tunnels). Configure
+      # the tunnel's Public Hostname to point at http://notebooklm-mcp:9420.
+      TUNNEL_TOKEN: ${CF_TUNNEL_TOKEN:?set CF_TUNNEL_TOKEN in .env}
+    depends_on:
+      # Wait until the MCP server passes its HEALTHCHECK (port listening), not
+      # merely until its container starts, before bringing the tunnel up.
+      notebooklm-mcp:
+        condition: service_healthy
