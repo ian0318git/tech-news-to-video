@@ -148,6 +148,19 @@ class TestClearCommand:
         assert result.exit_code == 0, result.output
         assert "Context cleared" in result.output
 
+    def test_clear_json(self, runner: CliRunner, isolated_home: Path) -> None:
+        """``clear --json`` reports an actual clear (cleared=True)."""
+        _seed_context(isolated_home, notebook_id="abc123", title="Demo", is_owner=True)
+        result = runner.invoke(cli, ["clear", "--json"])
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output) == {"status": "cleared", "cleared": True}
+
+    def test_clear_json_noop(self, runner: CliRunner, isolated_home: Path) -> None:
+        """``clear --json`` with nothing to clear reports cleared=False (no-op)."""
+        result = runner.invoke(cli, ["clear", "--json"])
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output) == {"status": "already_clear", "cleared": False}
+
 
 # ---------------------------------------------------------------------------
 # auth logout
@@ -174,6 +187,51 @@ class TestAuthLogoutCommand:
 
         assert result.exit_code == 0, result.output
         assert "Already logged out" in result.output
+
+    def test_auth_logout_json(self, runner: CliRunner, isolated_home: Path) -> None:
+        """``auth logout --json`` emits a structured logged-out document."""
+        _seed_storage_state(isolated_home)
+        result = runner.invoke(cli, ["auth", "logout", "--json"])
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)
+        assert payload["status"] == "logged_out"
+        assert payload["removed"] is True
+
+    def test_auth_logout_json_no_session(self, runner: CliRunner, isolated_home: Path) -> None:
+        """``auth logout --json`` with nothing to remove reports already-logged-out."""
+        result = runner.invoke(cli, ["auth", "logout", "--json"])
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)
+        assert payload["status"] == "already_logged_out"
+        assert payload["removed"] is False
+
+    def test_render_logout_outcome_json_failure_is_single_document(self) -> None:
+        """A per-step failure under ``--json`` emits exactly ONE error envelope
+        (exit 1) — never both the error and the success payload. Exercises the
+        render helper directly (no monkeypatch) since it owns the exit policy."""
+        import contextlib
+        import io
+
+        from notebooklm.cli._session_render import _render_logout_outcome
+        from notebooklm.cli.services.session_context import LogoutFailure, LogoutOutcome
+
+        outcome = LogoutOutcome(
+            removed_any=False,
+            env_auth_remains=False,
+            failure=LogoutFailure(
+                kind="storage",
+                path=Path("/tmp/x/storage_state.json"),
+                error_message="permission denied",
+                partial_storage_removed=False,
+            ),
+        )
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf), pytest.raises(SystemExit) as exc:
+            _render_logout_outcome(outcome, json_output=True)
+        assert exc.value.code == 1
+        payload = json.loads(buf.getvalue())  # raises if stdout isn't a single document
+        assert payload["error"] is True
+        assert payload["code"] == "logout_storage_failed"
 
     def test_auth_logout_also_clears_context(self, runner: CliRunner, isolated_home: Path) -> None:
         """``auth logout`` removes context.json so post-logout commands start fresh.
