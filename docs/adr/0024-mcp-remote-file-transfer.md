@@ -73,12 +73,24 @@ How this design aligns:
   (claude.ai Settings → Capabilities → additional allowed domains); otherwise the
   PUT fails despite a valid signature. The browser-upload path has no such
   requirement and is the universal fallback.
-- **Migration note:** when SEP-2356 lands *and* claude.ai implements it, the
-  upload side can migrate to the native declarative-file-input; until then there
-  is nothing native to adopt.
+- **Migration note (forward path = SEP-2631).** The standardization most likely to
+  land is **SEP-2631 "File Objects and Transfer"** (Draft, opened 2026-04-22; extends
+  SEP-2356) — and it *standardizes this very side-channel*: protocol-native
+  `files/authorizeUpload` / `files/authorizeDownload` control-plane methods that hand
+  the client a presigned **out-of-band** HTTPS URL (bytes stay out of JSON-RPC), plus
+  `x-mcp-file` URI-string inputs and a `FileValue` output type (uri / displayName /
+  mimeType / size / digest). So this ADR is **forward-compatible, not a stopgap to be
+  thrown away**: the existing signed-URL endpoints (`_filelink` / `_fileroutes`) become
+  the presigned targets the client negotiates, and migration mainly moves the UX into
+  the client's **native file picker** — removing the manual browser round-trip that is
+  today's upload friction. Blocked on SEP-2631 landing **and** FastMCP + claude.ai
+  implementing it; until all three, the side-channel is both the shippable approach and
+  the pattern the spec is converging on. (SEP-2356's declarative-file-input alone, being
+  base64-leaning, was never sufficient for our payload sizes.) Tracked in #1656.
 
 Sources: WG charter https://modelcontextprotocol.io/community/file-uploads/charter
 · SEP-2356 https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2356
+· SEP-2631 (File Objects and Transfer) https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2631
 · claude.ai connector guide https://claude.com/docs/connectors/building
 · FutureSearch upload pattern https://futuresearch.ai/blog/mcp-large-dataset-upload/
 · Tigris signed-download https://www.tigrisdata.com/blog/mcp-server-sharing/
