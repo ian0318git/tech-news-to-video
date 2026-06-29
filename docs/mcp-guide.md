@@ -236,12 +236,20 @@ conversation unless you pass a `conversation_id`.
 task = artifact_generate(notebook="Quantum Computing", artifact_type="audio")
 artifact_status(notebook="Quantum Computing", task_id="<task_id from above>")   # poll until complete
 artifact_download(notebook="Quantum Computing", artifact_type="audio", path="podcast.mp3")
+
+# Per-kind styling options are agent-settable, e.g. a custom-styled video:
+artifact_generate(notebook="Quantum Computing", artifact_type="video",
+                  style="custom", style_prompt="hand-drawn diagrams")
 ```
 
 `artifact_type` is one of `audio`, `video`, `cinematic-video`, `slide-deck`, `quiz`, `flashcards`,
-`infographic`, `data-table`, `mind-map`, `report`. Agent-settable options are `audio_format` /
-`audio_length` (audio), `quantity` / `difficulty` (quiz, flashcards), and `report_format` (report);
-the other kinds use fixed defaults.
+`infographic`, `data-table`, `mind-map`, `report`. Each kind's styling options are agent-settable
+(matching the CLI flags): `audio_format` / `audio_length` (audio); `video_format` / `style` /
+`style_prompt` (video); `deck_format` / `deck_length` (slide-deck); `quantity` / `difficulty`
+(quiz, flashcards); `orientation` / `detail` / `style` (infographic); `map_kind` (mind-map);
+and `report_format` (report). `cinematic-video` and `data-table` take no per-kind options. An
+option is valid only for its own kind — passing one to a different `artifact_type` is a
+validation error, not a silent no-op.
 
 ### Run deep research and import the findings
 

@@ -217,6 +217,229 @@ async def test_artifact_generate_valid_language_passes(mcp_call, mock_client) ->
 
 
 # ---------------------------------------------------------------------------
+# artifact_generate — per-kind options (#1654)
+# ---------------------------------------------------------------------------
+
+
+async def test_artifact_generate_video_options(mcp_call, mock_client) -> None:
+    """video format/style/style_prompt all reach generate_video (custom style path)."""
+    mock_client.artifacts.generate_video = AsyncMock(return_value=FakeStatus(task_id=TASK_ID))
+    await mcp_call(
+        "artifact_generate",
+        {
+            "notebook": NB_ID,
+            "artifact_type": "video",
+            "video_format": "brief",
+            "style": "custom",
+            "style_prompt": "hand-drawn diagrams",
+        },
+    )
+    kwargs = mock_client.artifacts.generate_video.await_args.kwargs
+    assert kwargs["video_format"].name == "BRIEF"
+    assert kwargs["video_style"].name == "CUSTOM"
+    assert kwargs["style_prompt"] == "hand-drawn diagrams"
+
+
+async def test_artifact_generate_slide_deck_options(mcp_call, mock_client) -> None:
+    mock_client.artifacts.generate_slide_deck = AsyncMock(return_value=FakeStatus(task_id=TASK_ID))
+    await mcp_call(
+        "artifact_generate",
+        {
+            "notebook": NB_ID,
+            "artifact_type": "slide-deck",
+            "deck_format": "presenter",
+            "deck_length": "short",
+        },
+    )
+    kwargs = mock_client.artifacts.generate_slide_deck.await_args.kwargs
+    assert kwargs["slide_format"].name == "PRESENTER_SLIDES"
+    assert kwargs["slide_length"].name == "SHORT"
+
+
+async def test_artifact_generate_infographic_options(mcp_call, mock_client) -> None:
+    mock_client.artifacts.generate_infographic = AsyncMock(return_value=FakeStatus(task_id=TASK_ID))
+    await mcp_call(
+        "artifact_generate",
+        {
+            "notebook": NB_ID,
+            "artifact_type": "infographic",
+            "orientation": "portrait",
+            "detail": "detailed",
+            "style": "professional",
+        },
+    )
+    kwargs = mock_client.artifacts.generate_infographic.await_args.kwargs
+    assert kwargs["orientation"].name == "PORTRAIT"
+    assert kwargs["detail_level"].name == "DETAILED"
+    assert kwargs["style"].name == "PROFESSIONAL"
+
+
+async def test_artifact_generate_mind_map_interactive_default(mcp_call, mock_client) -> None:
+    """Omitted ``map_kind`` defaults to interactive → routes to ``mind_maps.generate``."""
+    mock_client.mind_maps.generate = AsyncMock(return_value={"id": "mm1"})
+    await mcp_call("artifact_generate", {"notebook": NB_ID, "artifact_type": "mind-map"})
+    mock_client.mind_maps.generate.assert_awaited_once()
+    mock_client.artifacts.generate_mind_map.assert_not_called()
+
+
+async def test_artifact_generate_mind_map_note_backed_routes(mcp_call, mock_client) -> None:
+    """``map_kind=note-backed`` routes to ``artifacts.generate_mind_map`` instead."""
+    mock_client.artifacts.generate_mind_map = AsyncMock(return_value={"id": "mm1"})
+    await mcp_call(
+        "artifact_generate",
+        {"notebook": NB_ID, "artifact_type": "mind-map", "map_kind": "note-backed"},
+    )
+    mock_client.artifacts.generate_mind_map.assert_awaited_once()
+    mock_client.mind_maps.generate.assert_not_called()
+
+
+async def test_artifact_generate_mind_map_forwards_instructions(mcp_call, mock_client) -> None:
+    """``instructions`` reaches the mind-map client call (the dropped-instructions fix).
+
+    MCP stores the tool ``instructions`` arg as ``raw_args["description"]``, but the
+    mind-map plan reads ``raw_args["instructions"]`` — so MCP also sets that key. Without
+    the fix, mind-map instructions were silently discarded.
+    """
+    mock_client.mind_maps.generate = AsyncMock(return_value={"id": "mm1"})
+    await mcp_call(
+        "artifact_generate",
+        {
+            "notebook": NB_ID,
+            "artifact_type": "mind-map",
+            "instructions": "focus on the timeline",
+        },
+    )
+    kwargs = mock_client.mind_maps.generate.await_args.kwargs
+    assert kwargs["instructions"] == "focus on the timeline"
+
+
+@pytest.mark.parametrize(
+    "artifact_type,opts",
+    [
+        ("video", {"style": "professional"}),  # infographic-only value, invalid for video
+        ("infographic", {"style": "classic"}),  # video-only value, invalid for infographic
+        ("mind-map", {"map_kind": "bogus"}),  # core wouldn't catch — MCP must
+        ("slide-deck", {"deck_format": "nonsense"}),
+    ],
+    ids=["video-bad-style", "infographic-bad-style", "bad-map-kind", "bad-deck-format"],
+)
+async def test_artifact_generate_bad_option_value_is_validation_error(
+    mcp_call, mock_client, artifact_type: str, opts: dict
+) -> None:
+    """A value outside the kind's choice set projects as VALIDATION.
+
+    The per-type ``style`` cases prove the video/infographic style sets are enforced
+    separately (the two overlap only on auto/anime/kawaii).
+    """
+    with pytest.raises(ToolError) as excinfo:
+        await mcp_call(
+            "artifact_generate",
+            {"notebook": NB_ID, "artifact_type": artifact_type, **opts},
+        )
+    assert "VALIDATION" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    "artifact_type,opts",
+    [
+        ("quiz", {"orientation": "portrait"}),  # infographic option on quiz
+        ("video", {"deck_format": "presenter"}),  # slide-deck option on video
+        ("audio", {"video_format": "brief"}),  # video option on audio
+        ("video", {"map_kind": "interactive"}),  # mind-map option on video
+        ("cinematic-video", {"style": "classic"}),  # cinematic-video exposes NO options
+    ],
+    ids=[
+        "orientation-on-quiz",
+        "deck-on-video",
+        "video-on-audio",
+        "mapkind-on-video",
+        "style-on-cinematic",
+    ],
+)
+async def test_artifact_generate_wrong_kind_option_is_validation_error(
+    mcp_call, mock_client, artifact_type: str, opts: dict
+) -> None:
+    """An option valid for some OTHER kind is rejected, not silently ignored.
+
+    The neutral core ignores irrelevant extras, so this rejection lives in the MCP tool;
+    without it an agent's mis-targeted option would silently no-op.
+    """
+    with pytest.raises(ToolError) as excinfo:
+        await mcp_call(
+            "artifact_generate",
+            {"notebook": NB_ID, "artifact_type": artifact_type, **opts},
+        )
+    assert "VALIDATION" in str(excinfo.value)
+
+
+async def test_artifact_generate_wrong_kind_message_for_optionless_kind(
+    mcp_call, mock_client
+) -> None:
+    """A kind with no per-kind options reports that clearly (not ``accepts []``)."""
+    with pytest.raises(ToolError) as excinfo:
+        await mcp_call(
+            "artifact_generate",
+            {"notebook": NB_ID, "artifact_type": "cinematic-video", "style": "classic"},
+        )
+    assert "no per-kind options" in str(excinfo.value)
+
+
+async def test_artifact_generate_style_prompt_requires_custom(mcp_call, mock_client) -> None:
+    """``style_prompt`` without ``style=custom`` is rejected (core cross-field rule)."""
+    mock_client.artifacts.generate_video = AsyncMock(return_value=FakeStatus(task_id=TASK_ID))
+    with pytest.raises(ToolError) as excinfo:
+        await mcp_call(
+            "artifact_generate",
+            {"notebook": NB_ID, "artifact_type": "video", "style_prompt": "hand-drawn"},
+        )
+    assert "VALIDATION" in str(excinfo.value)
+
+
+def test_kind_options_match_core_maps() -> None:
+    """The MCP per-kind choice tuples are DUPLICATED from the core's private maps (the
+    CLI/MCP boundary forbids importing them at runtime). Pin them equal so they can't
+    silently drift — the parity tests only exercise valid values and would miss a
+    *subset* drift (MCP wrongly rejecting a value the core accepts)."""
+    from notebooklm._app import generate_plans as gp
+    from notebooklm.mcp.tools.artifacts import _KIND_OPTIONS
+
+    assert _KIND_OPTIONS["audio"]["audio_format"] == tuple(gp._AUDIO_FORMAT_MAP)
+    assert _KIND_OPTIONS["audio"]["audio_length"] == tuple(gp._AUDIO_LENGTH_MAP)
+    assert _KIND_OPTIONS["video"]["video_format"] == tuple(gp._VIDEO_FORMAT_MAP)
+    assert _KIND_OPTIONS["video"]["style"] == tuple(gp._VIDEO_STYLE_MAP)
+    assert _KIND_OPTIONS["slide-deck"]["deck_format"] == tuple(gp._SLIDE_FORMAT_MAP)
+    assert _KIND_OPTIONS["slide-deck"]["deck_length"] == tuple(gp._SLIDE_LENGTH_MAP)
+    assert _KIND_OPTIONS["quiz"]["quantity"] == tuple(gp._QUIZ_QUANTITY_MAP)
+    assert _KIND_OPTIONS["quiz"]["difficulty"] == tuple(gp._QUIZ_DIFFICULTY_MAP)
+    # flashcards reuses the same core maps today; pin independently so a future
+    # flashcards-specific map can't drift the MCP set unnoticed.
+    assert _KIND_OPTIONS["flashcards"]["quantity"] == tuple(gp._QUIZ_QUANTITY_MAP)
+    assert _KIND_OPTIONS["flashcards"]["difficulty"] == tuple(gp._QUIZ_DIFFICULTY_MAP)
+    assert _KIND_OPTIONS["infographic"]["orientation"] == tuple(gp._INFOGRAPHIC_ORIENTATION_MAP)
+    assert _KIND_OPTIONS["infographic"]["detail"] == tuple(gp._INFOGRAPHIC_DETAIL_MAP)
+    assert _KIND_OPTIONS["infographic"]["style"] == tuple(gp._INFOGRAPHIC_STYLE_MAP)
+    assert _KIND_OPTIONS["report"]["report_format"] == tuple(gp._REPORT_FORMAT_MAP)
+
+
+async def test_artifact_generate_exposes_new_option_params(mcp_list_tools) -> None:
+    """The agent-facing tool schema exposes every new per-kind option parameter."""
+    tools = await mcp_list_tools()
+    schema = next(t for t in tools if t.name == "artifact_generate").inputSchema
+    properties = schema.get("properties", {})
+    for param in (
+        "video_format",
+        "style",
+        "style_prompt",
+        "deck_format",
+        "deck_length",
+        "orientation",
+        "detail",
+        "map_kind",
+    ):
+        assert param in properties, f"artifact_generate must expose {param!r}"
+
+
+# ---------------------------------------------------------------------------
 # artifact_status (stateless poll)
 # ---------------------------------------------------------------------------
 
