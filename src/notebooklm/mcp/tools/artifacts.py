@@ -201,8 +201,18 @@ async def _passthrough_sources(
     *,
     json_output: bool = False,
 ) -> Any:
-    """Return ``source_ids`` unchanged (MCP supplies full source ids)."""
-    return source_ids
+    """Return the supplied (already-full) source ids, or ``None`` when none were
+    given so the backend uses *every* source.
+
+    MCP supplies full source ids, so no partial-id resolution is needed. But an
+    EMPTY collection must map to ``None`` (not ``[]``): the generate core treats
+    ``None`` as "all sources" (mirroring the CLI's ``resolve_source_ids``, which
+    returns ``None`` for no input), whereas an empty list means "zero sources" —
+    which the backend refuses for source-needing kinds (quiz/audio/flashcards),
+    returning a null id surfaced as ``… generation is unavailable``. The tool
+    passes ``tuple(source_ids or ())``, so omitting ``source_ids`` arrives here
+    as ``()`` and must become ``None``."""
+    return source_ids or None
 
 
 async def _passthrough_download_notebook(notebook_id: str) -> str:

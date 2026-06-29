@@ -155,6 +155,28 @@ async def test_artifact_generate_passes_source_ids(mcp_call, mock_client) -> Non
     assert kwargs["source_ids"] == ("src-1", "src-2")
 
 
+async def test_artifact_generate_omitting_source_ids_uses_all(mcp_call, mock_client) -> None:
+    """Omitting ``source_ids`` must pass ``source_ids=None`` (=> all sources), NOT an
+    empty tuple. An empty list reaches the backend as 'zero sources', which it refuses
+    for source-needing kinds (quiz/audio/flashcards), returning a null id surfaced as
+    '… generation is unavailable'."""
+    mock_client.artifacts.generate_audio = AsyncMock(return_value=FakeStatus(task_id=TASK_ID))
+    await mcp_call("artifact_generate", {"notebook": NB_ID, "artifact_type": "audio"})
+    kwargs = mock_client.artifacts.generate_audio.await_args.kwargs
+    assert kwargs["source_ids"] is None
+
+
+async def test_artifact_generate_empty_source_ids_uses_all(mcp_call, mock_client) -> None:
+    """An EXPLICIT empty list is the same contract as omitting: => None (all sources),
+    never [] (which the backend refuses). Pins the full empty-vs-None contract."""
+    mock_client.artifacts.generate_audio = AsyncMock(return_value=FakeStatus(task_id=TASK_ID))
+    await mcp_call(
+        "artifact_generate", {"notebook": NB_ID, "artifact_type": "audio", "source_ids": []}
+    )
+    kwargs = mock_client.artifacts.generate_audio.await_args.kwargs
+    assert kwargs["source_ids"] is None
+
+
 async def test_artifact_generate_unknown_type_is_validation_error(mcp_call, mock_client) -> None:
     with pytest.raises(ToolError) as excinfo:
         await mcp_call("artifact_generate", {"notebook": NB_ID, "artifact_type": "bogus"})
