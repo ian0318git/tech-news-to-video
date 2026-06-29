@@ -156,6 +156,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **MCP `source_wait` now returns one unified per-source aggregate** (#1669).
+  Both modes — waiting for a single `source` or for every source in the notebook
+  — return the same shape: `{notebook_id, ok, ready, timed_out, failed,
+  not_found}`. `ready` carries the sources that reached READY (with
+  `kind`/`status_label` labels); the three error buckets carry
+  `{source_id, error}` entries; `ok` is `true` iff all error buckets are empty.
+  Previously the single-source mode returned `{status: ready|not_found|failed|
+  timeout}` while the all-sources mode **threw on the first failure and discarded
+  every source that had already become ready** — the all-sources mode now reports
+  **partial progress** instead. (A `source` reference that does not resolve still
+  raises NOT_FOUND before the wait — an input error, distinct from a resolved
+  source the backend reports missing/failed/slow.)
 - **Regenerable test baselines (Phase 1; contributor-facing, no public API
   change).** Frozen public-surface snapshots that were hand-typed copies of
   values the code already derives — `_FROZEN_TYPES_ALL` and

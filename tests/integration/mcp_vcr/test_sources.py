@@ -410,7 +410,8 @@ async def test_mcp_source_wait_single_over_vcr() -> None:
     ``execute_source_wait`` drives ``client.sources.wait_until_ready``, whose
     poller probes source status via the same ``GET_NOTEBOOK`` (``rLM1Ne``) list.
     The recorded source is already ``READY``, so it resolves on the first poll
-    and the tool returns the ``"ready"`` outcome wire shape.
+    and the tool returns the unified aggregate (``ok`` True, the source in
+    ``ready``, all error buckets empty).
     """
     async with build_mcp_client() as mcp_client:
         result = await mcp_client.call_tool(
@@ -425,14 +426,17 @@ async def test_mcp_source_wait_single_over_vcr() -> None:
 
     structured = result.structured_content
     assert isinstance(structured, dict)
-    # Single-source ready outcome: {"notebook_id", "status", "source"}.
-    assert set(structured) == {"notebook_id", "status", "source"}
+    # Unified aggregate shape, shared with the all-sources branch.
+    assert set(structured) == {"notebook_id", "ok", "ready", "timed_out", "failed", "not_found"}
     assert structured["notebook_id"] == SOURCES_LIST_NOTEBOOK_ID
-    assert structured["status"] == "ready"
-    source = structured["source"]
-    assert isinstance(source, dict)
+    assert structured["ok"] is True
+    assert structured["timed_out"] == structured["failed"] == structured["not_found"] == []
+    ready = structured["ready"]
+    assert len(ready) == 1
+    source = ready[0]
     assert source["id"] == SOURCES_LIST_SOURCE_ID
     assert source["status"] == 2  # SourceStatus.READY
+    assert source["status_label"] == "ready"
 
 
 @pytest.mark.asyncio
@@ -441,10 +445,11 @@ async def test_mcp_source_wait_all_over_vcr() -> None:
     """``source_wait`` (no ``source``) waits for every source in the notebook.
 
     The all-sources branch lists sources (``GET_NOTEBOOK`` → ``rLM1Ne``) then
-    waits on each id. Every recorded source is already ``READY``, so they all
-    resolve on the first poll and the tool returns the ``{"notebook_id",
-    "ready": [...]}`` wire shape. ``allow_playback_repeats`` lets the per-source
-    polls re-match the single recorded ``rLM1Ne`` interaction.
+    fans out a per-source wait on each id. Every recorded source is already
+    ``READY``, so they all resolve on the first poll and the tool returns the
+    unified aggregate (``ok`` True, the sources in ``ready``, error buckets
+    empty). ``allow_playback_repeats`` lets the per-source polls re-match the
+    single recorded ``rLM1Ne`` interaction.
     """
     async with build_mcp_client() as mcp_client:
         result = await mcp_client.call_tool(
@@ -458,8 +463,10 @@ async def test_mcp_source_wait_all_over_vcr() -> None:
 
     structured = result.structured_content
     assert isinstance(structured, dict)
-    assert set(structured) == {"notebook_id", "ready"}
+    assert set(structured) == {"notebook_id", "ok", "ready", "timed_out", "failed", "not_found"}
     assert structured["notebook_id"] == SOURCES_LIST_NOTEBOOK_ID
+    assert structured["ok"] is True
+    assert structured["timed_out"] == structured["failed"] == structured["not_found"] == []
     ready = structured["ready"]
     assert isinstance(ready, list)
     assert ready, "expected at least one ready source from the cassette"

@@ -16,9 +16,10 @@ This module imports NO ``click`` / ``rich`` / ``cli``.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import time
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from fastmcp import Context
 from fastmcp.server.dependencies import get_http_request
@@ -28,7 +29,13 @@ from ..._app import source_content as content_core
 from ..._app import source_mutations as mut_core
 from ..._app import source_wait as wait_core
 from ..._app.serialize import to_jsonable
-from ...exceptions import ConfigurationError, SourceNotFoundError, ValidationError
+from ...exceptions import (
+    ConfigurationError,
+    SourceNotFoundError,
+    SourceProcessingError,
+    SourceTimeoutError,
+    ValidationError,
+)
 from ...urls import is_youtube_url
 from .._confirm import DESTRUCTIVE, READ_ONLY, needs_confirmation
 from .._context import get_client, get_file_transfer
@@ -37,6 +44,9 @@ from .._filelink import UPLOAD_TTL, FileTransferConfig
 from .._resolve import resolve_notebook, resolve_source
 from ._passthrough import passthrough_child_id
 from ._preview import title_for_id
+
+if TYPE_CHECKING:
+    from ...client import NotebookLMClient
 
 #: MCP source types. Superset of the neutral ``source_add`` core's types
 #: (which lacks ``drive``); ``drive`` is dispatched to the Drive path.
@@ -233,8 +243,22 @@ def register(mcp: Any) -> None:
         """Wait for sources to finish processing. Accepts a notebook name or ID.
 
         Waits for a single source when ``source`` (name or ID) is given, otherwise
-        for every source in the notebook. Returns the ready sources, or surfaces a
-        not-found / processing / timeout error.
+        for every source in the notebook. BOTH modes return the SAME structured
+        aggregate, so an agent never has to branch on the shape:
+
+            {"notebook_id", "ok", "ready", "timed_out", "failed", "not_found"}
+
+        ``ready`` holds the sources that reached READY (each with ``kind`` /
+        ``status_label`` labels); ``timed_out`` / ``failed`` / ``not_found`` hold
+        ``{"source_id", "error"}`` entries for the sources that did not. ``ok`` is
+        ``true`` iff all three error buckets are empty. The all-sources mode reports
+        **partial progress** — a slow or failed source no longer discards the ones
+        that did become ready.
+
+        A single-source ``source`` ref that does not resolve (e.g. an unknown title)
+        still raises NOT_FOUND before the wait — that is an input error, distinct
+        from a resolved source the backend reports missing/failed/slow (which lands
+        in a bucket).
         """
         client = get_client(ctx)
         with mcp_errors():
@@ -254,17 +278,12 @@ def register(mcp: Any) -> None:
                         interval=interval,
                     ),
                 )
-                return _wait_outcome_payload(nb_id, outcome)
+                return _aggregate_wait_outcomes(nb_id, [outcome])
             sources = await client.sources.list(nb_id)
-            source_ids = [s.id for s in sources]
-            # ``wait_for_sources`` forwards **kwargs to ``wait_until_ready``,
-            # whose poll-interval kwarg is ``initial_interval`` — thread the
-            # advertised ``interval`` through so the all-sources branch honors it
-            # just like the single-source branch above.
-            ready = await client.sources.wait_for_sources(
-                nb_id, source_ids, timeout=timeout, initial_interval=interval
+            outcomes = await _wait_all_sources(
+                client, nb_id, [s.id for s in sources], timeout=timeout, interval=interval
             )
-            return {"notebook_id": nb_id, "ready": to_jsonable(ready)}
+            return _aggregate_wait_outcomes(nb_id, outcomes)
 
     @mcp.tool
     async def source_add(
@@ -457,16 +476,94 @@ def _select_content(
     raise ValidationError(f"Unknown source type {source_type!r}")  # pragma: no cover
 
 
-def _wait_outcome_payload(notebook_id: str, outcome: wait_core.SourceWaitOutcome) -> dict[str, Any]:
-    """Project a single-source :class:`SourceWaitOutcome` onto the wire shape."""
-    if isinstance(outcome, wait_core.SourceWaitReady):
-        return {
-            "notebook_id": notebook_id,
-            "status": "ready",
-            "source": to_jsonable(outcome.source),
-        }
-    if isinstance(outcome, wait_core.SourceWaitNotFound):
-        return {"notebook_id": notebook_id, "status": "not_found", "error": str(outcome.error)}
-    if isinstance(outcome, wait_core.SourceWaitProcessingError):
-        return {"notebook_id": notebook_id, "status": "failed", "error": str(outcome.error)}
-    return {"notebook_id": notebook_id, "status": "timeout", "error": str(outcome.error)}
+async def _wait_all_sources(
+    client: NotebookLMClient,
+    notebook_id: str,
+    source_ids: list[str],
+    *,
+    timeout: float,
+    interval: float,
+) -> list[wait_core.SourceWaitOutcome]:
+    """Wait for every source concurrently, returning one outcome per source.
+
+    Unlike ``client.sources.wait_for_sources`` (which re-raises the first failure
+    and discards the sources that already became ready), each per-source wait runs
+    through :func:`execute_source_wait`, which maps the three handled
+    ``SourceWait*`` failures to a typed outcome instead of raising — so a slow or
+    failed source never throws away its siblings' progress.
+
+    An UNEXPECTED exception (e.g. an auth/transport ``RPCError``, a bug) is NOT a
+    handled outcome: a bare ``asyncio.gather`` would re-raise it without cancelling
+    the still-running sibling pollers, leaking coroutines. Mirror the library's
+    ``wait_for_sources`` discipline (``_source/polling.py``): drive explicit tasks
+    and, on any such escape, cancel + drain the pending siblings before re-raising
+    (it then flows through ``mcp_errors()``).
+    """
+    tasks = [
+        asyncio.create_task(
+            wait_core.execute_source_wait(
+                client,
+                wait_core.SourceWaitPlan(
+                    notebook_id=notebook_id,
+                    source_id=sid,
+                    timeout=timeout,
+                    interval=interval,
+                ),
+            )
+        )
+        for sid in source_ids
+    ]
+    try:
+        return list(await asyncio.gather(*tasks))
+    except BaseException:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
+
+
+def _wait_bucket_entry(
+    error: SourceNotFoundError | SourceProcessingError | SourceTimeoutError,
+) -> dict[str, str]:
+    """Project a handled wait failure onto its ``{source_id, error}`` bucket entry."""
+    return {"source_id": error.source_id, "error": str(error)}
+
+
+def _aggregate_wait_outcomes(
+    notebook_id: str, outcomes: list[wait_core.SourceWaitOutcome]
+) -> dict[str, Any]:
+    """Project per-source wait outcomes onto the unified aggregate wire shape.
+
+    Both ``source_wait`` modes (single source, all sources) share this contract:
+    ready sources are returned alongside the ones that timed out / failed / went
+    missing, so the all-sources mode reports partial progress instead of discarding
+    the sources that did become ready. ``ok`` is ``True`` iff nothing landed in an
+    error bucket.
+    """
+    ready: list[dict[str, Any]] = []
+    timed_out: list[dict[str, str]] = []
+    failed: list[dict[str, str]] = []
+    not_found: list[dict[str, str]] = []
+    for outcome in outcomes:
+        if isinstance(outcome, wait_core.SourceWaitReady):
+            ready.append(_source_view(outcome.source))
+        elif isinstance(outcome, wait_core.SourceWaitTimeout):
+            timed_out.append(_wait_bucket_entry(outcome.error))
+        elif isinstance(outcome, wait_core.SourceWaitProcessingError):
+            failed.append(_wait_bucket_entry(outcome.error))
+        elif isinstance(outcome, wait_core.SourceWaitNotFound):
+            not_found.append(_wait_bucket_entry(outcome.error))
+        else:  # exhaustive over the closed SourceWaitOutcome union
+            # mypy narrows ``outcome`` to ``Never`` here; a future outcome variant
+            # would surface as a type error AND fail loudly at runtime rather than
+            # being silently dropped from every bucket.
+            raise AssertionError(f"unhandled SourceWaitOutcome: {outcome!r}")
+    return {
+        "notebook_id": notebook_id,
+        "ok": not (timed_out or failed or not_found),
+        "ready": ready,
+        "timed_out": timed_out,
+        "failed": failed,
+        "not_found": not_found,
+    }

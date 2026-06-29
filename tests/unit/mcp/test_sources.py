@@ -9,6 +9,7 @@ preview-then-delete flow, and error projection.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any
 
@@ -20,7 +21,12 @@ pytest.importorskip("fastmcp")
 from fastmcp.exceptions import ToolError  # noqa: E402 - after importorskip guard
 
 from notebooklm._types.sources import SourceType  # noqa: E402 - after importorskip guard
-from notebooklm.exceptions import SourceNotFoundError  # noqa: E402 - after importorskip guard
+from notebooklm.exceptions import (  # noqa: E402 - after importorskip guard
+    RPCError,
+    SourceNotFoundError,
+    SourceProcessingError,
+    SourceTimeoutError,
+)
 from notebooklm.rpc.types import SourceStatus  # noqa: E402 - after importorskip guard
 
 from .conftest import AsyncMock  # noqa: E402 - after importorskip guard
@@ -360,33 +366,40 @@ async def test_source_delete_with_confirm_deletes(mcp_call, mock_client) -> None
     mock_client.sources.delete.assert_awaited_once_with(NB_ID, SRC_ID)
 
 
-async def test_source_wait_all_sources(mcp_call, mock_client) -> None:
-    mock_client.sources.list = AsyncMock(
-        return_value=[FakeSource(id=SRC_ID), FakeSource(id=SRC2_ID)]
-    )
-    mock_client.sources.wait_for_sources = AsyncMock(
-        return_value=[FakeSource(id=SRC_ID, title="A"), FakeSource(id=SRC2_ID, title="B")]
-    )
-    result = await mcp_call("source_wait", {"notebook": NB_ID})
-    assert result.structured_content == {
-        "notebook_id": NB_ID,
-        "ready": [{"id": SRC_ID, "title": "A"}, {"id": SRC2_ID, "title": "B"}],
-    }
-    mock_client.sources.wait_for_sources.assert_awaited_once_with(
-        NB_ID, [SRC_ID, SRC2_ID], timeout=120.0, initial_interval=1.0
-    )
+# ---------------------------------------------------------------------------
+# source_wait — both modes share ONE aggregate contract:
+#   {notebook_id, ok, ready, timed_out, failed, not_found}
+# ``ready`` carries _source_view rows; the three error buckets carry
+# {source_id, error}. ``ok`` is True iff all three error buckets are empty.
+# ---------------------------------------------------------------------------
+
+_AGGREGATE_KEYS = {"notebook_id", "ok", "ready", "timed_out", "failed", "not_found"}
 
 
-async def test_source_wait_all_sources_forwards_interval(mcp_call, mock_client) -> None:
-    """The all-sources branch honors the advertised ``interval`` (was dropped)."""
-    mock_client.sources.list = AsyncMock(return_value=[FakeSource(id=SRC_ID)])
-    mock_client.sources.wait_for_sources = AsyncMock(
-        return_value=[FakeSource(id=SRC_ID, title="A")]
-    )
-    await mcp_call("source_wait", {"notebook": NB_ID, "timeout": 30.0, "interval": 3.0})
-    mock_client.sources.wait_for_sources.assert_awaited_once_with(
-        NB_ID, [SRC_ID], timeout=30.0, initial_interval=3.0
-    )
+def _assert_aggregate_shape(structured: dict[str, Any]) -> None:
+    """Pin the six-key aggregate so the shape isn't re-asserted per test."""
+    assert set(structured) == _AGGREGATE_KEYS
+    assert isinstance(structured["ok"], bool)
+    for key in ("ready", "timed_out", "failed", "not_found"):
+        assert isinstance(structured[key], list)
+
+
+def _dispatch_wait_until_ready(by_id: dict[str, Any]) -> Any:
+    """Build a ``wait_until_ready`` side_effect dispatching on the source id.
+
+    The tool calls ``wait_until_ready(notebook_id, source_id, timeout=…,
+    initial_interval=…)`` (per source), so ``source_id`` is the 2nd positional
+    arg. ``by_id`` maps a source id to either a ``FakeSource`` (returned ready) or
+    an ``Exception`` instance (raised) — letting one fan-out mix ready/failed/etc.
+    """
+
+    def _side_effect(_notebook_id: str, source_id: str, **_kwargs: Any) -> Any:
+        outcome = by_id[source_id]
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+    return AsyncMock(side_effect=_side_effect)
 
 
 async def test_source_wait_single_source_ready(mcp_call, mock_client) -> None:
@@ -394,17 +407,169 @@ async def test_source_wait_single_source_ready(mcp_call, mock_client) -> None:
         return_value=FakeSource(id=SRC_ID, title="Ready")
     )
     result = await mcp_call("source_wait", {"notebook": NB_ID, "source": SRC_ID})
-    assert result.structured_content == {
-        "notebook_id": NB_ID,
-        "status": "ready",
-        "source": {"id": SRC_ID, "title": "Ready"},
-    }
+    sc = result.structured_content
+    _assert_aggregate_shape(sc)
+    assert sc["ok"] is True
+    assert sc["ready"] == [
+        {"id": SRC_ID, "title": "Ready", "kind": "web_page", "status_label": "ready"}
+    ]
+    assert sc["timed_out"] == sc["failed"] == sc["not_found"] == []
 
 
 async def test_source_wait_single_source_not_found(mcp_call, mock_client) -> None:
+    """A resolved full-UUID source the backend can't find → ``not_found`` bucket."""
     mock_client.sources.wait_until_ready = AsyncMock(side_effect=SourceNotFoundError(SRC_ID))
     result = await mcp_call("source_wait", {"notebook": NB_ID, "source": SRC_ID})
-    assert result.structured_content["status"] == "not_found"
+    sc = result.structured_content
+    _assert_aggregate_shape(sc)
+    assert sc["ok"] is False
+    assert sc["ready"] == []
+    assert sc["not_found"] == [{"source_id": SRC_ID, "error": f"Source not found: {SRC_ID}"}]
+
+
+async def test_source_wait_single_source_timeout(mcp_call, mock_client) -> None:
+    mock_client.sources.wait_until_ready = AsyncMock(
+        side_effect=SourceTimeoutError(SRC_ID, 5.0, last_status=1)
+    )
+    result = await mcp_call("source_wait", {"notebook": NB_ID, "source": SRC_ID})
+    sc = result.structured_content
+    _assert_aggregate_shape(sc)
+    assert sc["ok"] is False
+    assert sc["timed_out"] and sc["timed_out"][0]["source_id"] == SRC_ID
+    assert sc["failed"] == sc["not_found"] == []
+
+
+async def test_source_wait_single_source_failed(mcp_call, mock_client) -> None:
+    mock_client.sources.wait_until_ready = AsyncMock(
+        side_effect=SourceProcessingError(SRC_ID, status=3)
+    )
+    result = await mcp_call("source_wait", {"notebook": NB_ID, "source": SRC_ID})
+    sc = result.structured_content
+    _assert_aggregate_shape(sc)
+    assert sc["ok"] is False
+    assert sc["failed"] and sc["failed"][0]["source_id"] == SRC_ID
+    assert sc["timed_out"] == sc["not_found"] == []
+
+
+async def test_source_wait_single_source_name_miss_raises(mcp_call, mock_client) -> None:
+    """An UNRESOLVABLE non-UUID ``source`` ref is an input error → ToolError NOT_FOUND,
+    NOT a ``not_found`` bucket entry (the resolver raises before the wait loop)."""
+    mock_client.sources.list = AsyncMock(return_value=[FakeSource(id=SRC_ID, title="Other")])
+    mock_client.sources.wait_until_ready = AsyncMock()
+    with pytest.raises(ToolError) as excinfo:
+        await mcp_call("source_wait", {"notebook": NB_ID, "source": "No Such Title"})
+    assert "NOT_FOUND" in str(excinfo.value)
+    mock_client.sources.wait_until_ready.assert_not_called()
+
+
+async def test_source_wait_all_sources_all_ready(mcp_call, mock_client) -> None:
+    mock_client.sources.list = AsyncMock(
+        return_value=[FakeSource(id=SRC_ID), FakeSource(id=SRC2_ID)]
+    )
+    mock_client.sources.wait_for_sources = AsyncMock()
+    mock_client.sources.wait_until_ready = _dispatch_wait_until_ready(
+        {SRC_ID: FakeSource(id=SRC_ID, title="A"), SRC2_ID: FakeSource(id=SRC2_ID, title="B")}
+    )
+    result = await mcp_call("source_wait", {"notebook": NB_ID})
+    sc = result.structured_content
+    _assert_aggregate_shape(sc)
+    assert sc["ok"] is True
+    assert {row["id"] for row in sc["ready"]} == {SRC_ID, SRC2_ID}
+    assert sc["timed_out"] == sc["failed"] == sc["not_found"] == []
+    # The aggregate fans out per-source wait_until_ready, NOT the throw-on-first
+    # wait_for_sources helper (which would discard partial progress).
+    mock_client.sources.wait_for_sources.assert_not_called()
+
+
+async def test_source_wait_all_sources_partial_progress(mcp_call, mock_client) -> None:
+    """One call mixing ready + timeout + failed + not_found keeps the ready ones
+    (partial progress) and sets ok=False — the core of #1669."""
+    ready_id, timeout_id, failed_id, missing_id = (
+        "10000000-0000-0000-0000-000000000001",
+        "20000000-0000-0000-0000-000000000002",
+        "30000000-0000-0000-0000-000000000003",
+        "40000000-0000-0000-0000-000000000004",
+    )
+    mock_client.sources.list = AsyncMock(
+        return_value=[FakeSource(id=i) for i in (ready_id, timeout_id, failed_id, missing_id)]
+    )
+    mock_client.sources.wait_until_ready = _dispatch_wait_until_ready(
+        {
+            ready_id: FakeSource(id=ready_id, title="OK"),
+            timeout_id: SourceTimeoutError(timeout_id, 5.0),
+            failed_id: SourceProcessingError(failed_id, status=3),
+            missing_id: SourceNotFoundError(missing_id),
+        }
+    )
+    result = await mcp_call("source_wait", {"notebook": NB_ID})
+    sc = result.structured_content
+    _assert_aggregate_shape(sc)
+    assert sc["ok"] is False
+    assert [row["id"] for row in sc["ready"]] == [ready_id]
+    assert [e["source_id"] for e in sc["timed_out"]] == [timeout_id]
+    assert [e["source_id"] for e in sc["failed"]] == [failed_id]
+    assert [e["source_id"] for e in sc["not_found"]] == [missing_id]
+
+
+async def test_source_wait_all_sources_empty_notebook(mcp_call, mock_client) -> None:
+    """A notebook with no sources → all buckets empty, ok=True."""
+    mock_client.sources.list = AsyncMock(return_value=[])
+    result = await mcp_call("source_wait", {"notebook": NB_ID})
+    sc = result.structured_content
+    _assert_aggregate_shape(sc)
+    assert sc == {
+        "notebook_id": NB_ID,
+        "ok": True,
+        "ready": [],
+        "timed_out": [],
+        "failed": [],
+        "not_found": [],
+    }
+
+
+async def test_source_wait_all_sources_forwards_interval(mcp_call, mock_client) -> None:
+    """The all-sources branch honors the advertised ``timeout``/``interval`` per source."""
+    mock_client.sources.list = AsyncMock(return_value=[FakeSource(id=SRC_ID)])
+    mock_client.sources.wait_until_ready = AsyncMock(return_value=FakeSource(id=SRC_ID, title="A"))
+    await mcp_call("source_wait", {"notebook": NB_ID, "timeout": 30.0, "interval": 3.0})
+    mock_client.sources.wait_until_ready.assert_awaited_once_with(
+        NB_ID, SRC_ID, timeout=30.0, initial_interval=3.0
+    )
+
+
+async def test_source_wait_all_sources_cancels_siblings_on_unexpected_error(
+    mcp_call, mock_client
+) -> None:
+    """An UNEXPECTED per-source exception (not one of the 3 handled wait failures)
+    propagates as ToolError AND cancels/drains the still-running sibling pollers —
+    no leaked coroutine. Mirrors the library-level wait_for_sources leak guard."""
+    slow_id, raiser_id = (
+        "50000000-0000-0000-0000-000000000005",
+        "60000000-0000-0000-0000-000000000006",
+    )
+    sibling_cancelled = asyncio.Event()
+
+    async def _wait(_nb: str, source_id: str, **_kwargs: Any) -> Any:
+        if source_id == raiser_id:
+            await asyncio.sleep(0)  # let the slow sibling start first
+            raise RPCError("unexpected boom")
+        try:
+            await asyncio.sleep(30)  # the slow sibling — should be cancelled
+        except asyncio.CancelledError:
+            sibling_cancelled.set()
+            raise
+        return FakeSource(id=slow_id)  # pragma: no cover - never reached
+
+    mock_client.sources.list = AsyncMock(
+        return_value=[FakeSource(id=slow_id), FakeSource(id=raiser_id)]
+    )
+    mock_client.sources.wait_until_ready = _wait
+    mock_client.sources.wait_for_sources = AsyncMock()
+
+    with pytest.raises(ToolError):
+        await mcp_call("source_wait", {"notebook": NB_ID})
+    assert sibling_cancelled.is_set(), "slow sibling poller was not cancelled/drained"
+    mock_client.sources.wait_for_sources.assert_not_called()
 
 
 async def test_source_add_text(mcp_call, mock_client) -> None:

@@ -307,7 +307,8 @@ class TestMcpSources:
             client, "source_wait", {"notebook": nb, "source": src_id, "timeout": 120.0}
         )
         assert waited.get("notebook_id") == nb
-        assert "status" in waited
+        # Unified aggregate contract: both modes carry an explicit ``ok`` signal.
+        assert "ok" in waited
 
         listing = await _call(client, "source_list", {"notebook": nb})
         ids = [s["id"] for s in listing["sources"]]
