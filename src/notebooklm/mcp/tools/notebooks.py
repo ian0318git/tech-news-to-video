@@ -16,6 +16,7 @@ This module imports NO ``click`` / ``rich`` / ``cli``.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastmcp import Context
@@ -28,6 +29,8 @@ from .._errors import mcp_errors
 from .._resolve import resolve_notebook
 from ._passthrough import passthrough_notebook_id
 from ._preview import title_for_id
+
+logger = logging.getLogger(__name__)
 
 
 def register(mcp: Any) -> None:
@@ -53,9 +56,40 @@ def register(mcp: Any) -> None:
             # record under a ``notebook`` key (#1540). The remaining Notebook
             # fields (title, created_at, sources_count, is_owner, modified_at)
             # stay at the top level so no metadata is dropped.
-            notebook = to_jsonable(result.notebook)
-            notebook_id = notebook.pop("id")
-            return {"notebook_id": notebook_id, **notebook}
+            record = to_jsonable(result.notebook)
+            notebook_id = record.pop("id")
+            # CREATE_NOTEBOOK leaves created_at/modified_at null even though
+            # GET_NOTEBOOK / notebook_list populate them (#1699). Do ONE
+            # best-effort re-read to backfill just those two keys, skipping it
+            # when both are already present (no wasted RPC) or the id is empty
+            # (no ``get("")``). The create result stays authoritative for
+            # id/title/etc. The fill is PER-KEY and strictly additive: a slot is
+            # filled only when the create left it null AND the re-read has a
+            # value, so a populated create timestamp is never touched and a
+            # lagging re-read that returns null cannot REGRESS one back to null.
+            # The create already committed server-side, so a re-read failure
+            # (eventual-consistency NotebookNotFoundError, a transport blip) must
+            # degrade to the create timestamps rather than fail the create;
+            # ``except Exception`` still lets asyncio.CancelledError propagate.
+            if notebook_id and (
+                record.get("created_at") is None or record.get("modified_at") is None
+            ):
+                try:
+                    fresh = to_jsonable(await client.notebooks.get(notebook_id))
+                    # ``to_jsonable`` on the ``Notebook`` dataclass always yields
+                    # a dict; the isinstance guard makes the ``.get`` reads
+                    # explicitly safe regardless.
+                    if isinstance(fresh, dict):
+                        for key in ("created_at", "modified_at"):
+                            if record.get(key) is None and fresh.get(key) is not None:
+                                record[key] = fresh[key]
+                except Exception:
+                    logger.debug(
+                        "notebook_create: timestamp re-read failed; returning "
+                        "create result with unpopulated timestamps",
+                        exc_info=True,
+                    )
+            return {"notebook_id": notebook_id, **record}
 
     @mcp.tool(annotations=READ_ONLY)
     async def notebook_describe(ctx: Context, notebook: str) -> dict[str, Any]:

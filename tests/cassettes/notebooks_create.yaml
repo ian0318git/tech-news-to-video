@@ -1767,4 +1767,43 @@ interactions:
     status:
       code: 200
       message: OK
+- request:
+    body: f.req=%5B%5B%5B%22rLM1Ne%22%2C%22%5B%5C%22afefc562-f8d1-41ec-a5d5-c197efdf52e1%5C%22%2Cnull%2C%5B2%2Cnull%2Cnull%2C%5B1%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2C%5B1%5D%5D%5D%2Cnull%2C0%5D%22%2Cnull%2C%22generic%22%5D%5D%5D&at=SCRUBBED_CSRF%3A1768963936973&
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '199'
+      Content-Type:
+      - application/x-www-form-urlencoded;charset=UTF-8
+      Cookie:
+      - NID=SCRUBBED; SID=SCRUBBED; __Secure-1PSID=SCRUBBED; __Secure-3PSID=SCRUBBED; HSID=SCRUBBED; SSID=SCRUBBED; APISID=SCRUBBED; SAPISID=SCRUBBED; __Secure-1PAPISID=SCRUBBED; __Secure-3PAPISID=SCRUBBED; __Secure-1PSIDTS=SCRUBBED; __Secure-3PSIDTS=SCRUBBED; OSID=SCRUBBED; __Secure-OSID=SCRUBBED; SIDCC=SCRUBBED; __Secure-1PSIDCC=SCRUBBED; __Secure-3PSIDCC=SCRUBBED
+      Host:
+      - notebooklm.google.com
+      User-Agent:
+      - python-httpx/0.28.1
+    method: POST
+    uri: https://notebooklm.google.com/_/LabsTailwindUi/data/batchexecute?rpcids=rLM1Ne&source-path=%2Fnotebook%2Fafefc562-f8d1-41ec-a5d5-c197efdf52e1&f.sid=SCRUBBED&rt=c
+  response:
+    body:
+      string: ')]}''
+
+
+        354
+
+        [["wrb.fr","rLM1Ne","[[\"VCR Test Notebook\",null,\"afefc562-f8d1-41ec-a5d5-c197efdf52e1\",null,null,[1,false,true,null,null,[1768312219,407754000],1,null,[1768174413,819385000],null,null,null,false],null,null,null,null,null,[[\"6b8bc782-7624-47cd-a5ef-8679165c076f\"]]]]",null,null,null,"generic"],["di",200],["af.httprm",200,"-1234567890123456789",10]]
+
+        '
+    headers:
+      Content-Disposition:
+      - attachment; filename="response.txt"; filename*=UTF-8''response.txt
+      Content-Type:
+      - application/json+protobuf; charset=UTF-8
+    status:
+      code: 200
+      message: OK
 version: 1

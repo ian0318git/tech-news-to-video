@@ -45,11 +45,13 @@ DELETE_NOTEBOOK_ID = "fc9cc125-fc20-439b-9f3d-d801c5b0de38"  # notebooks_delete.
 @pytest.mark.asyncio
 @notebooklm_vcr.use_cassette("notebooks_create.yaml")
 async def test_mcp_notebook_create_over_vcr() -> None:
-    """``notebook_create`` returns the created notebook through the real client.
+    """``notebook_create`` returns the created notebook with non-null timestamps.
 
     End-to-end: FastMCP ``Client`` -> ``notebook_create`` tool ->
     ``execute_notebook_create`` -> ``client.notebooks.create`` -> recorded
-    ``CREATE_NOTEBOOK`` (``CCqFvf``) RPC.
+    ``CREATE_NOTEBOOK`` (``CCqFvf``) RPC, THEN the #1699 best-effort re-read
+    ``client.notebooks.get`` -> recorded ``GET_NOTEBOOK`` (``rLM1Ne``) RPC whose
+    response carries populated ``meta[5]``/``meta[8]`` timestamps.
 
     Pins the *flat* wire shape: the created notebook's fields land at the top
     level with its id exposed as ``notebook_id`` (matching ``note_create`` and
@@ -77,6 +79,12 @@ async def test_mcp_notebook_create_over_vcr() -> None:
         "is_owner",
         "modified_at",
     }
+    # #1699: CREATE_NOTEBOOK returns null created_at/modified_at; the tool's
+    # GET_NOTEBOOK re-read populates them. Asserting NON-null is the load-bearing
+    # guard that the enrichment actually ran — a regression to the create result
+    # (or a silent fallback) would leave these null and fail here.
+    assert structured["created_at"] is not None, "created_at should be populated by the re-read"
+    assert structured["modified_at"] is not None, "modified_at should be populated by the re-read"
 
 
 @pytest.mark.asyncio
