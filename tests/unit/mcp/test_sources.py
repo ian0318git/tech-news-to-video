@@ -29,6 +29,32 @@ class FakeSource:
     id: str
     title: str | None = None
 
+    @property
+    def is_ready(self) -> bool:  # mirrors Source.is_ready; not a field → not serialized
+        return True
+
+
+@dataclass
+class FakeNotReadySource:
+    """A source that exists but is still processing (``is_ready`` False)."""
+
+    id: str
+    title: str | None = None
+
+    @property
+    def is_ready(self) -> bool:
+        return False
+
+
+@dataclass
+class FakeFulltext:
+    """Stand-in for ``SourceFulltext`` (what ``client.sources.get_fulltext`` returns)."""
+
+    content: str = ""
+    char_count: int = 0
+    source_id: str = ""
+    title: str = ""
+
 
 NB_ID = "11111111-1111-1111-1111-111111111111"
 SRC_ID = "33333333-3333-3333-3333-333333333333"
@@ -61,20 +87,137 @@ async def test_source_list_resolves_notebook_by_name(mcp_call, mock_client) -> N
 
 
 async def test_source_get_content(mcp_call, mock_client) -> None:
+    """Returns the source metadata AND its full text content + char_count."""
     mock_client.sources.get_or_none = AsyncMock(return_value=FakeSource(id=SRC_ID, title="Doc"))
+    mock_client.sources.get_fulltext = AsyncMock(
+        return_value=FakeFulltext(content="hello world", char_count=11)
+    )
     result = await mcp_call("source_get_content", {"notebook": NB_ID, "source": SRC_ID})
     assert result.structured_content == {
         "notebook_id": NB_ID,
         "source_id": SRC_ID,
         "source": {"id": SRC_ID, "title": "Doc"},
+        "content": "hello world",
+        "char_count": 11,
+        "output_format": "text",
     }
     mock_client.sources.get_or_none.assert_awaited_once_with(NB_ID, SRC_ID)
+    mock_client.sources.get_fulltext.assert_awaited_once_with(NB_ID, SRC_ID, output_format="text")
+
+
+async def test_source_get_content_markdown_format(mcp_call, mock_client) -> None:
+    """``output_format='markdown'`` is forwarded to the fulltext fetch."""
+    mock_client.sources.get_or_none = AsyncMock(return_value=FakeSource(id=SRC_ID, title="Doc"))
+    mock_client.sources.get_fulltext = AsyncMock(
+        return_value=FakeFulltext(content="# Heading", char_count=9)
+    )
+    result = await mcp_call(
+        "source_get_content",
+        {"notebook": NB_ID, "source": SRC_ID, "output_format": "markdown"},
+    )
+    assert result.structured_content["content"] == "# Heading"
+    assert result.structured_content["output_format"] == "markdown"
+    mock_client.sources.get_fulltext.assert_awaited_once_with(
+        NB_ID, SRC_ID, output_format="markdown"
+    )
+
+
+async def test_source_get_content_invalid_format_rejected(mcp_call, mock_client) -> None:
+    """An out-of-enum ``output_format`` is rejected at the schema boundary.
+
+    Typing the param as ``Literal["text", "markdown"]`` makes FastMCP/Pydantic emit
+    a JSON-schema enum and reject anything else before the tool body runs — agents
+    see the allowed values in the tool schema.
+    """
+    with pytest.raises(ToolError) as excinfo:
+        await mcp_call(
+            "source_get_content",
+            {"notebook": NB_ID, "source": SRC_ID, "output_format": "pdf"},
+        )
+    msg = str(excinfo.value).lower()
+    assert "text" in msg and "markdown" in msg
+
+
+async def test_source_get_content_markdown_missing_extra_is_config_error(
+    mcp_call, mock_client
+) -> None:
+    """``output_format='markdown'`` without the ``markdownify`` extra surfaces a CONFIG
+    error (with the install hint), not a bug-class UNEXPECTED."""
+    mock_client.sources.get_or_none = AsyncMock(return_value=FakeSource(id=SRC_ID, title="Doc"))
+    mock_client.sources.get_fulltext = AsyncMock(
+        side_effect=ImportError(
+            "The 'markdown' format requires the 'markdownify' package. "
+            "Install it with: pip install 'notebooklm-py[markdown]'"
+        )
+    )
+    with pytest.raises(ToolError) as excinfo:
+        await mcp_call(
+            "source_get_content",
+            {"notebook": NB_ID, "source": SRC_ID, "output_format": "markdown"},
+        )
+    msg = str(excinfo.value)
+    assert "CONFIG" in msg
+    assert "markdownify" in msg  # the actionable install hint survives
+
+
+async def test_source_get_content_text_import_error_not_remapped(mcp_call, mock_client) -> None:
+    """An ImportError on the TEXT path is genuinely unexpected — it must NOT be
+    relabeled CONFIG (the remap is restricted to the markdown case)."""
+    mock_client.sources.get_or_none = AsyncMock(return_value=FakeSource(id=SRC_ID, title="Doc"))
+    mock_client.sources.get_fulltext = AsyncMock(side_effect=ImportError("unrelated boom"))
+    with pytest.raises(ToolError) as excinfo:
+        await mcp_call("source_get_content", {"notebook": NB_ID, "source": SRC_ID})
+    assert "CONFIG" not in str(excinfo.value)
+
+
+async def test_source_get_content_not_ready_returns_null_without_fetch(
+    mcp_call, mock_client
+) -> None:
+    """A still-processing source returns metadata + content=null and does NOT fetch
+    the body (gating on status avoids both a wasted RPC and masking a genuine
+    not-found)."""
+    mock_client.sources.get_or_none = AsyncMock(
+        return_value=FakeNotReadySource(id=SRC_ID, title="Doc")
+    )
+    mock_client.sources.get_fulltext = AsyncMock(return_value=FakeFulltext(content="x"))
+    result = await mcp_call("source_get_content", {"notebook": NB_ID, "source": SRC_ID})
+    assert result.structured_content["source"] == {"id": SRC_ID, "title": "Doc"}
+    assert result.structured_content["content"] is None
+    assert result.structured_content["char_count"] == 0
+    assert result.structured_content["output_format"] == "text"
+    mock_client.sources.get_fulltext.assert_not_called()
+
+
+async def test_source_get_content_ready_but_gone_propagates_not_found(
+    mcp_call, mock_client
+) -> None:
+    """A READY source whose fulltext fetch raises NOT_FOUND (e.g. deleted between the
+    metadata and body calls) propagates as NOT_FOUND — it is NOT masked as
+    content=null."""
+    mock_client.sources.get_or_none = AsyncMock(return_value=FakeSource(id=SRC_ID, title="Doc"))
+    mock_client.sources.get_fulltext = AsyncMock(side_effect=SourceNotFoundError(SRC_ID))
+    with pytest.raises(ToolError) as excinfo:
+        await mcp_call("source_get_content", {"notebook": NB_ID, "source": SRC_ID})
+    assert "NOT_FOUND" in str(excinfo.value) or "not found" in str(excinfo.value).lower()
+
+
+async def test_source_get_content_empty_body_normalized_to_null(mcp_call, mock_client) -> None:
+    """An empty extracted body (``""``) is surfaced as ``null``, not an empty string."""
+    mock_client.sources.get_or_none = AsyncMock(return_value=FakeSource(id=SRC_ID, title="Doc"))
+    mock_client.sources.get_fulltext = AsyncMock(
+        return_value=FakeFulltext(content="", char_count=0)
+    )
+    result = await mcp_call("source_get_content", {"notebook": NB_ID, "source": SRC_ID})
+    assert result.structured_content["content"] is None
 
 
 async def test_source_get_content_resolves_source_by_name(mcp_call, mock_client) -> None:
     """A non-id ``source`` ref resolves by exact title within the notebook."""
     mock_client.sources.list = AsyncMock(return_value=[FakeSource(id=SRC_ID, title="Paper")])
     mock_client.sources.get_or_none = AsyncMock(return_value=FakeSource(id=SRC_ID, title="Paper"))
+    mock_client.sources.get_fulltext = AsyncMock(
+        return_value=FakeFulltext(content="body", char_count=4)
+    )
     result = await mcp_call("source_get_content", {"notebook": NB_ID, "source": "Paper"})
     assert result.structured_content["source_id"] == SRC_ID
     mock_client.sources.get_or_none.assert_awaited_once_with(NB_ID, SRC_ID)

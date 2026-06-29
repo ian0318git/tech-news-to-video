@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any
+from typing import Any, Literal
 
 from fastmcp import Context
 from fastmcp.server.dependencies import get_http_request
@@ -28,7 +28,7 @@ from ..._app import source_content as content_core
 from ..._app import source_mutations as mut_core
 from ..._app import source_wait as wait_core
 from ..._app.serialize import to_jsonable
-from ...exceptions import SourceNotFoundError, ValidationError
+from ...exceptions import ConfigurationError, SourceNotFoundError, ValidationError
 from ...urls import is_youtube_url
 from .._confirm import DESTRUCTIVE, READ_ONLY, needs_confirmation
 from .._context import get_client, get_file_transfer
@@ -59,8 +59,26 @@ def register(mcp: Any) -> None:
             return {"notebook_id": nb_id, "sources": to_jsonable(sources)}
 
     @mcp.tool(annotations=READ_ONLY)
-    async def source_get_content(ctx: Context, notebook: str, source: str) -> dict[str, Any]:
-        """Fetch a source's details. Accepts a notebook/source name or ID."""
+    async def source_get_content(
+        ctx: Context,
+        notebook: str,
+        source: str,
+        output_format: Literal["text", "markdown"] = "text",
+    ) -> dict[str, Any]:
+        """Fetch a source's metadata AND its full indexed text content.
+
+        Accepts a notebook/source name or ID. Returns the source ``metadata``
+        (id/title/url/kind/status) plus the extracted ``content`` and its
+        ``char_count``.
+
+        ``output_format`` selects how the text is rendered: ``text`` (default) is
+        flattened plaintext; ``markdown`` preserves headings/tables/links/emphasis
+        (requires the server's ``markdownify`` extra — otherwise a clean error).
+
+        ``content`` is ``null`` (and ``char_count`` 0) when the source is not yet
+        ready (still processing / errored) or has no extractable text, so this tool
+        returns the metadata even before the body is available.
+        """
         client = get_client(ctx)
         with mcp_errors():
             nb_id = await resolve_notebook(client, notebook)
@@ -74,7 +92,42 @@ def register(mcp: Any) -> None:
             # ``{"source": null}`` as a success.
             if result.source is None:
                 raise SourceNotFoundError(src_id)
-            return to_jsonable(result)
+
+            # Only fetch the body once the source is READY. A not-ready source
+            # (still processing / errored) has no retrievable text yet, so return
+            # its metadata with content=None instead of fetching. Gating on status
+            # (rather than catching the fulltext fetch's SourceNotFoundError) keeps
+            # a genuine "source is gone" — e.g. deleted between these two calls —
+            # propagating as NOT_FOUND instead of masquerading as "no content".
+            content: str | None = None
+            char_count = 0
+            if result.source.is_ready:
+                try:
+                    fulltext = await content_core.execute_source_fulltext(
+                        client,
+                        content_core.SourceFulltextPlan(
+                            notebook_id=nb_id, source_id=src_id, output_format=output_format
+                        ),
+                    )
+                except ImportError as exc:
+                    # ``output_format='markdown'`` needs the optional ``markdownify``
+                    # extra, which the server may not have installed. Surface a
+                    # deterministic CONFIG error (with the install hint) rather than
+                    # the bug-class UNEXPECTED a bare ImportError would project as.
+                    # Restrict the remap to the markdown path: an ImportError on the
+                    # text path (or a future regression) is genuinely unexpected and
+                    # must keep propagating as such, not be mislabeled CONFIG.
+                    if output_format != "markdown":
+                        raise
+                    raise ConfigurationError(str(exc)) from exc
+                content = fulltext.fulltext.content or None
+                char_count = fulltext.fulltext.char_count
+
+            payload = to_jsonable(result)
+            payload["content"] = content
+            payload["char_count"] = char_count
+            payload["output_format"] = output_format
+            return payload
 
     @mcp.tool
     async def source_rename(

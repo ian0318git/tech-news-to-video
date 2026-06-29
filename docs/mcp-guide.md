@@ -269,7 +269,7 @@ a single in-flight task.
 | Domain | Tools |
 |--------|-------|
 | **Notebooks** | `notebook_list` · `notebook_create(title)` · `notebook_describe(notebook)` · `notebook_rename(notebook, new_title)` · `notebook_delete(notebook, confirm)` |
-| **Sources** | `source_list(notebook)` · `source_get_content(notebook, source)` · `source_rename(notebook, source, new_title)` · `source_delete(notebook, source, confirm)` · `source_wait(notebook, source?, timeout, interval)` · `source_add(notebook, source_type, ..., allow_internal?)` |
+| **Sources** | `source_list(notebook)` · `source_get_content(notebook, source, output_format?)` (metadata **+ full indexed text**; `output_format`: text\|markdown) · `source_rename(notebook, source, new_title)` · `source_delete(notebook, source, confirm)` · `source_wait(notebook, source?, timeout, interval)` · `source_add(notebook, source_type, ..., allow_internal?)` |
 | **Chat** | `chat_ask(notebook, question, conversation_id?)` · `chat_configure(notebook, goal?, response_length?)` |
 | **Notes** | `note_create(notebook, title, content)` · `note_list(notebook)` · `note_update(notebook, note, content)` · `note_delete(notebook, note, confirm)` |
 | **Artifacts** | `artifact_list(notebook)` · `artifact_generate(notebook, artifact_type, …)` · `artifact_status(notebook, task_id)` · `artifact_download(notebook, artifact_type, path, output_format?)` |
