@@ -29,11 +29,12 @@ import hashlib
 import hmac
 import os
 
-from fastmcp.server.auth import AccessToken, TokenVerifier
+from fastmcp.server.auth import AccessToken, AuthProvider, TokenVerifier
 
 __all__ = [
     "MCP_TOKEN_ENV",
     "McpBearerAuthProvider",
+    "build_auth",
     "build_auth_provider",
     "get_configured_token",
 ]
@@ -108,3 +109,22 @@ def build_auth_provider(token: str | None) -> McpBearerAuthProvider | None:
     maps token→provider so ``create_server`` stays env-free.
     """
     return McpBearerAuthProvider(token) if token else None
+
+
+def build_auth(token: str | None, oauth: AuthProvider | None) -> AuthProvider | None:
+    """Compose the active auth provider for ``create_server(auth=...)``.
+
+    * bearer + oauth → ``MultiAuth`` (claude.ai uses OAuth, Claude Code the bearer;
+      the bearer is a verifier, so a non-OAuth token misses the OAuth lookup locally
+      and falls through — no network).
+    * one of them → that one.
+    * neither → ``None`` (loopback dev).
+
+    IdP-agnostic: ``oauth`` is any ``AuthProvider`` (here the self-hosted OAuth server).
+    """
+    bearer = build_auth_provider(token)
+    if oauth and bearer:
+        from fastmcp.server.auth import MultiAuth
+
+        return MultiAuth(server=oauth, verifiers=[bearer])
+    return oauth or bearer

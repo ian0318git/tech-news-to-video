@@ -24,6 +24,22 @@ pytest.importorskip("fastmcp")
 
 from notebooklm.mcp import __main__ as entry  # noqa: E402 - after importorskip guard
 
+_STRONG_PW = "a-strong-random-password-1234567890"
+
+
+@pytest.fixture(autouse=True)
+def _clear_oauth_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``main()`` reads the self-hosted-OAuth env on every HTTP run; clear it by
+    default so an ambient dev/CI environment can't perturb the bearer-focused tests
+    (the OAuth tests set the vars explicitly after this autouse cleanup)."""
+    for var in ("NOTEBOOKLM_MCP_OAUTH_PASSWORD", "NOTEBOOKLM_MCP_OAUTH_BASE_URL"):
+        monkeypatch.delenv(var, raising=False)
+
+
+def _set_oauth_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NOTEBOOKLM_MCP_OAUTH_PASSWORD", _STRONG_PW)
+    monkeypatch.setenv("NOTEBOOKLM_MCP_OAUTH_BASE_URL", "https://host.example.com")
+
 
 def test_help_exits_zero(capsys: pytest.CaptureFixture[str]) -> None:
     """``main(["--help"])`` prints argparse help and exits 0."""
@@ -187,3 +203,63 @@ def test_http_non_loopback_with_token_attaches_auth(monkeypatch: pytest.MonkeyPa
 
     fake_server.run.assert_called_once_with(transport="http", host="0.0.0.0", port=8000)
     assert isinstance(captured["auth"], McpBearerAuthProvider)
+
+
+def test_http_non_loopback_with_oauth_only_satisfies_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A network bind with self-hosted OAuth configured (no bearer) starts and attaches
+    the OAuth provider — OAuth alone satisfies the fail-closed auth requirement."""
+    from notebooklm.mcp._auth import McpBearerAuthProvider
+
+    fake_server = MagicMock()
+    captured: dict[str, object] = {}
+
+    def fake_create_server(*, profile=None, client_factory=None, auth=None):
+        captured["auth"] = auth
+        return fake_server
+
+    monkeypatch.setattr(entry, "create_server", fake_create_server)
+    monkeypatch.setenv("NOTEBOOKLM_MCP_ALLOW_EXTERNAL_BIND", "1")
+    monkeypatch.delenv("NOTEBOOKLM_MCP_TOKEN", raising=False)
+    _set_oauth_env(monkeypatch)
+
+    entry.main(["--transport", "http", "--host", "0.0.0.0", "--port", "8000"])
+
+    fake_server.run.assert_called_once()
+    auth = captured["auth"]
+    assert auth is not None and not isinstance(auth, McpBearerAuthProvider)  # the OAuth provider
+
+
+def test_http_non_loopback_with_oauth_and_bearer_composes_multiauth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bearer + self-hosted OAuth → MultiAuth (claude.ai uses OAuth, Claude Code the bearer)."""
+    from fastmcp.server.auth import MultiAuth
+
+    fake_server = MagicMock()
+    captured: dict[str, object] = {}
+
+    def fake_create_server(*, profile=None, client_factory=None, auth=None):
+        captured["auth"] = auth
+        return fake_server
+
+    monkeypatch.setattr(entry, "create_server", fake_create_server)
+    monkeypatch.setenv("NOTEBOOKLM_MCP_ALLOW_EXTERNAL_BIND", "1")
+    monkeypatch.setenv("NOTEBOOKLM_MCP_TOKEN", "s3cret-token")
+    _set_oauth_env(monkeypatch)
+
+    entry.main(["--transport", "http", "--host", "0.0.0.0", "--port", "8000"])
+
+    assert isinstance(captured["auth"], MultiAuth)
+
+
+def test_http_non_loopback_partial_oauth_refuses(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Partial OAuth config (password without base URL) fails closed at startup."""
+    built = MagicMock(side_effect=AssertionError("create_server must not be reached"))
+    monkeypatch.setattr(entry, "create_server", built)
+    monkeypatch.setenv("NOTEBOOKLM_MCP_ALLOW_EXTERNAL_BIND", "1")
+    monkeypatch.delenv("NOTEBOOKLM_MCP_TOKEN", raising=False)
+    monkeypatch.setenv("NOTEBOOKLM_MCP_OAUTH_PASSWORD", _STRONG_PW)  # base URL missing
+
+    with pytest.raises(SystemExit):
+        entry.main(["--transport", "http", "--host", "0.0.0.0", "--port", "8000"])
+    built.assert_not_called()
