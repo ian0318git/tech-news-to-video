@@ -44,6 +44,10 @@ class FakeSource:
         return True
 
     @property
+    def is_error(self) -> bool:
+        return False
+
+    @property
     def kind(self) -> SourceType:
         return SourceType.WEB_PAGE
 
@@ -64,12 +68,41 @@ class FakeNotReadySource:
         return False
 
     @property
+    def is_error(self) -> bool:
+        return False
+
+    @property
     def kind(self) -> SourceType:
         return SourceType.PDF
 
     @property
     def status(self) -> SourceStatus:
         return SourceStatus.PROCESSING
+
+
+@dataclass
+class FakeFailedSource:
+    """A source whose import failed (status ERROR) — the ghost row left by a
+    broken ``source_add``. Exercises the synchronous failure-signal path."""
+
+    id: str
+    title: str | None = None
+
+    @property
+    def is_ready(self) -> bool:
+        return False
+
+    @property
+    def is_error(self) -> bool:
+        return True
+
+    @property
+    def kind(self) -> SourceType:
+        return SourceType.WEB_PAGE
+
+    @property
+    def status(self) -> SourceStatus:
+        return SourceStatus.ERROR
 
 
 @dataclass
@@ -95,6 +128,75 @@ async def test_source_list(mcp_call, mock_client) -> None:
         "sources": [{"id": SRC_ID, "title": "Doc", "kind": "web_page", "status_label": "ready"}],
     }
     mock_client.sources.list.assert_awaited_once_with(NB_ID)
+
+
+async def test_source_list_status_filter(mcp_call, mock_client) -> None:
+    """``status`` narrows the list to sources whose ``status_label`` matches."""
+    mock_client.sources.list = AsyncMock(
+        return_value=[
+            FakeSource(id=SRC_ID, title="Ready Doc"),
+            FakeFailedSource(id=SRC2_ID, title="Broken Import"),
+        ]
+    )
+    result = await mcp_call("source_list", {"notebook": NB_ID, "status": "error"})
+    assert result.structured_content == {
+        "notebook_id": NB_ID,
+        "sources": [
+            {
+                "id": SRC2_ID,
+                "title": "Broken Import",
+                "kind": "web_page",
+                "status_label": "error",
+            }
+        ],
+    }
+
+
+async def test_source_list_status_filter_no_match(mcp_call, mock_client) -> None:
+    """A filter matching nothing yields an empty list (notebook_id still present)."""
+    mock_client.sources.list = AsyncMock(return_value=[FakeSource(id=SRC_ID, title="Ready Doc")])
+    result = await mcp_call("source_list", {"notebook": NB_ID, "status": "error"})
+    assert result.structured_content == {"notebook_id": NB_ID, "sources": []}
+
+
+async def test_source_list_invalid_status_filter_rejected(mcp_call, mock_client) -> None:
+    """An out-of-enum ``status`` is rejected at the schema boundary (Literal).
+
+    Pydantic's exact wording varies by version, so assert loosely that the allowed
+    labels surface in the error — matching ``test_source_get_content_invalid_format``.
+    """
+    with pytest.raises(ToolError) as excinfo:
+        await mcp_call("source_list", {"notebook": NB_ID, "status": "failed"})
+    msg = str(excinfo.value).lower()
+    assert "error" in msg and "ready" in msg
+
+
+async def test_source_list_status_filter_enum_parity(mcp_list_tools) -> None:
+    """The ``status`` filter's accepted values are exactly the lower-cased
+    ``SourceStatus`` member names (the same vocabulary ``status_label`` emits).
+
+    This pins the hand-written ``Literal`` to the enum so a future ``SourceStatus``
+    member can't silently become unfilterable: adding one without extending the
+    ``Literal`` trips this guard.
+    """
+    tools = {t.name: t for t in await mcp_list_tools()}
+    status_schema = tools["source_list"].inputSchema["properties"]["status"]
+    # ``status: Literal[...] | None`` serializes as an ``anyOf`` of {enum} + {null}.
+    # Pull the one branch that carries the enum list.
+    enum_values = next(branch["enum"] for branch in status_schema["anyOf"] if "enum" in branch)
+    assert set(enum_values) == {s.name.lower() for s in SourceStatus}
+
+
+async def test_source_list_status_filter_non_ready_labels(mcp_call, mock_client) -> None:
+    """Non-ready labels filter too: a ``processing`` / ``error`` source is returned
+    when filtering by its own label (the ``ready`` case is covered above; the full
+    label set is pinned to the enum by ``test_source_list_status_filter_enum_parity``)."""
+    for fake in (FakeNotReadySource(id=SRC_ID, title="P"), FakeFailedSource(id=SRC_ID, title="E")):
+        mock_client.sources.list = AsyncMock(return_value=[fake])
+        label = fake.status.name.lower()
+        result = await mcp_call("source_list", {"notebook": NB_ID, "status": label})
+        sources = result.structured_content["sources"]
+        assert [s["status_label"] for s in sources] == [label]
 
 
 async def test_source_list_resolves_notebook_by_name(mcp_call, mock_client) -> None:
@@ -578,7 +680,9 @@ async def test_source_add_text(mcp_call, mock_client) -> None:
         "source_add",
         {"notebook": NB_ID, "source_type": "text", "text": "hello world", "title": "Notes"},
     )
-    assert result.structured_content == {"source": {"id": SRC_ID, "title": "Notes"}}
+    assert result.structured_content == {
+        "source": {"id": SRC_ID, "title": "Notes", "kind": "web_page", "status_label": "ready"}
+    }
     mock_client.sources.add_text.assert_awaited_once_with(NB_ID, "Notes", "hello world")
 
 
@@ -587,8 +691,25 @@ async def test_source_add_url(mcp_call, mock_client) -> None:
     result = await mcp_call(
         "source_add", {"notebook": NB_ID, "source_type": "url", "url": "https://example.com/a"}
     )
-    assert result.structured_content == {"source": {"id": SRC_ID, "title": "Page"}}
+    assert result.structured_content == {
+        "source": {"id": SRC_ID, "title": "Page", "kind": "web_page", "status_label": "ready"}
+    }
     mock_client.sources.add_url.assert_awaited_once_with(NB_ID, "https://example.com/a")
+
+
+async def test_source_add_surfaces_import_failure(mcp_call, mock_client) -> None:
+    """When the add response already reflects ERROR, source_add flags it inline:
+    a top-level ``warning`` plus ``status_label='error'`` on the echoed source."""
+    mock_client.sources.add_url = AsyncMock(
+        return_value=FakeFailedSource(id=SRC_ID, title="Broken")
+    )
+    result = await mcp_call(
+        "source_add", {"notebook": NB_ID, "source_type": "url", "url": "https://example.com/bad"}
+    )
+    sc = result.structured_content
+    assert sc["source"]["status_label"] == "error"
+    assert "warning" in sc
+    assert "source_delete" in sc["warning"]
 
 
 async def test_source_add_drive(mcp_call, mock_client) -> None:
@@ -605,7 +726,7 @@ async def test_source_add_drive(mcp_call, mock_client) -> None:
     )
     # SourceAddDriveResult carries the source plus the drive provenance fields.
     assert result.structured_content == {
-        "source": {"id": SRC_ID, "title": "Sheet"},
+        "source": {"id": SRC_ID, "title": "Sheet", "kind": "web_page", "status_label": "ready"},
         "notebook_id": NB_ID,
         "file_id": "drivefile123",
         "mime_type": "google-sheets",
@@ -678,5 +799,7 @@ async def test_source_add_youtube_accepts_youtube_url(mcp_call, mock_client) -> 
     yt = "https://www.youtube.com/watch?v=abc123"
     mock_client.sources.add_url = AsyncMock(return_value=FakeSource(id=SRC_ID, title="Vid"))
     result = await mcp_call("source_add", {"notebook": NB_ID, "source_type": "youtube", "url": yt})
-    assert result.structured_content == {"source": {"id": SRC_ID, "title": "Vid"}}
+    assert result.structured_content == {
+        "source": {"id": SRC_ID, "title": "Vid", "kind": "web_page", "status_label": "ready"}
+    }
     mock_client.sources.add_url.assert_awaited_once_with(NB_ID, yt)

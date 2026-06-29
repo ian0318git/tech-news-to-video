@@ -191,9 +191,20 @@ async def test_mcp_source_add_url_over_vcr() -> None:
     assert source["id"] == "20d66b0b-787f-480e-a9c1-6823f7a12d8e"
     assert source["title"] == "Artificial intelligence - Wikipedia"
     assert source["url"] == "https://en.wikipedia.org/wiki/Artificial_intelligence"
-    # The serialized Source carries the full typed-field set.
-    assert set(source) == {"id", "title", "url", "_type_code", "created_at", "status"}
+    # The serialized Source carries the full typed-field set plus the agent-readable
+    # ``kind``/``status_label`` labels source_add now adds (parity with source_list).
+    assert set(source) == {
+        "id",
+        "title",
+        "url",
+        "_type_code",
+        "created_at",
+        "status",
+        "kind",
+        "status_label",
+    }
     assert source["status"] == 2  # SourceStatus.READY
+    assert source["status_label"] == "ready"
 
 
 @pytest.mark.asyncio
