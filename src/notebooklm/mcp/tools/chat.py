@@ -22,7 +22,6 @@ Both bodies wrap in :func:`mcp_errors`. This module imports NO ``click`` /
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any, Literal
 
 from fastmcp import Context
@@ -32,7 +31,7 @@ from ..._app.serialize import to_jsonable
 from .._coerce import coerce_list
 from .._context import get_client
 from .._errors import mcp_errors
-from .._resolve import resolve_notebook, resolve_source
+from .._resolve import resolve_notebook, resolve_sources
 
 #: Reference fields kept in the default ("lite") ``chat_ask`` projection. The full
 #: ``ChatReference`` also carries chunk-level char offsets / ``chunk_id`` /
@@ -77,11 +76,7 @@ def register(mcp: Any) -> None:
             # other source-accepting tool does. Omitted/empty stays None (=> all
             # sources, mirroring ``client.chat.ask``'s None contract).
             refs = coerce_list(source_ids)
-            resolved_source_ids = (
-                list(await asyncio.gather(*(resolve_source(client, nb_id, ref) for ref in refs)))
-                if refs
-                else None
-            )
+            resolved_source_ids = await resolve_sources(client, nb_id, refs) if refs else None
             result = await client.chat.ask(
                 nb_id,
                 question,

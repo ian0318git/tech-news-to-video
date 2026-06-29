@@ -163,6 +163,31 @@ async def test_chat_ask_whitespace_source_ids_uses_all(mcp_call, mock_client) ->
     assert mock_client.chat.ask.await_args.kwargs["source_ids"] is None
 
 
+@dataclass
+class FakeSource:
+    id: str
+    title: str | None
+
+
+async def test_chat_ask_two_title_refs_list_once_order_preserved(mcp_call, mock_client) -> None:
+    """Two non-UUID refs resolve via a single ``sources.list`` snapshot, in input order."""
+    mock_client.sources.list = AsyncMock(
+        return_value=[
+            FakeSource(id=_SRC_A, title="Alpha"),
+            FakeSource(id=_SRC_B, title="Beta"),
+        ]
+    )
+    mock_client.chat.ask = AsyncMock(
+        return_value=FakeAskResult(answer="42", conversation_id=CONV_ID)
+    )
+    await mcp_call(
+        "chat_ask",
+        {"notebook": NB_ID, "question": "what?", "source_ids": ["Beta", "Alpha"]},
+    )
+    mock_client.sources.list.assert_awaited_once_with(NB_ID)
+    assert mock_client.chat.ask.await_args.kwargs["source_ids"] == [_SRC_B, _SRC_A]
+
+
 async def test_chat_configure_goal_and_length(mcp_call, mock_client) -> None:
     mock_client.chat.configure = AsyncMock(return_value=None)
     result = await mcp_call(

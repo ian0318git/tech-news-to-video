@@ -50,7 +50,7 @@ from ..exceptions import (
 if TYPE_CHECKING:
     from ..client import NotebookLMClient
 
-__all__ = ["resolve_note", "resolve_notebook", "resolve_source"]
+__all__ = ["resolve_note", "resolve_notebook", "resolve_source", "resolve_sources"]
 
 #: A token made only of hex digits and dashes routes to the id/prefix path; any
 #: other character (a space, a letter outside ``a-f``, punctuation) routes to the
@@ -200,6 +200,63 @@ async def resolve_source(client: NotebookLMClient, notebook_id: str, ref: str) -
     if _HEX_ISH.match(ref):
         return _resolve_hex(ref, items, not_found=SourceNotFoundError)
     return _resolve_by_title(ref, items, not_found=SourceNotFoundError)
+
+
+async def resolve_sources(
+    client: NotebookLMClient, notebook_id: str, refs: Sequence[str]
+) -> list[str]:
+    """Resolve many source references within a notebook, listing sources at most once.
+
+    The per-tool callers ``chat_ask`` / ``artifact_generate`` previously resolved N
+    refs via ``asyncio.gather(resolve_source(...) for ref in refs)``, which fired one
+    ``client.sources.list(notebook_id)`` per non-UUID ref — N identical concurrent
+    list RPCs. This resolves the whole batch against a single source-list snapshot.
+
+    Matching rules are identical to :func:`resolve_source` (full-UUID fast-path,
+    hex id/prefix, exact case-insensitive title) and reuse the same single-ref
+    helpers, so behavior per ref is unchanged. An all-UUID batch still makes no
+    list call (each ref takes the fast-path, as before). Two differences from the
+    old ``gather`` path:
+
+    * Non-UUID refs share a **single** ``sources.list`` snapshot instead of one
+      concurrent list call per ref.
+    * Errors are deterministic, not subject to ``gather``'s first-to-complete
+      race: every ref is ``validate_id``-checked first (so an empty/whitespace
+      ref raises before any resolution), then refs resolve sequentially over the
+      snapshot, so a not-found / ambiguous ref raises in input order.
+
+    Args:
+        client: The lifespan-bound client.
+        notebook_id: The (already-resolved) notebook id the sources live in.
+        refs: Source references (full/partial id or exact title).
+
+    Returns:
+        The resolved canonical ids, in the same order as ``refs``. An empty
+        ``refs`` returns an empty list (NOT ``None``): callers that treat
+        "no refs" as "all sources" must keep their own ``if refs else None``
+        guard — forwarding ``[]`` to the backend means "zero sources", which it
+        refuses for source-requiring artifact types (#1652).
+
+    Raises:
+        ValidationError: A ref is empty/whitespace.
+        SourceNotFoundError: A ref matches no source in the notebook.
+        AmbiguousIdError: A ref matches more than one source by prefix or title.
+    """
+    validated = [validate_id(ref, "source") for ref in refs]
+    # If every ref is already a full UUID, skip the list call entirely.
+    if all(FULL_ID_PATTERN.fullmatch(ref) for ref in validated):
+        return validated
+    items = await client.sources.list(notebook_id)
+
+    # Same matching dispatch as resolve_source, but against one shared snapshot.
+    def match(ref: str) -> str:
+        if FULL_ID_PATTERN.fullmatch(ref):
+            return ref
+        if _HEX_ISH.match(ref):
+            return _resolve_hex(ref, items, not_found=SourceNotFoundError)
+        return _resolve_by_title(ref, items, not_found=SourceNotFoundError)
+
+    return [match(ref) for ref in validated]
 
 
 async def resolve_note(client: NotebookLMClient, notebook_id: str, ref: str) -> str:

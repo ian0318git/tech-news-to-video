@@ -200,6 +200,31 @@ async def test_artifact_generate_resolves_source_id_prefix(mcp_call, mock_client
     assert kwargs["source_ids"] == (full,)
 
 
+async def test_artifact_generate_two_title_refs_list_once_order_preserved(
+    mcp_call, mock_client
+) -> None:
+    """Two non-UUID refs resolve via a single ``sources.list`` snapshot, in input order."""
+
+    @dataclass
+    class _Src:
+        id: str
+        title: str | None
+
+    src_a = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    src_b = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    mock_client.sources.list = AsyncMock(
+        return_value=[_Src(id=src_a, title="Alpha"), _Src(id=src_b, title="Beta")]
+    )
+    mock_client.artifacts.generate_audio = AsyncMock(return_value=FakeStatus(task_id=TASK_ID))
+    await mcp_call(
+        "artifact_generate",
+        {"notebook": NB_ID, "artifact_type": "audio", "source_ids": ["Beta", "Alpha"]},
+    )
+    mock_client.sources.list.assert_awaited_once_with(NB_ID)
+    kwargs = mock_client.artifacts.generate_audio.await_args.kwargs
+    assert kwargs["source_ids"] == (src_b, src_a)
+
+
 async def test_artifact_generate_omitting_source_ids_uses_all(mcp_call, mock_client) -> None:
     """Omitting ``source_ids`` must pass ``source_ids=None`` (=> all sources), NOT an
     empty tuple. An empty list reaches the backend as 'zero sources', which it refuses

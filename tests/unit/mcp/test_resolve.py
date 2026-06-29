@@ -23,10 +23,12 @@ from notebooklm._app.resolve import AmbiguousIdError  # noqa: E402 - after impor
 from notebooklm.exceptions import (  # noqa: E402 - after importorskip guard
     NotebookNotFoundError,
     SourceNotFoundError,
+    ValidationError,
 )
 from notebooklm.mcp._resolve import (  # noqa: E402 - after importorskip guard
     resolve_notebook,
     resolve_source,
+    resolve_sources,
 )
 
 FULL_A = "abc12345-6789-4abc-def0-1234567890ab"
@@ -184,3 +186,61 @@ async def test_source_hex_only_title_falls_back_to_title() -> None:
     """A source whose TITLE is all-hex resolves by name (id/prefix path misses)."""
     client = _client(sources=[_Src("0000aaaa1111", "beef"), _Src("cd0002abef", "Notes")])
     assert await resolve_source(client, "nb-1", "beef") == "0000aaaa1111"
+
+
+# --------------------------------------------------------------------------- #
+# resolve_sources (batch — lists at most once)
+# --------------------------------------------------------------------------- #
+async def test_sources_all_full_uuid_skips_list() -> None:
+    """A batch of full UUIDs is returned verbatim with no list call."""
+    client = _client(sources=[_Src(FULL_A, "Doc")])
+    assert await resolve_sources(client, "nb-1", [FULL_A, FULL_B]) == [FULL_A, FULL_B]
+    client.sources.list.assert_not_called()
+
+
+async def test_sources_mixed_lists_exactly_once_order_preserved() -> None:
+    """A mix of prefix/title refs lists once and preserves input order."""
+    client = _client(
+        sources=[
+            _Src("ab0001cdef", "Report.pdf"),
+            _Src("cd0002abef", "Notes"),
+        ]
+    )
+    result = await resolve_sources(client, "nb-1", ["Notes", "ab0001", FULL_A])
+    assert result == ["cd0002abef", "ab0001cdef", FULL_A]
+    client.sources.list.assert_awaited_once_with("nb-1")
+
+
+async def test_sources_title_refs_list_exactly_once() -> None:
+    """Two non-UUID title refs share a single list snapshot, order preserved."""
+    client = _client(
+        sources=[
+            _Src("ab0001cdef", "Report.pdf"),
+            _Src("cd0002abef", "Notes"),
+        ]
+    )
+    result = await resolve_sources(client, "nb-1", ["Notes", "Report.pdf"])
+    assert result == ["cd0002abef", "ab0001cdef"]
+    client.sources.list.assert_awaited_once_with("nb-1")
+
+
+async def test_sources_no_match_raises_source_not_found() -> None:
+    client = _client(sources=[_Src("ab0001cdef", "Doc")])
+    with pytest.raises(SourceNotFoundError):
+        await resolve_sources(client, "nb-1", ["Doc", "Missing Title"])
+
+
+async def test_sources_ambiguous_title_raises() -> None:
+    client = _client(sources=[_Src("ab0001cdef", "Dup"), _Src("cd0002abef", "dup")])
+    with pytest.raises(AmbiguousIdError) as caught:
+        await resolve_sources(client, "nb-1", ["Dup"])
+    assert set(caught.value.candidate_ids) == {"ab0001cdef", "cd0002abef"}
+
+
+async def test_sources_whitespace_ref_raises_validation_before_listing() -> None:
+    """Every ref is ``validate_id``-checked first, so an empty/whitespace ref in the
+    batch raises ``ValidationError`` (no list call, per the documented contract)."""
+    client = _client(sources=[_Src("ab0001cdef", "Doc")])
+    with pytest.raises(ValidationError):
+        await resolve_sources(client, "nb-1", ["Doc", "   "])
+    client.sources.list.assert_not_called()
