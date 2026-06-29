@@ -13,12 +13,15 @@ VERSION ?= 0.8.0
 # Profile-aware compose invocation — selects exactly one tunnel sidecar.
 DC = $(COMPOSE) --profile $(TUNNEL)
 
-# Run the container as YOUR uid/gid so the mounted profile needs no chown, and
-# default the mounted profile to your local "default" profile. All overridable
-# (env or `make dev NOTEBOOKLM_PROFILE_DIR=...`); exported so compose sees them.
+# Run the container as YOUR uid/gid so the mounted profile needs no chown.
 export NOTEBOOKLM_UID ?= $(shell id -u)
 export NOTEBOOKLM_GID ?= $(shell id -g)
-export NOTEBOOKLM_PROFILE_DIR ?= $(HOME)/.notebooklm/profiles/default
+# NOTE: do NOT set/export NOTEBOOKLM_PROFILE_DIR here. make does not read .env, so a
+# `?=` default would resolve to "default" and `export` would push it into compose's
+# env, where it OUTRANKS the .env value (shell env > .env) — silently ignoring the
+# user's `.env` setting. Compose reads NOTEBOOKLM_PROFILE_DIR from .env directly and
+# defaults to ~/.notebooklm/profiles/default on its own; a shell/CLI override such as
+# `NOTEBOOKLM_PROFILE_DIR=… make dev` is still auto-exported by make to the recipe.
 
 .PHONY: help dev prod up restart logs down config _require-tunnel-token
 
