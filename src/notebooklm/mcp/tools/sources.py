@@ -184,10 +184,14 @@ def register(mcp: Any) -> None:
         * ``file``    — over **stdio**, requires ``path`` (a local file path on the
           server host). Over the **remote (http) connector** the server's
           filesystem is unreachable, so instead the tool returns
-          ``{"status": "upload_required", "url": …}``: open the short-lived signed
-          URL in a browser and upload the file, then confirm with ``source_wait`` /
-          ``source_list``. ``title`` / ``mime_type`` (carried in the signed URL) and
-          the supplied ``path`` (its basename seeds the default title) are honored.
+          ``{"status": "upload_required", "url": …, "agent_upload": {…}}``. A human
+          opens the short-lived signed URL in a browser and uploads the file; an
+          **agent that already holds the bytes** skips the browser and POSTs them as
+          the raw request body to the same URL (see the ``agent_upload`` recipe in
+          the response — with ``Accept: application/json`` it returns
+          ``{"status": "added", "source_id": …}``). Then confirm with ``source_wait``
+          / ``source_list``. ``title`` / ``mime_type`` (carried in the signed URL)
+          and the supplied ``path`` (its basename seeds the default title) are honored.
         * ``drive``   — requires ``document_id`` (Google Drive file id); ``title``
           and ``mime_type`` (one of google-doc|google-slides|google-sheets|pdf,
           default google-doc) optional.
@@ -290,11 +294,27 @@ def _broker_upload(
         payload["title"] = default_title
     if mime_type:
         payload["mime"] = mime_type
+    url = cfg.upload_url(payload)
     return {
         "status": "upload_required",
         "notebook_id": notebook_id,
-        "url": cfg.upload_url(payload),
+        "url": url,
         "expires_at": int(time.time()) + UPLOAD_TTL,
+        # An agent holding the bytes skips the browser: POST them as the raw body here.
+        "agent_upload": {
+            "method": "POST",
+            "url": f"{url}?filename=<basename>",
+            "headers": {
+                "Accept": "application/json",
+                "Content-Type": "<mime-type> (fallback only; ignored when mime_type was passed)",
+            },
+            "body": "the raw file bytes (not multipart/form-data)",
+            "returns": '{"status": "added", "source_id": ...}',
+            "example": (
+                'curl -X POST -H "Accept: application/json" --data-binary @report.pdf '
+                f'"{url}?filename=report.pdf"'
+            ),
+        },
     }
 
 
