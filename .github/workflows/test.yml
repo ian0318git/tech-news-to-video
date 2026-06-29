@@ -293,10 +293,18 @@ jobs:
       run: uv run python tests/scripts/check_cassettes_clean.py --secrets-only --recursive tests/fixtures
 
     - name: Run tests with coverage
-      # Emit coverage.json so the per-file floor check below can read it
-      # without re-running the suite. ``term-missing`` is kept so build logs
-      # still show the missing-lines summary.
-      run: uv run pytest --cov=src/notebooklm --cov-report=term-missing --cov-report=json:coverage.json --cov-fail-under=90
+      # ``-n auto --dist loadgroup`` parallelizes the ~11k-test suite across the
+      # runner's cores (pytest-xdist is already a dev dep). ``loadgroup`` honors
+      # ``@pytest.mark.xdist_group`` — the isolation escape hatch for tests touching
+      # process-global state (tests/integration/concurrency/conftest.py); unmarked
+      # tests distribute like ``load``. The suite is parallel-safe via per-test
+      # ``NOTEBOOKLM_HOME`` tmp isolation, and pytest-cov merges per-worker coverage
+      # automatically, so the coverage.json + per-file floors below are unaffected.
+      #
+      # Emit coverage.json so the per-file floor check below can read it without
+      # re-running the suite. ``term-missing`` is kept so build logs still show the
+      # missing-lines summary.
+      run: uv run pytest -n auto --dist loadgroup --cov=src/notebooklm --cov-report=term-missing --cov-report=json:coverage.json --cov-fail-under=90
 
     - name: Assert per-file coverage floors
       # Linux-only because ``coverage.json`` on Windows records backslash
