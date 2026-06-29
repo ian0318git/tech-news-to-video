@@ -22,11 +22,13 @@ from fastmcp.exceptions import ToolError  # noqa: E402 - after importorskip guar
 
 from notebooklm._types.sources import SourceType  # noqa: E402 - after importorskip guard
 from notebooklm.exceptions import (  # noqa: E402 - after importorskip guard
+    NetworkError,
     RPCError,
     SourceNotFoundError,
     SourceProcessingError,
     SourceTimeoutError,
 )
+from notebooklm.mcp._errors import tool_error_payload  # noqa: E402 - after importorskip guard
 from notebooklm.rpc.types import SourceStatus  # noqa: E402 - after importorskip guard
 
 from .conftest import AsyncMock  # noqa: E402 - after importorskip guard
@@ -801,5 +803,241 @@ async def test_source_add_youtube_accepts_youtube_url(mcp_call, mock_client) -> 
     result = await mcp_call("source_add", {"notebook": NB_ID, "source_type": "youtube", "url": yt})
     assert result.structured_content == {
         "source": {"id": SRC_ID, "title": "Vid", "kind": "web_page", "status_label": "ready"}
+    }
+    mock_client.sources.add_url.assert_awaited_once_with(NB_ID, yt)
+
+
+# --- Batch mode (urls=[...]) -------------------------------------------------
+
+
+async def test_source_add_batch_all_success(mcp_call, mock_client) -> None:
+    """A batch of valid URLs returns a per-item ``added`` list, in input order."""
+    by_url = {
+        "https://example.com/a": FakeSource(id=SRC_ID, title="A"),
+        "https://example.com/b": FakeSource(id=SRC2_ID, title="B"),
+    }
+    mock_client.sources.add_url = AsyncMock(side_effect=lambda _nb, url: by_url[url])
+    result = await mcp_call(
+        "source_add",
+        {"notebook": NB_ID, "urls": ["https://example.com/a", "https://example.com/b"]},
+    )
+    assert result.structured_content == {
+        "notebook_id": NB_ID,
+        "added": 2,
+        "failed": 0,
+        "results": [
+            {
+                "input": "https://example.com/a",
+                "status": "added",
+                "source_id": SRC_ID,
+                "title": "A",
+                "status_label": "ready",
+            },
+            {
+                "input": "https://example.com/b",
+                "status": "added",
+                "source_id": SRC2_ID,
+                "title": "B",
+                "status_label": "ready",
+            },
+        ],
+    }
+    assert mock_client.sources.add_url.await_count == 2
+
+
+async def test_source_add_batch_partial_failure(mcp_call, mock_client) -> None:
+    """One bad URL does NOT abort the batch and is reported per-item, not collapsed."""
+    mock_client.sources.add_url = AsyncMock(return_value=FakeSource(id=SRC_ID, title="Good"))
+    result = await mcp_call(
+        "source_add",
+        {"notebook": NB_ID, "urls": ["https://good.example.com", "ftp://bad.example.com"]},
+    )
+    sc = result.structured_content
+    assert sc["added"] == 1
+    assert sc["failed"] == 1
+    assert sc["results"][0] == {
+        "input": "https://good.example.com",
+        "status": "added",
+        "source_id": SRC_ID,
+        "title": "Good",
+        "status_label": "ready",
+    }
+    bad = sc["results"][1]
+    assert bad["input"] == "ftp://bad.example.com"
+    assert bad["status"] == "error"
+    assert bad["error"]["code"] == "VALIDATION"
+    # The disallowed scheme is rejected by validate_url before reaching the client.
+    mock_client.sources.add_url.assert_awaited_once_with(NB_ID, "https://good.example.com")
+
+
+async def test_source_add_batch_non_url_entry_errors_not_text(mcp_call, mock_client) -> None:
+    """Non-URL entries error as VALIDATION — never silently added as text/file."""
+    mock_client.sources.add_url = AsyncMock(return_value=FakeSource(id=SRC_ID))
+    mock_client.sources.add_text = AsyncMock(return_value=FakeSource(id=SRC_ID))
+    mock_client.sources.add_file = AsyncMock(return_value=FakeSource(id=SRC_ID))
+    result = await mcp_call(
+        "source_add",
+        {"notebook": NB_ID, "urls": ["just some text", "/etc/hosts"]},
+    )
+    sc = result.structured_content
+    assert sc["added"] == 0
+    assert sc["failed"] == 2
+    assert [item["status"] for item in sc["results"]] == ["error", "error"]
+    assert all(item["error"]["code"] == "VALIDATION" for item in sc["results"])
+    mock_client.sources.add_url.assert_not_called()
+    mock_client.sources.add_text.assert_not_called()
+    mock_client.sources.add_file.assert_not_called()
+
+
+async def test_source_add_batch_server_error_isolated(mcp_call, mock_client) -> None:
+    """A mid-batch server/network failure is isolated to its item; the rest proceed."""
+    mock_client.sources.add_url = AsyncMock(
+        side_effect=[NetworkError("boom"), FakeSource(id=SRC2_ID, title="Second")]
+    )
+    result = await mcp_call(
+        "source_add",
+        {"notebook": NB_ID, "urls": ["https://first.example.com", "https://second.example.com"]},
+    )
+    sc = result.structured_content
+    assert sc["added"] == 1
+    assert sc["failed"] == 1
+    assert sc["results"][0]["status"] == "error"
+    # The per-item error carries the FULL structured contract a single-mode
+    # failure would raise (code/message/retriable/hint), not just a code.
+    assert sc["results"][0]["error"] == tool_error_payload(NetworkError("boom"))
+    assert sc["results"][1] == {
+        "input": "https://second.example.com",
+        "status": "added",
+        "source_id": SRC2_ID,
+        "title": "Second",
+        "status_label": "ready",
+    }
+    assert mock_client.sources.add_url.await_count == 2
+
+
+async def test_source_add_batch_flags_failed_import(mcp_call, mock_client) -> None:
+    """An added-but-errored source is reported status='added' with status_label
+    'error' + an inline warning — the #1679 failure-signaling, per batch item."""
+    mock_client.sources.add_url = AsyncMock(
+        return_value=FakeFailedSource(id=SRC_ID, title="Broken")
+    )
+    result = await mcp_call(
+        "source_add", {"notebook": NB_ID, "urls": ["https://broken.example.com"]}
+    )
+    sc = result.structured_content
+    # The add CALL succeeded (row created) → status 'added'; the async import errored.
+    assert sc["added"] == 1
+    assert sc["failed"] == 0
+    item = sc["results"][0]
+    assert item["status"] == "added"
+    assert item["status_label"] == "error"
+    assert "Import failed" in item["warning"]
+
+
+async def test_source_add_batch_propagates_cancellation(mock_client) -> None:
+    """Per-item isolation must NOT swallow CancelledError (a BaseException)."""
+    import asyncio
+
+    from notebooklm.mcp.tools.sources import _add_url_batch
+
+    mock_client.sources.add_url = AsyncMock(side_effect=asyncio.CancelledError())
+    with pytest.raises(asyncio.CancelledError):
+        await _add_url_batch(mock_client, NB_ID, ["https://example.com/a"], allow_internal=False)
+
+
+async def test_source_add_batch_allow_internal_passthrough(mcp_call, mock_client) -> None:
+    """``allow_internal`` is forwarded to every batch entry (and is not rejected)."""
+    internal = "http://127.0.0.1:8080/x"
+    mock_client.sources.add_url = AsyncMock(return_value=FakeSource(id=SRC_ID, title="Local"))
+    result = await mcp_call(
+        "source_add",
+        {"notebook": NB_ID, "urls": [internal], "allow_internal": True},
+    )
+    sc = result.structured_content
+    assert sc["added"] == 1
+    mock_client.sources.add_url.assert_awaited_once_with(NB_ID, internal)
+
+
+async def test_source_add_batch_internal_rejected_without_allow_internal(
+    mcp_call, mock_client
+) -> None:
+    """The same internal URL errors per-item (not raised) when allow_internal is off."""
+    mock_client.sources.add_url = AsyncMock(return_value=FakeSource(id=SRC_ID))
+    result = await mcp_call(
+        "source_add",
+        {"notebook": NB_ID, "urls": ["http://127.0.0.1:8080/x"]},
+    )
+    sc = result.structured_content
+    assert sc["added"] == 0
+    assert sc["results"][0]["status"] == "error"
+    assert sc["results"][0]["error"]["code"] == "VALIDATION"
+    mock_client.sources.add_url.assert_not_called()
+
+
+async def test_source_add_batch_empty_array_is_validation_error(mcp_call, mock_client) -> None:
+    """An empty ``urls`` list is rejected BEFORE any notebook I/O (uses a name ref)."""
+    mock_client.notebooks.list = AsyncMock(return_value=[])
+    mock_client.sources.add_url = AsyncMock(return_value=FakeSource(id=SRC_ID))
+    with pytest.raises(ToolError) as excinfo:
+        await mcp_call("source_add", {"notebook": "Some Notebook", "urls": []})
+    assert "VALIDATION" in str(excinfo.value)
+    mock_client.sources.add_url.assert_not_called()
+    # Mode validation runs before resolve_notebook, so a name is never looked up.
+    mock_client.notebooks.list.assert_not_called()
+
+
+async def test_source_add_batch_conflicts_with_source_type(mcp_call, mock_client) -> None:
+    """``urls`` together with ``source_type`` is an ambiguous-mode VALIDATION error."""
+    with pytest.raises(ToolError) as excinfo:
+        await mcp_call(
+            "source_add",
+            {"notebook": NB_ID, "source_type": "url", "urls": ["https://example.com/a"]},
+        )
+    assert "VALIDATION" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    "scalar",
+    [
+        {"url": "https://example.com/x"},
+        {"text": "hi"},
+        {"title": "nope"},
+        {"path": "/tmp/x"},
+        {"document_id": "drivefile123"},
+        {"mime_type": "google-doc"},
+    ],
+)
+async def test_source_add_batch_conflicts_with_scalar(mcp_call, mock_client, scalar) -> None:
+    """ANY single-mode scalar supplied with ``urls`` is rejected (fail-closed)."""
+    mock_client.sources.add_url = AsyncMock(return_value=FakeSource(id=SRC_ID))
+    with pytest.raises(ToolError) as excinfo:
+        await mcp_call(
+            "source_add",
+            {"notebook": NB_ID, "urls": ["https://example.com/a"], **scalar},
+        )
+    assert "VALIDATION" in str(excinfo.value)
+    mock_client.sources.add_url.assert_not_called()
+
+
+async def test_source_add_missing_mode_is_validation_error(mcp_call, mock_client) -> None:
+    """Neither ``source_type`` nor ``urls`` now fails in the body (source_type optional)."""
+    with pytest.raises(ToolError) as excinfo:
+        await mcp_call("source_add", {"notebook": NB_ID})
+    assert "VALIDATION" in str(excinfo.value)
+
+
+async def test_source_add_batch_youtube_accepted(mcp_call, mock_client) -> None:
+    """A YouTube URL in the batch is accepted and added via add_url."""
+    yt = "https://www.youtube.com/watch?v=abc123"
+    mock_client.sources.add_url = AsyncMock(return_value=FakeSource(id=SRC_ID, title="Vid"))
+    result = await mcp_call("source_add", {"notebook": NB_ID, "urls": [yt]})
+    sc = result.structured_content
+    assert sc["added"] == 1
+    assert sc["results"][0] == {
+        "input": yt,
+        "status": "added",
+        "source_id": SRC_ID,
+        "title": "Vid",
+        "status_label": "ready",
     }
     mock_client.sources.add_url.assert_awaited_once_with(NB_ID, yt)
