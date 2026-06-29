@@ -73,6 +73,15 @@ NotebookResolver = Callable[..., Awaitable[str]]
 
 #: Resolves a tuple of (possibly partial) source ids to full ids. The CLI
 #: adapter injects ``cli.resolve.resolve_source_ids``.
+#:
+#: Backend contract every resolver MUST honor: return ``None`` for "no sources
+#: given" (⇒ generate over ALL sources), NOT an empty list. ``[]``/``()`` means
+#: "zero sources", which the backend refuses for source-needing kinds
+#: (quiz/audio/flashcards): it replies HTTP 200 with a null artifact id, surfaced
+#: as ``ArtifactFeatureUnavailableError`` ("… generation is unavailable"). This was
+#: #1652 — the MCP pass-through resolver sent ``()`` where the CLI resolver sent
+#: ``None``, so the two adapters diverged. A new adapter's resolver must map the
+#: empty case to ``None``; ``tests/unit/cli/test_cli_mcp_parity.py`` pins it.
 SourceResolver = Callable[..., Awaitable[Any]]
 
 # Display name used in user-facing strings ("Audio ready", "rate limited", etc.).

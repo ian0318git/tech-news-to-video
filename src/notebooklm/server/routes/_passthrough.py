@@ -44,7 +44,8 @@ async def passthrough_source_ids(
     except for the empty case, which mirrors ``cli.resolve.resolve_source_ids``:
     no selection resolves to ``None``, not an empty tuple. The client treats
     ``None`` as "scope to all sources"; an empty sequence as "no sources", which
-    the API rejects for quiz/flashcards (``… generation is unavailable``). So a
+    the API rejects for source-needing kinds — quiz/audio/flashcards
+    (``… generation is unavailable``). So a
     bare ``POST .../artifacts`` (no ``source_ids``) generates over all sources,
     matching the CLI's no-``--source`` behavior.
     """
