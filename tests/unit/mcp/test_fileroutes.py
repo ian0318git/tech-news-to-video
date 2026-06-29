@@ -14,6 +14,7 @@ import contextlib
 import os
 import tempfile
 from collections.abc import AsyncIterator, Iterator
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -23,6 +24,10 @@ import pytest
 pytest.importorskip("fastmcp")
 starlette_testclient = pytest.importorskip("starlette.testclient")
 
+from notebooklm._types.artifacts import (  # noqa: E402 - after importorskip guard
+    ArtifactStatus,
+    ArtifactTypeCode,
+)
 from notebooklm.mcp import _fileroutes  # noqa: E402 - after importorskip guard
 from notebooklm.mcp._auth import build_auth_provider  # noqa: E402 - after importorskip guard
 from notebooklm.mcp._filelink import (  # noqa: E402 - after importorskip guard
@@ -30,6 +35,7 @@ from notebooklm.mcp._filelink import (  # noqa: E402 - after importorskip guard
     FileTransferConfig,
 )
 from notebooklm.mcp.server import create_server  # noqa: E402 - after importorskip guard
+from notebooklm.types import Artifact  # noqa: E402 - after importorskip guard
 
 from .conftest import AsyncMock  # noqa: E402 - after importorskip guard
 
@@ -113,6 +119,127 @@ def test_download_route_forwards_fmt_from_token(monkeypatch, mock_client, config
         resp = client.get(_path(url))
     assert resp.status_code == 200
     assert captured["format_choice"] == "markdown"
+
+
+def test_download_route_forwards_aid_from_token(monkeypatch, mock_client, config) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake(plan, client, *, notebook_resolver, artifact_resolver, progress=None):
+        captured["artifact_id"] = plan.artifact_id
+        captured["latest"] = plan.latest
+        # Exercise the resolver to prove it's called
+        artifact_resolver([{"id": "a1", "title": "My Podcast"}], "a1")
+        await notebook_resolver(plan.notebook_id)
+        Path(plan.output_path).write_bytes(b"AUDIO")
+        return _fileroutes.download_core.DownloadResult(
+            outcome=_fileroutes.download_core.DownloadOutcome.SINGLE_DOWNLOADED,
+            artifact={"id": "a1", "title": "My Podcast", "selection_reason": "by id"},
+            output_path=plan.output_path,
+        )
+
+    monkeypatch.setattr(_fileroutes.download_core, "execute_download", fake)
+    app = _build(mock_client, config)
+    url = config.download_url({"nb": NB, "atype": "audio", "aid": "a1"})
+    with starlette_testclient.TestClient(app) as client:
+        resp = client.get(_path(url))
+    assert resp.status_code == 200
+    assert captured["artifact_id"] == "a1"
+    assert captured["latest"] is False
+
+
+def test_download_route_latest_unchanged(monkeypatch, mock_client, config) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake(plan, client, *, notebook_resolver, artifact_resolver, progress=None):
+        captured["artifact_id"] = plan.artifact_id
+        captured["latest"] = plan.latest
+        await notebook_resolver(plan.notebook_id)
+        Path(plan.output_path).write_bytes(b"AUDIO")
+        return _fileroutes.download_core.DownloadResult(
+            outcome=_fileroutes.download_core.DownloadOutcome.SINGLE_DOWNLOADED,
+            artifact={"id": "a1", "title": "My Podcast", "selection_reason": "latest"},
+            output_path=plan.output_path,
+        )
+
+    monkeypatch.setattr(_fileroutes.download_core, "execute_download", fake)
+    app = _build(mock_client, config)
+    url = config.download_url({"nb": NB, "atype": "audio"})
+    with starlette_testclient.TestClient(app) as client:
+        resp = client.get(_path(url))
+    assert resp.status_code == 200
+    assert captured["artifact_id"] is None
+    assert captured["latest"] is True
+
+
+def test_download_route_ambiguous_aid_is_400_not_500(mock_client, config) -> None:
+    # An ambiguous ``aid`` prefix in the token must surface as a clean 400 (the real
+    # ``_resolve_artifact_id`` raises AmbiguousIdError → ValidationError), NOT bubble
+    # up as a Starlette 500. Runs the REAL execute_download (no monkeypatch) so the
+    # resolver actually fires against the mocked artifact list.
+    art_1 = Artifact(
+        id="cccccccc-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        title="Podcast A",
+        _artifact_type=ArtifactTypeCode.AUDIO.value,
+        status=int(ArtifactStatus.COMPLETED),
+        created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+    )
+    art_2 = Artifact(
+        id="cccccccc-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        title="Podcast B",
+        _artifact_type=ArtifactTypeCode.AUDIO.value,
+        status=int(ArtifactStatus.COMPLETED),
+        created_at=datetime(2024, 1, 2, tzinfo=timezone.utc),
+    )
+    mock_client.artifacts.list = AsyncMock(return_value=[art_1, art_2])
+    app = _build(mock_client, config)
+    url = config.download_url({"nb": NB, "atype": "audio", "aid": "cccccccc"})
+    with starlette_testclient.TestClient(app) as client:
+        resp = client.get(_path(url))
+    assert resp.status_code == 400
+    assert "Ambiguous ID" in resp.text
+
+
+def _one_audio() -> Artifact:
+    return Artifact(
+        id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        title="Podcast A",
+        _artifact_type=ArtifactTypeCode.AUDIO.value,
+        status=int(ArtifactStatus.COMPLETED),
+        created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+    )
+
+
+def test_download_route_full_uuid_miss_is_400(mock_client, config) -> None:
+    # A not-found full UUID ``aid`` resolves hard (uniform with a missing prefix) →
+    # 400 with the real "not found" message, not the generic 409 not-ready text.
+    mock_client.artifacts.list = AsyncMock(return_value=[_one_audio()])
+    app = _build(mock_client, config)
+    url = config.download_url(
+        {"nb": NB, "atype": "audio", "aid": "dddddddd-dddd-dddd-dddd-dddddddddddd"}
+    )
+    with starlette_testclient.TestClient(app) as client:
+        resp = client.get(_path(url))
+    assert resp.status_code == 400
+    assert "not found" in resp.text
+
+
+def test_download_route_no_match_prefix_is_400(mock_client, config) -> None:
+    mock_client.artifacts.list = AsyncMock(return_value=[_one_audio()])
+    app = _build(mock_client, config)
+    url = config.download_url({"nb": NB, "atype": "audio", "aid": "ffff"})
+    with starlette_testclient.TestClient(app) as client:
+        resp = client.get(_path(url))
+    assert resp.status_code == 400
+
+
+def test_download_route_non_string_aid_is_400_not_500(mock_client, config) -> None:
+    # A signed token whose ``aid`` is not a string must fail as a clean 400, not a
+    # 500 from ``_resolve_artifact_id`` calling ``.strip()`` on a non-str.
+    app = _build(mock_client, config)
+    url = config.download_url({"nb": NB, "atype": "audio", "aid": 123})
+    with starlette_testclient.TestClient(app) as client:
+        resp = client.get(_path(url))
+    assert resp.status_code == 400
 
 
 @pytest.mark.parametrize(

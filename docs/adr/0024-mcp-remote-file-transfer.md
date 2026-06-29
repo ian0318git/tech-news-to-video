@@ -155,7 +155,7 @@ from the browser/sandbox and seeds the temp file's basename+extension.
 The signed token **encodes the operation parameters**, so the handlers hold no
 server-side state:
 
-- download token payload: `{op:"dl", nb, atype, fmt?, exp}`
+- download token payload: `{op:"dl", nb, atype, fmt?, aid?, exp}`
 - upload token payload:   `{op:"ul", nb, title?, mime?, exp}`
 
 Carrying `title`/`mime` in the upload token preserves the current

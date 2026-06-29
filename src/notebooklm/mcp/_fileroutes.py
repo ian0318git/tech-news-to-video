@@ -48,7 +48,7 @@ from .._app import source_add as add_core
 from ..exceptions import ValidationError
 from ._context import get_client_from_app
 from ._filelink import FileLinkError, FileTransferConfig
-from .tools.artifacts import _DOWNLOAD_SPECS
+from .tools.artifacts import _DOWNLOAD_SPECS, _resolve_artifact_id
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -182,14 +182,29 @@ def register_file_routes(mcp: FastMCP, config: FileTransferConfig) -> None:
         except RuntimeError:
             return PlainTextResponse("Server is not ready.", status_code=500)
 
+        # ``aid`` rides inside the HMAC-signed token, so a non-string value should be
+        # unreachable in practice — but the route treats the token as its source of
+        # truth, and a non-string ``aid`` would make ``_resolve_artifact_id`` raise a
+        # raw ``AttributeError`` (not ``ValidationError``) → a 500. Guard the shape so
+        # a malformed token fails as a clean 400 like any other bad ``aid``.
+        aid = payload.get("aid")
+        if aid is not None and not isinstance(aid, str):
+            return PlainTextResponse(
+                "This download link is invalid.",
+                status_code=400,
+                headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+            )
+
         temp_dir = tempfile.mkdtemp(prefix="nblm-mcp-dl-")
         temp_path = os.path.join(temp_dir, f"artifact{spec.extension}")
         try:
             args: dict[str, object] = {
                 "notebook_id": payload.get("nb"),
                 "output_path": temp_path,
-                "latest": True,
+                "latest": aid is None,
             }
+            if aid is not None:
+                args["artifact_id"] = aid
             fmt = payload.get("fmt")
             if fmt is not None:
                 args[spec.format_param_name] = fmt
@@ -198,9 +213,22 @@ def register_file_routes(mcp: FastMCP, config: FileTransferConfig) -> None:
                 plan,
                 client,
                 notebook_resolver=_passthrough_notebook,
-                # download selects by ``latest``, so the artifact resolver is never
-                # invoked — supply the required identity stub inline.
-                artifact_resolver=lambda _artifacts, artifact_id: artifact_id,
+                artifact_resolver=_resolve_artifact_id,
+            )
+        except ValidationError as exc:
+            # A bad ``aid`` in the token — a no-match id (full UUID or prefix) or an
+            # ambiguous prefix (AmbiguousIdError) — surfaces here from
+            # ``_resolve_artifact_id``. The catch also covers ``build_download_plan``'s
+            # ``DownloadPlanValidationError`` (a ValidationError subclass), which a
+            # broker-minted token won't trigger but is correctly a 400 too. Map it to a
+            # clean 400 instead of letting it bubble up as a Starlette 500. (The 409
+            # below stays for the latest-by-type path when no completed artifact of that
+            # type exists yet.)
+            _cleanup(temp_dir)
+            return PlainTextResponse(
+                str(exc),
+                status_code=400,
+                headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
             )
         except BaseException:
             _cleanup(temp_dir)

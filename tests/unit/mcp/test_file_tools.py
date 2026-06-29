@@ -189,7 +189,7 @@ async def test_artifact_download_config_rejects_invalid_format_value(mock_client
             "artifact_download",
             {"notebook": NB_ID, "artifact_type": "slide-deck", "output_format": "docx"},
         )
-    assert "VALIDATION" in str(excinfo.value)
+    assert "validation error" in str(excinfo.value)
 
 
 async def test_artifact_download_http_without_config_is_not_configured_error(
@@ -239,3 +239,27 @@ async def test_artifact_download_stdio_missing_path_is_clear_error(mock_client) 
 # The stdio path-download happy path (file_transfer absent) is already covered by
 # ``test_artifacts.py::test_artifact_download_audio`` (its server has no file
 # transfer), so it is not duplicated here.
+
+
+async def test_artifact_download_remote_tool_encodes_aid(mock_client, config) -> None:
+    # under http transport (with config), artifact_download returns download_ready
+    # and the minted token contains aid.
+    result = await _call(
+        mock_client,
+        config,
+        "artifact_download",
+        {
+            "notebook": NB_ID,
+            "artifact_type": "audio",
+            "artifact_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        },
+    )
+    sc = result.structured_content
+    assert sc["status"] == "download_ready"
+    # The structured payload echoes the targeted id (self-describing), not only the
+    # token.
+    assert sc["artifact_id"] == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    url = sc["url"]
+    token = url.split("/")[-1]
+    payload = config.signer.verify(token, op="dl")
+    assert payload["aid"] == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"

@@ -38,6 +38,7 @@ from ..._app import artifacts as artifact_core
 from ..._app import download as download_core
 from ..._app import generate as generate_core
 from ..._app.language import is_supported_language
+from ..._app.resolve import resolve_ref
 from ..._app.serialize import to_jsonable
 from ...exceptions import ValidationError
 from ...types import ArtifactType
@@ -274,9 +275,38 @@ async def _passthrough_download_notebook(notebook_id: str) -> str:
     return notebook_id
 
 
-def _no_partial_artifact(_artifacts: list[Any], artifact_id: str) -> str:
-    """Artifact-id resolver for the download core (MCP passes a full id through)."""
-    return artifact_id
+def _resolve_artifact_id(artifacts: list[Any], artifact_id: str) -> str:
+    """Resolve a full / partial / UUID artifact id against the type-filtered list.
+
+    Wraps the transport-neutral :func:`resolve_ref` (full-UUID fast-path, exact
+    match, unique prefix; ambiguous / no-match prefixes raise ``ValidationError`` /
+    ``AmbiguousIdError``). The fast-path returns a canonical UUID **verbatim**
+    without scanning ``artifacts``, so we match it case-insensitively against the
+    pre-fetched list and return the list's own id. This:
+
+    * fixes uppercase full UUIDs — ``select_artifact`` compares ids
+      case-sensitively, so returning the token's casing would spuriously miss; and
+    * makes a not-found full UUID raise the SAME hard error as a not-found /
+      ambiguous prefix (→ ``ToolError`` on stdio, 400 on the remote route) instead
+      of falling through to the download core's soft ``ERROR`` outcome — matching
+      how ``_resolve.py`` resolves notebooks / sources (every miss is ``NOT_FOUND``).
+    """
+    resolved = resolve_ref(
+        artifact_id,
+        artifacts,
+        id_of=lambda a: a["id"],
+        title_of=lambda a: a.get("title"),
+    ).id
+    # The full-UUID fast-path returns the caller's casing verbatim; for a prefix
+    # match ``resolved`` is already the list's canonical id. A single
+    # case-insensitive scan normalizes both and confirms membership.
+    resolved_lower = resolved.lower()
+    for artifact in artifacts:
+        if str(artifact["id"]).lower() == resolved_lower:
+            return str(artifact["id"])
+    # Mirror ``select_artifact``'s "Artifact <id> not found" wording so the message
+    # is uniform whether the miss is caught here or by the core.
+    raise ValidationError(f"Artifact {artifact_id} not found")
 
 
 def _is_http_transport() -> bool:
@@ -299,6 +329,7 @@ def _broker_download(
     notebook_id: str,
     artifact_type: str,
     output_format: str | None,
+    artifact_id: str | None = None,
 ) -> ToolResult:
     """Mint a signed download URL + a clickable ``resource_link`` for a remote
     ``artifact_download``.
@@ -311,16 +342,26 @@ def _broker_download(
         "nb": notebook_id,
         "atype": artifact_type,
     }  # op stamped by download_url
+    if artifact_id is not None:
+        payload["aid"] = artifact_id
     if output_format is not None:
         payload["fmt"] = output_format
     url = cfg.download_url(payload)
-    structured = {
+    structured: dict[str, Any] = {
         "status": "download_ready",
         "notebook_id": notebook_id,
         "artifact_type": artifact_type,
         "url": url,
         "expires_at": int(time.time()) + DOWNLOAD_TTL,
     }
+    if artifact_id is not None:
+        # Echo the targeted id the link was brokered for, so the agent's response
+        # records what it asked for (the token carries it, but the structured
+        # payload should be self-describing).
+        structured["artifact_id"] = artifact_id
+        desc = f"Download {artifact_type} artifact {artifact_id} (link expires)."
+    else:
+        desc = f"Download the latest {artifact_type} artifact (link expires)."
     link = ResourceLink(
         type="resource_link",
         name=f"{artifact_type} download",
@@ -328,7 +369,7 @@ def _broker_download(
         # passing the raw str (keeps mypy happy across pydantic-stub versions:
         # a bare str needed a [arg-type] ignore that CI's stubs flagged unused).
         uri=AnyUrl(url),
-        description=f"Download the latest {artifact_type} artifact (link expires).",
+        description=desc,
     )
     return ToolResult(content=[link], structured_content=structured)
 
@@ -551,20 +592,28 @@ def register(mcp: Any) -> None:
             "flashcards",
         ],
         path: str | None = None,
-        output_format: str | None = None,
+        output_format: Literal["pdf", "pptx", "json", "markdown", "html"] | None = None,
+        artifact_id: str | None = None,
     ) -> Any:
         """Download a generated artifact. Accepts a notebook name or ID.
 
         ``artifact_type`` is one of audio|video|slide-deck|infographic|report|
-        mind-map|data-table|quiz|flashcards (the latest artifact of that type is
-        selected). ``output_format`` overrides the default file format where
-        supported: slide-deck → pdf|pptx; quiz/flashcards → json|markdown|html.
+        mind-map|data-table|quiz|flashcards. ``output_format`` overrides the
+        default file format where supported: slide-deck → pdf|pptx; quiz/flashcards
+        → json|markdown|html.
+
+        ``artifact_id`` (optional; full or unique-prefix) targets a specific
+        artifact and overrides latest-by-type. If omitted, the latest artifact
+        of ``artifact_type`` is selected.
 
         Over **stdio** the artifact is written to ``path`` (the output file on the
         server host; required). Over the **remote (http) connector** the server's
         filesystem is unreachable, so the tool instead returns a clickable
         ``resource_link`` plus ``{"status": "download_ready", "url": …}`` — a
-        short-lived signed URL; ``path`` is ignored.
+        short-lived signed URL; ``path`` is ignored. On the remote connector the
+        broker cannot list artifacts, so an ``artifact_id`` is validated lazily when
+        the link is opened (an unknown/ambiguous id then yields a 400), unlike
+        ``output_format``, which is validated up front at the tool call.
         """
         client = get_client(ctx)
         with mcp_errors():
@@ -594,7 +643,7 @@ def register(mcp: Any) -> None:
             if cfg is not None:
                 # Remote connector: broker a signed download URL (the server path is
                 # unreachable). `path` is accepted but ignored.
-                return _broker_download(cfg, nb_id, artifact_type, output_format)
+                return _broker_download(cfg, nb_id, artifact_type, output_format, artifact_id)
             # No file-transfer config. On the remote (http) connector the server
             # filesystem is unreachable REGARDLESS of `path`, so fail clearly here —
             # mirroring source_add type=file — BEFORE any server-side download (else a
@@ -610,8 +659,10 @@ def register(mcp: Any) -> None:
             args: dict[str, Any] = {
                 "notebook_id": nb_id,
                 "output_path": path,
-                "latest": True,
+                "latest": artifact_id is None,
             }
+            if artifact_id is not None:
+                args["artifact_id"] = artifact_id
             if output_format is not None:
                 args[spec.format_param_name] = output_format
             plan = download_core.build_download_plan(spec, args, cwd=Path.cwd())
@@ -619,7 +670,7 @@ def register(mcp: Any) -> None:
                 plan,
                 client,
                 notebook_resolver=_passthrough_download_notebook,
-                artifact_resolver=_no_partial_artifact,
+                artifact_resolver=_resolve_artifact_id,
             )
             return to_jsonable(result)
 

@@ -136,3 +136,20 @@ async def test_read_only_and_destructive_are_disjoint() -> None:
     assert not (READ_ONLY_TOOLS & DESTRUCTIVE_TOOLS)
     assert READ_ONLY_TOOLS <= EXPECTED_TOOLS
     assert DESTRUCTIVE_TOOLS <= EXPECTED_TOOLS
+
+
+async def test_artifact_download_advertises_artifact_id_and_format_enum(tools_by_name) -> None:
+    """``artifact_download`` advertises the ``artifact_id`` param and an enumerated
+    ``output_format`` so an agent's tool schema can target a specific artifact and
+    pick a valid format (issue #1668)."""
+    import json
+
+    tool = tools_by_name["artifact_download"]
+    properties = tool.inputSchema.get("properties", {})
+    assert "artifact_id" in properties, "artifact_download must expose 'artifact_id'"
+    assert "output_format" in properties, "artifact_download must expose 'output_format'"
+    # output_format is a Literal union → the schema (possibly under anyOf for the
+    # optional ``| None``) must enumerate every supported format value.
+    fmt_schema = json.dumps(properties["output_format"])
+    for value in ("pdf", "pptx", "json", "markdown", "html"):
+        assert value in fmt_schema, f"output_format schema missing {value!r}: {fmt_schema}"

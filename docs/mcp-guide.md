@@ -237,6 +237,9 @@ task = artifact_generate(notebook="Quantum Computing", artifact_type="audio")
 artifact_status(notebook="Quantum Computing", task_id="<task_id from above>")   # poll until complete
 artifact_download(notebook="Quantum Computing", artifact_type="audio", path="podcast.mp3")
 
+# Target a specific/older artifact instead of the latest-by-type (full ID or unique prefix):
+artifact_download(notebook="Quantum Computing", artifact_type="audio", path="old_podcast.mp3", artifact_id="aaaaaaaa-aaaa")
+
 # Per-kind styling options are agent-settable, e.g. a custom-styled video:
 artifact_generate(notebook="Quantum Computing", artifact_type="video",
                   style="custom", style_prompt="hand-drawn diagrams")
@@ -272,7 +275,7 @@ a single in-flight task.
 | **Sources** | `source_list(notebook)` (each source has string `kind`/`status_label`) · `source_get_content(notebook, source, output_format?, max_chars?, offset?)` (metadata **+ full indexed text**, windowable via `max_chars`/`offset` → `content` slice + `truncated` flag, with full `char_count`; `output_format`: text\|markdown) · `source_rename(notebook, source, new_title)` · `source_delete(notebook, source, confirm)` · `source_wait(notebook, source?, timeout, interval)` · `source_add(notebook, source_type, ..., allow_internal?)` |
 | **Chat** | `chat_ask(notebook, question, conversation_id?, references?, source_ids?)` (`references`: lite\|full; never returns the raw debug blob; `source_ids` scopes to specific sources — list, JSON-array string, or comma string; omit for all) · `chat_configure(notebook, goal?, response_length?)` |
 | **Notes** | `note_create(notebook, title, content)` · `note_list(notebook)` · `note_update(notebook, note, content)` · `note_delete(notebook, note, confirm)` |
-| **Artifacts** | `artifact_list(notebook)` · `artifact_generate(notebook, artifact_type, …)` · `artifact_status(notebook, task_id)` · `artifact_download(notebook, artifact_type, path, output_format?)` |
+| **Artifacts** | `artifact_list(notebook)` · `artifact_generate(notebook, artifact_type, …)` · `artifact_status(notebook, task_id)` · `artifact_download(notebook, artifact_type, path, output_format?, artifact_id?)` |
 | **Research** | `research_start(notebook, query, source, mode)` · `research_status(notebook, task_id?)` · `research_import(notebook, task_id)` |
 | **Server** | `server_info` — version + local auth health |
 

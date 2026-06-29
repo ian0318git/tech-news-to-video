@@ -597,13 +597,27 @@ async def test_artifact_download_unknown_type_is_validation_error(mcp_call, mock
 async def test_artifact_download_bad_format_for_supported_type_is_validation(
     mcp_call, mock_client, tmp_path
 ) -> None:
-    """A bad ``format`` for a type that DOES support format projects VALIDATION."""
+    """A bad ``format`` for a type that DOES support format projects a Literal schema boundary error."""
     out = str(tmp_path / "quiz.json")
     mock_client.artifacts.list = AsyncMock(return_value=[_QUIZ_ARTIFACT])
     with pytest.raises(ToolError) as excinfo:
         await mcp_call(
             "artifact_download",
             {"notebook": NB_ID, "artifact_type": "quiz", "path": out, "output_format": "bogus"},
+        )
+    assert "validation error" in str(excinfo.value)
+
+
+async def test_artifact_download_bad_format_cross_validation_is_validation(
+    mcp_call, mock_client, tmp_path
+) -> None:
+    """An in-union format value that is invalid for the specific type raises a runtime VALIDATION error."""
+    out = str(tmp_path / "quiz.json")
+    mock_client.artifacts.list = AsyncMock(return_value=[_QUIZ_ARTIFACT])
+    with pytest.raises(ToolError) as excinfo:
+        await mcp_call(
+            "artifact_download",
+            {"notebook": NB_ID, "artifact_type": "quiz", "path": out, "output_format": "pdf"},
         )
     assert "VALIDATION" in str(excinfo.value)
 
@@ -631,6 +645,156 @@ async def test_artifact_download_no_artifacts(mcp_call, mock_client, tmp_path) -
         "artifact_download", {"notebook": NB_ID, "artifact_type": "audio", "path": out}
     )
     assert result.structured_content["outcome"] == "no_artifacts"
+
+
+_AUDIO_ARTIFACT_1 = Artifact(
+    id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    title="Podcast 1",
+    _artifact_type=ArtifactTypeCode.AUDIO.value,
+    status=int(ArtifactStatus.COMPLETED),
+    created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+)
+_AUDIO_ARTIFACT_2 = Artifact(
+    id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+    title="Podcast 2",
+    _artifact_type=ArtifactTypeCode.AUDIO.value,
+    status=int(ArtifactStatus.COMPLETED),
+    created_at=datetime(2024, 1, 2, tzinfo=timezone.utc),
+)
+
+
+async def test_artifact_download_by_full_id(mcp_call, mock_client, tmp_path) -> None:
+    out = str(tmp_path / "out.mp3")
+    mock_client.artifacts.list = AsyncMock(return_value=[_AUDIO_ARTIFACT_1, _AUDIO_ARTIFACT_2])
+    mock_client.artifacts.download_audio = AsyncMock(return_value=out)
+    result = await mcp_call(
+        "artifact_download",
+        {
+            "notebook": NB_ID,
+            "artifact_type": "audio",
+            "path": out,
+            "artifact_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        },
+    )
+    assert result.structured_content["outcome"] == "single_downloaded"
+    assert result.structured_content["artifact"]["id"] == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    mock_client.artifacts.download_audio.assert_awaited_once_with(
+        NB_ID, out, artifact_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    )
+
+
+async def test_artifact_download_by_unique_prefix(mcp_call, mock_client, tmp_path) -> None:
+    out = str(tmp_path / "out.mp3")
+    mock_client.artifacts.list = AsyncMock(return_value=[_AUDIO_ARTIFACT_1, _AUDIO_ARTIFACT_2])
+    mock_client.artifacts.download_audio = AsyncMock(return_value=out)
+    result = await mcp_call(
+        "artifact_download",
+        {
+            "notebook": NB_ID,
+            "artifact_type": "audio",
+            "path": out,
+            "artifact_id": "bbbbbbbb-bbbb",
+        },
+    )
+    assert result.structured_content["outcome"] == "single_downloaded"
+    assert result.structured_content["artifact"]["id"] == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    mock_client.artifacts.download_audio.assert_awaited_once_with(
+        NB_ID, out, artifact_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    )
+
+
+async def test_artifact_download_by_id_not_found(mcp_call, mock_client, tmp_path) -> None:
+    # A not-found ``artifact_id`` (a full UUID absent from the list) is a hard miss,
+    # uniform with a not-found / ambiguous prefix — ``_resolve_artifact_id`` raises
+    # before the download core's soft ERROR path, mirroring how a bad notebook id
+    # surfaces (ToolError / NOT_FOUND).
+    out = str(tmp_path / "out.mp3")
+    mock_client.artifacts.list = AsyncMock(return_value=[_AUDIO_ARTIFACT_1, _AUDIO_ARTIFACT_2])
+    with pytest.raises(ToolError) as excinfo:
+        await mcp_call(
+            "artifact_download",
+            {
+                "notebook": NB_ID,
+                "artifact_type": "audio",
+                "path": out,
+                "artifact_id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+            },
+        )
+    assert "not found" in str(excinfo.value)
+    mock_client.artifacts.download_audio.assert_not_called()
+
+
+async def test_artifact_download_by_uppercase_full_id(mcp_call, mock_client, tmp_path) -> None:
+    # An uppercase full UUID must still resolve: resolve_ref fast-paths it verbatim,
+    # so _resolve_artifact_id case-insensitively matches it back to the list's
+    # canonical (lowercase) id that select_artifact compares against.
+    out = str(tmp_path / "out.mp3")
+    mock_client.artifacts.list = AsyncMock(return_value=[_AUDIO_ARTIFACT_1, _AUDIO_ARTIFACT_2])
+    mock_client.artifacts.download_audio = AsyncMock(return_value=out)
+    result = await mcp_call(
+        "artifact_download",
+        {
+            "notebook": NB_ID,
+            "artifact_type": "audio",
+            "path": out,
+            "artifact_id": "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA",
+        },
+    )
+    assert result.structured_content["outcome"] == "single_downloaded"
+    assert result.structured_content["artifact"]["id"] == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    mock_client.artifacts.download_audio.assert_awaited_once_with(
+        NB_ID, out, artifact_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    )
+
+
+async def test_artifact_download_by_id_ambiguous_prefix(mcp_call, mock_client, tmp_path) -> None:
+    out = str(tmp_path / "out.mp3")
+    art_same_1 = Artifact(
+        id="cccccccc-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        title="Podcast A",
+        _artifact_type=ArtifactTypeCode.AUDIO.value,
+        status=int(ArtifactStatus.COMPLETED),
+        created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+    )
+    art_same_2 = Artifact(
+        id="cccccccc-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        title="Podcast B",
+        _artifact_type=ArtifactTypeCode.AUDIO.value,
+        status=int(ArtifactStatus.COMPLETED),
+        created_at=datetime(2024, 1, 2, tzinfo=timezone.utc),
+    )
+    mock_client.artifacts.list = AsyncMock(return_value=[art_same_1, art_same_2])
+    with pytest.raises(ToolError) as excinfo:
+        await mcp_call(
+            "artifact_download",
+            {
+                "notebook": NB_ID,
+                "artifact_type": "audio",
+                "path": out,
+                "artifact_id": "cccccccc",
+            },
+        )
+    assert "Ambiguous ID" in str(excinfo.value)
+    mock_client.artifacts.download_audio.assert_not_called()
+
+
+async def test_artifact_download_latest_preserved(mcp_call, mock_client, tmp_path) -> None:
+    out = str(tmp_path / "out.mp3")
+    mock_client.artifacts.list = AsyncMock(return_value=[_AUDIO_ARTIFACT_1, _AUDIO_ARTIFACT_2])
+    mock_client.artifacts.download_audio = AsyncMock(return_value=out)
+    result = await mcp_call(
+        "artifact_download",
+        {
+            "notebook": NB_ID,
+            "artifact_type": "audio",
+            "path": out,
+        },
+    )
+    assert result.structured_content["outcome"] == "single_downloaded"
+    assert result.structured_content["artifact"]["id"] == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    mock_client.artifacts.download_audio.assert_awaited_once_with(
+        NB_ID, out, artifact_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    )
 
 
 # ---------------------------------------------------------------------------
