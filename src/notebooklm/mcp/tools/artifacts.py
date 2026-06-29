@@ -23,9 +23,10 @@ than imported from ``cli/_download_specs.py``.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from fastmcp import Context
 from fastmcp.server.dependencies import get_http_request
@@ -44,28 +45,11 @@ from .._confirm import READ_ONLY
 from .._context import get_client, get_file_transfer
 from .._errors import mcp_errors
 from .._filelink import DOWNLOAD_TTL, FileTransferConfig
-from .._resolve import resolve_notebook
+from .._resolve import resolve_notebook, resolve_source
 from ._passthrough import passthrough_notebook_id
 
 if TYPE_CHECKING:
     from ...client import NotebookLMClient
-
-#: The generation kinds an agent may request via ``artifact_generate``. Mirrors
-#: the neutral ``generate`` core's :data:`~notebooklm._app.generate.GenerationKind`
-#: (minus ``revise-slide``, which mutates an existing slide deck rather than
-#: producing a fresh artifact — not a from-scratch generation).
-_GENERATE_TYPES = (
-    "audio",
-    "video",
-    "cinematic-video",
-    "slide-deck",
-    "quiz",
-    "flashcards",
-    "infographic",
-    "data-table",
-    "mind-map",
-    "report",
-)
 
 #: Per-kind default option values mirroring the CLI ``generate`` Click ``Choice``
 #: defaults, so a bare ``artifact_generate(notebook, type=…)`` succeeds without
@@ -364,7 +348,18 @@ def register(mcp: Any) -> None:
     async def artifact_generate(
         ctx: Context,
         notebook: str,
-        artifact_type: str,
+        artifact_type: Literal[
+            "audio",
+            "video",
+            "cinematic-video",
+            "slide-deck",
+            "quiz",
+            "flashcards",
+            "infographic",
+            "data-table",
+            "mind-map",
+            "report",
+        ],
         source_ids: list[str] | None = None,
         instructions: str = "",
         language: str | None = None,
@@ -422,11 +417,8 @@ def register(mcp: Any) -> None:
         """
         client = get_client(ctx)
         with mcp_errors():
-            if artifact_type not in _GENERATE_TYPES:
-                raise ValidationError(
-                    f"Unknown artifact type {artifact_type!r}; "
-                    f"expected one of {list(_GENERATE_TYPES)}"
-                )
+            # ``artifact_type`` is a Literal — FastMCP/Pydantic rejects an unknown
+            # kind at the schema boundary, so no runtime membership check is needed.
             # Validate ``language`` up front: the neutral generate core's default
             # language resolver returns the raw string unchecked (the CLI
             # validates via SUPPORTED_LANGUAGES first), so a bad code would be
@@ -479,6 +471,20 @@ def register(mcp: Any) -> None:
                 overrides[key] = value
 
             nb_id = await resolve_notebook(client, notebook)
+            # Resolve each source ref the same way every other source-accepting tool
+            # does (full-UUID fast-path, 12-char prefix, exact title) instead of
+            # forwarding raw — so an agent that passed a prefix/title (the style that
+            # works elsewhere) or an empty string gets it validated/resolved, not
+            # forwarded to the backend. Omitted/empty stays None (= all sources, #1652).
+            resolved_source_ids = (
+                list(
+                    await asyncio.gather(
+                        *(resolve_source(client, nb_id, ref) for ref in source_ids)
+                    )
+                )
+                if source_ids
+                else None
+            )
             raw_args: dict[str, Any] = dict(_KIND_DEFAULTS[artifact_type])
             raw_args.update(
                 {
@@ -488,7 +494,7 @@ def register(mcp: Any) -> None:
                     # reads ``description``); set it so mind-map instructions actually
                     # reach the client — the extra key is ignored by the other builders.
                     "instructions": instructions or None,
-                    "source_ids": tuple(source_ids or ()),
+                    "source_ids": tuple(resolved_source_ids or ()),
                     "language": language,
                     "wait": False,
                     "json_output": True,
@@ -524,7 +530,17 @@ def register(mcp: Any) -> None:
     async def artifact_download(
         ctx: Context,
         notebook: str,
-        artifact_type: str,
+        artifact_type: Literal[
+            "audio",
+            "video",
+            "slide-deck",
+            "infographic",
+            "report",
+            "mind-map",
+            "data-table",
+            "quiz",
+            "flashcards",
+        ],
         path: str | None = None,
         output_format: str | None = None,
     ) -> Any:

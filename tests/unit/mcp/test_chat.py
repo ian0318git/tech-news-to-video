@@ -30,12 +30,23 @@ class FakeNotebook:
 
 
 @dataclass
+class FakeReference:
+    source_id: str
+    citation_number: int | None = None
+    cited_text: str | None = None
+    chunk_id: str | None = None
+    start_char: int | None = None
+    score: float | None = None
+
+
+@dataclass
 class FakeAskResult:
     answer: str
     conversation_id: str
     turn_number: int = 1
     is_follow_up: bool = False
     references: list[Any] = field(default_factory=list)
+    raw_response: str = ""
 
 
 NB_ID = "11111111-1111-1111-1111-111111111111"
@@ -97,13 +108,61 @@ async def test_chat_configure_no_goal(mcp_call, mock_client) -> None:
     mock_client.chat.configure.assert_awaited_once()
 
 
+async def test_chat_ask_strips_raw_response_and_lite_references(mcp_call, mock_client) -> None:
+    """raw_response is never returned; default references are the lite subset."""
+    mock_client.chat.ask = AsyncMock(
+        return_value=FakeAskResult(
+            answer="42",
+            conversation_id=CONV_ID,
+            raw_response='[["wrb.fr", ... internal wire blob ...]]',
+            references=[
+                FakeReference(
+                    source_id="s1",
+                    citation_number=1,
+                    cited_text="quote",
+                    chunk_id="c1",
+                    start_char=10,
+                    score=0.9,
+                )
+            ],
+        )
+    )
+    result = await mcp_call("chat_ask", {"notebook": NB_ID, "question": "what?"})
+    sc = result.structured_content
+    assert "raw_response" not in sc
+    assert sc["references"] == [{"source_id": "s1", "citation_number": 1, "cited_text": "quote"}]
+
+
+async def test_chat_ask_tolerates_null_references(mcp_call, mock_client) -> None:
+    """A null references value (not a list) must not crash the lite projection."""
+    mock_client.chat.ask = AsyncMock(
+        return_value=FakeAskResult(answer="42", conversation_id=CONV_ID, references=None)
+    )
+    result = await mcp_call("chat_ask", {"notebook": NB_ID, "question": "what?"})
+    assert result.structured_content["references"] == []
+
+
+async def test_chat_ask_full_references_keep_chunk_detail(mcp_call, mock_client) -> None:
+    mock_client.chat.ask = AsyncMock(
+        return_value=FakeAskResult(
+            answer="42",
+            conversation_id=CONV_ID,
+            references=[FakeReference(source_id="s1", citation_number=1, chunk_id="c1", score=0.9)],
+        )
+    )
+    result = await mcp_call(
+        "chat_ask", {"notebook": NB_ID, "question": "what?", "references": "full"}
+    )
+    assert result.structured_content["references"][0]["chunk_id"] == "c1"
+
+
 async def test_chat_configure_rejects_bad_response_length(mcp_call, mock_client) -> None:
-    """An invalid response_length is rejected up front as VALIDATION_ERROR, no RPC."""
+    """An out-of-enum response_length is rejected at the Literal schema boundary, no RPC."""
     mock_client.chat.configure = AsyncMock(return_value=None)
     with pytest.raises(ToolError) as excinfo:
         await mcp_call("chat_configure", {"notebook": NB_ID, "response_length": "huge"})
-    assert "VALIDATION" in str(excinfo.value)
-    assert "response_length" in str(excinfo.value)
+    msg = str(excinfo.value).lower()
+    assert "response_length" in msg and "shorter" in msg
     mock_client.chat.configure.assert_not_called()
 
 

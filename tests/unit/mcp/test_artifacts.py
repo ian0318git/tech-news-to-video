@@ -146,13 +146,37 @@ async def test_artifact_generate_report_routes_to_report(mcp_call, mock_client) 
 
 
 async def test_artifact_generate_passes_source_ids(mcp_call, mock_client) -> None:
+    # Full-UUID source ids take resolve_source's fast path (no listing) and pass
+    # straight through — the style MCP supplies.
+    src_a = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    src_b = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
     mock_client.artifacts.generate_audio = AsyncMock(return_value=FakeStatus(task_id=TASK_ID))
     await mcp_call(
         "artifact_generate",
-        {"notebook": NB_ID, "artifact_type": "audio", "source_ids": ["src-1", "src-2"]},
+        {"notebook": NB_ID, "artifact_type": "audio", "source_ids": [src_a, src_b]},
     )
     kwargs = mock_client.artifacts.generate_audio.await_args.kwargs
-    assert kwargs["source_ids"] == ("src-1", "src-2")
+    assert kwargs["source_ids"] == (src_a, src_b)
+
+
+async def test_artifact_generate_resolves_source_id_prefix(mcp_call, mock_client) -> None:
+    """A non-UUID source ref is resolved to its full id (like every sibling tool),
+    not forwarded raw to the backend."""
+
+    @dataclass
+    class _Src:
+        id: str
+        title: str = "Doc"
+
+    full = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    mock_client.sources.list = AsyncMock(return_value=[_Src(id=full)])
+    mock_client.artifacts.generate_audio = AsyncMock(return_value=FakeStatus(task_id=TASK_ID))
+    await mcp_call(
+        "artifact_generate",
+        {"notebook": NB_ID, "artifact_type": "audio", "source_ids": [full[:12]]},
+    )
+    kwargs = mock_client.artifacts.generate_audio.await_args.kwargs
+    assert kwargs["source_ids"] == (full,)
 
 
 async def test_artifact_generate_omitting_source_ids_uses_all(mcp_call, mock_client) -> None:
@@ -178,9 +202,10 @@ async def test_artifact_generate_empty_source_ids_uses_all(mcp_call, mock_client
 
 
 async def test_artifact_generate_unknown_type_is_validation_error(mcp_call, mock_client) -> None:
+    """An unknown artifact_type is rejected at the Literal schema boundary."""
     with pytest.raises(ToolError) as excinfo:
         await mcp_call("artifact_generate", {"notebook": NB_ID, "artifact_type": "bogus"})
-    assert "VALIDATION" in str(excinfo.value)
+    assert "audio" in str(excinfo.value) and "report" in str(excinfo.value)
 
 
 async def test_artifact_generate_bad_enum_is_validation_error(mcp_call, mock_client) -> None:
@@ -500,11 +525,12 @@ async def test_artifact_download_quiz_with_format(mcp_call, mock_client, tmp_pat
 
 
 async def test_artifact_download_unknown_type_is_validation_error(mcp_call, mock_client) -> None:
+    """An unknown download artifact_type is rejected at the Literal schema boundary."""
     with pytest.raises(ToolError) as excinfo:
         await mcp_call(
             "artifact_download", {"notebook": NB_ID, "artifact_type": "bogus", "path": "/tmp/x"}
         )
-    assert "VALIDATION" in str(excinfo.value)
+    assert "audio" in str(excinfo.value) and "flashcards" in str(excinfo.value)
 
 
 async def test_artifact_download_bad_format_for_supported_type_is_validation(

@@ -376,6 +376,7 @@ async def test_mcp_source_get_content_over_vcr() -> None:
         "source",
         "content",
         "char_count",
+        "truncated",
         "output_format",
     }
     assert structured["notebook_id"] == GET_CONTENT_NOTEBOOK_ID
@@ -386,8 +387,12 @@ async def test_mcp_source_get_content_over_vcr() -> None:
     assert source["title"] == SOURCES_LIST_SOURCE_TITLE
     assert source["url"] == "https://github.com/shareAI-lab/learn-claude-code"
     assert source["status"] == 2  # SourceStatus.READY
+    # String labels accompany the raw codes (agent-readable).
+    assert source["kind"] == "web_page"
+    assert source["status_label"] == "ready"
     # Full text came back from the recorded GET_SOURCE interaction.
     assert structured["output_format"] == "text"
+    assert structured["truncated"] is False
     assert isinstance(structured["content"], str) and structured["content"]
     assert structured["char_count"] == len(structured["content"])
 

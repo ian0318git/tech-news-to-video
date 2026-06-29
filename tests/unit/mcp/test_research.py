@@ -19,8 +19,6 @@ pytest.importorskip("fastmcp")
 
 from fastmcp.exceptions import ToolError  # noqa: E402 - after importorskip guard
 
-from notebooklm.exceptions import ValidationError  # noqa: E402 - after importorskip guard
-
 from .conftest import AsyncMock  # noqa: E402 - after importorskip guard
 
 NB_ID = "11111111-1111-1111-1111-111111111111"
@@ -87,13 +85,20 @@ async def test_research_start(mcp_call, mock_client) -> None:
     mock_client.research.start.assert_awaited_once_with(NB_ID, "quantum computing", "web", "fast")
 
 
-async def test_research_start_drive_deep(mcp_call, mock_client) -> None:
+async def test_research_start_non_default_source_mode(mcp_call, mock_client) -> None:
+    """Non-default but valid source/mode are forwarded (drive+fast; web+deep)."""
     mock_client.research.start = AsyncMock(return_value=FakeResearchStart(task_id=TASK_ID))
     await mcp_call(
         "research_start",
-        {"notebook": NB_ID, "query": "q", "source": "drive", "mode": "deep"},
+        {"notebook": NB_ID, "query": "q", "source": "drive", "mode": "fast"},
     )
-    mock_client.research.start.assert_awaited_once_with(NB_ID, "q", "drive", "deep")
+    mock_client.research.start.assert_awaited_once_with(NB_ID, "q", "drive", "fast")
+    mock_client.research.start.reset_mock()
+    await mcp_call(
+        "research_start",
+        {"notebook": NB_ID, "query": "q", "source": "web", "mode": "deep"},
+    )
+    mock_client.research.start.assert_awaited_once_with(NB_ID, "q", "web", "deep")
 
 
 async def test_research_start_resolves_notebook_by_name(mcp_call, mock_client) -> None:
@@ -246,11 +251,53 @@ async def test_research_start_then_status_poll_shape(mcp_call, mock_client) -> N
 # ---------------------------------------------------------------------------
 
 
-async def test_research_start_invalid_source_projects_validation(mcp_call, mock_client) -> None:
-    def _raise(*_a: Any, **_k: Any) -> Any:
-        raise ValidationError("Invalid source 'ftp'. Use 'web' or 'drive'.")
-
-    mock_client.research.start = AsyncMock(side_effect=_raise)
+async def test_research_start_invalid_source_rejected_at_schema(mcp_call, mock_client) -> None:
+    """``source`` is a Literal — an out-of-enum value is rejected before the RPC."""
+    mock_client.research.start = AsyncMock(return_value=FakeResearchStart(task_id=TASK_ID))
     with pytest.raises(ToolError) as excinfo:
         await mcp_call("research_start", {"notebook": NB_ID, "query": "q", "source": "ftp"})
+    msg = str(excinfo.value).lower()
+    assert "web" in msg and "drive" in msg
+    mock_client.research.start.assert_not_called()
+
+
+async def test_research_start_drive_deep_rejected(mcp_call, mock_client) -> None:
+    """deep mode is web-only — drive+deep is rejected at the tool boundary, no RPC."""
+    mock_client.research.start = AsyncMock(return_value=FakeResearchStart(task_id=TASK_ID))
+    with pytest.raises(ToolError) as excinfo:
+        await mcp_call(
+            "research_start",
+            {"notebook": NB_ID, "query": "q", "source": "drive", "mode": "deep"},
+        )
     assert "VALIDATION" in str(excinfo.value)
+    mock_client.research.start.assert_not_called()
+
+
+async def test_research_import_in_progress_refused(mcp_call, mock_client) -> None:
+    """An in-progress task is not importable — refuse rather than import a partial set."""
+    mock_client.research.poll = AsyncMock(
+        return_value=FakeResearchTask(
+            status=FakeResearchStatus.IN_PROGRESS,
+            sources=[FakeSource(url="http://a", title="A")],
+            task_id=TASK_ID,
+        )
+    )
+    mock_client.research.import_sources = AsyncMock(return_value=[])
+    with pytest.raises(ToolError) as excinfo:
+        await mcp_call("research_import", {"notebook": NB_ID, "task_id": TASK_ID})
+    assert "VALIDATION" in str(excinfo.value)
+    mock_client.research.import_sources.assert_not_called()
+
+
+async def test_research_import_completed_but_empty_refused(mcp_call, mock_client) -> None:
+    """A completed task with no sources is refused (no silent empty import)."""
+    mock_client.research.poll = AsyncMock(
+        return_value=FakeResearchTask(
+            status=FakeResearchStatus.COMPLETED, sources=[], task_id=TASK_ID
+        )
+    )
+    mock_client.research.import_sources = AsyncMock(return_value=[])
+    with pytest.raises(ToolError) as excinfo:
+        await mcp_call("research_import", {"notebook": NB_ID, "task_id": TASK_ID})
+    assert "VALIDATION" in str(excinfo.value)
+    mock_client.research.import_sources.assert_not_called()

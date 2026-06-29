@@ -22,18 +22,21 @@ Both bodies wrap in :func:`mcp_errors`. This module imports NO ``click`` /
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from fastmcp import Context
 
 from ..._app import chat as core
 from ..._app.serialize import to_jsonable
-from ...exceptions import ValidationError
 from .._context import get_client
 from .._errors import mcp_errors
 from .._resolve import resolve_notebook
 
-_RESPONSE_LENGTHS = ("default", "longer", "shorter")
+#: Reference fields kept in the default ("lite") ``chat_ask`` projection. The full
+#: ``ChatReference`` also carries chunk-level char offsets / ``chunk_id`` /
+#: ``passage_id`` / ``score`` — useful for deep citation tooling but pure context
+#: bloat for a typical agent, so they are dropped unless ``references="full"``.
+_LITE_REFERENCE_FIELDS = ("source_id", "citation_number", "cited_text")
 
 
 def register(mcp: Any) -> None:
@@ -45,45 +48,60 @@ def register(mcp: Any) -> None:
         notebook: str,
         question: str,
         conversation_id: str | None = None,
+        references: Literal["lite", "full"] = "lite",
     ) -> dict[str, Any]:
         """Ask a notebook's sources a question. Accepts a notebook name or ID.
 
         Pass ``conversation_id`` to continue a specific conversation; omit it to
         continue the notebook's most-recent conversation (or start a new one).
+
+        Returns the ``answer`` plus citation ``references``. The internal
+        ``raw_response`` debugging blob is never included. ``references`` controls
+        citation detail: ``lite`` (default) returns ``source_id`` / ``citation_number``
+        / ``cited_text``; ``full`` adds chunk-level char offsets and scores.
         """
         client = get_client(ctx)
         with mcp_errors():
             nb_id = await resolve_notebook(client, notebook)
             result = await client.chat.ask(nb_id, question, conversation_id=conversation_id)
-            return to_jsonable(result)
+            payload = to_jsonable(result)
+            # Drop the debug-only raw wire-protocol blob (it just burns agent context).
+            payload.pop("raw_response", None)
+            if references == "lite":
+                # ``or []`` (not a get-default) so a null ``references`` value is
+                # tolerated, not iterated.
+                payload["references"] = [
+                    {k: ref[k] for k in _LITE_REFERENCE_FIELDS if ref.get(k) is not None}
+                    for ref in (payload.get("references") or [])
+                ]
+            return payload
 
     @mcp.tool
     async def chat_configure(
         ctx: Context,
         notebook: str,
         goal: str | None = None,
-        response_length: str | None = None,
+        response_length: Literal["default", "longer", "shorter"] | None = None,
     ) -> dict[str, Any]:
         """Configure a notebook's chat behavior. Accepts a notebook name or ID.
 
         ``goal`` is a free-text custom persona/goal for the assistant (selects the
         CUSTOM chat goal); ``response_length`` is one of default|longer|shorter.
+
+        NOTE: this writes the full chat-settings block — omitting a field resets it
+        to its default (e.g. setting only ``response_length`` clears a previously-set
+        custom ``goal``). Pass both to preserve both.
         """
         client = get_client(ctx)
         with mcp_errors():
-            # Validate up front so a bad value returns a clean VALIDATION_ERROR
-            # rather than failing deeper in the core.
-            if response_length is not None and response_length not in _RESPONSE_LENGTHS:
-                raise ValidationError(
-                    f"Unknown response_length {response_length!r}; "
-                    f"expected one of {'|'.join(_RESPONSE_LENGTHS)}"
-                )
+            # ``response_length`` is a Literal, so FastMCP/Pydantic rejects an
+            # out-of-enum value at the schema boundary (no runtime check needed).
             nb_id = await resolve_notebook(client, notebook)
             result = await core.execute_configure(
                 client,
                 nb_id,
                 chat_mode=None,
                 persona=goal,
-                response_length=response_length,  # type: ignore[arg-type]
+                response_length=response_length,
             )
             return to_jsonable(result)

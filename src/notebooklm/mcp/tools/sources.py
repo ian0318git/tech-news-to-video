@@ -42,8 +42,27 @@ from ._preview import title_for_id
 #: (which lacks ``drive``); ``drive`` is dispatched to the Drive path.
 _SOURCE_TYPES = ("url", "text", "file", "drive", "youtube")
 
+#: Drive MIME choices the backend accepts (mirrors the CLI ``--mime-type``).
+_DRIVE_MIME_CHOICES = ("google-doc", "google-slides", "google-sheets", "pdf")
+
 #: The default Drive MIME choice when the caller does not specify one.
 _DEFAULT_DRIVE_MIME = "google-doc"
+
+
+def _source_view(source: Any) -> dict[str, Any]:
+    """Serialize a Source with agent-readable string labels added.
+
+    ``to_jsonable`` emits only dataclass fields, so the integer ``status`` and
+    ``_type_code`` arrive as bare numbers and the ``kind`` *property* is dropped —
+    forcing an agent to guess what ``3``/``5``/``2`` mean. Add ``kind`` (e.g.
+    ``"pdf"``/``"web_page"``) and ``status_label`` (e.g. ``"ready"``/``"error"``)
+    string labels alongside the raw codes.
+    """
+    view = to_jsonable(source)
+    view["kind"] = source.kind.value
+    status = source.status
+    view["status_label"] = getattr(status, "name", str(status)).lower()
+    return view
 
 
 def register(mcp: Any) -> None:
@@ -51,12 +70,16 @@ def register(mcp: Any) -> None:
 
     @mcp.tool(annotations=READ_ONLY)
     async def source_list(ctx: Context, notebook: str) -> dict[str, Any]:
-        """List a notebook's sources. Accepts a notebook name or ID."""
+        """List a notebook's sources. Accepts a notebook name or ID.
+
+        Each source carries string ``kind`` / ``status_label`` labels (not just the
+        raw type/status codes) so an agent never has to guess the enums.
+        """
         client = get_client(ctx)
         with mcp_errors():
             nb_id = await resolve_notebook(client, notebook)
             sources = await client.sources.list(nb_id)
-            return {"notebook_id": nb_id, "sources": to_jsonable(sources)}
+            return {"notebook_id": nb_id, "sources": [_source_view(s) for s in sources]}
 
     @mcp.tool(annotations=READ_ONLY)
     async def source_get_content(
@@ -64,16 +87,24 @@ def register(mcp: Any) -> None:
         notebook: str,
         source: str,
         output_format: Literal["text", "markdown"] = "text",
+        max_chars: int | None = None,
+        offset: int = 0,
     ) -> dict[str, Any]:
         """Fetch a source's metadata AND its full indexed text content.
 
-        Accepts a notebook/source name or ID. Returns the source ``metadata``
-        (id/title/url/kind/status) plus the extracted ``content`` and its
-        ``char_count``.
+        Accepts a notebook/source name or ID. Returns the source metadata (incl.
+        string ``kind``/``status_label``) plus the extracted ``content``, the full
+        ``char_count``, and a ``truncated`` flag.
 
         ``output_format`` selects how the text is rendered: ``text`` (default) is
         flattened plaintext; ``markdown`` preserves headings/tables/links/emphasis
         (requires the server's ``markdownify`` extra — otherwise a clean error).
+
+        For large sources, window the body with ``offset`` and ``max_chars`` (the
+        returned ``content`` is the slice ``[offset : offset+max_chars]``);
+        ``char_count`` is always the FULL length and ``truncated`` says whether the
+        returned slice is shorter than the remainder. Prefer ``chat_ask`` for
+        querying large sources rather than pulling the whole body.
 
         ``content`` is ``null`` (and ``char_count`` 0) when the source is not yet
         ready (still processing / errored) or has no extractable text, so this tool
@@ -81,6 +112,10 @@ def register(mcp: Any) -> None:
         """
         client = get_client(ctx)
         with mcp_errors():
+            if max_chars is not None and max_chars < 0:
+                raise ValidationError(f"max_chars must be >= 0; got {max_chars}")
+            if offset < 0:
+                raise ValidationError(f"offset must be >= 0; got {offset}")
             nb_id = await resolve_notebook(client, notebook)
             src_id = await resolve_source(client, nb_id, source)
             result = await content_core.execute_source_get(
@@ -123,9 +158,22 @@ def register(mcp: Any) -> None:
                 content = fulltext.fulltext.content or None
                 char_count = fulltext.fulltext.char_count
 
+            # Window the body if requested. ``char_count`` stays the FULL length;
+            # ``truncated`` reports whether the returned slice omits any remainder.
+            truncated = False
+            if content is not None and (offset > 0 or max_chars is not None):
+                end = len(content) if max_chars is None else offset + max_chars
+                windowed = content[offset:end]
+                truncated = len(windowed) < (len(content) - offset)
+                # Normalize an empty slice (e.g. offset past the end) to None, matching
+                # the fetch-path contract (content is null when there's nothing to show).
+                content = windowed or None
+
             payload = to_jsonable(result)
+            payload["source"] = _source_view(result.source)
             payload["content"] = content
             payload["char_count"] = char_count
+            payload["truncated"] = truncated
             payload["output_format"] = output_format
             return payload
 
@@ -174,7 +222,7 @@ def register(mcp: Any) -> None:
             await client.sources.delete(nb_id, src_id)
             return {"status": "deleted", "notebook_id": nb_id, "source_id": src_id}
 
-    @mcp.tool
+    @mcp.tool(annotations=READ_ONLY)
     async def source_wait(
         ctx: Context,
         notebook: str,
@@ -190,6 +238,10 @@ def register(mcp: Any) -> None:
         """
         client = get_client(ctx)
         with mcp_errors():
+            if timeout < 0:
+                raise ValidationError(f"timeout must be >= 0; got {timeout}")
+            if interval <= 0:
+                raise ValidationError(f"interval must be > 0; got {interval}")
             nb_id = await resolve_notebook(client, notebook)
             if source is not None:
                 src_id = await resolve_source(client, nb_id, source)
@@ -218,7 +270,7 @@ def register(mcp: Any) -> None:
     async def source_add(
         ctx: Context,
         notebook: str,
-        source_type: str,
+        source_type: Literal["url", "text", "file", "drive", "youtube"],
         url: str | None = None,
         text: str | None = None,
         title: str | None = None,
@@ -254,9 +306,16 @@ def register(mcp: Any) -> None:
         """
         client = get_client(ctx)
         with mcp_errors():
-            if source_type not in _SOURCE_TYPES:
+            # ``source_type`` is a Literal — FastMCP/Pydantic rejects an unknown value
+            # at the schema boundary, so no runtime membership check is needed.
+            if (
+                mime_type is not None
+                and source_type == "drive"
+                and mime_type not in _DRIVE_MIME_CHOICES
+            ):
                 raise ValidationError(
-                    f"Unknown source type {source_type!r}; expected one of {list(_SOURCE_TYPES)}"
+                    f"Invalid mime_type {mime_type!r} for drive; "
+                    f"expected one of {list(_DRIVE_MIME_CHOICES)}"
                 )
             nb_id = await resolve_notebook(client, notebook)
 
@@ -291,7 +350,7 @@ def register(mcp: Any) -> None:
             content = _select_content(source_type, url=url, text=text, path=path)
             plan = add_core.build_source_add_plan(
                 content=content,
-                source_type=source_type,  # type: ignore[arg-type]
+                source_type=source_type,
                 title=title,
                 mime_type=mime_type,
                 follow_symlinks=False,

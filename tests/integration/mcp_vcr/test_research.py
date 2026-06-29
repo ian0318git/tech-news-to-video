@@ -36,6 +36,7 @@ so the query / mode / notebook-id leaf values do not need to match the recording
 from __future__ import annotations
 
 import pytest
+from fastmcp.exceptions import ToolError
 
 from tests.integration.conftest import skip_no_cassettes
 from tests.vcr_config import notebooklm_vcr
@@ -179,30 +180,24 @@ async def test_mcp_research_status_no_research_over_vcr() -> None:
 
 @pytest.mark.asyncio
 @notebooklm_vcr.use_cassette("research_import_sources.yaml")
-async def test_mcp_research_import_empty_sources_over_vcr() -> None:
-    """``research_import`` polls the pinned task then imports its (empty) sources.
+async def test_mcp_research_import_incomplete_task_refused_over_vcr() -> None:
+    """``research_import`` refuses an incomplete task (no IMPORT_RESEARCH issued).
 
     End-to-end: FastMCP ``Client`` → ``research_import`` tool →
-    ``poll_and_classify`` (recorded ``POLL_RESEARCH`` ``e3bVqc``) →
-    ``client.research.import_sources``. The pinned task's recorded poll returns
-    zero sources, so ``import_sources`` short-circuits on its empty-sources guard
-    and issues NO ``IMPORT_RESEARCH`` (``LBwxtb``) RPC. Asserts the import wire
-    shape (``{imported: [], sources_found: 0}``) — the poll→empty-import wiring.
+    ``poll_and_classify`` (recorded ``POLL_RESEARCH`` ``e3bVqc``). The pinned task's
+    recorded poll is still ``in_progress``, so the tool refuses up front with a
+    VALIDATION error and issues NO ``IMPORT_RESEARCH`` (``LBwxtb``) RPC — importing a
+    non-completed snapshot would silently import a partial/empty set as "success".
     The populated import leg (the real ``LBwxtb`` RPC) is covered by
     ``test_mcp_research_import_populated_sources_over_vcr``.
     """
     async with build_mcp_client() as mcp_client:
-        result = await mcp_client.call_tool(
-            "research_import",
-            {"notebook": RESEARCH_NOTEBOOK_ID, "task_id": PINNED_TASK_ID},
-        )
-
-    structured = result.structured_content
-    assert isinstance(structured, dict)
-    assert structured["notebook_id"] == RESEARCH_NOTEBOOK_ID
-    assert structured["task_id"] == PINNED_TASK_ID
-    assert structured["imported"] == []
-    assert structured["sources_found"] == 0
+        with pytest.raises(ToolError) as excinfo:
+            await mcp_client.call_tool(
+                "research_import",
+                {"notebook": RESEARCH_NOTEBOOK_ID, "task_id": PINNED_TASK_ID},
+            )
+    assert "VALIDATION" in str(excinfo.value)
 
 
 @pytest.mark.asyncio
