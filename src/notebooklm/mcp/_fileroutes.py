@@ -117,7 +117,7 @@ _FILE_ROUTE_STATUS: dict[ErrorCategory, int] = {
 }
 
 
-def _upstream_error_response(exc: NotebookLMError) -> PlainTextResponse:
+def _upstream_error_response(exc: NotebookLMError, *, note: str = "") -> PlainTextResponse:
     """Project an upstream ``NotebookLMError`` onto a classified, redacted response.
 
     A ``NotebookLMError`` raised inside a ``/files/*`` handler (e.g. the artifact
@@ -127,10 +127,17 @@ def _upstream_error_response(exc: NotebookLMError) -> PlainTextResponse:
     status, and return the secret-scrubbed message (the same :func:`redact`
     chokepoint the MCP tool errors use). ``.get(..., 502)`` is defense-in-depth —
     every category is in the table (pinned by a coverage test).
+
+    An optional ``note`` is prepended as a human-facing prefix; the helper owns the
+    separating space and runs it through :func:`redact` too (defense-in-depth — it
+    should already be a static, secret-free label, e.g. the upload route's
+    bytes-arrived-but-add-failed hint, but redacting uniformly means a future
+    dynamic caller can't leak through it).
     """
     status = _FILE_ROUTE_STATUS.get(classify(exc).category, 502)
+    prefix = f"{redact(note)} " if note else ""
     return PlainTextResponse(
-        f"Upstream NotebookLM error: {redact(str(exc))}",
+        f"{prefix}Upstream NotebookLM error: {redact(str(exc))}",
         status_code=status,
         headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
     )
@@ -433,8 +440,13 @@ def register_file_routes(mcp: FastMCP, config: FileTransferConfig) -> None:
                 )
             except NotebookLMError as exc:
                 # An upstream auth/server/rate-limit error from execute_source_add
-                # (add_file → RPC) would otherwise escape as a raw 500.
-                return _upstream_error_response(exc)
+                # (add_file → RPC) would otherwise escape as a raw 500. The bytes
+                # already finished uploading by here, so tell the user a retry
+                # re-sends the whole file (vs a mid-stream failure that did not).
+                return _upstream_error_response(
+                    exc,
+                    note="Your file uploaded, but adding it as a source failed (a retry re-uploads it).",
+                )
             except OSError:
                 # A bad filename / fs error (e.g. a name that survives sanitization
                 # but the fs rejects) is a clean 400, not a bare 500.
