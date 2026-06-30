@@ -52,7 +52,7 @@ NotebookLM is a **grounded** engine: Gemini does the heavy reading and answers f
 
 These combine ordinary library primitives — see the [CLI Reference](docs/cli-reference.md) and [Python API](docs/python-api.md). The agent-side glue (skills, scheduling, vault layout) lives in your own setup, not this package.
 
-**Seen in the wild:** ["Claude Code + NotebookLM = CHEAT CODE"](https://www.youtube.com/watch?v=usTeU4Uh0iM) · ["…+ Obsidian = GOD MODE"](https://www.youtube.com/watch?v=kU3qYQ7ACMA) · [giving Claude Code "a brain that doesn't hallucinate"](https://dev.to/stevengonsalvez/notebooklm-skills-give-claude-code-a-brain-that-doesnt-hallucinate-2anj) · [auto-building study notebooks from roadmap.sh](https://dev.to/waseemaldmeiri/automating-roadmapsh-into-notebooklm-132i) · [a browser-free YouTube→notebook→cited-answers pipeline driven entirely from the terminal](https://artemxtech.substack.com/p/notebooklm-has-a-knowledge-graph).
+**Seen in the wild:** ["Claude Code + NotebookLM = CHEAT CODE"](https://www.youtube.com/watch?v=usTeU4Uh0iM) · ["…+ Obsidian = GOD MODE"](https://www.youtube.com/watch?v=kU3qYQ7ACMA) · [a browser-free YouTube→notebook→cited-answers pipeline driven entirely from the terminal](https://artemxtech.substack.com/p/notebooklm-has-a-knowledge-graph) · [driving NotebookLM from Claude Code](https://x.com/hooeem/status/2042293751805329445) · [why every software project needs a "project brain"](https://medium.com/@pradeep00271/every-software-project-needs-a-project-brain-5cbc33917160).
 
 ## Ways to Use
 
