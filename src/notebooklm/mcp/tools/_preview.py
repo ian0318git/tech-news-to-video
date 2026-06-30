@@ -1,9 +1,10 @@
 """Shared helper for the destructive tools' confirmation previews.
 
-The three delete tools (``notebook_delete`` / ``source_delete`` / ``note_delete``)
-build a ``needs_confirmation`` preview that includes the resolved resource's
-title. Each fetches its own domain list (notebooks / sources / notes), but the
-id-to-title match over that list is identical, so it lives here.
+The four delete tools (``notebook_delete`` / ``source_delete`` / ``note_delete`` /
+``artifact_delete``) build a ``needs_confirmation`` preview that includes the
+resolved resource's title. Each fetches its own domain list (notebooks / sources /
+notes / artifacts), but the id-to-title match over that list is identical, so it
+lives here.
 
 This module imports NO ``click`` / ``rich`` / ``cli``.
 """

@@ -42,12 +42,13 @@ from ..._app.serialize import to_jsonable
 from ...exceptions import ValidationError
 from ...types import ArtifactType
 from .._coerce import coerce_list
-from .._confirm import READ_ONLY
+from .._confirm import DESTRUCTIVE, READ_ONLY, needs_confirmation
 from .._context import get_client, get_file_transfer
 from .._errors import mcp_errors
 from .._filelink import DOWNLOAD_TTL, FileTransferConfig
-from .._resolve import resolve_notebook, resolve_sources
+from .._resolve import resolve_artifact, resolve_notebook, resolve_sources
 from ._passthrough import passthrough_notebook_id
+from ._preview import title_for_id
 
 if TYPE_CHECKING:
     from ...client import NotebookLMClient
@@ -700,6 +701,73 @@ def register(mcp: Any) -> None:
                 artifact_resolver=_resolve_artifact_id,
             )
             return to_jsonable(result)
+
+    @mcp.tool
+    async def artifact_rename(
+        ctx: Context, notebook: str, artifact: str, new_title: str
+    ) -> dict[str, Any]:
+        """Rename a studio artifact (title only). Accepts a notebook/artifact name or ID.
+
+        Works for every artifact type — audio, video, slide-deck, quiz,
+        flashcards, infographic, data-table, report, and BOTH mind-map kinds.
+        Note-backed mind maps are renamed through the note system; interactive
+        maps and regular artifacts through the artifact rename RPC. The kind
+        routing is handled by the shared ``_app`` core, so callers need not know
+        which backing an artifact has.
+        """
+        client = get_client(ctx)
+        with mcp_errors():
+            nb_id = await resolve_notebook(client, notebook)
+            art_id = await resolve_artifact(client, nb_id, artifact)
+            result = await artifact_core.rename_artifact(client, nb_id, art_id, new_title)
+            return {
+                "status": "renamed",
+                "notebook_id": nb_id,
+                "artifact_id": result.artifact_id,
+                "new_title": result.new_title,
+                "is_mind_map": result.is_mind_map,
+            }
+
+    @mcp.tool(annotations=DESTRUCTIVE)
+    async def artifact_delete(
+        ctx: Context, notebook: str, artifact: str, confirm: bool = False
+    ) -> dict[str, Any]:
+        """Delete a studio artifact (irreversible). Accepts a notebook/artifact name or ID.
+
+        Covers every artifact type, including both mind-map kinds: note-backed
+        maps are *cleared* via the note system (not hard-removed — Google may
+        garbage collect them later), interactive maps and regular artifacts are
+        removed via the artifact delete RPC. The kind routing is handled by the
+        shared ``_app`` core.
+
+        Two-step confirmation: with ``confirm=False`` (default) it returns a
+        ``needs_confirmation`` preview of the resolved artifact without deleting;
+        call again with ``confirm=True`` to perform the delete. Deleting an
+        already-absent full id is idempotent (no error).
+        """
+        client = get_client(ctx)
+        with mcp_errors():
+            nb_id = await resolve_notebook(client, notebook)
+            art_id = await resolve_artifact(client, nb_id, artifact)
+            if not confirm:
+                # Best-effort title for the preview; a full-UUID that is absent
+                # from the list resolves to None, which is fine for the preview.
+                title = title_for_id(await client.artifacts.list(nb_id), art_id)
+                return needs_confirmation(
+                    {
+                        "action": "delete_artifact",
+                        "notebook_id": nb_id,
+                        "artifact_id": art_id,
+                        "title": title,
+                    }
+                )
+            was_note_backed = await artifact_core.delete_artifact(client, nb_id, art_id)
+            return {
+                "status": "deleted",
+                "notebook_id": nb_id,
+                "artifact_id": art_id,
+                "was_note_backed": was_note_backed,
+            }
 
 
 def _generation_payload(

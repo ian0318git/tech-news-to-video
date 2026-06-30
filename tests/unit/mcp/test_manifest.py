@@ -3,10 +3,10 @@
 Builds the server (bound to a mock client) and lists its tools through the
 in-memory FastMCP ``Client``, then pins:
 
-* the EXACT set of tool names (the 25 of Phase 2a + 2b plus ``research_cancel``)
-  — so a tool can't be silently added, removed, or renamed without updating this
-  gate;
-* a tool-count ceiling (28) leaving a little headroom over the ~25 design target;
+* the EXACT set of tool names — so a tool can't be silently added, removed, or
+  renamed without updating this gate;
+* a tool-count ceiling (28) now reached exactly (28/28): the next tool needs a
+  justified ceiling bump;
 * the ``destructiveHint`` annotation + a ``confirm`` parameter on every
   destructive (delete) tool; and
 * the ``readOnlyHint`` annotation on every read-only tool.
@@ -23,7 +23,7 @@ import pytest
 pytest.importorskip("fastmcp")
 
 
-#: The complete, pinned tool surface. 26 tools across 7 domains. Adding or
+#: The complete, pinned tool surface. 28 tools across 7 domains. Adding or
 #: removing a tool MUST update this set (and the ceiling below if it grows).
 EXPECTED_TOOLS: frozenset[str] = frozenset(
     {
@@ -48,11 +48,13 @@ EXPECTED_TOOLS: frozenset[str] = frozenset(
         "note_list",
         "note_update",
         "note_delete",
-        # Artifacts (4)
+        # Artifacts (6)
         "artifact_list",
         "artifact_generate",
         "artifact_status",
         "artifact_download",
+        "artifact_rename",
+        "artifact_delete",
         # Research (4)
         "research_start",
         "research_status",
@@ -68,9 +70,11 @@ EXPECTED_TOOLS: frozenset[str] = frozenset(
 #: trips the gate.
 TOOL_CEILING = 28
 
-#: The three destructive tools — each carries ``destructiveHint`` AND a
-#: ``confirm`` parameter (the both-mode confirmation contract).
-DESTRUCTIVE_TOOLS: frozenset[str] = frozenset({"notebook_delete", "source_delete", "note_delete"})
+#: The destructive tools — each carries ``destructiveHint`` AND a ``confirm``
+#: parameter (the both-mode confirmation contract).
+DESTRUCTIVE_TOOLS: frozenset[str] = frozenset(
+    {"notebook_delete", "source_delete", "note_delete", "artifact_delete"}
+)
 
 #: Read-only tools — each carries ``readOnlyHint``.
 READ_ONLY_TOOLS: frozenset[str] = frozenset(
@@ -136,6 +140,23 @@ async def test_read_only_and_destructive_are_disjoint() -> None:
     assert not (READ_ONLY_TOOLS & DESTRUCTIVE_TOOLS)
     assert READ_ONLY_TOOLS <= EXPECTED_TOOLS
     assert DESTRUCTIVE_TOOLS <= EXPECTED_TOOLS
+
+
+async def test_artifact_rename_is_plain_mutating_tool(tools_by_name) -> None:
+    """``artifact_rename`` mutates but is neither read-only nor destructive.
+
+    A title-only update carries default annotations (no ``readOnlyHint``, no
+    ``destructiveHint``) and no ``confirm`` gate — so it must stay out of both the
+    read-only and destructive pinned sets.
+    """
+    assert "artifact_rename" in tools_by_name
+    assert "artifact_rename" not in READ_ONLY_TOOLS
+    assert "artifact_rename" not in DESTRUCTIVE_TOOLS
+    tool = tools_by_name["artifact_rename"]
+    if tool.annotations is not None:
+        assert not tool.annotations.readOnlyHint
+        assert not tool.annotations.destructiveHint
+    assert "confirm" not in tool.inputSchema.get("properties", {})
 
 
 async def test_artifact_download_advertises_artifact_id_and_format_enum(tools_by_name) -> None:

@@ -21,11 +21,13 @@ pytest.importorskip("fastmcp")
 
 from notebooklm._app.resolve import AmbiguousIdError  # noqa: E402 - after importorskip guard
 from notebooklm.exceptions import (  # noqa: E402 - after importorskip guard
+    ArtifactNotFoundError,
     NotebookNotFoundError,
     SourceNotFoundError,
     ValidationError,
 )
 from notebooklm.mcp._resolve import (  # noqa: E402 - after importorskip guard
+    resolve_artifact,
     resolve_notebook,
     resolve_source,
     resolve_sources,
@@ -47,10 +49,21 @@ class _Src:
     title: str | None
 
 
-def _client(notebooks: list[_NB] | None = None, sources: list[_Src] | None = None) -> AsyncMock:
+@dataclass
+class _Art:
+    id: str
+    title: str | None
+
+
+def _client(
+    notebooks: list[_NB] | None = None,
+    sources: list[_Src] | None = None,
+    artifacts: list[_Art] | None = None,
+) -> AsyncMock:
     client = AsyncMock()
     client.notebooks.list = AsyncMock(return_value=notebooks or [])
     client.sources.list = AsyncMock(return_value=sources or [])
+    client.artifacts.list = AsyncMock(return_value=artifacts or [])
     return client
 
 
@@ -244,3 +257,63 @@ async def test_sources_whitespace_ref_raises_validation_before_listing() -> None
     with pytest.raises(ValidationError):
         await resolve_sources(client, "nb-1", ["Doc", "   "])
     client.sources.list.assert_not_called()
+
+
+# --------------------------------------------------------------------------- #
+# resolve_artifact
+# --------------------------------------------------------------------------- #
+async def test_artifact_full_uuid_skips_list() -> None:
+    """A full canonical UUID is returned verbatim with no artifact-list call.
+
+    This is load-bearing: a note-backed mind-map id (or one missing from a stale
+    list) must still reach the ``_app`` core for kind routing.
+    """
+    client = _client(artifacts=[_Art(FULL_A, "Podcast")])
+    assert await resolve_artifact(client, "nb-1", FULL_A) == FULL_A
+    client.artifacts.list.assert_not_called()
+
+
+async def test_artifact_prefix_match_lists_within_notebook() -> None:
+    client = _client(artifacts=[_Art("ab0001cdef", "Podcast"), _Art("cd0002abef", "Quiz")])
+    assert await resolve_artifact(client, "nb-1", "ab0001") == "ab0001cdef"
+    client.artifacts.list.assert_awaited_once_with("nb-1")
+
+
+async def test_artifact_title_match() -> None:
+    client = _client(artifacts=[_Art("ab0001cdef", "My Podcast"), _Art("cd0002abef", "Quiz")])
+    assert await resolve_artifact(client, "nb-1", "my podcast") == "ab0001cdef"
+
+
+async def test_artifact_ambiguous_title_raises() -> None:
+    client = _client(artifacts=[_Art("ab0001cdef", "Dup"), _Art("cd0002abef", "dup")])
+    with pytest.raises(AmbiguousIdError) as caught:
+        await resolve_artifact(client, "nb-1", "Dup")
+    assert set(caught.value.candidate_ids) == {"ab0001cdef", "cd0002abef"}
+
+
+async def test_artifact_ambiguous_prefix_raises() -> None:
+    client = _client(artifacts=[_Art("beef0001", "A"), _Art("beef0002", "B")])
+    with pytest.raises(AmbiguousIdError) as caught:
+        await resolve_artifact(client, "nb-1", "beef")
+    assert set(caught.value.candidate_ids) == {"beef0001", "beef0002"}
+
+
+async def test_artifact_no_match_raises_artifact_not_found() -> None:
+    client = _client(artifacts=[_Art("ab0001cdef", "Podcast")])
+    with pytest.raises(ArtifactNotFoundError):
+        await resolve_artifact(client, "nb-1", "Missing Title")
+
+
+async def test_artifact_hex_only_title_falls_back_to_title() -> None:
+    """An artifact whose TITLE is all-hex resolves by name (id/prefix path misses)."""
+    client = _client(artifacts=[_Art("0000aaaa1111", "beef"), _Art("cd0002abef", "Quiz")])
+    assert await resolve_artifact(client, "nb-1", "beef") == "0000aaaa1111"
+
+
+async def test_artifact_whitespace_ref_raises_validation_before_listing() -> None:
+    """An empty/whitespace ref is ``validate_id``-rejected before any list call
+    (sibling-resolver parity)."""
+    client = _client(artifacts=[_Art("ab0001cdef", "Podcast")])
+    with pytest.raises(ValidationError):
+        await resolve_artifact(client, "nb-1", "   ")
+    client.artifacts.list.assert_not_called()

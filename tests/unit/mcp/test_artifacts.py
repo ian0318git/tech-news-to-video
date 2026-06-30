@@ -25,6 +25,7 @@ from notebooklm._types.artifacts import (  # noqa: E402
     ArtifactStatus,
     ArtifactTypeCode,
 )
+from notebooklm._types.mind_maps import MindMapKind  # noqa: E402
 from notebooklm.exceptions import (  # noqa: E402 - after importorskip guard
     ArtifactNotFoundError,
     NotebookNotFoundError,
@@ -83,6 +84,18 @@ class FakeArtifact:
     kind: ArtifactType = ArtifactType.AUDIO
     is_completed: bool = True
     created_at: datetime = field(default_factory=lambda: datetime(2024, 1, 1, tzinfo=timezone.utc))
+
+
+@dataclass
+class FakeMindMap:
+    """Minimal ``MindMap`` stand-in for the rename/delete mind-map probes.
+
+    ``rename_artifact`` reads ``.id`` + ``.kind`` off ``mind_maps.list`` rows;
+    ``delete_artifact`` reads ``.id`` off ``mind_maps.list_note_backed`` rows.
+    """
+
+    id: str
+    kind: MindMapKind = MindMapKind.INTERACTIVE
 
 
 @dataclass
@@ -963,3 +976,230 @@ async def test_artifact_list_notebook_not_found_projects_tool_error(mcp_call, mo
         await mcp_call("artifact_list", {"notebook": "No Such Notebook"})
     assert "NOT_FOUND" in str(excinfo.value)
     _ = NotebookNotFoundError  # imported for symmetry with sibling suites
+
+
+# ---------------------------------------------------------------------------
+# artifact_rename
+# ---------------------------------------------------------------------------
+
+_ART_FULL = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+
+
+async def test_artifact_rename_regular_typed_artifact(mcp_call, mock_client) -> None:
+    """A regular artifact resolves via the typed ``Artifact`` list (NOT a dict) and
+    routes to ``artifacts.rename``.
+
+    Regression guard: the resolver must use attribute access (``a.id`` / ``a.title``)
+    on the typed ``Artifact`` objects ``client.artifacts.list`` returns. The earlier
+    dict-shaped helper would ``TypeError`` here. Resolving by a hex prefix exercises
+    the id/prefix path against the typed list.
+    """
+    art = Artifact(
+        id=_ART_FULL,
+        title="Podcast 1",
+        _artifact_type=ArtifactTypeCode.AUDIO.value,
+        status=int(ArtifactStatus.COMPLETED),
+        created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+    )
+    mock_client.artifacts.list = AsyncMock(return_value=[art])
+    mock_client.mind_maps.list = AsyncMock(return_value=[])
+    mock_client.artifacts.rename = AsyncMock()
+    result = await mcp_call(
+        "artifact_rename",
+        {"notebook": NB_ID, "artifact": "aaaaaaaa-aaaa", "new_title": "Renamed"},
+    )
+    assert result.structured_content == {
+        "status": "renamed",
+        "notebook_id": NB_ID,
+        "artifact_id": _ART_FULL,
+        "new_title": "Renamed",
+        "is_mind_map": False,
+    }
+    mock_client.artifacts.rename.assert_awaited_once_with(
+        NB_ID, _ART_FULL, "Renamed", return_object=False
+    )
+    mock_client.mind_maps.rename.assert_not_called()
+
+
+async def test_artifact_rename_interactive_mind_map_by_title(mcp_call, mock_client) -> None:
+    """A mind map resolved by title routes through ``mind_maps.rename`` (is_mind_map true)."""
+    mm_id = "mmmmmmmm-mmmm-mmmm-mmmm-mmmmmmmmmmmm"
+    mock_client.artifacts.list = AsyncMock(
+        return_value=[FakeArtifact(id=mm_id, title="My Map", kind=ArtifactType.MIND_MAP)]
+    )
+    mock_client.mind_maps.list = AsyncMock(
+        return_value=[FakeMindMap(id=mm_id, kind=MindMapKind.INTERACTIVE)]
+    )
+    mock_client.mind_maps.rename = AsyncMock()
+    result = await mcp_call(
+        "artifact_rename",
+        {"notebook": NB_ID, "artifact": "My Map", "new_title": "Renamed Map"},
+    )
+    assert result.structured_content["is_mind_map"] is True
+    assert result.structured_content["artifact_id"] == mm_id
+    mock_client.mind_maps.rename.assert_awaited_once()
+    mock_client.artifacts.rename.assert_not_called()
+
+
+async def test_artifact_rename_note_backed_mind_map_by_full_uuid(mcp_call, mock_client) -> None:
+    """A full-UUID ref reaches the core unlisted; the core's ``mind_maps.list`` probe
+    finds the note-backed map → ``mind_maps.rename`` with its kind."""
+    mock_client.mind_maps.list = AsyncMock(
+        return_value=[FakeMindMap(id=_ART_FULL, kind=MindMapKind.NOTE_BACKED)]
+    )
+    mock_client.mind_maps.rename = AsyncMock()
+    result = await mcp_call(
+        "artifact_rename",
+        {"notebook": NB_ID, "artifact": _ART_FULL, "new_title": "Renamed"},
+    )
+    assert result.structured_content["is_mind_map"] is True
+    assert result.structured_content["artifact_id"] == _ART_FULL
+    # Full-UUID fast-path: the resolver never lists artifacts.
+    mock_client.artifacts.list.assert_not_called()
+    mock_client.mind_maps.rename.assert_awaited_once()
+    assert mock_client.mind_maps.rename.await_args.kwargs["kind"] == MindMapKind.NOTE_BACKED
+
+
+async def test_artifact_rename_not_found_projects_tool_error(mcp_call, mock_client) -> None:
+    """A prefix/title that matches no artifact projects NOT_FOUND (resolver raises
+    ``ArtifactNotFoundError``, which ``mcp_errors`` maps to a ``ToolError``)."""
+    mock_client.artifacts.list = AsyncMock(return_value=[])
+    with pytest.raises(ToolError) as excinfo:
+        await mcp_call(
+            "artifact_rename",
+            {"notebook": NB_ID, "artifact": "No Such Artifact", "new_title": "X"},
+        )
+    assert "NOT_FOUND" in str(excinfo.value)
+    mock_client.artifacts.rename.assert_not_called()
+    # The tool layer asserts the wrapped ToolError/NOT_FOUND; the raw
+    # ArtifactNotFoundError is asserted at the resolver layer in test_resolve.py.
+
+
+# ---------------------------------------------------------------------------
+# artifact_delete
+# ---------------------------------------------------------------------------
+
+
+async def test_artifact_delete_confirm_false_previews(mcp_call, mock_client) -> None:
+    """``confirm=False`` returns a ``needs_confirmation`` preview and does NOT delete."""
+    art = Artifact(
+        id=_ART_FULL,
+        title="Podcast 1",
+        _artifact_type=ArtifactTypeCode.AUDIO.value,
+        status=int(ArtifactStatus.COMPLETED),
+        created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+    )
+    mock_client.artifacts.list = AsyncMock(return_value=[art])
+    mock_client.artifacts.delete = AsyncMock()
+    # No list_note_backed mock: the confirm=False path returns the preview before
+    # ever reaching the delete core (which is what probes list_note_backed).
+    result = await mcp_call(
+        "artifact_delete",
+        {"notebook": NB_ID, "artifact": "aaaaaaaa-aaaa"},
+    )
+    assert result.structured_content["status"] == "needs_confirmation"
+    preview = result.structured_content["preview"]
+    assert preview["action"] == "delete_artifact"
+    assert preview["artifact_id"] == _ART_FULL
+    assert preview["title"] == "Podcast 1"
+    mock_client.artifacts.delete.assert_not_called()
+    mock_client.notes.delete.assert_not_called()
+
+
+async def test_artifact_delete_regular_confirmed(mcp_call, mock_client) -> None:
+    """``confirm=True`` on a regular artifact hits ``artifacts.delete`` (was_note_backed false)."""
+    art = Artifact(
+        id=_ART_FULL,
+        title="Podcast 1",
+        _artifact_type=ArtifactTypeCode.AUDIO.value,
+        status=int(ArtifactStatus.COMPLETED),
+        created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+    )
+    mock_client.artifacts.list = AsyncMock(return_value=[art])
+    mock_client.mind_maps.list_note_backed = AsyncMock(return_value=[])
+    mock_client.artifacts.delete = AsyncMock()
+    result = await mcp_call(
+        "artifact_delete",
+        {"notebook": NB_ID, "artifact": "aaaaaaaa-aaaa", "confirm": True},
+    )
+    assert result.structured_content == {
+        "status": "deleted",
+        "notebook_id": NB_ID,
+        "artifact_id": _ART_FULL,
+        "was_note_backed": False,
+    }
+    mock_client.artifacts.delete.assert_awaited_once_with(NB_ID, _ART_FULL)
+    mock_client.notes.delete.assert_not_called()
+
+
+async def test_artifact_delete_note_backed_by_full_uuid_confirmed(mcp_call, mock_client) -> None:
+    """A note-backed mind map (full-UUID ref) is cleared via ``notes.delete``
+    (was_note_backed true). The core's probe is ``mind_maps.list_note_backed``."""
+    mock_client.mind_maps.list_note_backed = AsyncMock(return_value=[FakeMindMap(id=_ART_FULL)])
+    mock_client.notes.delete = AsyncMock()
+    mock_client.artifacts.delete = AsyncMock()
+    result = await mcp_call(
+        "artifact_delete",
+        {"notebook": NB_ID, "artifact": _ART_FULL, "confirm": True},
+    )
+    assert result.structured_content["was_note_backed"] is True
+    assert result.structured_content["artifact_id"] == _ART_FULL
+    # Full-UUID fast-path: the resolver never lists artifacts.
+    mock_client.artifacts.list.assert_not_called()
+    mock_client.notes.delete.assert_awaited_once_with(NB_ID, _ART_FULL)
+    mock_client.artifacts.delete.assert_not_called()
+
+
+async def test_artifact_delete_note_backed_by_title_confirmed(mcp_call, mock_client) -> None:
+    """A note-backed mind map resolved by title also routes through ``notes.delete``."""
+    mm_id = "mmmmmmmm-mmmm-mmmm-mmmm-mmmmmmmmmmmm"
+    mock_client.artifacts.list = AsyncMock(
+        return_value=[FakeArtifact(id=mm_id, title="My Map", kind=ArtifactType.MIND_MAP)]
+    )
+    mock_client.mind_maps.list_note_backed = AsyncMock(return_value=[FakeMindMap(id=mm_id)])
+    mock_client.notes.delete = AsyncMock()
+    mock_client.artifacts.delete = AsyncMock()
+    result = await mcp_call(
+        "artifact_delete",
+        {"notebook": NB_ID, "artifact": "My Map", "confirm": True},
+    )
+    assert result.structured_content["was_note_backed"] is True
+    assert result.structured_content["artifact_id"] == mm_id
+    mock_client.notes.delete.assert_awaited_once_with(NB_ID, mm_id)
+    mock_client.artifacts.delete.assert_not_called()
+
+
+async def test_artifact_delete_absent_full_uuid_is_idempotent(mcp_call, mock_client) -> None:
+    """Deleting an already-absent full UUID is a no-error no-op: the full-UUID
+    fast-path reaches the core unlisted, the note-backed probe misses, and
+    ``artifacts.delete`` (idempotent on missing) runs without raising."""
+    absent = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+    mock_client.mind_maps.list_note_backed = AsyncMock(return_value=[])
+    mock_client.artifacts.delete = AsyncMock()
+    result = await mcp_call(
+        "artifact_delete",
+        {"notebook": NB_ID, "artifact": absent, "confirm": True},
+    )
+    assert result.structured_content == {
+        "status": "deleted",
+        "notebook_id": NB_ID,
+        "artifact_id": absent,
+        "was_note_backed": False,
+    }
+    mock_client.artifacts.list.assert_not_called()
+    mock_client.artifacts.delete.assert_awaited_once_with(NB_ID, absent)
+
+
+async def test_artifact_delete_absent_prefix_projects_tool_error(mcp_call, mock_client) -> None:
+    """An absent prefix/title raises at resolve time (NOT_FOUND), never reaching the
+    core — distinct from the idempotent absent-full-UUID case above."""
+    mock_client.artifacts.list = AsyncMock(return_value=[])
+    mock_client.artifacts.delete = AsyncMock()
+    with pytest.raises(ToolError) as excinfo:
+        await mcp_call(
+            "artifact_delete",
+            {"notebook": NB_ID, "artifact": "No Such Artifact", "confirm": True},
+        )
+    assert "NOT_FOUND" in str(excinfo.value)
+    mock_client.artifacts.delete.assert_not_called()
+    mock_client.notes.delete.assert_not_called()

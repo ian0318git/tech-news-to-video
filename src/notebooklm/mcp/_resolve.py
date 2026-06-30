@@ -41,6 +41,7 @@ from .._app.resolve import (
     validate_id,
 )
 from ..exceptions import (
+    ArtifactNotFoundError,
     NotebookNotFoundError,
     NoteNotFoundError,
     SourceNotFoundError,
@@ -50,7 +51,13 @@ from ..exceptions import (
 if TYPE_CHECKING:
     from ..client import NotebookLMClient
 
-__all__ = ["resolve_note", "resolve_notebook", "resolve_source", "resolve_sources"]
+__all__ = [
+    "resolve_artifact",
+    "resolve_note",
+    "resolve_notebook",
+    "resolve_source",
+    "resolve_sources",
+]
 
 #: A token made only of hex digits and dashes routes to the id/prefix path; any
 #: other character (a space, a letter outside ``a-f``, punctuation) routes to the
@@ -65,7 +72,9 @@ def _resolve_by_title(
     token: str,
     items: Sequence[Any],
     *,
-    not_found: type[NotebookNotFoundError | SourceNotFoundError | NoteNotFoundError],
+    not_found: type[
+        NotebookNotFoundError | SourceNotFoundError | NoteNotFoundError | ArtifactNotFoundError
+    ],
 ) -> str:
     """Resolve ``token`` by case-insensitive exact title over ``items``.
 
@@ -97,7 +106,9 @@ def _resolve_by_id_or_prefix(
     token: str,
     items: Sequence[Any],
     *,
-    not_found: type[NotebookNotFoundError | SourceNotFoundError | NoteNotFoundError],
+    not_found: type[
+        NotebookNotFoundError | SourceNotFoundError | NoteNotFoundError | ArtifactNotFoundError
+    ],
 ) -> str:
     """Resolve a hex-ish ``token`` via ``resolve_ref``, mapping no-match to NotFound."""
     try:
@@ -123,7 +134,9 @@ def _resolve_hex(
     token: str,
     items: Sequence[Any],
     *,
-    not_found: type[NotebookNotFoundError | SourceNotFoundError | NoteNotFoundError],
+    not_found: type[
+        NotebookNotFoundError | SourceNotFoundError | NoteNotFoundError | ArtifactNotFoundError
+    ],
 ) -> str:
     """Resolve a hex-ish ``token``, preferring id/prefix but falling back to title.
 
@@ -286,3 +299,39 @@ async def resolve_note(client: NotebookLMClient, notebook_id: str, ref: str) -> 
     if _HEX_ISH.match(ref):
         return _resolve_hex(ref, items, not_found=NoteNotFoundError)
     return _resolve_by_title(ref, items, not_found=NoteNotFoundError)
+
+
+async def resolve_artifact(client: NotebookLMClient, notebook_id: str, ref: str) -> str:
+    """Resolve a studio-artifact reference within a notebook to its id.
+
+    Same matching rules as :func:`resolve_source`, over the notebook's artifact
+    list. ``client.artifacts.list`` MERGES both mind-map backings (interactive +
+    note-backed) under one listing, so a note-backed mind map is resolvable by
+    id / prefix / title here just like any other artifact.
+
+    The full-UUID fast-path returns ``ref`` **verbatim with no list call**: this
+    lets a concrete id (including a note-backed mind-map id, or one missing from a
+    stale list) reach the ``_app`` core, which then routes it by kind.
+
+    Args:
+        client: The lifespan-bound client.
+        notebook_id: The (already-resolved) notebook id the artifact lives in.
+        ref: A full canonical UUID, a hex id prefix, or an exact (case-insensitive)
+            artifact title.
+
+    Returns:
+        The artifact's canonical id.
+
+    Raises:
+        ValidationError: ``ref`` is empty/whitespace.
+        ArtifactNotFoundError: No artifact in the notebook matches ``ref``.
+        AmbiguousIdError: ``ref`` matches more than one artifact by prefix or title.
+    """
+    ref = validate_id(ref, "artifact")
+    # Full UUID fast-path — never list.
+    if FULL_ID_PATTERN.fullmatch(ref):
+        return ref
+    items = await client.artifacts.list(notebook_id)
+    if _HEX_ISH.match(ref):
+        return _resolve_hex(ref, items, not_found=ArtifactNotFoundError)
+    return _resolve_by_title(ref, items, not_found=ArtifactNotFoundError)

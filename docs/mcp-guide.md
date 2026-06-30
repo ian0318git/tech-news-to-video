@@ -6,7 +6,7 @@
 > server and its dependencies only arrive with the `mcp` extra.
 
 The MCP server exposes NotebookLM to any [Model Context Protocol](https://modelcontextprotocol.io)
-client (Claude Desktop, Claude Code, Cursor, Windsurf, …) as a set of **25 tools** — manage
+client (Claude Desktop, Claude Code, Cursor, Windsurf, …) as a set of **28 tools** — manage
 notebooks and sources, chat over a notebook's sources, generate and download studio artifacts,
 and run deep research. It is a thin adapter over the same business logic the CLI uses, so it
 behaves identically to `notebooklm <command>`.
@@ -195,11 +195,11 @@ bearer-only deploy → the two file tools return a clear "not configured" error
 
 These conventions hold across every tool:
 
-- **Name *or* ID.** Every `notebook`/`source`/`note` argument accepts a human title **or** an ID
-  (full, or a unique prefix). Use the matching `*_list` tool to discover them. An ambiguous name or
-  prefix returns a `VALIDATION` error listing the candidates so you can retry with an exact ID.
-- **Destructive tools need confirmation.** `notebook_delete`, `source_delete`, and `note_delete`
-  take `confirm` (default `false`). Called without it, they return a `needs_confirmation` preview
+- **Name *or* ID.** Every `notebook`/`source`/`note`/`artifact` argument accepts a human title **or**
+  an ID (full, or a unique prefix). Use the matching `*_list` tool to discover them. An ambiguous name
+  or prefix returns a `VALIDATION` error listing the candidates so you can retry with an exact ID.
+- **Destructive tools need confirmation.** `notebook_delete`, `source_delete`, `note_delete`, and
+  `artifact_delete` take `confirm` (default `false`). Called without it, they return a `needs_confirmation` preview
   (with the resolved title) and delete **nothing**; call again with `confirm=true` to execute.
 - **Long-running work is non-blocking.** `artifact_generate` returns immediately with a `task_id`;
   poll `artifact_status` until it's complete, then `artifact_download`. Research is the same shape:
@@ -294,11 +294,11 @@ a single in-flight task.
 | **Sources** | `source_list(notebook, status?)` (each source has string `kind`/`status_label`; `status` filters to one of ready\|processing\|error\|preparing — e.g. `status="error"` finds failed imports) · `source_get_content(notebook, source, output_format?, max_chars?, offset?)` (metadata **+ full indexed text**, windowable via `max_chars`/`offset` → `content` slice + `truncated` flag, with full `char_count`; `output_format`: text\|markdown) · `source_rename(notebook, source, new_title)` · `source_delete(notebook, source, confirm)` · `source_wait(notebook, source?, timeout, interval)` · `source_add(notebook, source_type, ..., allow_internal?)` (single; echoes `kind`/`status_label`, flags a failed import inline with a `warning`) / `source_add(notebook, urls=[...], allow_internal?)` (batch → per-item `results`) |
 | **Chat** | `chat_ask(notebook, question, conversation_id?, references?, source_ids?)` (`references`: lite\|full; never returns the raw debug blob; `source_ids` scopes to specific sources — list, JSON-array string, or comma string; omit for all) · `chat_configure(notebook, goal?, response_length?)` |
 | **Notes** | `note_create(notebook, title, content)` · `note_list(notebook)` · `note_update(notebook, note, content)` · `note_delete(notebook, note, confirm)` |
-| **Artifacts** | `artifact_list(notebook)` · `artifact_generate(notebook, artifact_type, …)` · `artifact_status(notebook, task_id)` · `artifact_download(notebook, artifact_type, path, output_format?, artifact_id?)` |
-| **Research** | `research_start(notebook, query, source, mode)` · `research_status(notebook, task_id?)` · `research_import(notebook, task_id)` |
+| **Artifacts** | `artifact_list(notebook)` · `artifact_generate(notebook, artifact_type, …)` · `artifact_status(notebook, task_id)` · `artifact_download(notebook, artifact_type, path, output_format?, artifact_id?)` · `artifact_rename(notebook, artifact, new_title)` · `artifact_delete(notebook, artifact, confirm)` |
+| **Research** | `research_start(notebook, query, source, mode)` · `research_status(notebook, task_id?)` · `research_import(notebook, task_id)` · `research_cancel(notebook, run_id)` |
 | **Server** | `server_info` — version + local auth health |
 
-Tools that only read are annotated read-only; the three `*_delete` tools are annotated destructive
+Tools that only read are annotated read-only; the four `*_delete` tools are annotated destructive
 and require `confirm`. A host that honors MCP annotations can auto-allow the read-only calls and
 gate the destructive ones.
 

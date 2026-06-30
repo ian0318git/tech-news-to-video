@@ -188,7 +188,7 @@ class TestMcpNameResolution:
         assert described_upper["notebook_id"] == nb_id
 
 
-# Tool → owning-test matrix. Every one of the 26 registered tools must map to a
+# Tool → owning-test matrix. Every one of the 28 registered tools must map to a
 # test (or a documented owner) so a newly-added tool fails ``test_tool_matrix``
 # until it gains live coverage. ``test_tool_matrix`` asserts this set equals the
 # live manifest.
@@ -220,6 +220,8 @@ TOOL_COVERAGE: dict[str, str] = {
     "artifact_generate": "TestMcpArtifacts.test_generate_report_wiring (variants)",
     "artifact_status": "TestMcpArtifacts.test_generate_report_wiring (variants)",
     "artifact_download": "TestMcpArtifacts.test_download_existing_artifact",
+    "artifact_rename": "tests/unit/mcp/test_artifacts.py (kind-aware rename; no live mutation)",
+    "artifact_delete": "tests/unit/mcp/test_artifacts.py (kind-aware delete; no live mutation)",
     # research
     "research_start": "TestMcpResearch.test_start_status_cancel (variants)",
     "research_status": "TestMcpResearch.test_status_readonly",
@@ -230,7 +232,7 @@ TOOL_COVERAGE: dict[str, str] = {
 
 @requires_auth
 class TestMcpToolMatrix:
-    """Every registered tool is accounted for by a live test (the 26-tool matrix)."""
+    """Every registered tool is accounted for by a live test (the 28-tool matrix)."""
 
     @pytest.mark.asyncio
     @pytest.mark.readonly

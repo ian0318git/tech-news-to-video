@@ -9,10 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **MCP artifact rename & delete tools.** Two new MCP tools close the artifact
+  CRUD gap (the server previously exposed create + read only): `artifact_rename`
+  (title-only update) and `artifact_delete` (destructive, two-step `confirm`).
+  Both accept a notebook/artifact name **or** ID, cover every studio artifact
+  type including both mind-map kinds — note-backed maps route through the note
+  system, interactive maps and regular artifacts through the artifact RPC — over
+  the shared kind-aware `_app.artifacts` cores the CLI already uses. The MCP tool
+  surface is now **28 tools**.
 - **Live-API e2e coverage for the MCP server and the CLI binary.** The nightly
   E2E job now installs `--extra mcp`, so the MCP/CLI layers run against the real
   NotebookLM API once per release instead of being silently `importorskip`-ped.
-  New suites: per-domain MCP tool round-trips plus a 26-tool→test matrix
+  New suites: per-domain MCP tool round-trips plus a 28-tool→test matrix
   (`tests/e2e/test_mcp.py`); the HTTP transport, bearer gate, `.well-known`
   discovery, and signed-URL upload/download routes driven in-process over
   `httpx.ASGITransport` (`tests/e2e/test_mcp_http.py`); live-only contract
@@ -138,7 +146,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Experimental: MCP server** (#1484, opt-in via the `mcp` extra). A
   [Model Context Protocol](https://modelcontextprotocol.io) server exposing
-  NotebookLM to MCP clients (Claude Desktop / Code, Cursor, Windsurf) as 25 tools
+  NotebookLM to MCP clients (Claude Desktop / Code, Cursor, Windsurf) as 28 tools
   across notebooks, sources, chat, notes, studio artifacts, and research — built
   as a transport-neutral sibling adapter over the `_app/` layer (ADR-0021), so it
   behaves identically to the equivalent `notebooklm` CLI command. Run it with the

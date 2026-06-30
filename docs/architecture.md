@@ -1178,7 +1178,7 @@ src/notebooklm/
 │   ├── _fileroutes.py           # register_file_routes(mcp, config): the /files/{dl,ul} custom routes mounted on the FastMCP http app (ADR-0024). GET /files/dl streams the artifact (download core → FileResponse, meaningful filename, inside-tempdir assert, BackgroundTask cleanup); GET /files/ul = minimal upload page (file picker + raw-body fetch POST); POST|PUT /files/ul streams request.stream() into a 0600 temp under a running byte cap (real DoS guard) + Content-Length early 413 → neutral source_add core. Signed token is the sole auth (custom routes bypass the bearer gate); HTML pages set no-referrer/no-store/DENY; local _safe_upload_name (no server/ import)
 │   ├── _context.py              # AppState dataclass (client + optional file_transfer) + get_client(ctx) / get_file_transfer(ctx) (lifespan-bound) + get_client_from_app(request) (the guarded private-attr accessor for the bare-Request custom routes)
 │   ├── _errors.py               # Structured tool-error projection (CATEGORY_TABLE/ERROR_CODES/mcp_errors/to_tool_error/tool_error_payload) over _app.errors.classify
-│   ├── _resolve.py              # resolve_notebook/resolve_source/resolve_note — name + partial-id resolution over _app.resolve plus exact-title matching
+│   ├── _resolve.py              # resolve_notebook/resolve_source/resolve_note/resolve_artifact — name + partial-id resolution over _app.resolve plus exact-title matching
 │   ├── _confirm.py              # needs_confirmation() both-mode envelope + READ_ONLY/DESTRUCTIVE ToolAnnotations
 │   ├── _coerce.py               # coerce_list(value) — tolerant list-param normalizer (real list/tuple, JSON-array string, comma string, scalar → list[str]; None stays None for the "all sources" contract); used by artifact_generate/chat_ask source_ids
 │   └── tools/                   # Per-domain tool modules; each exposes register(mcp) wired by server.register_all
@@ -1189,7 +1189,7 @@ src/notebooklm/
 │       ├── sources.py           # source_list/get_content/rename/delete/wait/add over _app.source_* (add: url/text/file/youtube via source_add, drive via source_mutations)
 │       ├── chat.py              # chat_ask (client.chat.ask) + chat_configure (_app.chat.execute_configure)
 │       ├── notes.py             # note_create/list/update/delete over _app.notes
-│       ├── artifacts.py         # artifact_list/generate/status/download (enum dispatch over _app.generate + _app.download; stateless poll via _app.artifacts.poll_artifact)
+│       ├── artifacts.py         # artifact_list/generate/status/download/rename/delete (enum dispatch over _app.generate + _app.download; stateless poll via _app.artifacts.poll_artifact; rename/delete over _app.artifacts kind-aware cores)
 │       ├── research.py          # research_start (client.research.start) + research_status (_app.research.poll_and_classify) + research_import
 │       └── meta.py              # server_info — package version + auth-health over _app.auth_check (no notebook arg)
 ├── rpc/                         # RPC protocol layer
