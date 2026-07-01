@@ -69,8 +69,33 @@ MODIFIED_AT = datetime(2026, 1, 3, 4, 5, 6, tzinfo=timezone.utc)
 async def test_notebook_list(mcp_call, mock_client) -> None:
     mock_client.notebooks.list = AsyncMock(return_value=[FakeNotebook(id=NB_ID, title="Research")])
     result = await mcp_call("notebook_list")
-    assert result.structured_content == {"notebooks": [{"id": NB_ID, "title": "Research"}]}
+    assert result.structured_content == {
+        "notebooks": [{"id": NB_ID, "title": "Research"}],
+        "total": 1,
+        "offset": 0,
+        "has_more": False,
+    }
     mock_client.notebooks.list.assert_awaited_once_with()
+
+
+async def test_notebook_list_limit_paginates(mcp_call, mock_client) -> None:
+    """``limit`` bounds the returned page; ``total`` / ``has_more`` reflect the full set."""
+    mock_client.notebooks.list = AsyncMock(
+        return_value=[FakeNotebook(id=f"nb{i}", title=f"N{i}") for i in range(5)]
+    )
+    result = await mcp_call("notebook_list", {"limit": 2})
+    sc = result.structured_content
+    assert len(sc["notebooks"]) == 2
+    assert sc["total"] == 5
+    assert sc["has_more"] is True
+
+
+async def test_notebook_list_bad_limit_rejected(mcp_call, mock_client) -> None:
+    """``limit`` < 1 is a validation error (a bounded page is the point)."""
+    mock_client.notebooks.list = AsyncMock(return_value=[])
+    with pytest.raises(ToolError) as exc:
+        await mcp_call("notebook_list", {"limit": 0})
+    assert "limit" in str(exc.value)
 
 
 async def test_notebook_create_surfaces_backfilled_timestamps(mcp_call, mock_client) -> None:
@@ -99,6 +124,7 @@ async def test_notebook_create_surfaces_backfilled_timestamps(mcp_call, mock_cli
     )
     result = await mcp_call("notebook_create", {"title": "New"})
     assert result.structured_content == {
+        "status": "created",
         "notebook_id": NB_ID,
         "title": "New",  # from create, NOT the divergent GET
         "created_at": CREATED_AT.isoformat(),  # backfilled by the core
@@ -186,7 +212,11 @@ async def test_notebook_describe_include_metadata_adds_block(mcp_call, mock_clie
 async def test_notebook_rename(mcp_call, mock_client) -> None:
     mock_client.notebooks.rename = AsyncMock(return_value=None)
     result = await mcp_call("notebook_rename", {"notebook": NB_ID, "new_title": "Renamed"})
-    assert result.structured_content == {"notebook_id": NB_ID, "new_title": "Renamed"}
+    assert result.structured_content == {
+        "status": "renamed",
+        "notebook_id": NB_ID,
+        "new_title": "Renamed",
+    }
     mock_client.notebooks.rename.assert_awaited_once_with(NB_ID, "Renamed")
 
 

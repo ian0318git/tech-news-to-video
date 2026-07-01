@@ -26,6 +26,7 @@ from ..._app.serialize import to_jsonable
 from .._confirm import DESTRUCTIVE, READ_ONLY, needs_confirmation
 from .._context import get_client
 from .._errors import mcp_errors
+from .._paginate import DEFAULT_LIMIT, paginate
 from .._resolve import resolve_notebook
 from ._passthrough import passthrough_notebook_id
 from ._preview import title_for_id
@@ -35,12 +36,20 @@ def register(mcp: Any) -> None:
     """Register the notebook tools on ``mcp``."""
 
     @mcp.tool(annotations=READ_ONLY)
-    async def notebook_list(ctx: Context) -> dict[str, Any]:
-        """List all notebooks (id + title + metadata)."""
+    async def notebook_list(
+        ctx: Context, limit: int = DEFAULT_LIMIT, offset: int = 0
+    ) -> dict[str, Any]:
+        """List all notebooks (id + title + metadata).
+
+        Returns a bounded page: ``limit`` (default 50) items from ``offset`` (default
+        0), plus ``total`` / ``offset`` / ``has_more``. Page forward by re-calling
+        with ``offset += limit`` while ``has_more`` is true.
+        """
         client = get_client(ctx)
         with mcp_errors():
             notebooks = await client.notebooks.list()
-            return {"notebooks": to_jsonable(notebooks)}
+            page, meta = paginate(to_jsonable(notebooks), limit, offset)
+            return {"notebooks": page, **meta}
 
     @mcp.tool
     async def notebook_create(ctx: Context, title: str) -> dict[str, Any]:
@@ -60,7 +69,7 @@ def register(mcp: Any) -> None:
             # adapter-level re-read here.
             record = to_jsonable(result.notebook)
             notebook_id = record.pop("id")
-            return {"notebook_id": notebook_id, **record}
+            return {"status": "created", "notebook_id": notebook_id, **record}
 
     @mcp.tool(annotations=READ_ONLY)
     async def notebook_describe(
@@ -105,7 +114,7 @@ def register(mcp: Any) -> None:
             result = await core.execute_notebook_rename(
                 client, nb_id, new_title, resolve_notebook_id=passthrough_notebook_id
             )
-            return to_jsonable(result)
+            return {"status": "renamed", **to_jsonable(result)}
 
     @mcp.tool(annotations=DESTRUCTIVE)
     async def notebook_delete(ctx: Context, notebook: str, confirm: bool = False) -> dict[str, Any]:

@@ -123,8 +123,14 @@ async def test_artifact_list(mcp_call, mock_client) -> None:
         return_value=[FakeArtifact(id="art1", title="My Podcast")]
     )
     result = await mcp_call("artifact_list", {"notebook": NB_ID})
-    assert result.structured_content["notebook_id"] == NB_ID
-    assert result.structured_content["artifacts"][0]["id"] == "art1"
+    sc = result.structured_content
+    assert sc["notebook_id"] == NB_ID
+    assert sc["artifacts"][0]["id"] == "art1"
+    # Pin the pagination meta too, so a total/offset/has_more regression can't slip
+    # through a subset assertion (unlike the sibling *_list tests).
+    assert sc["total"] == 1
+    assert sc["offset"] == 0
+    assert sc["has_more"] is False
     mock_client.artifacts.list.assert_awaited_once_with(NB_ID)
 
 
@@ -791,6 +797,54 @@ async def test_artifact_download_audio(mcp_call, mock_client, tmp_path) -> None:
     assert result.structured_content["outcome"] == "single_downloaded"
     assert result.structured_content["output_path"] == out
     mock_client.artifacts.download_audio.assert_awaited_once()
+
+
+async def test_artifact_download_by_artifact_ref_infers_type(
+    mcp_call, mock_client, tmp_path
+) -> None:
+    """R3: an ``artifact`` name-or-id ref resolves to its type+id — no ``artifact_type``."""
+    out = str(tmp_path / "out.mp3")
+    mock_client.artifacts.list = AsyncMock(return_value=[_AUDIO_ARTIFACT])
+    mock_client.artifacts.download_audio = AsyncMock(return_value=out)
+    result = await mcp_call(
+        "artifact_download", {"notebook": NB_ID, "artifact": "Podcast", "path": out}
+    )
+    assert result.structured_content["outcome"] == "single_downloaded"
+    # The audio downloader was selected purely from the resolved artifact's kind,
+    # AND the resolved id (not latest-by-type) reached it — guards a regression to
+    # latest-by-type that a bare assert_awaited_once() would miss.
+    assert result.structured_content["artifact"]["id"] == "art1"
+    assert mock_client.artifacts.download_audio.await_args.kwargs["artifact_id"] == "art1"
+
+
+async def test_artifact_download_ref_and_type_together_is_validation(mcp_call, mock_client) -> None:
+    """Passing both ``artifact`` and ``artifact_type`` is rejected (one addressing mode)."""
+    mock_client.artifacts.list = AsyncMock(return_value=[_AUDIO_ARTIFACT])
+    with pytest.raises(ToolError) as exc:
+        await mcp_call(
+            "artifact_download",
+            {"notebook": NB_ID, "artifact": "Podcast", "artifact_type": "audio"},
+        )
+    assert "not both" in str(exc.value)
+
+
+async def test_artifact_download_ref_and_id_together_is_validation(mcp_call, mock_client) -> None:
+    """Passing `artifact` alongside `artifact_id` is rejected (would silently drop the id)."""
+    mock_client.artifacts.list = AsyncMock(return_value=[_AUDIO_ARTIFACT])
+    with pytest.raises(ToolError) as exc:
+        await mcp_call(
+            "artifact_download",
+            {"notebook": NB_ID, "artifact": "Podcast", "artifact_id": "art1"},
+        )
+    assert "not both" in str(exc.value)
+
+
+async def test_artifact_download_neither_ref_nor_type_is_validation(mcp_call, mock_client) -> None:
+    """Omitting both ``artifact`` and ``artifact_type`` is rejected."""
+    mock_client.artifacts.list = AsyncMock(return_value=[_AUDIO_ARTIFACT])
+    with pytest.raises(ToolError) as exc:
+        await mcp_call("artifact_download", {"notebook": NB_ID})
+    assert "artifact_type" in str(exc.value)
 
 
 async def test_artifact_download_quiz_with_format(mcp_call, mock_client, tmp_path) -> None:

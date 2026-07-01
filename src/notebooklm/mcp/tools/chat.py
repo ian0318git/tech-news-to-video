@@ -274,7 +274,7 @@ def register(mcp: Any) -> None:
                 persona=goal,
                 response_length=response_length,
             )
-            return to_jsonable(result)
+            return {"status": "configured", **to_jsonable(result)}
 
     @mcp.tool(annotations=READ_ONLY)
     async def suggest_prompts(
