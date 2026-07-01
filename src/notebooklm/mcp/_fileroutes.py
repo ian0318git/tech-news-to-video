@@ -31,9 +31,8 @@ import re
 import shutil
 import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from starlette.background import BackgroundTask
 from starlette.requests import Request
 from starlette.responses import (
     FileResponse,
@@ -42,6 +41,7 @@ from starlette.responses import (
     PlainTextResponse,
     Response,
 )
+from starlette.types import Receive, Scope, Send
 
 from .._app import download as download_core
 from .._app import source_add as add_core
@@ -69,6 +69,17 @@ MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 #: ``await`` points, never concurrently) is sufficient — no lock needed.
 _MAX_CONCURRENT_UPLOADS = 4
 _inflight_uploads = 0
+
+#: Cap concurrent in-flight downloads. Each accepted download spools the artifact
+#: to a private temp dir and fetches it from Google before streaming it out, so a
+#: leaked/replayable ``dl`` token (valid for its full TTL) could otherwise drive N
+#: parallel streams = N× transient temp disk + N× Google-fetch amplification. This
+#: bounds aggregate temp pressure + upstream fetch fan-out to
+#: ``_MAX_CONCURRENT_DOWNLOADS``; excess downloads get a fast 429 (no disk touched,
+#: no fetch issued). Single process / single tenant, so a plain counter (mutated
+#: only between ``await`` points, never concurrently) is sufficient — no lock.
+_MAX_CONCURRENT_DOWNLOADS = 4
+_inflight_downloads = 0
 
 #: Security headers for the HTML pages. The signed token rides in the URL path, so
 #: bound its exposure: ``no-referrer`` keeps it out of any ``Referer``, ``no-store``
@@ -180,6 +191,33 @@ def _cleanup(path: str) -> None:
     shutil.rmtree(path, ignore_errors=True)
 
 
+class _SlotHeldFileResponse(FileResponse):
+    """A ``FileResponse`` that releases its download slot + temp dir only once the
+    body has finished streaming — or the client disconnected / the stream aborted.
+
+    Releasing at the END of the ASGI send loop (a ``finally``), not at handler
+    return, means the slot stays counted for the whole time the spooled artifact
+    occupies temp disk, so slow or deliberately-held streams still count against
+    ``_MAX_CONCURRENT_DOWNLOADS`` (a replayed token cannot accumulate uncounted
+    on-disk artifacts). The ``finally`` also guarantees the release when a client
+    disconnect or bad ``Range`` aborts the stream mid-flight, so a slot can never
+    leak and permanently wedge the cap. Error/early-return paths never construct
+    this response — the route's own ``finally`` releases those.
+    """
+
+    def __init__(self, *args: Any, temp_dir: str, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._temp_dir = temp_dir
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        global _inflight_downloads
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            _inflight_downloads -= 1
+            _cleanup(self._temp_dir)
+
+
 async def _passthrough_notebook(notebook_id: str) -> str:
     """Async pass-through notebook resolver (the token carries the full id)."""
     return notebook_id
@@ -255,78 +293,112 @@ def register_file_routes(mcp: FastMCP, config: FileTransferConfig) -> None:
                 headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
             )
 
-        temp_dir = tempfile.mkdtemp(prefix="nblm-mcp-dl-")
-        temp_path = os.path.join(temp_dir, f"artifact{spec.extension}")
-        try:
-            args: dict[str, object] = {
-                "notebook_id": payload.get("nb"),
-                "output_path": temp_path,
-                "latest": aid is None,
-            }
-            if aid is not None:
-                args["artifact_id"] = aid
-            fmt = payload.get("fmt")
-            if fmt is not None:
-                args[spec.format_param_name] = fmt
-            plan = download_core.build_download_plan(spec, args, cwd=Path.cwd())
-            result = await download_core.execute_download(
-                plan,
-                client,
-                notebook_resolver=_passthrough_notebook,
-                artifact_resolver=_resolve_artifact_id,
-            )
-        except ValidationError as exc:
-            # A bad ``aid`` in the token — a no-match id (full UUID or prefix) or an
-            # ambiguous prefix (AmbiguousIdError) — surfaces here from
-            # ``_resolve_artifact_id``. The catch also covers ``build_download_plan``'s
-            # ``DownloadPlanValidationError`` (a ValidationError subclass), which a
-            # broker-minted token won't trigger but is correctly a 400 too. Map it to a
-            # clean 400 instead of letting it bubble up as a Starlette 500. (The 409
-            # below stays for the latest-by-type path when no completed artifact of that
-            # type exists yet.)
-            _cleanup(temp_dir)
+        # Bound aggregate temp-disk + upstream Google-fetch fan-out: reject (fast,
+        # no disk touched, no fetch issued) when too many downloads are already in
+        # flight. Placed AFTER the cheap token/spec/client/aid-shape rejects (those
+        # must not count against the cap) and BEFORE the temp dir / fetch. The
+        # counter is mutated only between awaits in this single-process async server,
+        # so no lock is needed.
+        global _inflight_downloads
+        if _inflight_downloads >= _MAX_CONCURRENT_DOWNLOADS:
             return PlainTextResponse(
-                str(exc),
-                status_code=400,
+                "Too many concurrent downloads in progress; retry shortly.",
+                status_code=429,
                 headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
             )
-        except NotebookLMError as exc:
-            # An upstream error raised out of the core (e.g. the artifact ``list``
-            # RPC inside ``execute_download`` is not wrapped) would otherwise become
-            # a raw 500. Classify + redact it instead. (Failures that the core
-            # *returns* as a non-success ``DownloadResult`` fall through to the
-            # generic 409 below — that path already leaks nothing.)
-            _cleanup(temp_dir)
-            return _upstream_error_response(exc)
-        except BaseException:
-            _cleanup(temp_dir)
-            raise
+        _inflight_downloads += 1
+        # Slot accounting has two disjoint owners, so the counter is decremented
+        # exactly once per accepted request:
+        #  * NON-success (mkdtemp failure, any error/early return, or an unexpected
+        #    exception in the post-fetch code like ``FileResponse`` init /
+        #    ``artifact_title_to_filename``) → the outer ``finally`` below releases
+        #    the slot AND cleans the temp dir. ``mkdtemp`` failure is the exact
+        #    temp-disk exhaustion this cap defends against, so it must release.
+        #  * SUCCESS → ownership passes to the returned ``_SlotHeldFileResponse``,
+        #    which releases the slot + cleans the temp dir only after the body has
+        #    finished streaming (or a disconnect/bad-Range aborts it). Holding the
+        #    slot for the whole stream keeps slow/held downloads counted (temp disk
+        #    stays bounded), and its ``finally`` guarantees release on disconnect so
+        #    a slot can never leak and wedge the cap.
+        temp_dir: str | None = None
+        success = False
+        try:
+            temp_dir = tempfile.mkdtemp(prefix="nblm-mcp-dl-")
+            temp_path = os.path.join(temp_dir, f"artifact{spec.extension}")
+            try:
+                args: dict[str, object] = {
+                    "notebook_id": payload.get("nb"),
+                    "output_path": temp_path,
+                    "latest": aid is None,
+                }
+                if aid is not None:
+                    args["artifact_id"] = aid
+                fmt = payload.get("fmt")
+                if fmt is not None:
+                    args[spec.format_param_name] = fmt
+                plan = download_core.build_download_plan(spec, args, cwd=Path.cwd())
+                result = await download_core.execute_download(
+                    plan,
+                    client,
+                    notebook_resolver=_passthrough_notebook,
+                    artifact_resolver=_resolve_artifact_id,
+                )
+            except ValidationError as exc:
+                # A bad ``aid`` in the token — a no-match id (full UUID or prefix) or
+                # an ambiguous prefix (AmbiguousIdError) — surfaces here from
+                # ``_resolve_artifact_id``. The catch also covers
+                # ``build_download_plan``'s ``DownloadPlanValidationError`` (a
+                # ValidationError subclass), which a broker-minted token won't trigger
+                # but is correctly a 400 too. Map it to a clean 400 instead of letting
+                # it bubble up as a Starlette 500. (The 409 below stays for the
+                # latest-by-type path when no completed artifact of that type exists.)
+                return PlainTextResponse(
+                    str(exc),
+                    status_code=400,
+                    headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+                )
+            except NotebookLMError as exc:
+                # An upstream error raised out of the core (e.g. the artifact ``list``
+                # RPC inside ``execute_download`` is not wrapped) would otherwise become
+                # a raw 500. Classify + redact it instead. (Failures that the core
+                # *returns* as a non-success ``DownloadResult`` fall through to the
+                # generic 409 below — that path already leaks nothing.)
+                return _upstream_error_response(exc)
 
-        if result.outcome != download_core.DownloadOutcome.SINGLE_DOWNLOADED:
-            _cleanup(temp_dir)
-            return PlainTextResponse(
-                f"No completed {spec.name} artifact is available yet.",
-                status_code=409,
-                headers={"Cache-Control": "no-store"},
+            if result.outcome != download_core.DownloadOutcome.SINGLE_DOWNLOADED:
+                return PlainTextResponse(
+                    f"No completed {spec.name} artifact is available yet.",
+                    status_code=409,
+                    headers={"Cache-Control": "no-store"},
+                )
+            # The core may resolve a conflict to a different name, but it must stay
+            # inside our private dir — anything else is a bug, not a file we serve.
+            served = result.output_path or temp_path
+            if Path(temp_dir).resolve() not in Path(served).resolve().parents:
+                return PlainTextResponse(
+                    "Download produced an unexpected output path.", status_code=500
+                )
+            # Hand the user a meaningful name (the core wrote ``artifact<ext>``): the
+            # artifact title + the served file's actual extension.
+            title = str((result.artifact or {}).get("title") or spec.name)
+            download_name = download_core.artifact_title_to_filename(
+                title, Path(served).suffix, set()
             )
-        # The core may resolve a conflict to a different name, but it must stay
-        # inside our private dir — anything else is a bug, not a file we serve.
-        served = result.output_path or temp_path
-        if Path(temp_dir).resolve() not in Path(served).resolve().parents:
-            _cleanup(temp_dir)
-            return PlainTextResponse(
-                "Download produced an unexpected output path.", status_code=500
+            response = _SlotHeldFileResponse(
+                served,
+                filename=download_name,
+                temp_dir=temp_dir,
+                headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
             )
-        # Hand the user a meaningful name (the core wrote ``artifact<ext>``): the
-        # artifact title + the served file's actual extension.
-        title = str((result.artifact or {}).get("title") or spec.name)
-        download_name = download_core.artifact_title_to_filename(title, Path(served).suffix, set())
-        return FileResponse(
-            served,
-            filename=download_name,
-            background=BackgroundTask(_cleanup, temp_dir),
-            headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
-        )
+            success = True
+            return response
+        finally:
+            # Success hands slot + temp ownership to ``_SlotHeldFileResponse`` (released
+            # at end-of-stream); every other exit releases here.
+            if not success:
+                _inflight_downloads -= 1
+                if temp_dir is not None:
+                    _cleanup(temp_dir)
 
     @mcp.custom_route("/files/ul/{token}", methods=["GET"])
     async def upload_page_route(request: Request) -> Response:
