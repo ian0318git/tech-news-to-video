@@ -117,5 +117,5 @@ class TestSuggestPromptsVCR:
         assert params[2] == [[sid] for sid in SOURCE_IDS], (
             f"slot 2 source-id wrappers drift: {params[2]!r}"
         )
-        assert params[3] in range(1, 10), f"slot 3 (mode) must be 1..9, got {params[3]!r}"
+        assert params[3] in range(1, 11), f"slot 3 (mode) must be 1..10, got {params[3]!r}"
         assert params[4] is None, f"slot 4 must be null, got {params[4]!r}"

@@ -543,7 +543,7 @@ def get_test_params(method: RPCMethod, notebook_id: str | None) -> list[Any] | N
     # SUGGEST_PROMPTS (GeneratePromptSuggestions): like GET_SUGGESTED_REPORTS,
     # suggestions only exist once a notebook has indexed sources, so route to a
     # stable read-only notebook when one is configured. The required mode enum
-    # (1..9) is set to the default 4; an empty source-id list scopes to all of
+    # (1..10) is set to the default 4; an empty source-id list scopes to all of
     # the notebook's sources server-side. The canary only verifies the RPC ID
     # echoes back, so empty source ids are sufficient.
     if method == RPCMethod.SUGGEST_PROMPTS:

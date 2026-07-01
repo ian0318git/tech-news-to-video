@@ -43,13 +43,13 @@ from .resolve import require_notebook, resolve_notebook_id, resolve_source_ids
 
 logger = logging.getLogger(__name__)
 
-# Inclusive ``--mode`` range for ``suggest-prompts``. Mirrors the canonical 1..9
+# Inclusive ``--mode`` range for ``suggest-prompts``. Mirrors the canonical 1..10
 # bound that ``NotebooksAPI.suggest_prompts`` enforces (the CLI boundary forbids
 # importing the runtime layer's private constant, so this is a deliberate copy);
 # the method re-validates server-side-bound, so a drift here only changes which
 # layer reports the same out-of-range error, never correctness.
 _SUGGEST_PROMPTS_MODE_MIN = 1
-_SUGGEST_PROMPTS_MODE_MAX = 9
+_SUGGEST_PROMPTS_MODE_MAX = 10
 
 
 def _configure_json_payload(config: ConfigureResult) -> dict[str, Any]:
@@ -443,8 +443,9 @@ def register_chat_commands(cli):
         default=4,
         type=int,
         help=(
-            "Suggestion surface to target (1-9, default 4). 4=default chat "
-            "questions, 5=critique, 6=audio/debate, 8=quiz, 9=flashcards. "
+            "Suggestion surface to target (1-10, default 4). 1=audio deep-dive, "
+            "2=audio brief, 3=video explainer, 4=chat questions, 5=audio critique, "
+            "6=audio debate, 8=quiz, 9=flashcards, 10=video short. "
             "Out-of-range values exit 1 with a validation error."
         ),
     )
@@ -476,9 +477,10 @@ def register_chat_commands(cli):
 
         Returns a short list of suggested prompts (each a title plus a
         ready-to-send instruction) that you can pass to ``notebooklm ask``.
-        ``--mode`` selects the product surface the prompts are written for:
-        4 (default) = chat questions, 5 = critique, 6 = audio/debate,
-        8 = quiz, 9 = flashcards. A mode outside 1-9 exits 1.
+        ``--mode`` selects the studio surface the prompts are written for:
+        1 = audio deep-dive, 2 = audio brief, 3 = video explainer,
+        4 (default) = chat questions, 5 = audio critique, 6 = audio debate,
+        8 = quiz, 9 = flashcards, 10 = video short. A mode outside 1-10 exits 1.
 
         \b
         Example:
@@ -492,7 +494,7 @@ def register_chat_commands(cli):
         # Validate ``mode`` up front -- BEFORE any notebook/source resolution --
         # so an out-of-range value always surfaces the mode error (exit 1) and
         # never pays for a ``sources.list`` resolution RPC. ``suggest_prompts``
-        # re-validates the same 1..9 range before its own RPC; this mirror keeps
+        # re-validates the same 1..10 range before its own RPC; this mirror keeps
         # the bad-mode failure deterministic regardless of how ``-s`` resolves.
         # Raises the public ``ValidationError`` so the shared error envelope
         # (``@with_client``) maps it to a VALIDATION_ERROR exit-1 / JSON envelope.

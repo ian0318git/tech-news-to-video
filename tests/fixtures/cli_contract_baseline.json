@@ -10761,7 +10761,7 @@
           "default": 4,
           "envvar": null,
           "has_custom_shell_complete": false,
-          "help": "Suggestion surface to target (1-9, default 4). 4=default chat questions, 5=critique, 6=audio/debate, 8=quiz, 9=flashcards. Out-of-range values exit 1 with a validation error.",
+          "help": "Suggestion surface to target (1-10, default 4). 1=audio deep-dive, 2=audio brief, 3=video explainer, 4=chat questions, 5=audio critique, 6=audio debate, 8=quiz, 9=flashcards, 10=video short. Out-of-range values exit 1 with a validation error.",
           "is_flag": false,
           "kind": "option",
           "multiple": false,

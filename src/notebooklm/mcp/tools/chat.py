@@ -32,6 +32,7 @@ from ..._app.chat import ChatModeChoice, ResponseLengthChoice
 from ..._app.serialize import to_jsonable
 from ...exceptions import ValidationError
 from .._coerce import coerce_list
+from .._confirm import READ_ONLY
 from .._context import get_client
 from .._errors import mcp_errors
 from .._resolve import resolve_notebook, resolve_sources
@@ -41,6 +42,38 @@ from .._resolve import resolve_notebook, resolve_sources
 #: ``passage_id`` / ``score`` — useful for deep citation tooling but pure context
 #: bloat for a typical agent, so they are dropped unless ``references="full"``.
 _LITE_REFERENCE_FIELDS = ("source_id", "citation_number", "cited_text")
+
+SuggestSurface = Literal[
+    "ask",
+    "audio-deep-dive",
+    "audio-brief",
+    "audio-critique",
+    "audio-debate",
+    "video-explainer",
+    "video-short",
+    "quiz",
+    "flashcards",
+]
+
+#: ``suggest_prompts`` surface → the ``otmP3b`` (GeneratePromptSuggestions) ``mode``
+#: int. The mode selects the product surface + format the prompts are written for.
+#: Map established by the #1726 live investigation (2026-07-01): audio formats
+#: browser-verified (each Customize-dialog format card decoded its otmP3b mode),
+#: video from real web captures, quiz/flashcards client-probed. Supersedes the
+#: earlier output-based #1612 guess. ``ask`` (4) is the web chat default. Keyed by
+#: ``SuggestSurface`` so mypy rejects any key not in the Literal; a Literal member
+#: missing from the map is caught by the per-surface test in ``test_chat.py``.
+_SUGGEST_SURFACE: dict[SuggestSurface, int] = {
+    "ask": 4,
+    "audio-deep-dive": 1,
+    "audio-brief": 2,
+    "audio-critique": 5,
+    "audio-debate": 6,
+    "video-explainer": 3,
+    "video-short": 10,
+    "quiz": 8,
+    "flashcards": 9,
+}
 
 
 def register(mcp: Any) -> None:
@@ -242,3 +275,51 @@ def register(mcp: Any) -> None:
                 response_length=response_length,
             )
             return to_jsonable(result)
+
+    @mcp.tool(annotations=READ_ONLY)
+    async def suggest_prompts(
+        ctx: Context,
+        notebook: str,
+        surface: SuggestSurface = "ask",
+        source_ids: list[str] | str | None = None,
+        query: str | None = None,
+    ) -> dict[str, Any]:
+        """Get AI-suggested, ready-to-send prompts for a studio surface. Accepts a
+        notebook name or ID.
+
+        ``surface`` selects what the prompts are written for (default ``ask``):
+        * ``ask`` — chat questions to ask the notebook's content.
+        * ``audio-deep-dive`` / ``audio-brief`` / ``audio-critique`` / ``audio-debate``
+          — prompts to steer an Audio Overview in that format.
+        * ``video-explainer`` / ``video-short`` — prompts to steer a Video Overview.
+        * ``quiz`` / ``flashcards`` — prompts to steer quiz / flashcard generation.
+
+        Each result is a ready-to-send instruction you can pass to the matching
+        generator (``chat_ask`` for ``ask``; ``artifact_generate``'s ``prompt`` for
+        the studio formats). ``source_ids`` (optional) scopes the suggestions to
+        specific sources; omit for all. ``query`` optionally steers the suggestions.
+
+        Related: ``chat_ask(suggest_followups=true)`` returns ``ask``-surface
+        suggestions inline with a question (ask + follow-ups in one call); this tool
+        is the standalone selector across every surface.
+        """
+        client = get_client(ctx)
+        with mcp_errors():
+            nb_id = await resolve_notebook(client, notebook)
+            # Tolerate source_ids as a JSON-array string / comma string / scalar,
+            # then resolve each ref (id/prefix/title). Omitted/empty stays None
+            # (=> all sources, mirroring the client's None contract).
+            refs = coerce_list(source_ids)
+            resolved_source_ids = await resolve_sources(client, nb_id, refs) if refs else None
+            # ``surface`` is a Literal, so FastMCP/Pydantic rejects an out-of-enum
+            # value at the schema boundary — the map lookup can't KeyError.
+            # ``query`` is passed through as-is: the payload builder
+            # (``build_prompt_suggestions_params``) is the single normalization
+            # point — it maps None / "" / whitespace-only to a null steer.
+            rows = await client.notebooks.suggest_prompts(
+                nb_id,
+                source_ids=resolved_source_ids,
+                mode=_SUGGEST_SURFACE[surface],
+                query=query,
+            )
+            return {"suggestions": [{"title": s.title, "prompt": s.prompt} for s in rows]}

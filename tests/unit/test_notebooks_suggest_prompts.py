@@ -81,13 +81,13 @@ class TestBuildPromptSuggestionsParams:
         assert a[0] == b[0]
         assert a[0] is not b[0]
 
-    @pytest.mark.parametrize("mode", [1, 4, 9])
+    @pytest.mark.parametrize("mode", [1, 4, 10])
     def test_accepts_in_range_modes(self, mode: int) -> None:
         assert build_prompt_suggestions_params("nb_1", [], mode=mode)[3] == mode
 
-    @pytest.mark.parametrize("mode", [0, -1, 10, 100])
+    @pytest.mark.parametrize("mode", [0, -1, 11, 100])
     def test_rejects_out_of_range_mode(self, mode: int) -> None:
-        with pytest.raises(ValueError, match="1..9"):
+        with pytest.raises(ValueError, match="1..10"):
             build_prompt_suggestions_params("nb_1", [], mode=mode)
 
     @pytest.mark.parametrize("query", ["", "   ", "\n\t "])
@@ -149,12 +149,12 @@ class TestSuggestPrompts:
         api.get_source_ids.assert_not_awaited()  # type: ignore[attr-defined]
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("mode", [0, 10])
+    @pytest.mark.parametrize("mode", [0, 11])
     async def test_out_of_range_mode_raises_before_any_network(
         self, api: NotebooksAPI, mock_rpc: MagicMock, mode: int
     ) -> None:
         """A bad mode raises ValidationError before the source fetch or the RPC."""
-        with pytest.raises(ValidationError, match="1..9"):
+        with pytest.raises(ValidationError, match="1..10"):
             await api.suggest_prompts("nb_xyz", mode=mode)
         api.get_source_ids.assert_not_awaited()  # type: ignore[attr-defined]
         mock_rpc.rpc_call.assert_not_awaited()

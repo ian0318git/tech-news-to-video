@@ -130,21 +130,24 @@ def test_empty_suggestions_text(runner, mock_auth):
     assert "No prompt suggestions" in result.output
 
 
-def test_bad_mode_exits_one(runner, mock_auth):
+# ``11`` is the just-out-of-range boundary (cap is 10) — pins the CLI mirror so it
+# can't silently widen past 10; ``99`` is a clearly-out value.
+@pytest.mark.parametrize("bad_mode", ["11", "99"])
+def test_bad_mode_exits_one(runner, mock_auth, bad_mode):
     mock_client = create_mock_client()
     mock_client.notebooks.suggest_prompts = AsyncMock(return_value=[])
 
     result = _invoke(
         runner,
         mock_client,
-        ["suggest-prompts", "-n", "nb_123", "--mode", "99", "--json"],
+        ["suggest-prompts", "-n", "nb_123", "--mode", bad_mode, "--json"],
     )
 
     assert result.exit_code == 1, result.output
     payload = json.loads(result.stdout)
     assert payload["error"] is True
     assert payload["code"] == "VALIDATION_ERROR"
-    assert "1..9" in payload["message"]
+    assert "1..10" in payload["message"]
 
 
 def test_bad_mode_validated_before_source_resolution(runner, mock_auth):
@@ -164,6 +167,6 @@ def test_bad_mode_validated_before_source_resolution(runner, mock_auth):
     assert result.exit_code == 1, result.output
     payload = json.loads(result.stdout)
     assert payload["code"] == "VALIDATION_ERROR"
-    assert "1..9" in payload["message"]
+    assert "1..10" in payload["message"]
     mock_client.sources.list.assert_not_awaited()
     mock_client.notebooks.suggest_prompts.assert_not_awaited()

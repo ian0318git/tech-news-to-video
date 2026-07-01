@@ -386,16 +386,15 @@ class NotebooksAPI:
             source_ids: Source ids to scope the suggestions to. ``None``
                 (default) uses **all** of the notebook's sources.
             mode: The required ``C0`` int "mode/surface" enum, inclusive range
-                ``1..9`` (``0`` / omitted makes the server return ``INTERNAL``).
-                The suggestions are LLM-generated (non-deterministic) but their
-                *framing* is a stable function of ``mode``: it selects the product
-                surface the prompts are written for. Default ``4`` = general "ask
-                about the content" questions (the web chat surface's own default);
-                ``5`` = critique/evaluate; ``6`` = audio/debate; ``8`` = quiz;
-                ``9`` = flashcards; ``1-3`` and ``7`` track ``4``. Stays a plain
-                int, not a named enum, since the bundle exposes the values but not
-                Google's member names. See ``_PROMPT_SUGGESTIONS_DEFAULT_MODE`` for
-                the full bundle + live-probe table.
+                ``1..10`` (``0`` / omitted makes the server return ``INTERNAL``).
+                It selects which studio surface/format the prompts are written for
+                (#1726, live-verified): ``1`` audio deep-dive, ``2`` audio brief,
+                ``3`` video explainer, ``4`` (default) chat "ask about the content"
+                questions, ``5`` audio critique, ``6`` audio debate, ``8`` quiz,
+                ``9`` flashcards, ``10`` video short (``7`` unidentified). Stays a
+                plain int, not a named enum, since the bundle exposes the values
+                but not Google's member names. See
+                ``_PROMPT_SUGGESTIONS_DEFAULT_MODE`` for the full map + method.
             query: Optional free-text steer for the kind of prompts to suggest.
                 An empty / whitespace-only string is treated as no steer.
 
@@ -405,7 +404,7 @@ class NotebooksAPI:
             best-effort UI sugar — an absent payload does not raise).
 
         Raises:
-            ValidationError: if ``mode`` is outside the inclusive ``1..9`` range
+            ValidationError: if ``mode`` is outside the inclusive ``1..10`` range
                 (caught before any network call, so a bad mode never costs an
                 RPC).
 

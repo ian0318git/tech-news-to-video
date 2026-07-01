@@ -549,3 +549,67 @@ async def test_chat_ask_error_projects_tool_error(mcp_call, mock_client) -> None
         await mcp_call("chat_ask", {"notebook": NB_ID, "question": "q"})
     # ChatError classifies under the LIBRARY ladder -> the generic ERROR code.
     assert "ERROR" in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
+# suggest_prompts (dedicated tool)
+# ---------------------------------------------------------------------------
+
+
+async def test_suggest_prompts_default_ask(mcp_call, mock_client) -> None:
+    """Default surface=ask maps to mode 4 and returns {suggestions:[...]}."""
+    mock_client.notebooks.suggest_prompts = AsyncMock(
+        return_value=[FakePromptSuggestion(title="T1", prompt="P1")]
+    )
+    result = await mcp_call("suggest_prompts", {"notebook": NB_ID})
+    assert result.structured_content["suggestions"] == [{"title": "T1", "prompt": "P1"}]
+    mock_client.notebooks.suggest_prompts.assert_awaited_once_with(
+        NB_ID, source_ids=None, mode=4, query=None
+    )
+
+
+@pytest.mark.parametrize(
+    ("surface", "mode"),
+    [
+        ("ask", 4),
+        ("audio-deep-dive", 1),
+        ("audio-brief", 2),
+        ("audio-critique", 5),
+        ("audio-debate", 6),
+        ("video-explainer", 3),
+        ("video-short", 10),
+        ("quiz", 8),
+        ("flashcards", 9),
+    ],
+)
+async def test_suggest_prompts_surface_maps_to_mode(mcp_call, mock_client, surface, mode) -> None:
+    """Each surface Literal maps to its verified otmP3b mode int (incl. video-short=10)."""
+    mock_client.notebooks.suggest_prompts = AsyncMock(return_value=[])
+    await mcp_call("suggest_prompts", {"notebook": NB_ID, "surface": surface})
+    assert mock_client.notebooks.suggest_prompts.await_args.kwargs["mode"] == mode
+
+
+async def test_suggest_prompts_source_ids_and_query(mcp_call, mock_client) -> None:
+    """source_ids resolved once; empty query normalizes to None."""
+    mock_client.notebooks.suggest_prompts = AsyncMock(return_value=[])
+    await mcp_call(
+        "suggest_prompts",
+        {"notebook": NB_ID, "surface": "quiz", "source_ids": [_SRC_A], "query": "risks"},
+    )
+    kwargs = mock_client.notebooks.suggest_prompts.await_args.kwargs
+    assert kwargs["source_ids"] == [_SRC_A]
+    assert kwargs["query"] == "risks"
+    # Omitted source_ids => None (all); explicit null query is accepted at the
+    # schema boundary (query is str | None) and reaches the client as None.
+    mock_client.notebooks.suggest_prompts = AsyncMock(return_value=[])
+    await mcp_call("suggest_prompts", {"notebook": NB_ID, "query": None})
+    kwargs = mock_client.notebooks.suggest_prompts.await_args.kwargs
+    assert kwargs["source_ids"] is None and kwargs["query"] is None
+
+
+async def test_suggest_prompts_rejects_bad_surface(mcp_call, mock_client) -> None:
+    """An out-of-enum surface is rejected at the Literal schema boundary, no RPC."""
+    mock_client.notebooks.suggest_prompts = AsyncMock()
+    with pytest.raises(ToolError):
+        await mcp_call("suggest_prompts", {"notebook": NB_ID, "surface": "podcast"})
+    mock_client.notebooks.suggest_prompts.assert_not_called()
