@@ -5,7 +5,7 @@ in-memory FastMCP ``Client``, then pins:
 
 * the EXACT set of tool names — so a tool can't be silently added, removed, or
   renamed without updating this gate;
-* a tool-count ceiling (40): the current surface is 35 tools; the next tool
+* a tool-count ceiling (40): the current surface is 32 tools; the next tool
   stays under the ceiling, but an accidental explosion still trips the gate;
 * the ``destructiveHint`` annotation + a ``confirm`` parameter on every
   destructive (delete) tool; and
@@ -23,7 +23,7 @@ import pytest
 pytest.importorskip("fastmcp")
 
 
-#: The complete, pinned tool surface. 35 tools across 8 domains. Adding or
+#: The complete, pinned tool surface. 32 tools across 8 domains. Adding or
 #: removing a tool MUST update this set (and the ceiling below if it grows).
 EXPECTED_TOOLS: frozenset[str] = frozenset(
     {
@@ -44,20 +44,17 @@ EXPECTED_TOOLS: frozenset[str] = frozenset(
         "chat_ask",
         "chat_configure",
         "suggest_prompts",
-        # Notes (4)
-        "note_create",
-        "note_list",
-        "note_update",
-        "note_delete",
-        # Artifacts (8)
-        "artifact_list",
-        "artifact_generate",
-        "artifact_status",
-        "artifact_get_prompt",
-        "artifact_download",
-        "artifact_rename",
-        "artifact_retry",
-        "artifact_delete",
+        # Notes (1)
+        "note_save",
+        # Studio (8)
+        "studio_list",
+        "studio_generate",
+        "studio_status",
+        "studio_get_prompt",
+        "studio_download",
+        "studio_rename",
+        "studio_retry",
+        "studio_delete",
         # Research (4)
         "research_start",
         "research_status",
@@ -76,14 +73,15 @@ EXPECTED_TOOLS: frozenset[str] = frozenset(
 #: Tool-count ceiling. The design target is ~25; the sharing domain (#1684) took
 #: the surface to 34, the artifact get-prompt/retry tools took it to 36, and
 #: suggest_prompts to 37; the Tier-1 read-merges (source_describe+source_get_content
-#: → source_read, note_get → note_list(note?)) brought it to 35. The ceiling has
-#: headroom, but an accidental explosion still trips the gate.
+#: → source_read) and the Studio consolidation (note_create+note_update → note_save,
+#: note_list+note_delete folded into studio_list/studio_delete) brought it to 32. The
+#: ceiling has headroom, but an accidental explosion still trips the gate.
 TOOL_CEILING = 40
 
 #: The destructive tools — each carries ``destructiveHint`` AND a ``confirm``
 #: parameter (the both-mode confirmation contract).
 DESTRUCTIVE_TOOLS: frozenset[str] = frozenset(
-    {"notebook_delete", "source_delete", "note_delete", "artifact_delete", "share_remove_user"}
+    {"notebook_delete", "source_delete", "studio_delete", "share_remove_user"}
 )
 
 #: Read-only tools — each carries ``readOnlyHint``.
@@ -93,10 +91,9 @@ READ_ONLY_TOOLS: frozenset[str] = frozenset(
         "notebook_describe",
         "source_list",
         "source_read",
-        "note_list",
-        "artifact_list",
-        "artifact_status",
-        "artifact_get_prompt",
+        "studio_list",
+        "studio_status",
+        "studio_get_prompt",
         "research_status",
         "share_status",
         "suggest_prompts",
@@ -155,51 +152,51 @@ async def test_read_only_and_destructive_are_disjoint() -> None:
     assert DESTRUCTIVE_TOOLS <= EXPECTED_TOOLS
 
 
-async def test_artifact_rename_is_plain_mutating_tool(tools_by_name) -> None:
-    """``artifact_rename`` mutates but is neither read-only nor destructive.
+async def test_studio_rename_is_plain_mutating_tool(tools_by_name) -> None:
+    """``studio_rename`` mutates but is neither read-only nor destructive.
 
     A title-only update carries default annotations (no ``readOnlyHint``, no
     ``destructiveHint``) and no ``confirm`` gate — so it must stay out of both the
     read-only and destructive pinned sets.
     """
-    assert "artifact_rename" in tools_by_name
-    assert "artifact_rename" not in READ_ONLY_TOOLS
-    assert "artifact_rename" not in DESTRUCTIVE_TOOLS
-    tool = tools_by_name["artifact_rename"]
+    assert "studio_rename" in tools_by_name
+    assert "studio_rename" not in READ_ONLY_TOOLS
+    assert "studio_rename" not in DESTRUCTIVE_TOOLS
+    tool = tools_by_name["studio_rename"]
     if tool.annotations is not None:
         assert not tool.annotations.readOnlyHint
         assert not tool.annotations.destructiveHint
     assert "confirm" not in tool.inputSchema.get("properties", {})
 
 
-async def test_artifact_retry_is_plain_mutating_tool(tools_by_name) -> None:
-    """``artifact_retry`` mutates but is neither read-only nor destructive.
+async def test_studio_retry_is_plain_mutating_tool(tools_by_name) -> None:
+    """``studio_retry`` mutates but is neither read-only nor destructive.
 
     Kicking off a retry carries default annotations (no ``readOnlyHint``, no
     ``destructiveHint``) and no ``confirm`` gate — so it must stay out of both the
     read-only and destructive pinned sets.
     """
-    assert "artifact_retry" in tools_by_name
-    assert "artifact_retry" not in READ_ONLY_TOOLS
-    assert "artifact_retry" not in DESTRUCTIVE_TOOLS
-    tool = tools_by_name["artifact_retry"]
+    assert "studio_retry" in tools_by_name
+    assert "studio_retry" not in READ_ONLY_TOOLS
+    assert "studio_retry" not in DESTRUCTIVE_TOOLS
+    tool = tools_by_name["studio_retry"]
     if tool.annotations is not None:
         assert not tool.annotations.readOnlyHint
         assert not tool.annotations.destructiveHint
     assert "confirm" not in tool.inputSchema.get("properties", {})
 
 
-async def test_artifact_download_advertises_artifact_id_and_format_enum(tools_by_name) -> None:
-    """``artifact_download`` advertises the ``artifact_id`` param and an enumerated
+async def test_studio_download_advertises_artifact_id_and_format_enum(tools_by_name) -> None:
+    """``studio_download`` advertises the ``artifact_id`` param and an enumerated
     ``output_format`` so an agent's tool schema can target a specific artifact and
     pick a valid format (issue #1668)."""
     import json
 
-    tool = tools_by_name["artifact_download"]
+    tool = tools_by_name["studio_download"]
     properties = tool.inputSchema.get("properties", {})
-    assert "artifact_id" in properties, "artifact_download must expose 'artifact_id'"
-    assert "artifact" in properties, "artifact_download must expose the 'artifact' name-or-id ref"
-    assert "output_format" in properties, "artifact_download must expose 'output_format'"
+    assert "artifact_id" in properties, "studio_download must expose 'artifact_id'"
+    assert "artifact" in properties, "studio_download must expose the 'artifact' name-or-id ref"
+    assert "output_format" in properties, "studio_download must expose 'output_format'"
     # output_format is a Literal union → the schema (possibly under anyOf for the
     # optional ``| None``) must enumerate every supported format value.
     fmt_schema = json.dumps(properties["output_format"])

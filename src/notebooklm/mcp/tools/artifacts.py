@@ -2,17 +2,17 @@
 
 Thin adapters over the transport-neutral artifact cores:
 
-* ``artifact_list`` reads ``client.artifacts.list`` directly (like ``source_list``).
-* ``artifact_generate`` is a hybrid over the neutral ``generate`` core: it builds a
+* ``studio_list`` reads ``client.artifacts.list`` directly (like ``source_list``).
+* ``studio_generate`` is a hybrid over the neutral ``generate`` core: it builds a
   :class:`~notebooklm._app.generate.GenerationPlan` via ``build_generation_plan``
   (which enum-maps + validates the per-kind options) and drives
   ``execute_generation`` with **pass-through** notebook/source resolvers (MCP has
   already resolved the notebook id and supplies full source ids). Each ``type``
   routes to the matching ``client.artifacts.generate_*`` method.
-* ``artifact_status`` is the **stateless** poll path (``_app.artifacts.poll_artifact``
+* ``studio_status`` is the **stateless** poll path (``_app.artifacts.poll_artifact``
   → ``client.artifacts.poll_status``) so an agent can poll a ``task_id`` across
   separate tool calls without holding server state.
-* ``artifact_download`` is a hybrid over the neutral ``download`` core: each
+* ``studio_download`` is a hybrid over the neutral ``download`` core: each
   ``type`` selects a :class:`~notebooklm._app.download.DownloadTypeSpec` row and
   ``build_download_plan`` + ``execute_download`` run with pass-through resolvers.
 
@@ -36,10 +36,11 @@ from pydantic import AnyUrl
 from ..._app import artifacts as artifact_core
 from ..._app import download as download_core
 from ..._app import generate as generate_core
+from ..._app import notes as note_core
 from ..._app.language import is_supported_language
-from ..._app.resolve import resolve_ref
+from ..._app.resolve import FULL_ID_PATTERN, resolve_ref
 from ..._app.serialize import to_jsonable
-from ...exceptions import ValidationError
+from ...exceptions import NotFoundError, ValidationError
 from ...types import ArtifactType
 from .._coerce import coerce_list
 from .._confirm import DESTRUCTIVE, READ_ONLY, needs_confirmation
@@ -49,13 +50,13 @@ from .._filelink import DOWNLOAD_TTL, FileTransferConfig
 from .._paginate import DEFAULT_LIMIT, paginate
 from .._resolve import resolve_artifact, resolve_notebook, resolve_sources
 from ._passthrough import passthrough_notebook_id
-from ._preview import title_for_id
+from ._studio import STUDIO_KINDS, resolve_studio_item, studio_items
 
 if TYPE_CHECKING:
     from ...client import NotebookLMClient
 
 #: Per-kind default option values mirroring the CLI ``generate`` Click ``Choice``
-#: defaults, so a bare ``artifact_generate(notebook, type=…)`` succeeds without
+#: defaults, so a bare ``studio_generate(notebook, type=…)`` succeeds without
 #: the agent restating every enum. The agent can override any of these by passing
 #: the matching keyword; ``build_generation_plan`` enum-maps + validates them.
 _KIND_DEFAULTS: dict[str, dict[str, Any]] = {
@@ -263,7 +264,7 @@ _DOWNLOAD_SPECS: dict[str, download_core.DownloadTypeSpec] = {
 }
 
 #: Reverse of ``_DOWNLOAD_SPECS`` — an artifact's ``ArtifactType`` (``.kind``) → the
-#: download-type key. Lets ``artifact_download`` derive ``artifact_type`` from an
+#: download-type key. Lets ``studio_download`` derive ``artifact_type`` from an
 #: ``artifact`` name-or-id ref (so the caller need not repeat the type).
 _KIND_TO_DOWNLOAD_KEY: dict[Any, DownloadType] = {
     spec.kind: cast(DownloadType, key) for key, spec in _DOWNLOAD_SPECS.items()
@@ -353,7 +354,7 @@ def _broker_download(
     artifact_id: str | None = None,
 ) -> ToolResult:
     """Mint a signed download URL + a clickable ``resource_link`` for a remote
-    ``artifact_download``.
+    ``studio_download``.
 
     Returns a :class:`ToolResult` carrying BOTH a ``resource_link`` content item
     (claude.ai renders it clickable) and the structured ``download_ready`` payload.
@@ -399,23 +400,66 @@ def register(mcp: Any) -> None:
     """Register the artifact tools on ``mcp``."""
 
     @mcp.tool(annotations=READ_ONLY)
-    async def artifact_list(
-        ctx: Context, notebook: str, limit: int = DEFAULT_LIMIT, offset: int = 0
+    async def studio_list(
+        ctx: Context,
+        notebook: str,
+        item: str | None = None,
+        kind: str | None = None,
+        limit: int = DEFAULT_LIMIT,
+        offset: int = 0,
     ) -> dict[str, Any]:
-        """List a notebook's studio artifacts. Accepts a notebook name or ID.
+        """List a notebook's Studio panel — text notes AND generated artifacts.
 
-        Returns a bounded page: ``limit`` (default 50) artifacts from ``offset``,
-        plus ``total`` / ``offset`` / ``has_more``. Page with ``offset += limit``.
+        Accepts a notebook name or ID. Returns a merged ``items`` list; each item
+        carries ``id`` / ``title`` / ``type`` where ``type`` is ``note`` for a text
+        note or the artifact's hyphenated kind (``audio`` / ``video`` / ``report`` /
+        ``quiz`` / ``flashcards`` / ``mind-map`` / ``infographic`` / ``slide-deck`` /
+        ``data-table``). Notes also carry ``content``; artifacts carry
+        ``status_label`` and ``url``.
+
+        * Default (list mode): a bounded page of ``limit`` (default 50) items from
+          ``offset``, plus ``total`` / ``offset`` / ``has_more`` (page with
+          ``offset += limit``).
+        * ``kind`` filters the list to one ``type`` before paging.
+        * ``item`` (a name or id — note OR artifact) fetches just that one item,
+          returned as a 1-element ``items`` list (``total`` 1); a ref that matches
+          nothing is a NOT_FOUND error. ``limit`` / ``offset`` are ignored when
+          ``item`` is given (but still validated). If ``kind`` is also given it
+          scopes the resolution — ``item`` is matched only among that ``type``.
         """
         client = get_client(ctx)
         with mcp_errors():
+            # Validate pagination bounds unconditionally (inside ``mcp_errors`` so
+            # the VALIDATION wire-contract applies) — ``studio_list(item=x,
+            # limit=0)`` errors even though they're ignored on the single-fetch path.
+            if limit < 1:
+                raise ValidationError("limit must be >= 1.")
+            if offset < 0:
+                raise ValidationError("offset must be >= 0.")
+            if kind is not None and kind not in STUDIO_KINDS:
+                raise ValidationError(
+                    f"unknown kind {kind!r}; valid: {', '.join(sorted(STUDIO_KINDS))}."
+                )
             nb_id = await resolve_notebook(client, notebook)
-            artifacts = await client.artifacts.list(nb_id)
-            page, meta = paginate(to_jsonable(artifacts), limit, offset)
-            return {"notebook_id": nb_id, "artifacts": page, **meta}
+            if item is not None:
+                # Single fetch by ref over the merged list; the resolved item's full
+                # projection rides on ``.raw`` so this never re-lists.
+                resolved = await resolve_studio_item(client, nb_id, item, kind)
+                return {
+                    "notebook_id": nb_id,
+                    "items": [resolved.raw],
+                    "total": 1,
+                    "offset": 0,
+                    "has_more": False,
+                }
+            items = await studio_items(client, nb_id)
+            if kind is not None:
+                items = [it for it in items if it["type"] == kind]
+            page, meta = paginate(items, limit, offset)
+            return {"notebook_id": nb_id, "items": page, **meta}
 
     @mcp.tool
-    async def artifact_generate(
+    async def studio_generate(
         ctx: Context,
         notebook: str,
         artifact_type: Literal[
@@ -484,7 +528,7 @@ def register(mcp: Any) -> None:
         """Start generating a studio artifact. Accepts a notebook name or ID.
 
         Non-blocking: returns immediately with a ``task_id``; poll
-        ``artifact_status(notebook, task_id)`` until ``is_complete`` is true.
+        ``studio_status(notebook, task_id)`` until ``is_complete`` is true.
 
         ``artifact_type`` selects the artifact kind (each routes to its own
         generator):
@@ -618,10 +662,10 @@ def register(mcp: Any) -> None:
             return _generation_payload(nb_id, result)
 
     @mcp.tool(annotations=READ_ONLY)
-    async def artifact_status(ctx: Context, notebook: str, task_id: str) -> dict[str, Any]:
+    async def studio_status(ctx: Context, notebook: str, task_id: str) -> dict[str, Any]:
         """Poll a generation task's status. Accepts a notebook name or ID.
 
-        Stateless: pass the ``task_id`` returned by ``artifact_generate``. Returns
+        Stateless: pass the ``task_id`` returned by ``studio_generate``. Returns
         ``status`` / ``url`` / ``error`` / ``is_complete``; call repeatedly until
         ``is_complete`` is true.
         """
@@ -633,7 +677,7 @@ def register(mcp: Any) -> None:
             return {"notebook_id": nb_id, **to_jsonable(view)}
 
     @mcp.tool(annotations=READ_ONLY)
-    async def artifact_get_prompt(ctx: Context, notebook: str, artifact: str) -> dict[str, Any]:
+    async def studio_get_prompt(ctx: Context, notebook: str, artifact: str) -> dict[str, Any]:
         """Fetch the free-text prompt an artifact was generated from.
 
         Accepts a notebook/artifact name or ID. Returns the stored ``prompt``
@@ -649,7 +693,7 @@ def register(mcp: Any) -> None:
             return {"notebook_id": nb_id, "artifact_id": artifact_id, "prompt": prompt}
 
     @mcp.tool
-    async def artifact_download(
+    async def studio_download(
         ctx: Context,
         notebook: str,
         artifact: str | None = None,
@@ -750,7 +794,7 @@ def register(mcp: Any) -> None:
                     "NOTEBOOKLM_MCP_PUBLIC_URL on the server to enable it"
                 )
             if path is None:
-                raise ValidationError("artifact_download requires 'path' on the stdio transport")
+                raise ValidationError("studio_download requires 'path' on the stdio transport")
 
             args: dict[str, Any] = {
                 "notebook_id": nb_id,
@@ -771,7 +815,7 @@ def register(mcp: Any) -> None:
             return to_jsonable(result)
 
     @mcp.tool
-    async def artifact_rename(
+    async def studio_rename(
         ctx: Context, notebook: str, artifact: str, new_title: str
     ) -> dict[str, Any]:
         """Rename a studio artifact (title only). Accepts a notebook/artifact name or ID.
@@ -797,12 +841,12 @@ def register(mcp: Any) -> None:
             }
 
     @mcp.tool
-    async def artifact_retry(ctx: Context, notebook: str, artifact: str) -> dict[str, Any]:
+    async def studio_retry(ctx: Context, notebook: str, artifact: str) -> dict[str, Any]:
         """Retry a failed Studio artifact in place (the UI "Retry" action).
 
         Accepts a notebook/artifact name or ID. Non-blocking: on acceptance it
         returns the kicked-off ``task_id`` (equal to the artifact id) and the new
-        ``status``; poll ``artifact_status(notebook, task_id)`` until complete. A
+        ``status``; poll ``studio_status(notebook, task_id)`` until complete. A
         synchronous refusal (rate limit / quota / not-retryable) surfaces as an error.
         """
         client = get_client(ctx)
@@ -818,43 +862,81 @@ def register(mcp: Any) -> None:
             }
 
     @mcp.tool(annotations=DESTRUCTIVE)
-    async def artifact_delete(
-        ctx: Context, notebook: str, artifact: str, confirm: bool = False
+    async def studio_delete(
+        ctx: Context, notebook: str, item: str, confirm: bool = False
     ) -> dict[str, Any]:
-        """Delete a studio artifact (irreversible). Accepts a notebook/artifact name or ID.
+        """Delete a Studio item (irreversible) — a text note OR an artifact.
 
-        Covers every artifact type, including both mind-map kinds: note-backed
-        maps are *cleared* via the note system (not hard-removed — Google may
-        garbage collect them later), interactive maps and regular artifacts are
-        removed via the artifact delete RPC. The kind routing is handled by the
-        shared ``_app`` core.
+        Accepts a notebook name or ID plus an ``item`` name-or-id ref resolved over
+        the merged notes+artifacts list. Routing is by resolved type: a ``note`` is
+        deleted via the note system; an artifact via the artifact delete RPC (which
+        itself *clears* a note-backed mind map through the note system rather than
+        hard-removing it — Google may garbage collect it later).
 
         Two-step confirmation: with ``confirm=False`` (default) it returns a
-        ``needs_confirmation`` preview of the resolved artifact without deleting;
-        call again with ``confirm=True`` to perform the delete. Deleting an
-        already-absent full id is idempotent (no error).
+        ``needs_confirmation`` preview of the resolved item without deleting; call
+        again with ``confirm=True`` to perform the delete. Deleting an already-absent
+        full id is idempotent (no error) — it routes down the artifact path (a
+        present note would have been found in the list).
         """
         client = get_client(ctx)
         with mcp_errors():
+            item = item.strip()
             nb_id = await resolve_notebook(client, notebook)
-            art_id = await resolve_artifact(client, nb_id, artifact)
+            try:
+                resolved = await resolve_studio_item(client, nb_id, item)
+            except NotFoundError:
+                # Idempotent-on-missing carve-out: an absent FULL UUID is safe to
+                # send down the artifact delete path (a present note would have been
+                # found in the merged list), preserving delete-by-id idempotency.
+                # A non-UUID (prefix/title) miss stays a real NOT_FOUND.
+                if not FULL_ID_PATTERN.fullmatch(item):
+                    raise
+                if not confirm:
+                    return needs_confirmation(
+                        {
+                            "action": "delete_studio_item",
+                            "notebook_id": nb_id,
+                            "item_id": item,
+                            "type": None,
+                            "title": None,
+                        }
+                    )
+                was_note_backed = await artifact_core.delete_artifact(client, nb_id, item)
+                return {
+                    "status": "deleted",
+                    "notebook_id": nb_id,
+                    "item_id": item,
+                    "type": "mind-map" if was_note_backed else "unknown",
+                    "was_note_backed": was_note_backed,
+                }
             if not confirm:
-                # Best-effort title for the preview; a full-UUID that is absent
-                # from the list resolves to None, which is fine for the preview.
-                title = title_for_id(await client.artifacts.list(nb_id), art_id)
                 return needs_confirmation(
                     {
-                        "action": "delete_artifact",
+                        "action": "delete_studio_item",
                         "notebook_id": nb_id,
-                        "artifact_id": art_id,
-                        "title": title,
+                        "item_id": resolved.item_id,
+                        "type": resolved.type,
+                        "title": resolved.title,
                     }
                 )
-            was_note_backed = await artifact_core.delete_artifact(client, nb_id, art_id)
+            if resolved.type == "note":
+                await note_core.execute_note_delete(client, nb_id, resolved.item_id)
+                return {
+                    "status": "deleted",
+                    "notebook_id": nb_id,
+                    "item_id": resolved.item_id,
+                    "type": "note",
+                    # Always present for a stable wire shape (a text note is never a
+                    # note-backed mind-map artifact).
+                    "was_note_backed": False,
+                }
+            was_note_backed = await artifact_core.delete_artifact(client, nb_id, resolved.item_id)
             return {
                 "status": "deleted",
                 "notebook_id": nb_id,
-                "artifact_id": art_id,
+                "item_id": resolved.item_id,
+                "type": resolved.type,
                 "was_note_backed": was_note_backed,
             }
 
@@ -864,7 +946,7 @@ def _generation_payload(
 ) -> dict[str, Any]:
     """Project a :class:`GenerationExecutionResult` onto the wire shape.
 
-    Surfaces the ``task_id`` an agent polls with ``artifact_status`` plus the
+    Surfaces the ``task_id`` an agent polls with ``studio_status`` plus the
     generation outcome (status / url / error) or, for mind maps, the rendered
     map. Mind-map generation renders synchronously (no ``task_id`` to poll).
     """
