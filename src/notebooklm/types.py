@@ -32,6 +32,7 @@ from ._types.common import (
     ConnectionLimits,
     RpcTelemetryEvent,
     UnknownTypeWarning,
+    UserSettings,
 )
 from ._types.labels import Label
 from ._types.mind_maps import MindMap, MindMapKind
@@ -138,6 +139,8 @@ _CITED_SOURCE_SELECTION_TYPE_HINT_GLOBALS = (ResearchSourceInput,)
 
 __all__ = [
     # Dataclasses
+    "AccountLimits",
+    "UserSettings",
     "CitedSourceSelection",
     "ConnectionLimits",
     "ClientMetricsSnapshot",
@@ -229,6 +232,7 @@ for _public_common_type in (
     ConnectionLimits,
     RpcTelemetryEvent,
     UnknownTypeWarning,
+    UserSettings,
 ):
     _public_common_type.__module__ = __name__
 del _public_common_type
