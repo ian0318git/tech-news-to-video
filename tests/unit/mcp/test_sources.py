@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -30,6 +31,7 @@ from notebooklm.exceptions import (  # noqa: E402 - after importorskip guard
 )
 from notebooklm.mcp._errors import tool_error_payload  # noqa: E402 - after importorskip guard
 from notebooklm.rpc.types import SourceStatus  # noqa: E402 - after importorskip guard
+from notebooklm.types import Label  # noqa: E402 - after importorskip guard
 
 from .conftest import AsyncMock  # noqa: E402 - after importorskip guard
 
@@ -1620,3 +1622,214 @@ async def test_source_add_batch_youtube_accepted(mcp_call, mock_client) -> None:
     }
     mock_client.sources.add_url.assert_awaited_once_with(NB_ID, yt)
     mock_client.sources.get_fulltext.assert_awaited_once_with(NB_ID, SRC_ID, output_format="text")
+
+
+# ---------------------------------------------------------------------------
+# source_wait subset targeting (#1745)
+# ---------------------------------------------------------------------------
+
+
+async def test_source_wait_subset_ready(mcp_call, mock_client) -> None:
+    """Subset mode: waits only on specified sources; returns aggregate outcomes."""
+    mock_client.sources.wait_until_ready = _dispatch_wait_until_ready(
+        {
+            SRC_ID: FakeSource(id=SRC_ID, title="A"),
+            SRC2_ID: FakeSource(id=SRC2_ID, title="B"),
+        }
+    )
+    mock_client.sources.get_fulltext = AsyncMock(
+        return_value=FakeFulltext(content="x" * 500, char_count=500)
+    )
+    # Subset targeting with a list of IDs.
+    result = await mcp_call("source_wait", {"notebook": NB_ID, "sources": [SRC_ID, SRC2_ID]})
+    sc = result.structured_content
+    _assert_aggregate_shape(sc)
+    assert sc["ok"] is True
+    assert {row["id"] for row in sc["ready"]} == {SRC_ID, SRC2_ID}
+    assert sc["timed_out"] == sc["failed"] == sc["not_found"] == []
+
+
+async def test_source_wait_subset_comma_string(mcp_call, mock_client) -> None:
+    """Subset mode: accepts comma-separated string, coerced to list."""
+    mock_client.sources.wait_until_ready = _dispatch_wait_until_ready(
+        {
+            SRC_ID: FakeSource(id=SRC_ID, title="A"),
+            SRC2_ID: FakeSource(id=SRC2_ID, title="B"),
+        }
+    )
+    mock_client.sources.get_fulltext = AsyncMock(
+        return_value=FakeFulltext(content="x" * 500, char_count=500)
+    )
+    result = await mcp_call("source_wait", {"notebook": NB_ID, "sources": f"{SRC_ID},{SRC2_ID}"})
+    sc = result.structured_content
+    _assert_aggregate_shape(sc)
+    assert sc["ok"] is True
+    assert {row["id"] for row in sc["ready"]} == {SRC_ID, SRC2_ID}
+
+
+async def test_source_wait_subset_partial_failures(mcp_call, mock_client) -> None:
+    """Subset mode: wait on multiple sources with some failing/timing out."""
+    mock_client.sources.wait_until_ready = _dispatch_wait_until_ready(
+        {
+            SRC_ID: FakeSource(id=SRC_ID, title="A"),
+            SRC2_ID: SourceTimeoutError(SRC2_ID, 5.0),
+        }
+    )
+    mock_client.sources.get_fulltext = AsyncMock(
+        return_value=FakeFulltext(content="x" * 500, char_count=500)
+    )
+    result = await mcp_call("source_wait", {"notebook": NB_ID, "sources": [SRC_ID, SRC2_ID]})
+    sc = result.structured_content
+    _assert_aggregate_shape(sc)
+    assert sc["ok"] is False
+    assert [row["id"] for row in sc["ready"]] == [SRC_ID]
+    assert [e["source_id"] for e in sc["timed_out"]] == [SRC2_ID]
+
+
+async def test_source_wait_subset_unresolvable_raises(mcp_call, mock_client) -> None:
+    """An unresolvable ref in subset raises NOT_FOUND before waiting."""
+    mock_client.sources.list = AsyncMock(return_value=[FakeSource(id=SRC_ID, title="Doc")])
+    mock_client.sources.wait_until_ready = AsyncMock()
+    with pytest.raises(ToolError) as excinfo:
+        await mcp_call("source_wait", {"notebook": NB_ID, "sources": [SRC_ID, "unresolvable_ref"]})
+    assert "NOT_FOUND" in str(excinfo.value)
+    mock_client.sources.wait_until_ready.assert_not_called()
+
+
+async def test_source_wait_mutual_exclusion(mcp_call, mock_client) -> None:
+    """Providing both source and sources raises a validation error."""
+    with pytest.raises(ToolError) as excinfo:
+        await mcp_call("source_wait", {"notebook": NB_ID, "source": SRC_ID, "sources": [SRC2_ID]})
+    assert "VALIDATION" in str(excinfo.value)
+    assert "not both" in str(excinfo.value)
+
+
+async def test_source_wait_empty_sources_raises(mcp_call, mock_client) -> None:
+    """Providing an empty sources list/string raises a validation error."""
+    with pytest.raises(ToolError) as excinfo:
+        await mcp_call("source_wait", {"notebook": NB_ID, "sources": []})
+    assert "VALIDATION" in str(excinfo.value)
+    assert "was empty" in str(excinfo.value)
+
+
+async def test_source_wait_subset_json_array_string(mcp_call, mock_client) -> None:
+    """Subset mode: accepts a JSON-array string, coerced to a list (end-to-end)."""
+    mock_client.sources.wait_until_ready = _dispatch_wait_until_ready(
+        {
+            SRC_ID: FakeSource(id=SRC_ID, title="A"),
+            SRC2_ID: FakeSource(id=SRC2_ID, title="B"),
+        }
+    )
+    mock_client.sources.get_fulltext = AsyncMock(
+        return_value=FakeFulltext(content="x" * 500, char_count=500)
+    )
+    result = await mcp_call(
+        "source_wait", {"notebook": NB_ID, "sources": f'["{SRC_ID}","{SRC2_ID}"]'}
+    )
+    sc = result.structured_content
+    _assert_aggregate_shape(sc)
+    assert sc["ok"] is True
+    assert {row["id"] for row in sc["ready"]} == {SRC_ID, SRC2_ID}
+
+
+async def test_source_wait_subset_dedupes(mcp_call, mock_client) -> None:
+    """Subset mode: a repeated ref collapses to one poll + one ready row."""
+    mock_client.sources.wait_until_ready = _dispatch_wait_until_ready(
+        {SRC_ID: FakeSource(id=SRC_ID, title="A")}
+    )
+    mock_client.sources.get_fulltext = AsyncMock(
+        return_value=FakeFulltext(content="x" * 500, char_count=500)
+    )
+    result = await mcp_call("source_wait", {"notebook": NB_ID, "sources": [SRC_ID, SRC_ID]})
+    sc = result.structured_content
+    _assert_aggregate_shape(sc)
+    assert [row["id"] for row in sc["ready"]] == [SRC_ID]
+    # Deduped BEFORE waiting: the source is polled exactly once, not twice.
+    assert mock_client.sources.wait_until_ready.call_count == 1
+
+
+async def test_source_wait_empty_sources_fails_before_notebook_lookup(
+    mcp_call, mock_client
+) -> None:
+    """Empty-``sources`` is an input error that fires BEFORE any I/O.
+
+    A bad notebook ref must NOT mask the VALIDATION error: the guard runs before
+    ``resolve_notebook``, so ``client.notebooks.list`` is never awaited.
+    """
+    mock_client.notebooks.list = AsyncMock(side_effect=AssertionError("resolve_notebook ran"))
+    with pytest.raises(ToolError) as excinfo:
+        await mcp_call("source_wait", {"notebook": "no-such-notebook", "sources": []})
+    assert "VALIDATION" in str(excinfo.value)
+    assert "was empty" in str(excinfo.value)
+    mock_client.notebooks.list.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# source_list label filter (#1745)
+# ---------------------------------------------------------------------------
+
+
+async def test_source_list_label_filter(mcp_call, mock_client) -> None:
+    """Filtering source list by label returns only member sources."""
+
+    mock_client.labels = MagicMock()
+    mock_client.labels.list = AsyncMock(
+        return_value=[Label(id="lbl_work", name="Work", source_ids=[SRC_ID])]
+    )
+    mock_client.labels.sources = AsyncMock(return_value=[FakeSource(id=SRC_ID, title="WorkDoc")])
+
+    result = await mcp_call("source_list", {"notebook": NB_ID, "label": "Work"})
+    sc = result.structured_content
+    assert sc["notebook_id"] == NB_ID
+    assert len(sc["sources"]) == 1
+    assert sc["sources"][0]["id"] == SRC_ID
+    assert sc["sources"][0]["title"] == "WorkDoc"
+    mock_client.labels.sources.assert_awaited_once_with(NB_ID, "lbl_work")
+
+
+async def test_source_list_label_and_status_filter(mcp_call, mock_client) -> None:
+    """Label and status filters compose to further narrow the result."""
+
+    mock_client.labels = MagicMock()
+    mock_client.labels.list = AsyncMock(
+        return_value=[Label(id="lbl_work", name="Work", source_ids=[SRC_ID, SRC2_ID])]
+    )
+    mock_client.labels.sources = AsyncMock(
+        return_value=[
+            FakeSource(id=SRC_ID, title="Ready Doc"),
+            FakeFailedSource(id=SRC2_ID, title="Broken Doc"),
+        ]
+    )
+
+    result = await mcp_call("source_list", {"notebook": NB_ID, "label": "Work", "status": "error"})
+    sc = result.structured_content
+    assert len(sc["sources"]) == 1
+    assert sc["sources"][0]["id"] == SRC2_ID
+    assert sc["sources"][0]["status_label"] == "error"
+
+
+async def test_source_list_unknown_label_raises(mcp_call, mock_client) -> None:
+    """An unknown label raises NOT_FOUND structured error."""
+    mock_client.labels = MagicMock()
+    mock_client.labels.list = AsyncMock(return_value=[])
+
+    with pytest.raises(ToolError) as excinfo:
+        await mcp_call("source_list", {"notebook": NB_ID, "label": "Unknown"})
+    assert "No label found matching" in str(excinfo.value)
+
+
+async def test_source_list_ambiguous_label_raises(mcp_call, mock_client) -> None:
+    """An ambiguous label token raises AMBIGUOUS_* structured error."""
+
+    mock_client.labels = MagicMock()
+    mock_client.labels.list = AsyncMock(
+        return_value=[
+            Label(id="lbl_work1", name="Work", source_ids=[]),
+            Label(id="lbl_work2", name="Work", source_ids=[]),
+        ]
+    )
+
+    with pytest.raises(ToolError) as excinfo:
+        await mcp_call("source_list", {"notebook": NB_ID, "label": "Work"})
+    assert "matches 2 labels" in str(excinfo.value)
+    assert "Use a label id instead" in str(excinfo.value)
