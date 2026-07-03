@@ -113,13 +113,48 @@ def _check_auth(storage_path: Path) -> dict[str, str]:
         cookies = data.get("cookies", [])
         if not isinstance(cookies, list):
             raise ValueError("cookies is not a list")
-        cookie_names = {c.get("name") for c in cookies if isinstance(c, dict)}
-        if "SID" in cookie_names:
+        # Reuse the shared, name-robust extractor (drops non-dict rows and
+        # nameless / empty-name / non-str-name entries) rather than a bare
+        # ``{c.get("name") ...}`` set — that would fold a nameless row in as a
+        # ``None`` member. Import is function-local so importing this neutral
+        # core never pulls the auth facade on the common path (mirrors the
+        # ``_auth`` import deferral in ``cli/doctor_cmd._headless_reauth_check``).
+        from ..auth import cookie_names_from_storage
+
+        # Count actual cookie *entries*, not unique names: the same name can
+        # legitimately appear on multiple domains, so ``len(cookie_names)`` would
+        # under-report the file's cookie count in the "N cookies" detail.
+        cookie_count = sum(isinstance(c, dict) for c in cookies)
+        cookie_names = cookie_names_from_storage(data)
+        if "SID" not in cookie_names:
+            return {"status": "fail", "detail": "SID cookie missing"}
+        # SID alone does not make a session usable. Google's homepage check also
+        # requires __Secure-1PSIDTS — the rotating freshness partner of
+        # __Secure-1PSID and the second half of the Tier-1 MINIMUM_REQUIRED_COOKIES
+        # set every real RPC enforces. It legitimately rotates and can be re-minted
+        # at runtime (RotateCookies), so a static, offline probe like doctor must
+        # not call its absence a hard failure — that would false-negative a
+        # recoverable session. But its absence is the #1 reason a session that
+        # looks authenticated is actually unusable (issue #1753; common on Windows,
+        # where Chrome 127+ App-Bound Encryption blocks --browser-cookies decryption
+        # and automated login can be served a session without the token-binding
+        # cookie). Surface it as a warn so doctor stops greenlighting an unusable
+        # session, without flipping the exit code on a session that may still heal.
+        if "__Secure-1PSIDTS" not in cookie_names:
             return {
-                "status": "pass",
-                "detail": f"local SID cookie present ({len(cookie_names)} cookies)",
+                "status": "warn",
+                "detail": (
+                    f"SID present but __Secure-1PSIDTS missing ({cookie_count} cookies); "
+                    "the session may be unusable until the cookie is refreshed. "
+                    "Re-run 'notebooklm login'; on Windows (Chrome 127+ App-Bound "
+                    "Encryption) use '--browser-cookies firefox' or set up "
+                    "'notebooklm login --master-token'."
+                ),
             }
-        return {"status": "fail", "detail": "SID cookie missing"}
+        return {
+            "status": "pass",
+            "detail": f"local auth cookies present ({cookie_count} cookies)",
+        }
     except (json.JSONDecodeError, OSError, ValueError) as e:
         return {"status": "fail", "detail": f"invalid storage file: {e}"}
 
