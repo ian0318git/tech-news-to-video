@@ -147,4 +147,9 @@ class TestErrorProjection:
                 "studio_generate",
                 {"notebook": read_only_notebook_id, "artifact_type": "not-a-real-type"},
             )
-        assert "VALIDATION" in str(excinfo.value)
+        # `artifact_type` is a Literal[...] param, so fastmcp/pydantic rejects the
+        # bad value at the tool-schema boundary — a clean ToolError (the point of
+        # this test: not a raw traceback), naming the offending field.
+        msg = str(excinfo.value)
+        assert "validation error" in msg.lower()
+        assert "artifact_type" in msg

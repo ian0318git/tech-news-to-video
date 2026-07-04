@@ -7,7 +7,123 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0]
+
+The headline of 0.8.0 is **integrations**: NotebookLM is now reachable from AI
+agents and HTTP clients through two new adapters built over the shared `_app/`
+core (ADR-0021) — an **MCP server** and an experimental **single-tenant REST API
+server** — plus a **remote MCP connector** you can self-host for **claude.ai**
+(and Claude Desktop / Code / Cursor) behind a Cloudflare Tunnel or Tailscale
+Funnel, gated by a single password.
+
+0.8.0 also lands the **breaking half** of the ADR-0019 error contract (the
+[#1346](https://github.com/teng-lin/notebooklm-py/issues/1346) umbrella):
+"absence and refusal **raise**; only success and async-lifecycle state are
+returned." Every flip previewed under `NOTEBOOKLM_FUTURE_ERRORS` in v0.7.0 is
+now the default, and the preview flag — together with the dict-subscript /
+get-returns-None / kwarg-alias deprecation machinery — has been **removed**
+(#1365). See the [Upgrading to v0.8.0](docs/upgrading-to-0.8.0.md) guide and the
+**Breaking** section below.
+
+> **⚠ `NOTEBOOKLM_FUTURE_ERRORS` is gone.** It was the v0.7.0 forward-compat
+> preview gate; its target behavior is now unconditional, so the flag is a no-op
+> (setting it changes nothing). Remove it from your environment / CI config.
+
 ### Added
+
+- **Experimental: MCP server** (#1484, opt-in via the `mcp` extra). A
+  [Model Context Protocol](https://modelcontextprotocol.io) server exposing
+  NotebookLM to MCP clients (Claude Desktop / Code, Cursor, Windsurf) as 28 tools
+  across notebooks, sources, chat, notes, studio artifacts, and research — built
+  as a transport-neutral sibling adapter over the `_app/` layer (ADR-0021), so it
+  behaves identically to the equivalent `notebooklm` CLI command. Run it with the
+  `notebooklm-mcp` console script (stdio by default, or loopback HTTP via
+  `--transport http`); wire it into a client with `notebooklm mcp install
+  <client>` or the one-click `.mcpb` desktop bundle. Notebook- and source-scoped
+  tool arguments accept a **name or an id**; destructive tools require
+  `confirm=true` (returning a `needs_confirmation` preview otherwise); long-running
+  generation is non-blocking (`*_generate` returns a `task_id` to poll via
+  `*_status`, then download). **The MCP tool surface is experimental and not
+  covered by the library's semver guarantees** — names, parameters, and output
+  shapes may change between releases. `pip install notebooklm-py` is unaffected:
+  the server and its dependencies (`fastmcp`) arrive only with the `mcp` extra.
+  See [docs/mcp-guide.md](docs/mcp-guide.md).
+
+- **Experimental: remote MCP connector — self-host NotebookLM for claude.ai,
+  Claude Desktop, and Cursor** (#1645, #1647). The MCP server now also runs as a
+  **remote HTTP connector**, not just a local stdio process: `notebooklm-mcp --transport http`
+  serves the same tools over HTTP behind a bearer token, and `deploy/` ships a
+  one-command Docker stack (`make dev`) that exposes it through a **Cloudflare
+  Tunnel** or a **Tailscale Funnel** — no public IP, no open port, no TLS cert to
+  manage. For **claude.ai** (whose connector UI is OAuth-only and has no bearer
+  field), the server can run its own tiny **OAuth authorization server gated by a
+  single password** (`NOTEBOOKLM_MCP_OAUTH_PASSWORD`) — no external IdP, no JWT
+  template; registered clients and tokens persist across restarts. Opt-in and
+  additive: leave the OAuth vars unset to stay bearer-only (Claude Code / Desktop
+  unaffected). The server **fail-closed** refuses to start on a non-loopback bind
+  with no auth, or on partial / weak / non-HTTPS OAuth config. Single-tenant,
+  self-hosted, one container per Google account. **The remote-deployment surface
+  is experimental and may change between releases.** See
+  [deploy/README.md](deploy/README.md) and
+  [docs/mcp-guide.md](docs/mcp-guide.md).
+
+- **Experimental: single-tenant REST API server** (#1538, opt-in via the `server`
+  extra; console script `notebooklm-server`). A FastAPI app exposing guarded
+  `/v1` routes — notebooks, sources, chat, notes, studio artifacts, sharing, and
+  research — over the same transport-neutral `_app/` core the CLI and MCP server
+  use (ADR-0021), so behavior matches the equivalent CLI command. Loopback-bound
+  by default, requires `NOTEBOOKLM_SERVER_TOKEN`, and refuses an unauthenticated
+  non-loopback bind. Native multipart source upload and `FileResponse` artifact
+  download (no signed-URL broker needed). Follow-up work closed the remaining
+  REST↔MCP capability and hardening gaps (#1620 notes CRUD, #1767). **The REST
+  surface is experimental and not covered by the library's semver guarantees.**
+  `pip install notebooklm-py` is unaffected — FastAPI / uvicorn arrive only with
+  the `server` extra. See
+  [docs/installation.md#rest-api-server](docs/installation.md#rest-api-server).
+
+- **Master-token headless auth** (#1638, #1640; ADR-0023; opt-in via the new
+  `headless` extra). NotebookLM's browser cookies are short-lived, and until now
+  the only way to re-acquire them was a human re-running `notebooklm login` in a
+  browser — fatal for long-lived headless / CI / server use. A durable Google
+  **master token** (minted once via `notebooklm login --master-token`, then stored
+  `0600` beside the profile) can now **re-mint fresh web cookies on demand with no
+  per-session browser**. Recovery is automatic: when a `master_token.json` is
+  present, an expired session re-mints in-process as the final layer of the
+  refresh ladder (single-flight, so concurrent RPCs coalesce one re-mint) instead
+  of raising "run 'notebooklm login'". `notebooklm auth check` surfaces the
+  master-token identity and `--master-token-refresh` re-mints on demand. This is
+  the foundation that makes the remote MCP connector and unattended deployments
+  viable. **Security:** the master token is a **full-account, long-lived**
+  credential — store it like a password and prefer a dedicated / throwaway account
+  for servers. It and its dependency (`gpsoauth`) arrive only with the `headless`
+  extra. See [docs/installation.md](docs/installation.md) and
+  [docs/auth-cookie-lifecycle.md](docs/auth-cookie-lifecycle.md).
+
+- **Source labels** (#1474). A new `client.labels` namespace and a `label` CLI
+  command group bring NotebookLM's source-label (tag) feature to the client:
+  list / create / rename / delete labels and assign or clear them on sources, then
+  narrow a listing with `source list --label <name>` (the MCP `source_list` tool
+  also gained a label filter). Additive new public surface across the Python API
+  and CLI.
+
+- **Suggested prompts** (#1612, #1616). New `client.chat.suggest_prompts(...)`
+  returns model-generated starter prompts for a notebook (backed by the
+  `GeneratePromptSuggestions` RPC), surfaced as a `notebooklm suggest-prompts` CLI
+  command and, later, an MCP `suggest_prompts` tool (#1726). A `mode` selector
+  targets the surface the suggestions are for (ask / audio / video / quiz /
+  flashcards / …). Additive new public surface.
+
+- **Opt-in `curl_cffi` browser-impersonation transport** (#1632). An alternative
+  HTTP backend that mimics a real browser's TLS fingerprint, selected via
+  `NOTEBOOKLM_TRANSPORT=curl_cffi` (requires the `curl_cffi` package), for
+  environments where the default `httpx` transport is fingerprint-blocked. It sits
+  behind the existing `async_client_factory` seam; the default transport is
+  unchanged.
+
+- **`--json` on every local CLI command** (#1643). The remaining local commands
+  gained a `--json` flag — now enforced by a coverage guardrail — so any
+  `notebooklm` command can emit machine-readable output for scripting and
+  automation.
 
 - **MCP soft-404 body-pattern detection.** The `source_wait` content-sanity check
   (#1698) now also flags a READY web page that sails past the thin-text threshold
@@ -152,24 +268,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   obfuscated method ID — by asserting a 200 plus a recognizable stream frame,
   closing the gap where the chat surface escaped the daily drift canary.
 
-- **Experimental: MCP server** (#1484, opt-in via the `mcp` extra). A
-  [Model Context Protocol](https://modelcontextprotocol.io) server exposing
-  NotebookLM to MCP clients (Claude Desktop / Code, Cursor, Windsurf) as 28 tools
-  across notebooks, sources, chat, notes, studio artifacts, and research — built
-  as a transport-neutral sibling adapter over the `_app/` layer (ADR-0021), so it
-  behaves identically to the equivalent `notebooklm` CLI command. Run it with the
-  `notebooklm-mcp` console script (stdio by default, or loopback HTTP via
-  `--transport http`); wire it into a client with `notebooklm mcp install
-  <client>` or the one-click `.mcpb` desktop bundle. Notebook- and source-scoped
-  tool arguments accept a **name or an id**; destructive tools require
-  `confirm=true` (returning a `needs_confirmation` preview otherwise); long-running
-  generation is non-blocking (`*_generate` returns a `task_id` to poll via
-  `*_status`, then download). **The MCP tool surface is experimental and not
-  covered by the library's semver guarantees** — names, parameters, and output
-  shapes may change between releases. `pip install notebooklm-py` is unaffected:
-  the server and its dependencies (`fastmcp`) arrive only with the `mcp` extra.
-  See [docs/mcp-guide.md](docs/mcp-guide.md).
-
 ### Changed
 
 - **MCP `source_wait` now returns one unified per-source aggregate** (#1669).
@@ -267,14 +365,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   --test` already reported the real error and is unchanged. New
   [troubleshooting.md](docs/troubleshooting.md) section documents the Windows
   App-Bound Encryption limitation and its workarounds.
-
-- **Video Overview visual-style values now match the live NotebookLM Web UI**
-  (#1594). `VideoStyle` previously used stale numeric values, so several named
-  styles could serialize as the wrong style on the wire. `CUSTOM` now reflects
-  the UI's `0` value and is encoded the same way the Web UI sends it: the style
-  enum slot is omitted/defaulted and the custom visual-style prompt is appended
-  to the video config. Preset styles such as Whiteboard, Anime, Kawaii,
-  Watercolor, Heritage, and Paper-craft now use the current Web UI values.
 
 - **`notebooklm auth check` text mode now exits non-zero when an executed check
   fails, matching `--json` mode** (#1569). Previously the Rich-table renderer
@@ -529,40 +619,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only when that positional reference carries no `citation_number`: a holed
   marker drops its anchor with a warning instead of anchoring the wrong
   chunk.
-- **Empty notebook summary no longer raises `UnknownRPCMethodError`** (#1485).
-  A brand-new, source-less notebook has no summary yet, so the `SUMMARIZE` RPC
-  returns an absent/`None` payload. `notebooks.get_summary()` and
-  `notebooks.get_description()` now treat that routine "no summary yet" state as
-  an empty summary (`""`) instead of mis-classifying it as wire-schema drift.
-  Genuinely-malformed payloads (a present-but-non-list `result[0]`, a scalar, or
-  a string where a nested list is expected) still raise. `get_summary` now shares
-  the `_extract_summary` descent with `get_description`, so both agree on every
-  shape. As part of the fix, `safe_index` rejects a `str`/`bytes` value at an
-  intermediate descent hop (it is indexable but never a valid container, so
-  descending it would smuggle a single character past drift detection).
-- **`download <type>` no longer exits 1 with no file written** (#1488). The
-  download path listed artifacts twice — the executor listed to select the
-  target, then each per-type download re-listed to re-find it by id — so the
-  second `LIST_ARTIFACTS` could not replay against a single-interaction VCR
-  cassette and aborted the download. The executor now lists once and threads
-  the already-fetched rows into the download method (which skips its redundant
-  second list); studio downloads also no longer trigger the note-backed
-  mind-map sub-fetch they never needed. Live behavior is unchanged for direct
-  `client.artifacts.download_*()` calls.
-
-## [0.8.0]
-
-This release lands the **breaking half** of the ADR-0019 error contract
-(umbrella #1346): "absence and refusal **raise**; only success and
-async-lifecycle state are returned." Every flip previewed under
-`NOTEBOOKLM_FUTURE_ERRORS` in v0.7.0 is now
-the default, and the preview flag — together with the dict-subscript / get-returns-
-None / kwarg-alias deprecation machinery — has been **removed** (#1365). See the
-[Upgrading to v0.8.0](docs/upgrading-to-0.8.0.md) guide.
-
-> **⚠ `NOTEBOOKLM_FUTURE_ERRORS` is gone.** It was the v0.7.0 forward-compat
-> preview gate; its target behavior is now unconditional, so the flag is a no-op
-> (setting it changes nothing). Remove it from your environment / CI config.
 
 ### Breaking
 
@@ -627,6 +683,124 @@ None / kwarg-alias deprecation machinery — has been **removed** (#1365). See t
   `deprecated_kwarg` / `MappingCompatMixin` deprecation helpers are deleted now
   that every break they previewed is the default. `warn_deprecated` and
   `NOTEBOOKLM_QUIET_DEPRECATIONS` remain for future one-off deprecations.
+
+## [0.7.3] - 2026-06-29
+
+Maintenance patch on the 0.7.x line. Backports fixes from `main`
+(cherry-picked ahead of the v0.8.0 breaking release).
+
+### Fixed
+
+- **Markdown (`.md`) uploads no longer fail on Python 3.10** (backport of
+  #1628; fixes #1627). `mimetypes.guess_type` returns `None` for `.md` on
+  Python 3.10 and on hosts without a populated `/etc/mime.types`, so the upload
+  fell back to `application/octet-stream`; NotebookLM could not infer a parser
+  and processing failed server-side (status=ERROR), surfacing as
+  "Error uploading source" / `SourceProcessingError`. `.md`/`.markdown` are now
+  pinned to `text/markdown` before the opaque fallback.
+- **Clearer error when NotebookLM redirects to its region / anti-abuse access
+  gate** (backport of #1630). A redirect to `notebooklm.google` is now
+  classified and surfaced with an actionable message instead of an opaque
+  failure.
+- **Interactive `notebooklm login` no longer hangs 5 minutes and silently
+  fails to save auth** (backport of #1700; fixes #1697). The login-success
+  detector used Playwright's default `wait_until="load"`, but
+  `notebooklm.google.com` is a streaming SPA that never fires the `load` event
+  (`readyState` stays `interactive`), so the wait blocked until timeout even
+  though sign-in had succeeded — printing "Login not detected within 5 minutes"
+  and never writing `storage_state.json`. The initial navigation and the
+  success detector now pass `wait_until="commit"` (the same level the existing
+  cookie-forcing navigations already use), so login is detected as soon as the
+  authenticated host is reached.
+
+## [0.7.2] - 2026-06-18
+
+Maintenance patch on the 0.7.x line. Backports fixes from `main`
+(cherry-picked ahead of the v0.8.0 breaking release).
+
+### Fixed
+
+- **Video Overview visual-style values corrected to match the live Web UI**
+  (#1594; backport of #1597). `VideoStyle` used stale numeric wire values, so
+  several named styles (Whiteboard, Kawaii, Anime, Watercolor, Heritage,
+  Paper-craft, Classic, Custom) serialized as the *wrong* style on the wire.
+  Values now match live Web UI captures, and `CUSTOM` is encoded the Web-UI way
+  (the style enum slot is omitted/defaulted and the custom visual-style prompt
+  is appended). **Note:** this changes the integer values of `VideoStyle`
+  members — code that passed the raw ints must update; passing the enum members
+  (`VideoStyle.WHITEBOARD`, …) is unaffected.
+
+- **Video (and other artifact) generation no longer fails immediately on
+  cohorts that reject the legacy client-options shape** (#1594; backport of
+  #1583). `CREATE_ARTIFACT` sent a minimal param-0 of `[2]`; the live web
+  client sends the fuller capability envelope
+  (`[2, null, null, [1, …, [1]], [[1, 4, 8, 2, 3, 6]]]`). On some accounts the
+  backend began rejecting the short form for video generation specifically —
+  the artifact was created and then immediately marked failed, while audio and
+  infographic (which the backend still accepted) kept working. All artifact
+  builders (audio, video, cinematic video, report, quiz, flashcards) now send
+  the full envelope, matching the browser. The VCR body matcher normalizes the
+  old and new client-options shapes so existing generation cassettes still
+  replay.
+
+- **`notebooks.create()` and `sources.add_url()` no longer fail on
+  already-migrated cohorts** (#1548; backport of #1546). Google migrated the
+  `CREATE_NOTEBOOK` (CCqFvf) and URL `ADD_SOURCE` (izAoDd) payloads to a nested
+  wire shape during the gradual rollout: the flat trailing template block
+  (`[2],[1]` for create; `[2],None,None` for url-add) collapsed into a nested
+  `[2, None, None, [1, …, [1]]]` block, and the URL source spec gained a
+  trailing `1`. Backends on already-migrated accounts began rejecting the old
+  flat shape (`status=3` for create, `5`/`9` for add-source), while read paths
+  were unaffected. Both payload builders now emit the nested shape, which is
+  forward-compatible across migrated and un-migrated cohorts (verified live).
+  Scope is limited to the create + add-url RPCs with exact Web-UI captures; the
+  youtube/text/drive/file `ADD_SOURCE` variants are unchanged.
+
+- **Empty notebook summary no longer raises `UnknownRPCMethodError`** (#1485).
+  A brand-new, source-less notebook has no summary yet, so the `SUMMARIZE` RPC
+  returns an absent/`None` payload. `notebooks.get_summary()` and
+  `notebooks.get_description()` now treat that routine "no summary yet" state as
+  an empty summary (`""`) instead of mis-classifying it as wire-schema drift.
+  Genuinely-malformed payloads (a present-but-non-list `result[0]`, a scalar, or
+  a string where a nested list is expected) still raise. `get_summary` now shares
+  the `_extract_summary` descent with `get_description`, so both agree on every
+  shape. As part of the fix, `safe_index` rejects a `str`/`bytes` value at an
+  intermediate descent hop (it is indexable but never a valid container, so
+  descending it would smuggle a single character past drift detection).
+- **`download <type>` no longer exits 1 with no file written** (#1488). The
+  download path listed artifacts twice — the executor listed to select the
+  target, then each per-type download re-listed to re-find it by id — so the
+  second `LIST_ARTIFACTS` could not replay against a single-interaction VCR
+  cassette and aborted the download. The executor now lists once and threads
+  the already-fetched rows into the download method (which skips its redundant
+  second list); studio downloads also no longer trigger the note-backed
+  mind-map sub-fetch they never needed. Live behavior is unchanged for direct
+  `client.artifacts.download_*()` calls.
+
+## [0.7.1] - 2026-06-06
+
+Maintenance patch on the 0.7.x line. Backports two fixes from `main`
+(cherry-picked ahead of the v0.8.0 breaking release).
+
+### Fixed
+
+- **Chat reads no longer time out on slow shared-notebook streams** (#1466,
+  #1468). `client.chat.ask` now uses a chat-specific per-read HTTP timeout
+  instead of inheriting the general client `timeout`, so shared notebooks that
+  are slow to emit the first streamed byte stop raising spurious timeouts. A new
+  optional `chat_timeout` keyword on `NotebookLMClient(...)` /
+  `NotebookLMClient.from_storage(...)` (and a matching `chat ask` CLI flag)
+  tunes the window; it defaults to 180 s. **Behavior note:** chat reads now wait
+  up to 180 s by default rather than inheriting the prior client timeout — pass
+  `chat_timeout=None` to restore the old inherit-`timeout` behavior.
+- **Dropped a misleading byte-count-mismatch WARNING from the chunked RPC
+  parser** (#1469). The decoder no longer logs a spurious size-mismatch warning
+  during normal chunked parsing.
+
+### Added
+
+- `chat_timeout` keyword argument on the client constructors and a corresponding
+  `chat ask` CLI option (additive; defaults preserve existing call sites).
 
 ## [0.7.0] - 2026-06-04
 
@@ -1727,7 +1901,10 @@ This is the initial public release of `notebooklm-py`. While core functionality 
 - **Large file uploads**: Files over 50MB may fail or timeout. Split large documents if needed.
 
 [Unreleased]: https://github.com/teng-lin/notebooklm-py/compare/v0.8.0...HEAD
-[0.8.0]: https://github.com/teng-lin/notebooklm-py/compare/v0.7.0...v0.8.0
+[0.8.0]: https://github.com/teng-lin/notebooklm-py/compare/v0.7.3...v0.8.0
+[0.7.3]: https://github.com/teng-lin/notebooklm-py/compare/v0.7.2...v0.7.3
+[0.7.2]: https://github.com/teng-lin/notebooklm-py/compare/v0.7.1...v0.7.2
+[0.7.1]: https://github.com/teng-lin/notebooklm-py/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/teng-lin/notebooklm-py/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/teng-lin/notebooklm-py/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/teng-lin/notebooklm-py/compare/v0.4.1...v0.5.0

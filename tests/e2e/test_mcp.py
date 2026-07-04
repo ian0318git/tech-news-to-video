@@ -69,13 +69,18 @@ class TestMcpReadOnly:
     @pytest.mark.asyncio
     @pytest.mark.readonly
     async def test_server_info(self, client):
-        """``server_info`` reports the version and a healthy auth probe."""
+        """``server_info`` reports the version and the auth-probe block."""
         structured = await _call(client, "server_info")
         assert structured["server"] == "notebooklm"
         assert structured["version"]
-        # Auth came from real storage for the E2E run, so the probe must pass.
-        assert structured["auth"]["authenticated"] is True
-        assert structured["auth"]["sid_cookie"] is True
+        # server_info deliberately probes ON-DISK storage (has_env_auth=False), so
+        # authenticated/sid_cookie are True only when a storage_state.json exists —
+        # not under the nightly's inline NOTEBOOKLM_AUTH_JSON auth. Assert the block
+        # shape, not the storage-dependent values (every other live tool call in
+        # this suite proves the injected client is genuinely authenticated).
+        auth = structured["auth"]
+        assert isinstance(auth["authenticated"], bool)
+        assert isinstance(auth["sid_cookie"], bool)
 
 
 @requires_auth
@@ -150,7 +155,7 @@ class TestMcpLifecycle:
         renamed_result = await _call(
             client, "notebook_rename", {"notebook": nb_id, "new_title": renamed}
         )
-        assert renamed_result == {"notebook_id": nb_id, "new_title": renamed}
+        assert renamed_result == {"status": "renamed", "notebook_id": nb_id, "new_title": renamed}
 
         # Delete via MCP — first preview (confirm omitted), then confirm=True.
         preview = await _call(client, "notebook_delete", {"notebook": nb_id})
@@ -185,10 +190,9 @@ class TestMcpNameResolution:
         assert described_upper["notebook_id"] == nb_id
 
 
-# Tool → owning-test matrix. Every one of the 28 registered tools must map to a
-# test (or a documented owner) so a newly-added tool fails ``test_tool_matrix``
-# until it gains live coverage. ``test_tool_matrix`` asserts this set equals the
-# live manifest.
+# Tool → owning-test matrix. Every registered tool must map to a test (or a
+# documented owner) so a newly-added tool fails ``test_tool_matrix`` until it
+# gains coverage. ``test_tool_matrix`` asserts this set equals the live manifest.
 TOOL_COVERAGE: dict[str, str] = {
     # notebooks / meta
     "notebook_list": "TestMcpReadOnly.test_notebook_list",
@@ -216,6 +220,15 @@ TOOL_COVERAGE: dict[str, str] = {
     "studio_download": "TestMcpArtifacts.test_download_existing_artifact",
     "studio_rename": "tests/unit/mcp/test_studio.py (cross-type note/artifact rename; no live mutation)",
     "studio_delete": "TestMcpNotes.test_note_crud (note path) + tests/unit/mcp/test_studio.py (artifact path)",
+    "studio_get_prompt": "tests/unit/mcp/test_studio.py (get_prompt; readonly)",
+    "studio_retry": "tests/unit/mcp/test_studio.py (retry wiring)",
+    # chat / suggestions
+    "suggest_prompts": "tests/unit/mcp/ (suggest_prompts wiring; readonly)",
+    # sharing (live widening is confirm-gated; covered by unit tests, not live e2e)
+    "share_status": "tests/unit/mcp/test_sharing.py (read)",
+    "share_set_access": "tests/unit/mcp/test_sharing.py (confirm-gated widening)",
+    "share_set_user": "tests/unit/mcp/test_sharing.py (confirm-gated widening)",
+    "share_remove_user": "tests/unit/mcp/test_sharing.py",
     # research
     "research_start": "TestMcpResearch.test_start_status_cancel (variants)",
     "research_status": "TestMcpResearch.test_status_readonly",
@@ -226,7 +239,7 @@ TOOL_COVERAGE: dict[str, str] = {
 
 @requires_auth
 class TestMcpToolMatrix:
-    """Every registered tool is accounted for by a live test (the 28-tool matrix)."""
+    """Every registered tool is accounted for by a live test (the tool matrix)."""
 
     @pytest.mark.asyncio
     @pytest.mark.readonly

@@ -1,7 +1,7 @@
 # Upgrading to v0.8.0
 
 **Status:** Active
-**Last Updated:** 2026-06-05
+**Last Updated:** 2026-07-04
 
 `notebooklm-py` v0.8.0 **landed** a batch of **breaking** error-and-return
 contract changes under [ADR-0019](adr/0019-error-and-return-contract.md) (umbrella
@@ -60,6 +60,8 @@ migrate.
 | Synchronous generation refusal returns `GenerationStatus(status="failed")` | ❌ silent | `try/except RateLimitError` (or `with_rate_limit_retry`) | v0.8.0 |
 | `notes.update` / `rename(return_object=False)` silently no-op on a missing target | ❌ silent | `try/except *NotFoundError` | v0.8.0 |
 | `sources.refresh` / `chat.delete_conversation` return `bool` (always `True`) | ❌ silent | Stop relying on the return value | v0.8.0 |
+| `client.settings.get_account_tier()` and the `AccountTier` type removed | ❌ silent | `client.settings.get_account_limits()` (`AccountLimits.notebook_limit` / `source_limit`) — the old tier could not tell free from paid | v0.8.0 |
+| Derived-read / lister drift (`sources.check_freshness()`, note & artifact listers) returned an empty value on an unrecognized payload | ❌ silent | Handle `DecodingError` (only fires on server-side schema drift; legitimate empty/stale shapes are unchanged) | v0.8.0 |
 
 Legend: ✅ emitted a `DeprecationWarning` (or a stderr notice) in 0.7.0; ❌ was a
 **silent** clean break with no v0.7.0 warning.

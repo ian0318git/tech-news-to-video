@@ -268,8 +268,12 @@ def test_torn_write_fault_injection_preserves_original(
     assert get_authuser_for_storage(storage_path) == 1
     assert get_account_email_for_storage(storage_path) == "original@example.com"
 
-    # No temp files leaked beside the storage file.
-    leftover_temps = list(tmp_path.glob(".storage_state.json.*"))
+    # No torn-write temp files leaked beside the storage file. The filelock
+    # sentinel (``.storage_state.json.lock``) is expected to persist — filelock
+    # >= 3.29 no longer unlinks it on release — and is not a torn-write leak.
+    leftover_temps = [
+        p for p in tmp_path.glob(".storage_state.json.*") if p.name != ".storage_state.json.lock"
+    ]
     assert leftover_temps == [], f"Temp file leaked: {leftover_temps}"
 
 
