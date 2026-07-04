@@ -113,6 +113,10 @@ Proceed with release preparation?
   version = "X.Y.Z"
   ```
 
+- [ ] Update the matching version in `desktop-extension/manifest.json` (`"version": "X.Y.Z"`).
+  It must equal `pyproject.toml` — `tests/unit/test_mcp_desktop_extension.py` enforces this,
+  and `publish-mcpb.yml` aborts the release-asset build on a mismatch.
+
 ### Public API Compatibility Gate
 
 - [ ] Run the cross-release public API audit before committing release changes:
@@ -219,7 +223,7 @@ no break against the baseline) is a CI failure, not silent cruft.
   entry, and for a pre-release the `uv sync` re-lock in the Pre-releases section
   requires it; staging it is a no-op on releases where it did not change):
   ```bash
-  git add pyproject.toml CHANGELOG.md uv.lock docs/
+  git add pyproject.toml desktop-extension/manifest.json CHANGELOG.md uv.lock docs/
   git commit -m "chore: release vX.Y.Z"
   ```
 - [ ] Show commit to user:
@@ -387,6 +391,14 @@ The `Publish to PyPI` step in `publish.yml` also opts into **PEP 740 attestation
   - Title: `vX.Y.Z`
   - Copy release notes from `CHANGELOG.md`
   - Publish release
+
+- [ ] Publishing a **stable** release fires `publish-mcpb.yml`, which builds
+  `notebooklm-mcp.mcpb` and attaches it to the release as an asset (it re-checks
+  that the manifest, tag, and `pyproject.toml` versions all agree). Confirm the
+  asset appears under the release once the workflow finishes — that is the
+  one-click Claude Desktop bundle users download. Pre-releases skip this step by
+  design (the thin launcher resolves the latest stable server, not the
+  pre-release), so a `vX.Y.ZaN` release carries no `.mcpb`.
 
 ### Prune the API-Compat Allowlist
 
