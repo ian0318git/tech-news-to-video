@@ -30,7 +30,7 @@ pytest.importorskip("fastmcp")
 #: Ratchet ceilings — calibrated to the current surface (Tier-1 read-merge took it
 #: to ~36.0k). Move these DOWN as the surface gets leaner; a rise means
 #: description/param bloat that must be justified, not rubber-stamped.
-SCHEMA_CHAR_BUDGET = 38_620  # total serialized inputSchema + description chars (current 38_565)
+SCHEMA_CHAR_BUDGET = 40_460  # total serialized inputSchema + description chars (current 40_412)
 # ^ Raised from 36_250 for #1741: research_status gained include_report /
 # report_max_chars / source_limit / source_offset windowing params, and the four
 # research tools' docstrings speak one `poll_task_id` id (tightened to stay lean).
@@ -44,6 +44,11 @@ SCHEMA_CHAR_BUDGET = 38_620  # total serialized inputSchema + description chars 
 # not growth of an existing one; ADR-0025 prefers a discrete verb over widening the
 # source_add mega-tool, whose schema-budget headroom this would otherwise consume.
 # Measured full-surface cost is 38_572.
+# #1807 added source_add_and_wait (single-mode source_add + source_wait composed into
+# one call — the add→wait round-trip an agent otherwise makes itself) — another NEW
+# discrete tool (~1_920 chars, 11 params), not growth of an existing one; same
+# ADR-0025 discrete-verb rationale as source_upload_bytes. Measured full-surface cost
+# is 40_412 (after the #1806 / #1805 rebase, which shifted the baseline).
 MAX_PARAMS_PER_TOOL = 22  # studio_generate is the current high-water mark
 
 

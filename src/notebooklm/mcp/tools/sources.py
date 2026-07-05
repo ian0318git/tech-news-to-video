@@ -18,7 +18,6 @@ This module imports NO ``click`` / ``rich`` / ``cli``.
 
 from __future__ import annotations
 
-import asyncio
 from typing import TYPE_CHECKING, Any, Literal
 
 from fastmcp import Context
@@ -34,8 +33,6 @@ from ..._app.serialize import to_jsonable
 from ..._app.views import source_view as _source_view
 from ...exceptions import (
     SourceNotFoundError,
-    SourceProcessingError,
-    SourceTimeoutError,
     ValidationError,
 )
 from ...types import source_status_to_str
@@ -50,6 +47,7 @@ from ._content_sanity import _annotate_thin_warnings
 from ._fileupload import _add_bytes, _add_one, _broker_upload, _decode_upload_b64
 from ._passthrough import passthrough_child_id
 from ._preview import title_for_id
+from ._waitagg import _aggregate_wait_outcomes, _wait_all_sources
 
 if TYPE_CHECKING:
     from ...client import NotebookLMClient
@@ -558,6 +556,87 @@ def register(mcp: Any) -> None:
             return _add_result_payload(src, to_jsonable(add_core.SourceAddResult(source=src)))
 
     @mcp.tool
+    async def source_add_and_wait(
+        ctx: Context,
+        notebook: str,
+        source_type: Literal["url", "text", "file", "drive", "youtube"],
+        url: str | None = None,
+        text: str | None = None,
+        title: str | None = None,
+        path: str | None = None,
+        document_id: str | None = None,
+        mime_type: str | None = None,
+        allow_internal: bool = False,
+        timeout: float = 120.0,
+        interval: float = 1.0,
+    ) -> dict[str, Any]:
+        """Add ONE source and block until it finishes processing, in a single call.
+
+        Composes single-mode ``source_add`` + ``source_wait`` so an agent skips the
+        add→wait round-trip. Takes the single-mode ``source_add`` inputs — ``source_type``
+        plus the one it needs (url/youtube→``url``, text→``text``, file→``path`` (stdio
+        only), drive→``document_id``; ``title``/``mime_type``/``allow_internal`` optional)
+        — and the ``source_wait`` knobs (``timeout``, ``interval``). NOT for batch
+        (``source_add(urls=[...])``) or a REMOTE ``file`` upload: that upload is a
+        separate step (use ``source_add(source_type="file")`` then ``source_wait``, or
+        ``source_upload_bytes`` for a tiny file).
+
+        Returns the ``source_wait`` aggregate (``{notebook_id, ok, ready, timed_out,
+        failed, not_found}``) plus a top-level ``source_id`` — always on the returned
+        aggregate, since the source persists even when the wait does not reach READY, so
+        you can retry/delete it. A READY web page with thin/soft-404 text carries a
+        non-blocking ``warning``, as in ``source_wait``.
+        """
+        client = get_client(ctx)
+        with mcp_errors():
+            if timeout < 0:
+                raise ValidationError(f"timeout must be >= 0; got {timeout}")
+            if interval <= 0:
+                raise ValidationError(f"interval must be > 0; got {interval}")
+            # The same single-add guards source_add applies, all BEFORE any notebook
+            # I/O so a malformed call never pays a round-trip. Kept in sync with
+            # source_add's copies (the drive-mime check + _reject_single_content_scalars):
+            # if _CONTENT_SCALAR_OWNERS / _DRIVE_MIME_CHOICES change, update both sites.
+            if (
+                mime_type is not None
+                and source_type == "drive"
+                and mime_type not in _DRIVE_MIME_CHOICES
+            ):
+                raise ValidationError(
+                    f"Invalid mime_type {mime_type!r} for drive; "
+                    f"expected one of {list(_DRIVE_MIME_CHOICES)}"
+                )
+            _reject_single_content_scalars(
+                source_type, url=url, text=text, path=path, document_id=document_id
+            )
+
+            nb_id = await resolve_notebook(client, notebook)
+            src = await _add_source_to_wait_on(
+                client,
+                ctx,
+                nb_id,
+                source_type=source_type,
+                url=url,
+                text=text,
+                title=title,
+                path=path,
+                document_id=document_id,
+                mime_type=mime_type,
+                allow_internal=allow_internal,
+            )
+            outcome = await wait_core.execute_source_wait(
+                client,
+                wait_core.SourceWaitPlan(
+                    notebook_id=nb_id, source_id=src.id, timeout=timeout, interval=interval
+                ),
+            )
+            result = await _aggregate_wait_outcomes(client, nb_id, [outcome])
+            # The created source persists regardless of the wait outcome — surface its id
+            # at the top level so a timed-out / failed caller can retry or delete it.
+            result["source_id"] = src.id
+            return result
+
+    @mcp.tool
     async def source_upload_bytes(
         ctx: Context,
         notebook: str,
@@ -781,6 +860,65 @@ async def _add_url_batch(
     }
 
 
+async def _add_source_to_wait_on(
+    client: NotebookLMClient,
+    ctx: Context,
+    notebook_id: str,
+    *,
+    source_type: Literal["url", "text", "file", "drive", "youtube"],
+    url: str | None,
+    text: str | None,
+    title: str | None,
+    path: str | None,
+    document_id: str | None,
+    mime_type: str | None,
+    allow_internal: bool,
+) -> Source:
+    """Add one source and return its ``Source`` for ``source_add_and_wait`` to poll.
+
+    A focused single-add dispatch over the SAME cores ``source_add`` drives
+    (:func:`_select_content` + :func:`_add_one` for url/youtube/text/file,
+    ``execute_source_add_drive`` for drive). It deliberately does NOT reuse
+    ``source_add``'s own dispatch, whose type-specific payloads (the Drive provenance
+    fields, the remote-file ``upload_required`` broker dict) are the wrong shape here
+    and are pinned by tests — sharing it would force a lossy refactor of that surface.
+
+    A REMOTE ``file`` add is rejected: the signed-URL upload is a separate human/agent
+    step, so no source exists yet to wait on (the caller must use ``source_add`` +
+    ``source_wait``). Only a stdio ``file`` (a real local path, read in one shot) falls
+    through to the add.
+    """
+    if source_type == "file" and (get_file_transfer(ctx) is not None or _is_http_transport()):
+        raise ValidationError(
+            "source_add_and_wait cannot one-shot a remote file upload (the upload is a "
+            "separate step); use source_add(source_type='file') then source_wait, or "
+            "source_upload_bytes for a tiny file"
+        )
+    if source_type == "drive":
+        if not document_id:
+            raise ValidationError("source_type 'drive' requires 'document_id'")
+        drive_result = await mut_core.execute_source_add_drive(
+            client,
+            mut_core.SourceAddDrivePlan(
+                notebook_id=notebook_id,
+                file_id=document_id,
+                title=title or "",
+                mime_type=mime_type or _DEFAULT_DRIVE_MIME,  # type: ignore[arg-type]
+            ),
+        )
+        return drive_result.source
+    content = _select_content(source_type, url=url, text=text, path=path)
+    return await _add_one(
+        client,
+        notebook_id,
+        content,
+        source_type=source_type,
+        title=title,
+        mime_type=mime_type,
+        allow_internal=allow_internal,
+    )
+
+
 def _select_content(
     source_type: str, *, url: str | None, text: str | None, path: str | None
 ) -> str:
@@ -806,110 +944,3 @@ def _select_content(
             raise ValidationError("source_type 'file' requires 'path'")
         return path
     raise ValidationError(f"Unknown source type {source_type!r}")  # pragma: no cover
-
-
-async def _wait_all_sources(
-    client: NotebookLMClient,
-    notebook_id: str,
-    source_ids: list[str],
-    *,
-    timeout: float,
-    interval: float,
-) -> list[wait_core.SourceWaitOutcome]:
-    """Wait for every source concurrently, returning one outcome per source.
-
-    Unlike ``client.sources.wait_for_sources`` (which re-raises the first failure
-    and discards the sources that already became ready), each per-source wait runs
-    through :func:`execute_source_wait`, which maps the three handled
-    ``SourceWait*`` failures to a typed outcome instead of raising — so a slow or
-    failed source never throws away its siblings' progress.
-
-    An UNEXPECTED exception (e.g. an auth/transport ``RPCError``, a bug) is NOT a
-    handled outcome: a bare ``asyncio.gather`` would re-raise it without cancelling
-    the still-running sibling pollers, leaking coroutines. Mirror the library's
-    ``wait_for_sources`` discipline (``_source/polling.py``): drive explicit tasks
-    and, on any such escape, cancel + drain the pending siblings before re-raising
-    (it then flows through ``mcp_errors()``).
-    """
-    tasks = [
-        asyncio.create_task(
-            wait_core.execute_source_wait(
-                client,
-                wait_core.SourceWaitPlan(
-                    notebook_id=notebook_id,
-                    source_id=sid,
-                    timeout=timeout,
-                    interval=interval,
-                ),
-            )
-        )
-        for sid in source_ids
-    ]
-    try:
-        return list(await asyncio.gather(*tasks))
-    except BaseException:
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        raise
-
-
-def _wait_bucket_entry(
-    error: SourceNotFoundError | SourceProcessingError | SourceTimeoutError,
-) -> dict[str, str]:
-    """Project a handled wait failure onto its ``{source_id, error}`` bucket entry."""
-    return {"source_id": error.source_id, "error": str(error)}
-
-
-async def _aggregate_wait_outcomes(
-    client: NotebookLMClient,
-    notebook_id: str,
-    outcomes: list[wait_core.SourceWaitOutcome],
-) -> dict[str, Any]:
-    """Project per-source wait outcomes onto the unified aggregate wire shape.
-
-    Both ``source_wait`` modes (single source, all sources) share this contract:
-    ready sources are returned alongside the ones that timed out / failed / went
-    missing, so the all-sources mode reports partial progress instead of discarding
-    the sources that did become ready. ``ok`` is ``True`` iff nothing landed in an
-    error bucket.
-
-    READY web-page entries are additionally annotated with a non-blocking
-    content-sanity ``warning`` when their indexed text is suspiciously thin (a
-    likely dead link / soft-404 / paywall ghost source) — see
-    :func:`_annotate_thin_warnings`. The warning is purely advisory: a thin source
-    is still READY and the wait is still ``ok``.
-    """
-    ready: list[dict[str, Any]] = []
-    # Pair each ready view with its Source so the thin-content sanity check can
-    # read the kind + fetch the body without re-resolving.
-    ready_pairs: list[tuple[dict[str, Any], Source]] = []
-    timed_out: list[dict[str, str]] = []
-    failed: list[dict[str, str]] = []
-    not_found: list[dict[str, str]] = []
-    for outcome in outcomes:
-        if isinstance(outcome, wait_core.SourceWaitReady):
-            view = _source_view(outcome.source)
-            ready.append(view)
-            ready_pairs.append((view, outcome.source))
-        elif isinstance(outcome, wait_core.SourceWaitTimeout):
-            timed_out.append(_wait_bucket_entry(outcome.error))
-        elif isinstance(outcome, wait_core.SourceWaitProcessingError):
-            failed.append(_wait_bucket_entry(outcome.error))
-        elif isinstance(outcome, wait_core.SourceWaitNotFound):
-            not_found.append(_wait_bucket_entry(outcome.error))
-        else:  # exhaustive over the closed SourceWaitOutcome union
-            # mypy narrows ``outcome`` to ``Never`` here; a future outcome variant
-            # would surface as a type error AND fail loudly at runtime rather than
-            # being silently dropped from every bucket.
-            raise AssertionError(f"unhandled SourceWaitOutcome: {outcome!r}")
-    await _annotate_thin_warnings(client, notebook_id, ready_pairs)
-    return {
-        "notebook_id": notebook_id,
-        "ok": not (timed_out or failed or not_found),
-        "ready": ready,
-        "timed_out": timed_out,
-        "failed": failed,
-        "not_found": not_found,
-    }

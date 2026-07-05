@@ -8,8 +8,9 @@ for such a source; :func:`_annotate_thin_warnings` runs it concurrently over the
 ready web-page views and attaches the warning in place.
 
 Extracted from ``sources.py`` (it stayed under the ADR-0008 module-size budget):
-the logic is a self-contained, reusable unit consumed by both ``source_wait``
-(:func:`._sources._aggregate_wait_outcomes`) and the ``source_add`` batch
+the logic is a self-contained, reusable unit consumed by both the wait aggregate
+(:func:`._waitagg._aggregate_wait_outcomes`, behind ``source_wait`` /
+``source_add_and_wait``) and the ``source_add`` batch
 (:func:`._sources._add_url_batch`). Reads only ``_app.source_content`` — imports
 NO ``click`` / ``rich`` / ``cli`` (MCP-layer boundary).
 """
