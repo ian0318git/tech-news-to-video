@@ -122,14 +122,6 @@ Programmatic, batch, and local-file capabilities the API/CLI make easy — sever
 - **Source fulltext access** - Retrieve the indexed text content of any source
 - **Programmatic sharing** - Manage permissions without the UI
 
-### Authentication & Access
-
-Flexible auth for local dev, headless servers, and multi-tenant setups:
-
-- **Three ways to get cookies** - Interactive Playwright login (default), import from an already-signed-in browser (`login --browser-cookies chrome`, no Playwright), or a durable **master token**.
-- **Master-token auth** - Mints fresh web cookies **on demand** with no per-session browser (`login --master-token --account you@example.com`), so it self-heals expired sessions unattended — the auth model for servers, CI, and the remote MCP connector (claude.ai / ChatGPT).
-- **Multi-account profiles** - Switch between Google accounts without re-authenticating.
-
 ## Installation
 
 The full install guide — six personas (agent, end-user, library, headless, contributor, power-user), optional extras matrix, platform notes — lives in **[docs/installation.md](docs/installation.md)**.
@@ -159,6 +151,14 @@ uv add notebooklm-py                    # or, inside a virtualenv: pip install n
 
 If `playwright install chromium` fails on Linux with `TypeError: onExit is not a function`, see the [Linux workaround](docs/troubleshooting.md#linux). **Contributors:** see [CONTRIBUTING.md](CONTRIBUTING.md).
 
+
+### Authentication & Access
+
+Flexible auth for local dev, headless servers, and multi-tenant setups:
+
+- **Three ways to get cookies** - Interactive Playwright login (default), import from an already-signed-in browser (`login --browser-cookies chrome`, no Playwright), or a durable **master token**.
+- **Master-token auth** - Mints fresh web cookies **on demand** with no per-session browser (`login --master-token --account you@example.com`), so it self-heals expired sessions unattended — the auth model for servers, CI, and the remote MCP connector (claude.ai / ChatGPT).
+- **Multi-account profiles** - Switch between Google accounts without re-authenticating.
 
 ### Agent Setup
 
