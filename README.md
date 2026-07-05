@@ -159,6 +159,25 @@ uv add notebooklm-py                    # or, inside a virtualenv: pip install n
 
 If `playwright install chromium` fails on Linux with `TypeError: onExit is not a function`, see the [Linux workaround](docs/troubleshooting.md#linux). **Contributors:** see [CONTRIBUTING.md](CONTRIBUTING.md).
 
+
+### Agent Setup
+
+**Option 1 — CLI install**:
+
+```bash
+notebooklm skill install
+```
+
+Installs the skill into `~/.claude/skills/notebooklm` and `~/.agents/skills/notebooklm`.
+
+**Option 2 — `npx` install** (via the open skills ecosystem):
+
+```bash
+npx skills add teng-lin/notebooklm-py
+```
+
+Fetches the canonical [SKILL.md](SKILL.md) directly from GitHub.
+
 ## Quick Start
 
 <p align="center">
@@ -269,25 +288,6 @@ async def main():
 asyncio.run(main())
 ```
 
-### Agent Setup
-
-**Option 1 — CLI install**:
-
-```bash
-notebooklm skill install
-```
-
-Installs the skill into `~/.claude/skills/notebooklm` and `~/.agents/skills/notebooklm`.
-
-**Option 2 — `npx` install** (via the open skills ecosystem):
-
-```bash
-npx skills add teng-lin/notebooklm-py
-```
-
-Fetches the canonical [SKILL.md](SKILL.md) directly from GitHub.
-
-
 ## Documentation
 
 - **[CLI Reference](docs/cli-reference.md)** - Complete command documentation
@@ -308,14 +308,6 @@ Fetches the canonical [SKILL.md](SKILL.md) directly from GitHub.
 - **[RPC Reference](docs/rpc-reference.md)** - Payload structures
 - **[Changelog](CHANGELOG.md)** - Version history and release notes
 - **[Security](SECURITY.md)** - Security policy and credential handling
-
-## Platform Support
-
-| Platform | Status | Notes |
-|----------|--------|-------|
-| **macOS** | ✅ Tested | Primary development platform |
-| **Linux** | ✅ Tested | Fully supported |
-| **Windows** | ✅ Tested | Tested in CI |
 
 ## Star History
 
