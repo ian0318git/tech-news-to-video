@@ -162,7 +162,11 @@ def register(mcp: Any) -> None:
             # different conversations (and so recall-only can echo the id).
             if conversation_id is None and history > 0:
                 conversation_id = await client.chat.get_conversation_id(nb_id)
-            payload: dict[str, Any] = {}
+            # Seed with the resolved canonical notebook_id so every exit shape
+            # (ask / recall-only / suggest-followups) echoes it — an automation that
+            # passed a notebook *name* gets the id back for deterministic chaining
+            # (#1808).
+            payload: dict[str, Any] = {"notebook_id": nb_id}
             # Fetch history first so it reflects the conversation *before* this
             # question (the new turn isn't double-reported in the recall list).
             # ``limit`` counts individual role-rows (~2 per Q&A pair), so double the
@@ -247,6 +251,11 @@ def register(mcp: Any) -> None:
                 payload["suggested_prompts"] = [
                     {"title": s.title, "prompt": s.prompt} for s in suggestions
                 ]
+            # Echo the resolved canonical source scope when the caller passed one
+            # (by id/prefix/title) so a title-scoped call hands back the ids for
+            # deterministic chaining (#1808). Omitted when unscoped (all sources).
+            if resolved_source_ids is not None:
+                payload["source_ids"] = resolved_source_ids
             return payload
 
     @mcp.tool
@@ -349,4 +358,9 @@ def register(mcp: Any) -> None:
                 mode=_SUGGEST_SURFACE[surface],
                 query=query,
             )
-            return {"suggestions": [{"title": s.title, "prompt": s.prompt} for s in rows]}
+            payload: dict[str, Any] = {"notebook_id": nb_id}
+            # Echo the resolved canonical source scope when one was passed (#1808).
+            if resolved_source_ids is not None:
+                payload["source_ids"] = resolved_source_ids
+            payload["suggestions"] = [{"title": s.title, "prompt": s.prompt} for s in rows]
+            return payload

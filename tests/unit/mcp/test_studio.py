@@ -489,12 +489,14 @@ async def test_artifact_generate_passes_source_ids(mcp_call, mock_client) -> Non
     src_a = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
     src_b = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
     mock_client.artifacts.generate_audio = AsyncMock(return_value=FakeStatus(task_id=TASK_ID))
-    await mcp_call(
+    result = await mcp_call(
         "studio_generate",
         {"notebook": NB_ID, "artifact_type": "audio", "source_ids": [src_a, src_b]},
     )
     kwargs = mock_client.artifacts.generate_audio.await_args.kwargs
     assert kwargs["source_ids"] == (src_a, src_b)
+    # A source-scoped generation echoes the resolved canonical source_ids (#1808).
+    assert result.structured_content["source_ids"] == [src_a, src_b]
 
 
 async def test_artifact_generate_resolves_source_id_prefix(mcp_call, mock_client) -> None:
@@ -1091,6 +1093,7 @@ async def test_artifact_download_audio(mcp_call, mock_client, tmp_path) -> None:
     result = await mcp_call(
         "studio_download", {"notebook": NB_ID, "artifact_type": "audio", "path": out}
     )
+    assert result.structured_content["notebook_id"] == NB_ID
     assert result.structured_content["outcome"] == "single_downloaded"
     assert result.structured_content["output_path"] == out
     mock_client.artifacts.download_audio.assert_awaited_once()
@@ -1813,3 +1816,70 @@ async def test_artifact_delete_absent_prefix_projects_tool_error(mcp_call, mock_
     assert "NOT_FOUND" in str(excinfo.value)
     mock_client.artifacts.delete.assert_not_called()
     mock_client.notes.delete.assert_not_called()
+
+
+# --------------------------------------------------------------------------- #
+# Strict IDs-only mode (NOTEBOOKLM_MCP_STRICT_IDS=1) — issue #1808
+#
+# The studio `item` resolver (resolve_studio_item) and studio_download's explicit
+# `artifact_id` are additional artifact/note reference paths that must honor strict
+# mode too — a title/prefix is rejected BEFORE the merged studio list is fetched.
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def _strict_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NOTEBOOKLM_MCP_STRICT_IDS", "1")
+
+
+async def test_strict_studio_list_item_title_rejected_without_listing(
+    _strict_ids, mcp_call, mock_client
+) -> None:
+    mock_client.notes.list = AsyncMock(return_value=[])
+    mock_client.artifacts.list = AsyncMock(return_value=[])
+    with pytest.raises(ToolError) as excinfo:
+        await mcp_call("studio_list", {"notebook": NB_ID, "item": "My Podcast"})
+    assert "NOTEBOOKLM_MCP_STRICT_IDS" in str(excinfo.value)
+    mock_client.notes.list.assert_not_called()
+    mock_client.artifacts.list.assert_not_called()
+
+
+async def test_strict_studio_delete_title_rejected_without_listing(
+    _strict_ids, mcp_call, mock_client
+) -> None:
+    mock_client.notes.list = AsyncMock(return_value=[])
+    mock_client.artifacts.list = AsyncMock(return_value=[])
+    with pytest.raises(ToolError) as excinfo:
+        await mcp_call("studio_delete", {"notebook": NB_ID, "item": "My Podcast", "confirm": True})
+    assert "NOTEBOOKLM_MCP_STRICT_IDS" in str(excinfo.value)
+    mock_client.notes.list.assert_not_called()
+    mock_client.artifacts.list.assert_not_called()
+
+
+async def test_strict_studio_rename_title_rejected_without_listing(
+    _strict_ids, mcp_call, mock_client
+) -> None:
+    mock_client.notes.list = AsyncMock(return_value=[])
+    mock_client.artifacts.list = AsyncMock(return_value=[])
+    with pytest.raises(ToolError) as excinfo:
+        await mcp_call("studio_rename", {"notebook": NB_ID, "item": "My Podcast", "new_title": "X"})
+    assert "NOTEBOOKLM_MCP_STRICT_IDS" in str(excinfo.value)
+    mock_client.notes.list.assert_not_called()
+    mock_client.artifacts.list.assert_not_called()
+
+
+async def test_strict_studio_download_prefix_artifact_id_rejected(
+    _strict_ids, mcp_call, mock_client, tmp_path
+) -> None:
+    """A short `artifact_id` prefix on the explicit path is rejected before listing."""
+    mock_client.artifacts.list = AsyncMock(return_value=[_AUDIO_ARTIFACT])
+    with pytest.raises(ToolError) as excinfo:
+        await mcp_call(
+            "studio_download",
+            {
+                "notebook": NB_ID,
+                "artifact_type": "audio",
+                "artifact_id": "abc123",
+                "path": str(tmp_path / "o.mp3"),
+            },
+        )
+    assert "NOTEBOOKLM_MCP_STRICT_IDS" in str(excinfo.value)
+    mock_client.artifacts.list.assert_not_called()

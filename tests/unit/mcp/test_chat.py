@@ -67,6 +67,7 @@ async def test_chat_ask(mcp_call, mock_client) -> None:
         return_value=FakeAskResult(answer="42", conversation_id=CONV_ID)
     )
     result = await mcp_call("chat_ask", {"notebook": NB_ID, "question": "what?"})
+    assert result.structured_content["notebook_id"] == NB_ID
     assert result.structured_content["answer"] == "42"
     assert result.structured_content["conversation_id"] == CONV_ID
     mock_client.chat.ask.assert_awaited_once_with(
@@ -94,7 +95,9 @@ async def test_chat_ask_resolves_notebook_by_name(mcp_call, mock_client) -> None
     mock_client.chat.ask = AsyncMock(
         return_value=FakeAskResult(answer="hi", conversation_id=CONV_ID)
     )
-    await mcp_call("chat_ask", {"notebook": "My Notebook", "question": "q"})
+    result = await mcp_call("chat_ask", {"notebook": "My Notebook", "question": "q"})
+    # Asked by NAME → the response echoes the resolved canonical id (#1808).
+    assert result.structured_content["notebook_id"] == NB_ID
     mock_client.chat.ask.assert_awaited_once_with(NB_ID, "q", source_ids=None, conversation_id=None)
 
 
@@ -116,11 +119,22 @@ async def test_chat_ask_source_ids_list(mcp_call, mock_client) -> None:
     mock_client.chat.ask = AsyncMock(
         return_value=FakeAskResult(answer="42", conversation_id=CONV_ID)
     )
-    await mcp_call(
+    result = await mcp_call(
         "chat_ask",
         {"notebook": NB_ID, "question": "what?", "source_ids": [_SRC_A, _SRC_B]},
     )
     assert mock_client.chat.ask.await_args.kwargs["source_ids"] == [_SRC_A, _SRC_B]
+    # A source-scoped call echoes the resolved canonical source_ids (#1808).
+    assert result.structured_content["source_ids"] == [_SRC_A, _SRC_B]
+
+
+async def test_chat_ask_unscoped_omits_source_ids_echo(mcp_call, mock_client) -> None:
+    """No source scope => no source_ids key in the response (all-sources contract)."""
+    mock_client.chat.ask = AsyncMock(
+        return_value=FakeAskResult(answer="42", conversation_id=CONV_ID)
+    )
+    result = await mcp_call("chat_ask", {"notebook": NB_ID, "question": "what?"})
+    assert "source_ids" not in result.structured_content
 
 
 async def test_chat_ask_source_ids_json_string(mcp_call, mock_client) -> None:
@@ -183,6 +197,7 @@ async def test_chat_ask_recall_only(mcp_call, mock_client) -> None:
         {"question": "q2", "answer": "a2"},
     ]
     # Recall-only echoes the resolved conversation; no answer is produced.
+    assert result.structured_content["notebook_id"] == NB_ID
     assert result.structured_content["conversation_id"] == CONV_ID
     assert "answer" not in result.structured_content
     mock_client.chat.ask.assert_not_awaited()
@@ -711,6 +726,7 @@ async def test_suggest_prompts_default_ask(mcp_call, mock_client) -> None:
         return_value=[FakePromptSuggestion(title="T1", prompt="P1")]
     )
     result = await mcp_call("suggest_prompts", {"notebook": NB_ID})
+    assert result.structured_content["notebook_id"] == NB_ID
     assert result.structured_content["suggestions"] == [{"title": "T1", "prompt": "P1"}]
     mock_client.notebooks.suggest_prompts.assert_awaited_once_with(
         NB_ID, source_ids=None, mode=4, query=None
@@ -741,13 +757,15 @@ async def test_suggest_prompts_surface_maps_to_mode(mcp_call, mock_client, surfa
 async def test_suggest_prompts_source_ids_and_query(mcp_call, mock_client) -> None:
     """source_ids resolved once; empty query normalizes to None."""
     mock_client.notebooks.suggest_prompts = AsyncMock(return_value=[])
-    await mcp_call(
+    result = await mcp_call(
         "suggest_prompts",
         {"notebook": NB_ID, "surface": "quiz", "source_ids": [_SRC_A], "query": "risks"},
     )
     kwargs = mock_client.notebooks.suggest_prompts.await_args.kwargs
     assert kwargs["source_ids"] == [_SRC_A]
     assert kwargs["query"] == "risks"
+    # A source-scoped call echoes the resolved canonical source_ids (#1808).
+    assert result.structured_content["source_ids"] == [_SRC_A]
     # Omitted source_ids => None (all); explicit null query is accepted at the
     # schema boundary (query is str | None) and reaches the client as None.
     mock_client.notebooks.suggest_prompts = AsyncMock(return_value=[])

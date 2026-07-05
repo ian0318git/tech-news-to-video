@@ -87,12 +87,17 @@ def _source_compact(source: Source) -> dict[str, Any]:
     return {k: view.get(k) for k in _COMPACT_SOURCE_FIELDS}
 
 
-def _add_result_payload(source: Any, base: dict[str, Any]) -> dict[str, Any]:
+def _add_result_payload(source: Any, base: dict[str, Any], *, notebook_id: str) -> dict[str, Any]:
     """Project a ``source_add`` result: enrich the added source + flag failure.
 
     Replaces ``base["source"]`` (the bare ``to_jsonable`` source dict) with the
     label-enriched :func:`_source_view` so ``source_add`` output reaches parity
     with ``source_list`` / ``source_read`` (``kind`` + ``status_label``).
+
+    Echoes the resolved canonical ``notebook_id`` (the added source itself carries
+    no ``notebook_id`` field) so a caller that added by notebook *name* gets the id
+    back for deterministic chaining, matching the batch-add and ``source_list``
+    responses (#1808).
 
     When the add response ALREADY reflects a failed import (``status`` == ERROR),
     surface it synchronously with a top-level ``warning``. Most imports are
@@ -101,6 +106,7 @@ def _add_result_payload(source: Any, base: dict[str, Any]) -> dict[str, Any]:
     backend echoes ERROR at add-time we say so immediately rather than letting it
     look like a successful add.
     """
+    base["notebook_id"] = notebook_id
     base["status"] = "added"
     base["source"] = _source_view(source)
     if source.is_error:
@@ -541,7 +547,9 @@ def register(mcp: Any) -> None:
                         mime_type=mime_type or _DEFAULT_DRIVE_MIME,  # type: ignore[arg-type]
                     ),
                 )
-                return _add_result_payload(drive_result.source, to_jsonable(drive_result))
+                return _add_result_payload(
+                    drive_result.source, to_jsonable(drive_result), notebook_id=nb_id
+                )
 
             content = _select_content(source_type, url=url, text=text, path=path)
             src = await _add_one(
@@ -553,7 +561,9 @@ def register(mcp: Any) -> None:
                 mime_type=mime_type,
                 allow_internal=allow_internal,
             )
-            return _add_result_payload(src, to_jsonable(add_core.SourceAddResult(source=src)))
+            return _add_result_payload(
+                src, to_jsonable(add_core.SourceAddResult(source=src)), notebook_id=nb_id
+            )
 
     @mcp.tool
     async def source_add_and_wait(
@@ -675,7 +685,9 @@ def register(mcp: Any) -> None:
             src = await _add_bytes(
                 client, nb_id, raw, filename=filename, title=title, mime_type=mime_type
             )
-            return _add_result_payload(src, to_jsonable(add_core.SourceAddResult(source=src)))
+            return _add_result_payload(
+                src, to_jsonable(add_core.SourceAddResult(source=src)), notebook_id=nb_id
+            )
 
 
 def _is_http_transport() -> bool:

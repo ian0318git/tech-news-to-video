@@ -185,9 +185,10 @@ async def test_mcp_source_add_url_over_vcr() -> None:
 
     structured = result.structured_content
     assert isinstance(structured, dict)
-    # The url flow wraps the added source under "source" (no notebook_id echo —
-    # that is the drive flow's shape).
-    assert set(structured) == {"source", "status"}
+    # The url flow wraps the added source under "source" and echoes the resolved
+    # canonical notebook_id (parity with the drive/batch flows and source_list, #1808).
+    assert set(structured) == {"notebook_id", "source", "status"}
+    assert structured["notebook_id"] == ADD_URL_NOTEBOOK_ID
     source = structured["source"]
     assert isinstance(source, dict)
     assert source["id"] == "20d66b0b-787f-480e-a9c1-6823f7a12d8e"
@@ -231,7 +232,8 @@ async def test_mcp_source_add_text_over_vcr() -> None:
 
     structured = result.structured_content
     assert isinstance(structured, dict)
-    assert set(structured) == {"source", "status"}
+    assert set(structured) == {"notebook_id", "source", "status"}
+    assert structured["notebook_id"] == ADD_URL_NOTEBOOK_ID
     source = structured["source"]
     assert isinstance(source, dict)
     # The recorded ADD_SOURCE echo titles the source from the recording, not the
@@ -267,7 +269,8 @@ async def test_mcp_source_add_file_over_vcr(tmp_path) -> None:
 
     structured = result.structured_content
     assert isinstance(structured, dict)
-    assert set(structured) == {"source", "status"}
+    assert set(structured) == {"notebook_id", "source", "status"}
+    assert structured["notebook_id"] == ADD_FILE_NOTEBOOK_ID
     source = structured["source"]
     assert isinstance(source, dict)
     assert source["id"] == "dc84ca28-2629-49ac-aec3-de45f0ec93e4"

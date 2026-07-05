@@ -31,12 +31,19 @@ no-match (``ValidationError`` from ``resolve_ref``) is re-raised as the
 domain-specific ``*NotFoundError`` so every miss surfaces uniformly as
 ``NOT_FOUND`` regardless of which path produced it.
 
+Strict IDs-only mode (``NOTEBOOKLM_MCP_STRICT_IDS=1``, off by default) turns every
+resolver below into a full-UUID gate: a name, title, or short id *prefix* is
+rejected with :class:`ValidationError` **before any list call**, so a long-lived
+automation fails loud and deterministically instead of fuzzy-matching a token
+whose meaning can drift (issue #1808). See :data:`STRICT_IDS_ENV`.
+
 This module imports NO ``click`` / ``rich`` / ``cli`` — only the ``_app``
 resolve core and the public exception hierarchy.
 """
 
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
@@ -60,6 +67,7 @@ if TYPE_CHECKING:
     from ..client import NotebookLMClient
 
 __all__ = [
+    "reject_non_canonical_id",
     "resolve_artifact",
     "resolve_note",
     "resolve_notebook",
@@ -74,6 +82,48 @@ _HEX_ISH = re.compile(r"^[0-9a-fA-F-]+$")
 
 #: Max candidate ids surfaced in an ambiguous-title error message.
 _MAX_AMBIGUOUS_CANDIDATES = 5
+
+#: Opt-in strict IDs-only mode (issue #1808). When ``NOTEBOOKLM_MCP_STRICT_IDS`` is
+#: ``"1"``, every resolver below rejects any reference that is not a full canonical
+#: UUID — a name, a title, or even a would-be-unique short id *prefix* — so a
+#: long-lived automation fails loud and deterministically instead of fuzzy-matching
+#: a token whose meaning can drift as the notebook changes. Off (unset / any other
+#: value) leaves the default name/prefix/title resolution untouched. Governs every
+#: notebook / source / note / artifact reference parameter — the resolvers here plus
+#: the studio ``item`` resolver and ``studio_download``'s explicit ``artifact_id``,
+#: which share :func:`reject_non_canonical_id`. A secondary convenience like
+#: ``source_list``'s ``label`` filter is out of scope (it uses the shared CLI/MCP
+#: label resolver). The name matches the
+#: ``NOTEBOOKLM_MCP_*`` family and the ``== "1"`` convention of
+#: ``NOTEBOOKLM_MCP_TRUST_PROXY`` / ``NOTEBOOKLM_MCP_ALLOW_EXTERNAL_BIND``.
+STRICT_IDS_ENV = "NOTEBOOKLM_MCP_STRICT_IDS"
+
+
+def _strict_ids_enabled() -> bool:
+    """Return whether strict IDs-only mode is enabled.
+
+    Read at call time (not cached at import) so tests and late-set environments
+    are honored, mirroring the other ``NOTEBOOKLM_MCP_*`` runtime flags.
+    """
+    return os.environ.get(STRICT_IDS_ENV) == "1"
+
+
+def reject_non_canonical_id(ref: str, kind: str) -> None:
+    """In strict IDs mode, reject ``ref`` unless it is a full canonical UUID.
+
+    Raises **before** any list call so the outcome is deterministic and does not
+    depend on the current list contents. A no-op when strict mode is off, or when
+    ``ref`` is already a full canonical UUID (which every resolver fast-paths).
+
+    Raises:
+        ValidationError: strict mode is on and ``ref`` is a name / title / short
+            id prefix rather than a full ``8-4-4-4-12`` UUID.
+    """
+    if _strict_ids_enabled() and not FULL_ID_PATTERN.fullmatch(ref):
+        raise ValidationError(
+            f"{STRICT_IDS_ENV}=1: {kind} reference {ref!r} is not a canonical id. "
+            "Strict mode requires a full UUID (8-4-4-4-12), not a name or prefix."
+        )
 
 
 def _ambiguous_title_error(token: str, matches: Sequence[Any], *, kind: str) -> AmbiguousIdError:
@@ -242,6 +292,7 @@ async def resolve_notebook(client: NotebookLMClient, ref: str) -> str:
         AmbiguousIdError: ``ref`` matches more than one notebook by prefix or title.
     """
     ref = validate_id(ref, "notebook")
+    reject_non_canonical_id(ref, "notebook")
     # Full UUID fast-path — never list.
     if FULL_ID_PATTERN.fullmatch(ref):
         return ref
@@ -270,6 +321,7 @@ async def resolve_source(client: NotebookLMClient, notebook_id: str, ref: str) -
         AmbiguousIdError: ``ref`` matches more than one source by prefix or title.
     """
     ref = validate_id(ref, "source")
+    reject_non_canonical_id(ref, "source")
     # Full UUID fast-path — never list.
     if FULL_ID_PATTERN.fullmatch(ref):
         return ref
@@ -321,6 +373,11 @@ async def resolve_sources(
         AmbiguousIdError: A ref matches more than one source by prefix or title.
     """
     validated = [validate_id(ref, "source") for ref in refs]
+    # Strict mode rejects every non-UUID ref up front — BEFORE the fast-path and
+    # the list call below — so a mixed UUID/name batch fails without a source-list
+    # RPC (deterministic, no leak).
+    for ref in validated:
+        reject_non_canonical_id(ref, "source")
     # If every ref is already a full UUID, skip the list call entirely.
     if all(FULL_ID_PATTERN.fullmatch(ref) for ref in validated):
         return validated
@@ -358,6 +415,7 @@ async def resolve_note(client: NotebookLMClient, notebook_id: str, ref: str) -> 
         AmbiguousIdError: ``ref`` matches more than one note by prefix or title.
     """
     ref = validate_id(ref, "note")
+    reject_non_canonical_id(ref, "note")
     # Full UUID fast-path — never list.
     if FULL_ID_PATTERN.fullmatch(ref):
         return ref
@@ -395,6 +453,7 @@ async def resolve_artifact(client: NotebookLMClient, notebook_id: str, ref: str)
         AmbiguousIdError: ``ref`` matches more than one artifact by prefix or title.
     """
     ref = validate_id(ref, "artifact")
+    reject_non_canonical_id(ref, "artifact")
     # Full UUID fast-path — never list.
     if FULL_ID_PATTERN.fullmatch(ref):
         return ref

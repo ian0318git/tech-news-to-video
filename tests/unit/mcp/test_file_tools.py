@@ -261,6 +261,8 @@ async def test_source_upload_bytes_adds_and_echoes_source(mock_client) -> None:
     )
     sc = result.structured_content
     assert sc["status"] == "added"
+    # Echoes the resolved canonical notebook_id, like source_add (#1808).
+    assert sc["notebook_id"] == NB_ID
     assert sc["source"]["id"] == "src-1"
     # Same enriched echo as source_add (kind + status_label), not a bare id.
     assert sc["source"]["kind"] == "pdf"

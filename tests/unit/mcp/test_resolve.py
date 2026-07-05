@@ -499,3 +499,101 @@ async def test_note_no_match_raises_note_not_found() -> None:
     client = _client(notes=[_Note("ab0001cdef", "Meeting Notes")])
     with pytest.raises(NoteNotFoundError):
         await resolve_note(client, "nb-1", "Missing Title")
+
+
+# --------------------------------------------------------------------------- #
+# Strict IDs-only mode (NOTEBOOKLM_MCP_STRICT_IDS=1) — issue #1808
+#
+# When enabled, every resolver rejects any reference that is not a full canonical
+# UUID (a name, title, or short id *prefix*), BEFORE any list call, so long-lived
+# automation fails loud and deterministically instead of fuzzy-matching. Off by
+# default, so the tests above (which do not set the env var) are the "strict off"
+# behavior contract; these assert the opt-in guard.
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def strict_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Enable strict IDs-only mode for the duration of a test."""
+    monkeypatch.setenv("NOTEBOOKLM_MCP_STRICT_IDS", "1")
+
+
+async def test_strict_full_uuid_still_resolves_without_listing(strict_ids: None) -> None:
+    """A full canonical UUID is the one accepted form — and still skips the list."""
+    client = _client(
+        notebooks=[_NB(FULL_A, "Alpha")],
+        sources=[_Src(FULL_A, "S")],
+        artifacts=[_Art(FULL_A, "A")],
+        notes=[_Note(FULL_A, "N")],
+    )
+    assert await resolve_notebook(client, FULL_A) == FULL_A
+    assert await resolve_source(client, "nb-1", FULL_A) == FULL_A
+    assert await resolve_artifact(client, "nb-1", FULL_A) == FULL_A
+    assert await resolve_note(client, "nb-1", FULL_A) == FULL_A
+    client.notebooks.list.assert_not_called()
+    client.sources.list.assert_not_called()
+    client.artifacts.list.assert_not_called()
+    client.notes.list.assert_not_called()
+
+
+async def test_strict_rejects_name_before_listing(strict_ids: None) -> None:
+    """A title/name is rejected with ValidationError and no list call is made."""
+    client = _client(notebooks=[_NB(FULL_A, "Alpha")])
+    with pytest.raises(ValidationError) as caught:
+        await resolve_notebook(client, "Alpha")
+    assert "NOTEBOOKLM_MCP_STRICT_IDS" in str(caught.value)
+    client.notebooks.list.assert_not_called()
+
+
+async def test_strict_rejects_short_id_prefix(strict_ids: None) -> None:
+    """Even a would-be-unique short id prefix is rejected (only full UUIDs pass)."""
+    client = _client(notebooks=[_NB(FULL_A, "Alpha")])
+    with pytest.raises(ValidationError):
+        await resolve_notebook(client, FULL_A[:8])
+    client.notebooks.list.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("resolve", "kind"),
+    [
+        (lambda c, t: resolve_source(c, "nb-1", t), "sources"),
+        (lambda c, t: resolve_artifact(c, "nb-1", t), "artifacts"),
+        (lambda c, t: resolve_note(c, "nb-1", t), "notes"),
+    ],
+)
+async def test_strict_rejects_name_on_child_resolvers(strict_ids: None, resolve, kind: str) -> None:
+    """Source / artifact / note resolvers also reject a name before listing."""
+    client = _client(
+        sources=[_Src(FULL_A, "Title")],
+        artifacts=[_Art(FULL_A, "Title")],
+        notes=[_Note(FULL_A, "Title")],
+    )
+    with pytest.raises(ValidationError):
+        await resolve(client, "Title")
+    getattr(client, kind).list.assert_not_called()
+
+
+async def test_strict_resolve_sources_all_uuid_batch_skips_list(strict_ids: None) -> None:
+    """An all-full-UUID batch resolves with no list call, as when strict is off."""
+    client = _client()
+    assert await resolve_sources(client, "nb-1", [FULL_A, FULL_B]) == [FULL_A, FULL_B]
+    client.sources.list.assert_not_called()
+
+
+async def test_strict_resolve_sources_mixed_batch_rejects_before_list(strict_ids: None) -> None:
+    """A mixed UUID/name batch rejects BEFORE the source list RPC (no leak)."""
+    client = _client(sources=[_Src(FULL_A, "Alpha")])
+    with pytest.raises(ValidationError):
+        await resolve_sources(client, "nb-1", [FULL_A, "Alpha"])
+    client.sources.list.assert_not_awaited()
+
+
+async def test_strict_resolve_sources_empty_batch_returns_empty(strict_ids: None) -> None:
+    """An empty batch is still an empty list (nothing to reject), no list call."""
+    client = _client()
+    assert await resolve_sources(client, "nb-1", []) == []
+    client.sources.list.assert_not_called()
+
+
+async def test_strict_off_still_resolves_names() -> None:
+    """Without the env var, name resolution is unchanged (the default contract)."""
+    client = _client(notebooks=[_NB(FULL_A, "Alpha")])
+    assert await resolve_notebook(client, "Alpha") == FULL_A

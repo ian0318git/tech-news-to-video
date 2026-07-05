@@ -30,6 +30,7 @@ from ..._app.resolve import (
 from ..._app.serialize import to_jsonable
 from ...exceptions import NotFoundError, ValidationError
 from ...types import ArtifactType
+from .._resolve import reject_non_canonical_id
 
 if TYPE_CHECKING:
     from ...client import NotebookLMClient
@@ -273,6 +274,9 @@ async def resolve_studio_item(
     ref raises :class:`AmbiguousIdError`.
     """
     ref = validate_id(ref, "item")
+    # Strict IDs-only mode rejects a title/prefix item ref before the list call,
+    # matching the notebook/source/note/artifact resolvers (#1808).
+    reject_non_canonical_id(ref, "studio item")
     items = await studio_items(client, nb_id)
     match = _match_studio_ref(items, ref, kind)
     if match is None:

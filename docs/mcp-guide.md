@@ -174,6 +174,16 @@ These conventions hold across every tool:
   up to three near-miss candidates, each with its **title and id** inline, so you can retry with the
   full title or id instead of guessing (a label near-miss reached via `source_list(label=…)` gets the
   same enrichment on its `VALIDATION` error).
+- **Canonical IDs come back.** Every response echoes the canonical `notebook_id` (and, where a
+  tool resolves them, the `source_ids` scope / `artifact_id`) — so a call made by *name* hands you
+  the id to chain the next call on.
+- **Strict IDs-only mode (opt-in).** Set `NOTEBOOKLM_MCP_STRICT_IDS=1` on the server to require a
+  **full canonical id** for every `notebook`/`source`/`note`/`artifact` reference: names, titles, and
+  short id prefixes are rejected with a `VALIDATION` error *before* any list call. This trades the
+  convenience above for deterministic, fail-fast behavior in long-lived automation, where a prefix or
+  title that is unique today can quietly resolve to a different (or ambiguous) entity tomorrow. Off by
+  default. (Governs every notebook/source/note/artifact reference — including studio `item` and
+  `studio_download`'s `artifact_id`; the `source_list(label=…)` name filter is out of scope.)
 - **Destructive tools need confirmation.** `notebook_delete`, `source_delete`,
   `studio_delete`, and `share_remove_user` take `confirm` (default `false`). Called without it, they return a `needs_confirmation` preview
   (with the resolved title) and delete **nothing**; call again with `confirm=true` to execute.

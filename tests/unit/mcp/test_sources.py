@@ -1257,6 +1257,7 @@ async def test_source_add_text(mcp_call, mock_client) -> None:
         {"notebook": NB_ID, "source_type": "text", "text": "hello world", "title": "Notes"},
     )
     assert result.structured_content == {
+        "notebook_id": NB_ID,
         "status": "added",
         "source": {"id": SRC_ID, "title": "Notes", "kind": "web_page", "status_label": "ready"},
     }
@@ -1269,6 +1270,7 @@ async def test_source_add_url(mcp_call, mock_client) -> None:
         "source_add", {"notebook": NB_ID, "source_type": "url", "url": "https://example.com/a"}
     )
     assert result.structured_content == {
+        "notebook_id": NB_ID,
         "status": "added",
         "source": {"id": SRC_ID, "title": "Page", "kind": "web_page", "status_label": "ready"},
     }
@@ -1436,6 +1438,7 @@ async def test_source_add_single_metadata_not_rejected(mcp_call, mock_client) ->
         },
     )
     assert result.structured_content == {
+        "notebook_id": NB_ID,
         "status": "added",
         "source": {"id": SRC_ID, "title": "Page", "kind": "web_page", "status_label": "ready"},
     }
@@ -1482,6 +1485,7 @@ async def test_source_add_youtube_accepts_youtube_url(mcp_call, mock_client) -> 
     mock_client.sources.add_url = AsyncMock(return_value=FakeSource(id=SRC_ID, title="Vid"))
     result = await mcp_call("source_add", {"notebook": NB_ID, "source_type": "youtube", "url": yt})
     assert result.structured_content == {
+        "notebook_id": NB_ID,
         "status": "added",
         "source": {"id": SRC_ID, "title": "Vid", "kind": "web_page", "status_label": "ready"},
     }
