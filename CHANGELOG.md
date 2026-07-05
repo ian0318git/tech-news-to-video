@@ -7,34 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-
-- **MCP research tools now accept the poll id under one name, `poll_task_id`.**
-  `research_status`, `research_import`, and `research_cancel` previously took the
-  value that `research_start` / `research_status` surface as `poll_task_id` under
-  mismatched parameter names (`task_id` on status/import, `run_id` on cancel),
-  forcing docstring warnings about which id goes where and inviting copy-paste
-  mistakes. All three now accept it as `poll_task_id`, so the value pastes
-  verbatim from one tool's output into the next. The old `task_id` / `run_id`
-  names still work as **deprecated aliases** (removed in v0.9.0): passing one
-  emits a `DeprecationWarning` and adds a `deprecation` note to the result;
-  passing both names with different values is a validation error.
-  ([#1789](https://github.com/teng-lin/notebooklm-py/issues/1789))
-
-### Fixed
-
-- **The `.mcpb` desktop bundle now ships for pre-releases and launches the
-  pinned pre-release.** The bundled launcher (`run_server.py`) always ran
-  `uvx --from "notebooklm-py[mcp]"`, which resolves the latest *stable* server —
-  so a pre-release bundle would have run the stable release, not the
-  pre-release (which is why `publish-mcpb.yml` skipped pre-releases). The
-  launcher now reads its version from the bundled `manifest.json` and, for a
-  `vX.Y.ZaN` bundle, pins the exact version (`uvx --from
-  "notebooklm-py[mcp]==X.Y.ZaN"` — the explicit `==` pin resolves the pre-release
-  under uv's default resolver, without loosening transitive dependency
-  resolution); stable bundles stay unpinned and track the latest stable server.
-  `publish-mcpb.yml` now ships a bundle for pre-releases too.
-
 ## [0.8.0]
 
 The headline of 0.8.0 is **integrations**: NotebookLM is now reachable from AI
@@ -59,9 +31,40 @@ get-returns-None / kwarg-alias deprecation machinery — has been **removed**
 
 ### Added
 
+- **Short-form video format** across the client, CLI, MCP, and REST
+  ([#1805](https://github.com/teng-lin/notebooklm-py/issues/1805)). Video
+  generation now takes a format selector so you can request a **short** video in
+  addition to the default full-length one. The server ignores a custom style on
+  the short format, so passing one is rejected up front rather than silently
+  dropped ([#1805](https://github.com/teng-lin/notebooklm-py/issues/1805)
+  follow-up).
+
+- **MCP `source_upload_bytes`** — in-channel small-file upload
+  ([#1803](https://github.com/teng-lin/notebooklm-py/issues/1803)). Adds a source
+  by sending the file bytes directly through the tool call, for network-boxed
+  agents that cannot reach the signed browser-upload URL.
+
+- **MCP `source_add_and_wait`** — a single-call composite of `source_add` +
+  `source_wait` for single-source adds
+  ([#1807](https://github.com/teng-lin/notebooklm-py/issues/1807)).
+
+- **Compact roster mode for `source_list` and `studio_list`**
+  ([#1806](https://github.com/teng-lin/notebooklm-py/issues/1806)) — a terser
+  listing shape that fits more entries into an agent's context window.
+
+- **MCP strict IDs-only mode + canonical-id echoes**
+  ([#1808](https://github.com/teng-lin/notebooklm-py/issues/1808)). Opt into
+  rejecting name-based refs and having tools echo the canonical id they resolved,
+  so an agent can pin every subsequent call to an unambiguous id.
+
+- **Near-miss candidates on failed name lookups**
+  ([#1787](https://github.com/teng-lin/notebooklm-py/issues/1787)). When a
+  notebook/source/note/artifact name doesn't resolve, the error now lists the
+  closest matches instead of a bare not-found.
+
 - **Experimental: MCP server** (#1484, opt-in via the `mcp` extra). A
   [Model Context Protocol](https://modelcontextprotocol.io) server exposing
-  NotebookLM to MCP clients (Claude Desktop / Code, Cursor, Windsurf) as 28 tools
+  NotebookLM to MCP clients (Claude Desktop / Code, Cursor, Windsurf) as 34 tools
   across notebooks, sources, chat, notes, studio artifacts, and research — built
   as a transport-neutral sibling adapter over the `_app/` layer (ADR-0021), so it
   behaves identically to the equivalent `notebooklm` CLI command. Run it with the
@@ -298,6 +301,24 @@ get-returns-None / kwarg-alias deprecation machinery — has been **removed**
 
 ### Changed
 
+- **MCP name refs resolve by unique title prefix** (#1786). Notebook, source,
+  note, and artifact name arguments now match on a unique title *prefix*, not
+  just an exact title, so an agent can address an entity by the shortest
+  unambiguous fragment; an ambiguous prefix is a resolution error listing the
+  candidates.
+
+- **MCP research tools now accept the poll id under one name, `poll_task_id`.**
+  `research_status`, `research_import`, and `research_cancel` previously took the
+  value that `research_start` / `research_status` surface as `poll_task_id` under
+  mismatched parameter names (`task_id` on status/import, `run_id` on cancel),
+  forcing docstring warnings about which id goes where and inviting copy-paste
+  mistakes. All three now accept it as `poll_task_id`, so the value pastes
+  verbatim from one tool's output into the next. The old `task_id` / `run_id`
+  names still work as **deprecated aliases** (removed in v0.9.0): passing one
+  emits a `DeprecationWarning` and adds a `deprecation` note to the result;
+  passing both names with different values is a validation error.
+  ([#1789](https://github.com/teng-lin/notebooklm-py/issues/1789))
+
 - **MCP `source_wait` now returns one unified per-source aggregate** (#1669).
   Both modes — waiting for a single `source` or for every source in the notebook
   — return the same shape: `{notebook_id, ok, ready, timed_out, failed,
@@ -378,6 +399,28 @@ get-returns-None / kwarg-alias deprecation machinery — has been **removed**
   [docs/deprecations.md](docs/deprecations.md).
 
 ### Fixed
+
+- **First-class human/mobile upload path in `upload_required`**
+  ([#1801](https://github.com/teng-lin/notebooklm-py/issues/1801)). When a source
+  add needs a browser upload, the `upload_required` response now surfaces the
+  human/mobile hand-off path as a first-class option rather than burying it.
+
+- **`server_info` and the profile probe report the resolved profile, not the
+  raw active one** ([#1790](https://github.com/teng-lin/notebooklm-py/issues/1790)).
+  The REST server's `server_info` and its startup profile probe now bind and
+  report the profile that was actually resolved for the request.
+
+- **The `.mcpb` desktop bundle now ships for pre-releases and launches the
+  pinned pre-release.** The bundled launcher (`run_server.py`) always ran
+  `uvx --from "notebooklm-py[mcp]"`, which resolves the latest *stable* server —
+  so a pre-release bundle would have run the stable release, not the
+  pre-release (which is why `publish-mcpb.yml` skipped pre-releases). The
+  launcher now reads its version from the bundled `manifest.json` and, for a
+  `vX.Y.ZaN` bundle, pins the exact version (`uvx --from
+  "notebooklm-py[mcp]==X.Y.ZaN"` — the explicit `==` pin resolves the pre-release
+  under uv's default resolver, without loosening transitive dependency
+  resolution); stable bundles stay unpinned and track the latest stable server.
+  `publish-mcpb.yml` now ships a bundle for pre-releases too.
 
 - **`notebooklm doctor` no longer greenlights a session that is missing
   `__Secure-1PSIDTS`** (#1753). The auth check previously passed on `SID`
