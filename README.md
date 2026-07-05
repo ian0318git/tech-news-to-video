@@ -75,7 +75,7 @@ These combine ordinary library primitives — see the [CLI Reference](docs/cli-r
 |--------|----------|
 | **Python API** | Application integration, async workflows, custom pipelines |
 | **CLI** | Shell scripts, quick tasks, CI/CD automation |
-| **MCP Server** | Exposing NotebookLM tools to Claude Desktop/Code, Cursor, Windsurf, and other MCP clients — locally (stdio) **or** as a self-hosted **remote connector** reachable from **claude.ai** (incl. mobile) **and ChatGPT** (web, Developer Mode — full MCP write tools need a Business/Enterprise/Edu workspace), over a Cloudflare/Tailscale tunnel |
+| **MCP Server** | Exposing NotebookLM tools to Claude Desktop/Code, Cursor, Windsurf, and other MCP clients — locally (stdio) **or** as a self-hosted **remote connector** reachable from **claude.ai/Claude** (incl. mobile) **and ChatGPT** (incl. mobile, Developer Mode), over a Cloudflare/Tailscale tunnel |
 | **REST Server** | Local automation over guarded HTTP routes without spawning a CLI process per call |
 | **Agent Integration** | Claude Code, Codex, LLM agents, natural language automation |
 
