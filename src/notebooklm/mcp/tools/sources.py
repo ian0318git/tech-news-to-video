@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-import time
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Literal
 
 from fastmcp import Context
@@ -387,14 +387,14 @@ def register(mcp: Any) -> None:
         * ``file``    — over **stdio**, requires ``path`` (a local file path on the
           server host). Over the **remote (http) connector** the server's
           filesystem is unreachable, so instead the tool returns
-          ``{"status": "upload_required", "url": …, "agent_upload": {…}}``. A human
-          opens the short-lived signed URL in a browser and uploads the file; an
-          **agent that already holds the bytes** skips the browser and POSTs them as
-          the raw request body to the same URL (see the ``agent_upload`` recipe in
-          the response — with ``Accept: application/json`` it returns
-          ``{"status": "added", "source_id": …}``). Then confirm with ``source_wait``
-          / ``source_list``. ``title`` / ``mime_type`` (carried in the signed URL)
-          and the supplied ``path`` (its basename seeds the default title) are honored.
+          ``upload_required`` with two first-class actor paths: ``human_upload``
+          (open the signed URL in a browser — works on mobile — and pick the file) and
+          ``agent_upload`` (an agent holding the bytes POSTs them as the raw body;
+          ``Accept: application/json`` → ``{"status": "added", …}``).
+          ``agent_instructions`` is the rule: try ``agent_upload``, fall back to
+          ``human_upload.url`` on a network error. ``mime_locked`` is true when
+          ``mime_type`` was supplied; ``expires_at_iso`` / ``expires_in_seconds`` give
+          the expiry; top-level ``url`` is **deprecated** for ``human_upload.url``.
         * ``drive``   — requires ``document_id`` (Google Drive file id); ``title``
           and ``mime_type`` (one of google-doc|google-slides|google-sheets|pdf,
           default google-doc) optional.
@@ -573,6 +573,13 @@ def _broker_upload(
     survive the browser round-trip and cannot be tampered with). When ``title`` is
     unset, the supplied ``path``'s basename seeds the default. The signer injects
     expiry; ``expires_at`` mirrors the upload TTL for the caller.
+
+    Returns the ``upload_required`` payload (#1801): two first-class actor paths —
+    ``human_upload`` (browser/mobile) and ``agent_upload`` (raw-body POST) — plus an
+    ``agent_instructions`` try-then-fallback rule, a ``mime_locked`` flag (true only
+    when a mime was signed, so the request ``Content-Type`` is ignored), and
+    ``expires_at_iso`` / ``expires_in_seconds`` beside the unix ``expires_at``. The
+    top-level ``url`` is retained but deprecated in favor of ``human_upload.url``.
     """
     default_title = title
     if not default_title and path:
@@ -586,26 +593,66 @@ def _broker_upload(
     if mime_type:
         payload["mime"] = mime_type
     url = cfg.upload_url(payload)
+    # Read the deadline back from the signed token so expires_at / _iso match the
+    # token's ``exp`` exactly, rather than recomputing now() a hair later (drift).
+    expires_at = cfg.signer.verify(url.rsplit("/", 1)[1], op="ul")["exp"]
+    expires_iso = (
+        datetime.fromtimestamp(expires_at, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+    )
+    approx_minutes = UPLOAD_TTL // 60
+    # The signed token's mime wins server-side; a request Content-Type is honored
+    # ONLY when no mime was signed (see _fileroutes upload_route). So expose
+    # Content-Type as an agent knob only in the unlocked case, and flag the locked
+    # case with ``mime_locked`` instead of the old confusing header prose. Mirror the
+    # exact truthiness that gates signing ``mime`` above (``if mime_type``) so the
+    # flag can't claim locked while the token carried no mime (e.g. mime_type == "").
+    mime_locked = bool(mime_type)
+    agent_headers: dict[str, str] = {"Accept": "application/json"}
+    # When unlocked, the request Content-Type is the ONLY mime signal (no
+    # extension sniffing server-side), so the example must set it too — an agent
+    # is as likely to copy the curl example as to read ``headers``.
+    example_ct = "" if mime_locked else '-H "Content-Type: application/pdf" '
+    if not mime_locked:
+        agent_headers["Content-Type"] = "<mime-type of the file, e.g. application/pdf>"
     return {
         "status": "upload_required",
         "notebook_id": notebook_id,
+        # DEPRECATED (kept for backward compat): use human_upload.url instead.
         "url": url,
-        "expires_at": int(time.time()) + UPLOAD_TTL,
+        "expires_at": expires_at,
+        "expires_at_iso": expires_iso,
+        # Nominal TTL at mint time — expires_at / expires_at_iso are the authoritative deadline.
+        "expires_in_seconds": UPLOAD_TTL,
+        "mime_locked": mime_locked,
+        # Human/browser path, first-class so an agent that cannot upload the bytes
+        # itself reliably surfaces the link to the user (the mobile case).
+        "human_upload": {
+            "url": url,
+            "instructions": (
+                "Open this link in a browser on the device that has the file, then "
+                "pick the file to upload. Works on mobile (photo library / Files). "
+                f"Link expires in ~{approx_minutes} min."
+            ),
+        },
         # An agent holding the bytes skips the browser: POST them as the raw body here.
         "agent_upload": {
             "method": "POST",
             "url": f"{url}?filename=<basename>",
-            "headers": {
-                "Accept": "application/json",
-                "Content-Type": "<mime-type> (fallback only; ignored when mime_type was passed)",
-            },
+            "headers": agent_headers,
             "body": "the raw file bytes (not multipart/form-data)",
             "returns": '{"status": "added", "source_id": ...}',
             "example": (
-                'curl -X POST -H "Accept: application/json" --data-binary @report.pdf '
-                f'"{url}?filename=report.pdf"'
+                f'curl -X POST -H "Accept: application/json" {example_ct}'
+                f'--data-binary @report.pdf "{url}?filename=report.pdf"'
             ),
         },
+        # One authoritative rule instead of asking the agent to predict its own
+        # environment: attempt the machine path, fall back to the human path.
+        "agent_instructions": (
+            "If you hold the file bytes, try agent_upload first (POST the raw bytes). "
+            "If that fails with a network/egress error, surface human_upload.url to "
+            "the user and ask them to open it in a browser and upload the file."
+        ),
     }
 
 

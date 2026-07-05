@@ -103,18 +103,38 @@ async def test_source_add_file_with_config_returns_upload_url(mock_client, confi
     assert sc["url"].startswith(f"{BASE}/files/ul/")
     assert sc["notebook_id"] == NB_ID
     assert isinstance(sc["expires_at"], int)
+    # Human-friendly expiry mirrors the unix timestamp (#1801).
+    assert sc["expires_in_seconds"] == 15 * 60
+    assert sc["expires_at_iso"].endswith("Z")
+    # ISO string round-trips to the same instant as the unix expires_at.
+    parsed = datetime.fromisoformat(sc["expires_at_iso"].replace("Z", "+00:00"))
+    assert parsed == datetime.fromtimestamp(sc["expires_at"], tz=timezone.utc)
     # The signed token carries the title + mime (so the browser round-trip keeps them).
     token = sc["url"].rsplit("/", 1)[1]
     payload = config.signer.verify(token, op="ul")
     assert payload["title"] == "My Doc"
     assert payload["mime"] == "application/pdf"
+    # Human/browser path is first-class (a named object, not prose) so an agent that
+    # can't upload the bytes itself reliably surfaces it to the user (#1801).
+    human = sc["human_upload"]
+    assert human["url"] == sc["url"]
+    assert "browser" in human["instructions"]
+    # The mobile case is what makes the human path first-class — lock it in (#1801).
+    assert "mobile" in human["instructions"]
+    # mime was supplied → the request Content-Type is ignored, so no Content-Type hint.
+    assert sc["mime_locked"] is True
     # The response self-documents the agent-direct path so an agent doesn't fall
     # back to the human "open in a browser" flow it can't perform.
     agent = sc["agent_upload"]
     assert agent["method"] == "POST"
     assert agent["headers"]["Accept"] == "application/json"
+    assert "Content-Type" not in agent["headers"]
+    # Locked → the example must NOT carry Content-Type either (server ignores it).
+    assert "Content-Type" not in agent["example"]
     assert agent["url"].startswith(sc["url"])
     assert sc["url"] in agent["example"]
+    # One authoritative try-then-fallback rule, not a per-environment prediction.
+    assert "human_upload.url" in sc["agent_instructions"]
 
 
 async def test_source_add_file_default_title_from_path_basename(mock_client, config) -> None:
@@ -125,8 +145,29 @@ async def test_source_add_file_default_title_from_path_basename(mock_client, con
         "source_add",
         {"notebook": NB_ID, "source_type": "file", "path": "/home/me/report.pdf"},
     )
-    token = result.structured_content["url"].rsplit("/", 1)[1]
+    sc = result.structured_content
+    token = sc["url"].rsplit("/", 1)[1]
     assert config.signer.verify(token, op="ul")["title"] == "report.pdf"
+    # No mime supplied → not locked, so the agent path exposes a Content-Type knob (#1801).
+    assert sc["mime_locked"] is False
+    assert "Content-Type" in sc["agent_upload"]["headers"]
+    # Unlocked → the copy-paste example must set Content-Type too (no server sniffing).
+    assert "Content-Type" in sc["agent_upload"]["example"]
+
+
+async def test_source_add_file_empty_mime_is_not_locked(mock_client, config) -> None:
+    # An empty mime_type is falsy, so it is NOT signed into the token — mime_locked
+    # must mirror that (bool, not `is not None`) or it would lie to the agent (#1801).
+    result = await _call(
+        mock_client,
+        config,
+        "source_add",
+        {"notebook": NB_ID, "source_type": "file", "title": "Doc", "mime_type": ""},
+    )
+    sc = result.structured_content
+    assert "mime" not in config.signer.verify(sc["url"].rsplit("/", 1)[1], op="ul")
+    assert sc["mime_locked"] is False
+    assert "Content-Type" in sc["agent_upload"]["headers"]
 
 
 async def test_source_add_file_http_without_config_is_not_configured_error(
