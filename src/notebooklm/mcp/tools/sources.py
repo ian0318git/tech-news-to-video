@@ -72,6 +72,23 @@ _DEFAULT_DRIVE_MIME = "google-doc"
 # under its historical private name so the tool bodies below are unchanged.
 
 
+#: Fields kept in a ``source_list(detail="compact")`` roster row — a strict subset of
+#: :func:`_source_view`'s output, dropping ``url`` / the raw ``status`` int / ``_type_code``.
+_COMPACT_SOURCE_FIELDS = ("id", "title", "kind", "status_label", "created_at")
+
+
+def _source_compact(source: Source) -> dict[str, Any]:
+    """Project a ``Source`` to the compact roster row for ``source_list(detail="compact")``.
+
+    A strict subset of :func:`_source_view` — keeping only
+    :data:`_COMPACT_SOURCE_FIELDS` — so a discovery listing stays low-token with no
+    extra read while ``kind`` / ``status_label`` / ISO ``created_at`` stay byte-identical
+    to the full projection (same single source of truth, no re-derivation).
+    """
+    view = _source_view(source)
+    return {k: view.get(k) for k in _COMPACT_SOURCE_FIELDS}
+
+
 def _add_result_payload(source: Any, base: dict[str, Any]) -> dict[str, Any]:
     """Project a ``source_add`` result: enrich the added source + flag failure.
 
@@ -106,21 +123,19 @@ def register(mcp: Any) -> None:
         notebook: str,
         status: Literal["ready", "processing", "error", "preparing"] | None = None,
         label: str | None = None,
+        detail: Literal["compact", "full"] = "full",
         limit: int = DEFAULT_LIMIT,
         offset: int = 0,
     ) -> dict[str, Any]:
         """List a notebook's sources. Accepts a notebook name or ID.
 
-        Each source carries string ``kind`` / ``status_label`` labels alongside the
-        raw codes, so an agent never has to guess the enums.
+        ``detail`` (default ``full``): ``full`` gives each source's metadata plus string
+        ``kind`` / ``status_label`` labels; ``compact`` returns only ``id`` / ``title``
+        / ``kind`` / ``status_label`` / ``created_at`` — a low-token roster.
 
-        Pass ``status`` to return only sources whose ``status_label`` matches.
-        ``error`` is a failed import (the "ghost row" from a broken ``source_add``);
-        use ``source_list(status="error")`` to find them, then clean up with
-        ``source_delete``. Omitting ``status`` returns every source.
-
-        Pass ``label`` (name or ID) to restrict to that label's members; composes
-        with ``status`` (resolves by ID, unambiguous prefix, or exact name).
+        Pass ``status`` to list only sources whose ``status_label`` matches (``error`` =
+        a broken import's ghost row). Pass ``label`` (name or ID) to restrict to that
+        label's members; composes with ``status``.
         """
         client = get_client(ctx)
         with mcp_errors():
@@ -128,12 +143,13 @@ def register(mcp: Any) -> None:
             sources = await listing_core.fetch_sources(
                 client, nb_id, label_filter=label, label_resolver=labels_core.resolve_label_id
             )
-            # Filter on the raw Source BEFORE serializing, so _source_view (which
+            # Filter on the raw Source BEFORE serializing, so the projector (which
             # runs to_jsonable) is only paid for the sources that survive the
-            # filter. Uses the same source_status_to_str label _source_view emits.
+            # filter. Uses the same source_status_to_str label the rows emit.
             if status is not None:
                 sources = [s for s in sources if source_status_to_str(s.status) == status]
-            page, meta = paginate([_source_view(s) for s in sources], limit, offset)
+            project = _source_compact if detail == "compact" else _source_view
+            page, meta = paginate([project(s) for s in sources], limit, offset)
             return {"notebook_id": nb_id, "sources": page, **meta}
 
     @mcp.tool(annotations=READ_ONLY)

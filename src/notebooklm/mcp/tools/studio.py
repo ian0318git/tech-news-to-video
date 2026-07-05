@@ -53,6 +53,7 @@ from ._studio_download import (
     _resolve_artifact_id,
 )
 from ._studio_items import (
+    compact_studio_item,
     resolve_studio_item,
     studio_items,
     summarize_studio_item,
@@ -204,27 +205,26 @@ def register(mcp: Any) -> None:
             "video",
         ]
         | None = None,
-        detail: Literal["summary", "full"] = "summary",
+        detail: Literal["compact", "summary", "full"] = "summary",
         limit: int = DEFAULT_LIMIT,
         offset: int = 0,
     ) -> dict[str, Any]:
         """List a notebook's Studio panel — text notes AND generated artifacts.
 
         Accepts a notebook name or ID. Returns a merged ``items`` list; each item has
-        ``id`` / ``title`` / ``type`` (``note`` or a hyphenated artifact kind). Artifacts
-        carry ``status_label`` and ``url``.
+        ``id`` / ``title`` / ``type`` (``note`` or a hyphenated artifact kind); artifacts
+        also carry ``status_label`` / ``url``. Bounded page of ``limit`` (default 50)
+        from ``offset``, with ``total`` / ``offset`` / ``has_more``.
 
-        * List mode: a bounded page of ``limit`` (default 50) from ``offset``, plus
-          ``total`` / ``offset`` / ``has_more``.
-        * ``detail`` (note-body token-saver): ``summary`` (default) gives each note a
-          bounded ``content_preview`` + full-body ``char_count`` instead of the whole
-          ``content``; ``full`` returns it. Artifacts are unaffected. Read a full body
-          via ``item=<ref>`` or ``detail="full"``.
+        * ``detail`` ladder: ``summary`` (default) gives each note a bounded
+          ``content_preview`` + ``char_count`` (artifacts unaffected); ``full`` returns
+          the whole ``content``; ``compact`` collapses every item to ``id`` / ``title``
+          / ``type`` / ``status_label`` / ``created_at`` (no body/``url``) — a low-token
+          roster.
         * ``kind`` filters to one ``type``.
-        * ``item`` (name or id — note OR artifact) fetches just that item as a 1-element
-          list with the note's FULL ``content``; no match is a NOT_FOUND error.
-          ``limit`` / ``offset`` / ``detail`` are ignored with ``item``; ``kind`` scopes
-          the resolution.
+        * ``item`` (name or id) fetches just that item as a 1-element list with the
+          note's FULL ``content``; no match is NOT_FOUND. ``limit`` / ``offset`` /
+          ``detail`` are ignored with ``item``; ``kind`` scopes resolution.
         """
         client = get_client(ctx)
         with mcp_errors():
@@ -250,16 +250,21 @@ def register(mcp: Any) -> None:
                     "offset": 0,
                     "has_more": False,
                 }
-            items = await studio_items(client, nb_id)
+            # ``compact`` needs each row's ``created_at`` (dropped by the default
+            # projection); fetch it only for that mode so the other paths are unchanged.
+            items = await studio_items(client, nb_id, include_created_at=(detail == "compact"))
             if kind is not None:
                 items = [it for it in items if it["type"] == kind]
             page, meta = paginate(items, limit, offset)
-            # Summarize only the returned page (not the whole list) so the note-body
-            # slicing is O(limit): default ``summary`` swaps each note's full body for a
-            # bounded ``content_preview`` + ``char_count`` (full body via ``detail="full"``
-            # or ``item=<ref>``); ``full`` leaves the projection untouched.
+            # Project only the returned page (not the whole list) so the work is
+            # O(limit): ``summary`` (default) swaps each note's full body for a bounded
+            # ``content_preview`` + ``char_count`` (full body via ``detail="full"`` or
+            # ``item=<ref>``); ``compact`` collapses every item to the roster row;
+            # ``full`` leaves the projection untouched.
             if detail == "summary":
                 page = [summarize_studio_item(it) for it in page]
+            elif detail == "compact":
+                page = [compact_studio_item(it) for it in page]
             return {"notebook_id": nb_id, "items": page, **meta}
 
     @mcp.tool

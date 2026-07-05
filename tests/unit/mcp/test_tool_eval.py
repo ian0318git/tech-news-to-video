@@ -30,7 +30,7 @@ pytest.importorskip("fastmcp")
 #: Ratchet ceilings — calibrated to the current surface (Tier-1 read-merge took it
 #: to ~36.0k). Move these DOWN as the surface gets leaner; a rise means
 #: description/param bloat that must be justified, not rubber-stamped.
-SCHEMA_CHAR_BUDGET = 38_620  # total serialized inputSchema + description chars (current 38_572)
+SCHEMA_CHAR_BUDGET = 38_620  # total serialized inputSchema + description chars (current 38_565)
 # ^ Raised from 36_250 for #1741: research_status gained include_report /
 # report_max_chars / source_limit / source_offset windowing params, and the four
 # research tools' docstrings speak one `poll_task_id` id (tightened to stay lean).

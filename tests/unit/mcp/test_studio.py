@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -125,6 +126,7 @@ class FakeNote:
     id: str
     title: str
     content: str = ""
+    created_at: datetime | None = None
 
 
 #: Ids used across the merged studio_list / studio_delete tests.
@@ -337,12 +339,111 @@ async def test_studio_list_summary_leaves_artifacts_untouched(mcp_call, mock_cli
 
 
 async def test_studio_list_rejects_bad_detail(mcp_call, mock_client) -> None:
-    """A ``detail`` outside the summary|full enum is rejected at the schema boundary
-    (mirrors ``source_read``'s invalid-``detail`` test)."""
+    """A ``detail`` outside the compact|summary|full enum is rejected at the schema
+    boundary (mirrors ``source_read``'s invalid-``detail`` test)."""
     mock_client.notes.list = AsyncMock(return_value=[])
     mock_client.artifacts.list = AsyncMock(return_value=[])
     with pytest.raises(ToolError):
         await mcp_call("studio_list", {"notebook": NB_ID, "detail": "bogus"})
+
+
+async def test_studio_list_compact(mcp_call, mock_client) -> None:
+    """``detail="compact"`` projects every item — note AND artifact — to a uniform
+    5-field roster row (``id, title, type, status_label, created_at``), no body/url.
+
+    A note carries its real ``created_at`` but no status (``status_label=None``); an
+    artifact carries both. ``created_at`` is already-fetched data the default
+    projection drops."""
+    mock_client.notes.list = AsyncMock(
+        return_value=[
+            FakeNote(
+                id=_NOTE_ID,
+                title="My Note",
+                content="x" * 500,
+                created_at=datetime(2024, 1, 2, tzinfo=timezone.utc),
+            )
+        ]
+    )
+    mock_client.artifacts.list = AsyncMock(return_value=[_completed_artifact("art1", "My Podcast")])
+    result = await mcp_call("studio_list", {"notebook": NB_ID, "detail": "compact"})
+    items = {it["type"]: it for it in result.structured_content["items"]}
+    assert set(items["note"]) == {"id", "title", "type", "status_label", "created_at"}
+    assert items["note"] == {
+        "id": _NOTE_ID,
+        "title": "My Note",
+        "type": "note",
+        "status_label": None,
+        "created_at": "2024-01-02T00:00:00+00:00",
+    }
+    assert set(items["audio"]) == {"id", "title", "type", "status_label", "created_at"}
+    assert items["audio"]["status_label"] == "completed"
+    assert items["audio"]["created_at"] == "2024-01-01T00:00:00+00:00"
+
+
+async def test_studio_list_compact_null_created_at(mcp_call, mock_client) -> None:
+    """A still-processing artifact (``created_at=None``) serializes ``created_at`` to
+    ``None`` in the compact row — mirrors the source-side null test."""
+    art = Artifact(
+        id="art1",
+        title="Generating",
+        _artifact_type=ArtifactTypeCode.AUDIO.value,
+        status=int(ArtifactStatus.PROCESSING),
+        created_at=None,
+    )
+    mock_client.notes.list = AsyncMock(return_value=[])
+    mock_client.artifacts.list = AsyncMock(return_value=[art])
+    result = await mcp_call("studio_list", {"notebook": NB_ID, "detail": "compact"})
+    row = result.structured_content["items"][0]
+    assert set(row) == {"id", "title", "type", "status_label", "created_at"}
+    assert row["created_at"] is None
+
+
+async def test_studio_list_compact_composes_with_kind_filter(mcp_call, mock_client) -> None:
+    """``detail="compact"`` still honors the ``kind`` filter (shaping is orthogonal)."""
+    mock_client.notes.list = AsyncMock(return_value=[FakeNote(id=_NOTE_ID, title="N", content="b")])
+    mock_client.artifacts.list = AsyncMock(return_value=[_completed_artifact("art1", "Pod")])
+    result = await mcp_call("studio_list", {"notebook": NB_ID, "detail": "compact", "kind": "note"})
+    rows = result.structured_content["items"]
+    assert [r["type"] for r in rows] == ["note"]
+    assert set(rows[0]) == {"id", "title", "type", "status_label", "created_at"}
+
+
+async def test_studio_list_compact_item_path_unaffected(mcp_call, mock_client) -> None:
+    """``item=<ref>`` returns the full item even with ``detail="compact"`` — the
+    single-fetch path ignores ``detail`` (unchanged contract)."""
+    mock_client.notes.list = AsyncMock(
+        return_value=[FakeNote(id=_NOTE_ID, title="My Note", content="the full body")]
+    )
+    mock_client.artifacts.list = AsyncMock(return_value=[])
+    result = await mcp_call(
+        "studio_list", {"notebook": NB_ID, "item": "My Note", "detail": "compact"}
+    )
+    note = result.structured_content["items"][0]
+    assert note["content"] == "the full body"
+    assert "created_at" not in note
+
+
+async def test_studio_items_created_at_opt_in() -> None:
+    """``studio_items`` omits ``created_at`` by default (default paths byte-identical)
+    and includes it only when ``include_created_at=True``."""
+    from notebooklm.mcp.tools._studio_items import studio_items
+
+    client = MagicMock()
+    client.notes.list = AsyncMock(
+        return_value=[
+            FakeNote(
+                id=_NOTE_ID,
+                title="N",
+                content="b",
+                created_at=datetime(2024, 1, 2, tzinfo=timezone.utc),
+            )
+        ]
+    )
+    client.artifacts.list = AsyncMock(return_value=[])
+    default = await studio_items(client, NB_ID)
+    assert "created_at" not in default[0]
+    enriched = await studio_items(client, NB_ID, include_created_at=True)
+    assert enriched[0]["created_at"] == "2024-01-02T00:00:00+00:00"
 
 
 # ---------------------------------------------------------------------------

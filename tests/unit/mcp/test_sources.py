@@ -264,6 +264,86 @@ async def test_source_list_resolves_notebook_by_name(mcp_call, mock_client) -> N
     mock_client.sources.list.assert_awaited_with(NB_ID)
 
 
+async def test_source_list_compact(mcp_call, mock_client) -> None:
+    """``detail="compact"`` projects each source to a 5-field roster row.
+
+    Uses a real ``Source`` so ``created_at`` (dropped by the minimal fakes)
+    actually serializes: the row is exactly ``{id, title, kind, status_label,
+    created_at}`` — no ``url`` / raw ``status`` / ``_type_code`` — for a low-token
+    listing with no extra read.
+    """
+    from datetime import datetime, timezone
+
+    from notebooklm.types import Source
+
+    src = Source(
+        id=SRC_ID,
+        title="Doc",
+        _type_code=3,  # pdf
+        created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        status=SourceStatus.READY,
+    )
+    mock_client.sources.list = AsyncMock(return_value=[src])
+    result = await mcp_call("source_list", {"notebook": NB_ID, "detail": "compact"})
+    assert result.structured_content == {
+        "notebook_id": NB_ID,
+        "sources": [
+            {
+                "id": SRC_ID,
+                "title": "Doc",
+                "kind": "pdf",
+                "status_label": "ready",
+                "created_at": "2024-01-01T00:00:00+00:00",
+            }
+        ],
+        "total": 1,
+        "offset": 0,
+        "has_more": False,
+    }
+
+
+async def test_source_list_compact_composes_with_status_filter(mcp_call, mock_client) -> None:
+    """``detail="compact"`` still honors the ``status`` filter (shaping is orthogonal)."""
+    mock_client.sources.list = AsyncMock(
+        return_value=[
+            FakeSource(id=SRC_ID, title="Ready Doc"),
+            FakeFailedSource(id=SRC2_ID, title="Broken Import"),
+        ]
+    )
+    result = await mcp_call(
+        "source_list", {"notebook": NB_ID, "detail": "compact", "status": "error"}
+    )
+    rows = result.structured_content["sources"]
+    assert [r["id"] for r in rows] == [SRC2_ID]
+    assert set(rows[0]) == {"id", "title", "kind", "status_label", "created_at"}
+    assert rows[0]["status_label"] == "error"
+
+
+async def test_source_list_compact_null_created_at(mcp_call, mock_client) -> None:
+    """A still-processing source (no decoded ``created_at``) serializes ``created_at``
+    to ``None`` in the compact row — the field is always present, never omitted."""
+    from notebooklm.types import Source
+
+    src = Source(
+        id=SRC_ID, title="Importing", _type_code=3, created_at=None, status=SourceStatus.PROCESSING
+    )
+    mock_client.sources.list = AsyncMock(return_value=[src])
+    result = await mcp_call("source_list", {"notebook": NB_ID, "detail": "compact"})
+    row = result.structured_content["sources"][0]
+    assert set(row) == {"id", "title", "kind", "status_label", "created_at"}
+    assert row["created_at"] is None
+    assert row["status_label"] == "processing"
+
+
+async def test_source_list_default_is_full_unchanged(mcp_call, mock_client) -> None:
+    """The default call (no ``detail``) is byte-identical to before (full projection)."""
+    mock_client.sources.list = AsyncMock(return_value=[FakeSource(id=SRC_ID, title="Doc")])
+    result = await mcp_call("source_list", {"notebook": NB_ID})
+    assert result.structured_content["sources"] == [
+        {"id": SRC_ID, "title": "Doc", "kind": "web_page", "status_label": "ready"}
+    ]
+
+
 async def test_source_read(mcp_call, mock_client) -> None:
     """Returns the source metadata AND its full text content + char_count."""
     mock_client.sources.get_or_none = AsyncMock(return_value=FakeSource(id=SRC_ID, title="Doc"))

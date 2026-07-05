@@ -27,6 +27,7 @@ from ..._app.resolve import (
     resolve_ref,
     validate_id,
 )
+from ..._app.serialize import to_jsonable
 from ...exceptions import NotFoundError, ValidationError
 from ...types import ArtifactType
 
@@ -35,6 +36,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "StudioResolvedItem",
+    "compact_studio_item",
     "hyphenated_type",
     "resolve_studio_item",
     "studio_items",
@@ -96,7 +98,9 @@ class StudioResolvedItem:
     raw: dict[str, Any] | None = None
 
 
-async def studio_items(client: NotebookLMClient, nb_id: str) -> list[dict[str, Any]]:
+async def studio_items(
+    client: NotebookLMClient, nb_id: str, *, include_created_at: bool = False
+) -> list[dict[str, Any]]:
     """Fetch + merge a notebook's text notes and studio artifacts into one list.
 
     Concurrently reads ``client.notes.list`` (text notes only — the notes facade
@@ -107,6 +111,11 @@ async def studio_items(client: NotebookLMClient, nb_id: str) -> list[dict[str, A
     * note → ``{"id", "title", "type": "note", "content"}``
     * artifact → ``{"id", "title", "type": <hyphenated kind>, "status_label", "url"}``
 
+    When ``include_created_at`` is set, each item additionally carries a ``created_at``
+    key (ISO string or ``None``) read from the already-fetched note/artifact row — used
+    by ``studio_list(detail="compact")``. It defaults off so the by-ref resolver and the
+    default list paths stay byte-identical.
+
     Items are keyed by id (notes first) so a hypothetical future note∩artifact
     overlap can't double-list — this never fires today (``notes.list`` excludes
     mind maps, the only rows both listings could share).
@@ -114,28 +123,56 @@ async def studio_items(client: NotebookLMClient, nb_id: str) -> list[dict[str, A
     notes, artifacts = await asyncio.gather(client.notes.list(nb_id), client.artifacts.list(nb_id))
     items: dict[str, dict[str, Any]] = {}
     for note in notes:
-        items.setdefault(
-            str(note.id),
-            {
-                "id": str(note.id),
-                "title": note.title,
-                "type": "note",
-                "content": note.content,
-            },
-        )
+        item: dict[str, Any] = {
+            "id": str(note.id),
+            "title": note.title,
+            "type": "note",
+            "content": note.content,
+        }
+        if include_created_at:
+            # Direct attribute access: ``created_at`` is an unconditional field on the
+            # typed ``Note`` (unlike ``status_str`` / ``url`` below, which some minimal
+            # rows omit and so keep the ``getattr`` guard).
+            item["created_at"] = to_jsonable(note.created_at)
+        items.setdefault(str(note.id), item)
     for art in artifacts:
         art_id = str(art.id)
         # Dedup by id (notes first) — never fires: notes.list excludes mind maps.
         if art_id in items:
             continue
-        items[art_id] = {
+        art_item: dict[str, Any] = {
             "id": art_id,
             "title": art.title,
             "type": hyphenated_type(art.kind),
             "status_label": getattr(art, "status_str", None),
             "url": getattr(art, "url", None),
         }
+        if include_created_at:
+            # Direct attribute access — ``created_at`` is an unconditional field on the
+            # typed ``Artifact`` (``status_str`` / ``url`` above keep ``getattr`` because
+            # minimal fakes/rows can lack them).
+            art_item["created_at"] = to_jsonable(art.created_at)
+        items[art_id] = art_item
     return list(items.values())
+
+
+#: Fields kept in a ``studio_list(detail="compact")`` roster row. ``status_label`` /
+#: ``created_at`` are absent-tolerant (a note has no status; both default to ``None``).
+_COMPACT_STUDIO_FIELDS = ("id", "title", "type", "status_label", "created_at")
+
+
+def compact_studio_item(item: dict[str, Any]) -> dict[str, Any]:
+    """Project one merged studio item onto the compact roster row.
+
+    Keeps only :data:`_COMPACT_STUDIO_FIELDS` (dropping a note's ``content`` and an
+    artifact's ``url``) for a low-token ``studio_list(detail="compact")`` listing.
+    ``status_label`` falls back to ``None`` (a note carries no status).
+
+    Note: ``created_at`` is read with ``.get`` and is therefore ``None`` UNLESS the
+    ``item`` came from ``studio_items(..., include_created_at=True)``; the sole caller
+    (``studio_list``'s compact branch) always sets that flag.
+    """
+    return {k: item.get(k) for k in _COMPACT_STUDIO_FIELDS}
 
 
 def summarize_studio_item(item: dict[str, Any]) -> dict[str, Any]:
