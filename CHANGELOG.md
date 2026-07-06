@@ -400,6 +400,16 @@ get-returns-None / kwarg-alias deprecation machinery — has been **removed**
 
 ### Fixed
 
+- **Remote MCP connector: pin `fastmcp==3.4.2` so claude.ai can connect.**
+  fastmcp 3.4.3 regressed the RFC 9728 protected-resource-metadata route
+  (`/.well-known/oauth-protected-resource/mcp` started returning **404**), which
+  dead-ends the claude.ai remote-connector OAuth discovery — the connector fails
+  with *"Couldn't connect to the server."* Because the `mcp` extra previously
+  allowed `fastmcp>=3.0,<4`, the published `0.8.0a2` Docker image floated to the
+  broken 3.4.3 at build time even though the client code was unchanged. The
+  `mcp` extra is now pinned to the last-good `fastmcp==3.4.2`; the pin will be
+  lifted once a fixed fastmcp ships.
+
 - **First-class human/mobile upload path in `upload_required`**
   ([#1801](https://github.com/teng-lin/notebooklm-py/issues/1801)). When a source
   add needs a browser upload, the `upload_required` response now surfaces the

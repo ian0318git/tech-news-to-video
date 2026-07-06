@@ -9,7 +9,10 @@ register→authorize→login→token→verify flow.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
+import re
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -36,6 +39,7 @@ from notebooklm.mcp._oauth import (  # noqa: E402
     build_oauth_provider,
     get_oauth_config,
 )
+from notebooklm.mcp.server import create_server  # noqa: E402
 
 _PW = "a-strong-random-password-1234567890"
 
@@ -164,6 +168,91 @@ def test_metadata_advertises_registration_endpoint() -> None:
     with TestClient(app) as c:
         meta = c.get("/.well-known/oauth-authorization-server").json()
     assert meta.get("registration_endpoint")  # DCR enabled → claude.ai can register
+
+
+# ------------------------------------------------- connector discovery (RFC 9728)
+# These drive the FULL FastMCP ``http_app()`` — not just the AS provider routes —
+# because the protected-resource-metadata endpoint is mounted by the MCP app, and
+# that is exactly what fastmcp 3.4.3 regressed: its Host/Origin guard rejected any
+# request whose Host wasn't its (localhost/``testserver``) allowlist — including
+# the deployment's own public origin — so claude.ai's discovery fetch got a
+# non-200 and dead-ended ("Couldn't connect to the server"). pyproject pins
+# ``fastmcp==3.4.2``; these fail loudly (under a realistic Host) if a float breaks it.
+_HOST = "host.example.com"
+
+
+def _oauth_http_app():
+    """The real FastMCP ``http_app()`` in OAuth mode, client bound to a stub."""
+
+    @contextlib.asynccontextmanager
+    async def factory():
+        yield MagicMock()
+
+    server = create_server(client_factory=factory, auth=build_auth(None, _provider()))
+    return server.http_app()
+
+
+def _path(url: str) -> str:
+    """Strip the public origin → the route path the in-process TestClient hits."""
+    return url.split(_HOST, 1)[-1]
+
+
+# The connector reaches the server under its OWN public origin (behind the
+# tunnel), NOT ``testserver``. This Host header is load-bearing: fastmcp 3.4.3's
+# Host/Origin guard allowlisted ``testserver``/localhost but not the deployment
+# origin, so it rejected the real request (→ 421) while a default TestClient Host
+# sailed through. Every request below sends the realistic Host so the guard is
+# actually exercised.
+_H = {"host": _HOST}
+
+
+def test_mcp_401_resource_metadata_is_fetchable() -> None:
+    """The ``/mcp`` 401 must advertise a resource-metadata URL that returns 200
+    when fetched under the deployment's own Host.
+
+    Precise regression guard for fastmcp 3.4.3: its Host-protection returned a
+    non-200 (421/404) for ``/.well-known/oauth-protected-resource/mcp`` under the
+    real connector Host, so claude.ai could not discover the auth server
+    ("Couldn't connect to the server"). pyproject pins ``fastmcp==3.4.2``.
+    """
+    with TestClient(_oauth_http_app()) as c:
+        r = c.post(
+            "/mcp",
+            headers={**_H, "Accept": "application/json, text/event-stream"},
+            json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        )
+        assert r.status_code == 401, f"/mcp under Host={_HOST!r} -> {r.status_code}"
+        m = re.search(r'resource_metadata="([^"]+)"', r.headers.get("www-authenticate", ""))
+        assert m, f"no resource_metadata in WWW-Authenticate: {r.headers.get('www-authenticate')!r}"
+        meta = c.get(_path(m.group(1)), headers=_H)
+        assert meta.status_code == 200, (
+            f"{_path(m.group(1))} under Host={_HOST!r} -> {meta.status_code}; the 401 "
+            "points at an unreachable metadata doc (fastmcp host-guard regression?)"
+        )
+        assert meta.json().get("authorization_servers")
+
+
+def test_dynamic_client_registration_succeeds() -> None:
+    """claude.ai registers a client via DCR before connecting; ``/register`` → 201
+    under the deployment's own Host (guards the same fastmcp 3.4.3 host regression)."""
+    with TestClient(_oauth_http_app()) as c:
+        meta = c.get("/.well-known/oauth-authorization-server", headers=_H)
+        assert meta.status_code == 200, f"AS metadata under Host={_HOST!r} -> {meta.status_code}"
+        reg = c.post(
+            _path(meta.json()["registration_endpoint"]),
+            headers=_H,
+            json={
+                "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"],
+                "grant_types": ["authorization_code", "refresh_token"],
+                "response_types": ["code"],
+                "token_endpoint_auth_method": "client_secret_post",
+                "client_name": "test",
+            },
+        )
+        assert reg.status_code == 201, (
+            f"register under Host={_HOST!r} -> {reg.status_code}: {reg.text}"
+        )
+        assert reg.json().get("client_id")
 
 
 # --------------------------------------------------------------------------- DCR cap
