@@ -235,7 +235,10 @@ chat_ask(notebook="Quantum Computing", question="What are the open problems?")
 ```
 
 `source_type` is one of `url`, `text`, `file` (local `path`), `drive` (a
-`document_id` + `mime_type`), or `youtube`. URL and YouTube adds reject
+`document_id` + a **required** `mime_type`, one of
+`google-doc`/`google-slides`/`google-sheets`/`pdf` — there is no default, since
+defaulting a non-Doc Drive file to `google-doc` fails the import), or `youtube`.
+URL and YouTube adds reject
 internal/loopback hosts by default; pass `allow_internal=true` only for
 deliberate local NotebookLM tests. `chat_ask` continues the most-recent
 conversation unless you pass a `conversation_id`.

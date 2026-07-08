@@ -63,8 +63,35 @@ _SOURCE_TYPES = ("url", "text", "file", "drive", "youtube")
 #: Drive MIME choices the backend accepts (mirrors the CLI ``--mime-type``).
 _DRIVE_MIME_CHOICES = ("google-doc", "google-slides", "google-sheets", "pdf")
 
-#: The default Drive MIME choice when the caller does not specify one.
-_DEFAULT_DRIVE_MIME = "google-doc"
+#: The choices as a clean, comma-separated quoted string for user-facing errors.
+_DRIVE_MIME_CHOICES_STR = ", ".join(f"'{choice}'" for choice in _DRIVE_MIME_CHOICES)
+
+
+def _validate_drive_mime(source_type: str, mime_type: str | None) -> None:
+    """Require an explicit, supported ``mime_type`` for a Drive add (#1827).
+
+    A Drive add no longer defaults an omitted ``mime_type`` to ``google-doc``: a
+    non-Doc Drive file (e.g. a raw ``.md``) so routed through the Google Docs
+    converter failed the import and left an error source stub behind. The client
+    can't sniff Drive metadata from a bare ``document_id``, so the caller must
+    declare the type; rejecting BEFORE ``resolve_notebook`` / the add RPC persists
+    no source row. A no-op for non-Drive types (``mime_type`` is dual-use free-text
+    for ``source_type="file"``).
+    """
+    if source_type != "drive":
+        return
+    if mime_type is None:
+        raise ValidationError(
+            "source_type 'drive' requires 'mime_type'; pass one of "
+            f"{_DRIVE_MIME_CHOICES_STR} (e.g. 'pdf' for a Drive-hosted PDF, "
+            "'google-doc' for a native Google Doc). An omitted type is no longer "
+            "defaulted to 'google-doc' — a non-Doc Drive file would fail the import "
+            "and leave an error source stub behind (#1827)."
+        )
+    if mime_type not in _DRIVE_MIME_CHOICES:
+        raise ValidationError(
+            f"Invalid mime_type {mime_type!r} for drive; expected one of {_DRIVE_MIME_CHOICES_STR}"
+        )
 
 
 # ``_source_view`` (Source → dict with string ``kind`` / ``status_label`` labels)
@@ -434,9 +461,9 @@ def register(mcp: Any) -> None:
           ``human_upload.url`` on a network error. ``mime_locked`` is true when
           ``mime_type`` was supplied; ``expires_at_iso`` / ``expires_in_seconds`` give
           the expiry; top-level ``url`` is **deprecated** for ``human_upload.url``.
-        * ``drive``   — requires ``document_id`` (Google Drive file id); ``title``
-          and ``mime_type`` (one of google-doc|google-slides|google-sheets|pdf,
-          default google-doc) optional.
+        * ``drive``   — requires ``document_id`` + ``mime_type`` (one of
+          google-doc|google-slides|google-sheets|pdf; required, no default — a
+          wrong default fails non-Doc imports, #1827); ``title`` optional.
 
         The single-mode named inputs are mutually exclusive — supply only the one
         your ``source_type`` requires.
@@ -515,20 +542,12 @@ def register(mcp: Any) -> None:
             # ``mime_type`` deliberately stays a free-text ``str`` (NOT a ``Literal``):
             # it is DUAL-USE — for ``source_type="file"`` it carries an arbitrary,
             # open-ended MIME type (in the signed upload URL), and only for
-            # ``source_type="drive"`` is it restricted to ``_DRIVE_MIME_CHOICES``.
-            # A ``Literal`` would wrongly reject valid ``file`` MIME types; splitting a
-            # dedicated ``drive_mime_type`` param would grow the ``source_add`` surface
-            # for a niche 4-value option. So the drive choice set is enforced here at
-            # runtime (and listed in the docstring) instead (issue #1759).
-            if (
-                mime_type is not None
-                and source_type == "drive"
-                and mime_type not in _DRIVE_MIME_CHOICES
-            ):
-                raise ValidationError(
-                    f"Invalid mime_type {mime_type!r} for drive; "
-                    f"expected one of {list(_DRIVE_MIME_CHOICES)}"
-                )
+            # ``source_type="drive"`` is it restricted to ``_DRIVE_MIME_CHOICES`` AND
+            # required (no ``google-doc`` default — #1827). A ``Literal`` would wrongly
+            # reject valid ``file`` MIME types; splitting a dedicated ``drive_mime_type``
+            # param would grow the ``source_add`` surface for a niche 4-value option. So
+            # the drive choice set is enforced here at runtime (issue #1759).
+            _validate_drive_mime(source_type, mime_type)
             # Content-scalar exclusivity (fail-closed): reject any content scalar
             # this source_type does not consume. title/mime_type are untouched —
             # they are optional metadata, not content.
@@ -564,8 +583,9 @@ def register(mcp: Any) -> None:
                     mut_core.SourceAddDrivePlan(
                         notebook_id=nb_id,
                         file_id=document_id,
+                        # Non-None + a valid choice, guaranteed by _validate_drive_mime above.
+                        mime_type=mime_type,  # type: ignore[arg-type]
                         title=title or "",
-                        mime_type=mime_type or _DEFAULT_DRIVE_MIME,  # type: ignore[arg-type]
                     ),
                 )
                 return _add_result_payload(
@@ -625,18 +645,10 @@ def register(mcp: Any) -> None:
             if interval <= 0:
                 raise ValidationError(f"interval must be > 0; got {interval}")
             # The same single-add guards source_add applies, all BEFORE any notebook
-            # I/O so a malformed call never pays a round-trip. Kept in sync with
-            # source_add's copies (the drive-mime check + _reject_single_content_scalars):
-            # if _CONTENT_SCALAR_OWNERS / _DRIVE_MIME_CHOICES change, update both sites.
-            if (
-                mime_type is not None
-                and source_type == "drive"
-                and mime_type not in _DRIVE_MIME_CHOICES
-            ):
-                raise ValidationError(
-                    f"Invalid mime_type {mime_type!r} for drive; "
-                    f"expected one of {list(_DRIVE_MIME_CHOICES)}"
-                )
+            # I/O so a malformed call never pays a round-trip. Shares the drive-mime
+            # validator + _reject_single_content_scalars with source_add so the two
+            # tools stay in lockstep.
+            _validate_drive_mime(source_type, mime_type)
             _reject_single_content_scalars(
                 source_type, url=url, text=text, path=path, document_id=document_id
             )
@@ -661,6 +673,12 @@ def register(mcp: Any) -> None:
                     notebook_id=nb_id, source_id=src.id, timeout=timeout, interval=interval
                 ),
             )
+            # ``wait_until_ready`` re-reads the source from GET_NOTEBOOK, where a Drive
+            # PDF again decodes to the ambiguous code 14 → GOOGLE_SPREADSHEET; carry the
+            # already-stamped code from ``src`` onto the ready outcome so add-and-wait
+            # labels it the same as source_add (#1828).
+            if source_type == "drive" and isinstance(outcome, wait_core.SourceWaitReady):
+                outcome.source._type_code = src._type_code
             result = await _aggregate_wait_outcomes(client, nb_id, [outcome])
             # The created source persists regardless of the wait outcome — surface its id
             # at the top level so a timed-out / failed caller can retry or delete it.
@@ -936,7 +954,8 @@ async def _add_source_to_wait_on(
                 notebook_id=notebook_id,
                 file_id=document_id,
                 title=title or "",
-                mime_type=mime_type or _DEFAULT_DRIVE_MIME,  # type: ignore[arg-type]
+                # Non-None + valid: _validate_drive_mime ran in the tool body (#1827).
+                mime_type=mime_type,  # type: ignore[arg-type]
             ),
         )
         return drive_result.source

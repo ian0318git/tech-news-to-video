@@ -399,11 +399,24 @@ def test_add_drive_source(authed_client: TestClient, fake_client: FakeClient) ->
     assert mime == "application/vnd.google-apps.document"
 
 
-def test_add_drive_default_mime(authed_client: TestClient, fake_client: FakeClient) -> None:
+def test_add_drive_missing_mime_is_422(authed_client: TestClient, fake_client: FakeClient) -> None:
+    """``mime_type`` is required — an omitted value is rejected (422) with no add
+    RPC, so no error source stub is left behind (#1827)."""
     resp = authed_client.post("/v1/notebooks/nb-1/sources/drive", json={"document_id": "doc-1"})
+    assert resp.status_code == 422
+    assert fake_client.added_drive == []
+
+
+def test_add_drive_pdf_kind_not_spreadsheet(
+    authed_client: TestClient, fake_client: FakeClient
+) -> None:
+    """A Drive PDF add surfaces as ``kind='pdf'``, not ``google_spreadsheet`` (#1828)."""
+    resp = authed_client.post(
+        "/v1/notebooks/nb-1/sources/drive",
+        json={"document_id": "doc-pdf", "title": "Report.pdf", "mime_type": "pdf"},
+    )
     assert resp.status_code == 201
-    # Default choice ``google-doc`` → Google Docs MIME.
-    assert fake_client.added_drive[0][3] == "application/vnd.google-apps.document"
+    assert resp.json()["kind"] == "pdf"
 
 
 def test_add_drive_bad_mime_is_422(authed_client: TestClient) -> None:
