@@ -20,6 +20,8 @@ pytest.importorskip("fastmcp")
 
 from fastmcp.exceptions import ToolError  # noqa: E402 - after importorskip guard
 
+from notebooklm import ResearchStartUnavailableError  # noqa: E402 - after importorskip guard
+
 from .conftest import AsyncMock  # noqa: E402 - after importorskip guard
 
 NB_ID = "11111111-1111-1111-1111-111111111111"
@@ -173,6 +175,32 @@ async def test_research_start_deep_without_report_id_rejected(mcp_call, mock_cli
     assert "VALIDATION" in msg
     # The raw session id is surfaced for traceability (the run started server-side).
     assert "session-x" in msg
+
+
+async def test_research_start_deep_unavailable_does_not_leak_rpc_method_id(
+    mcp_call, mock_client
+) -> None:
+    """#1849: MCP must not expose the deep RPC method id as a fake pollable id."""
+    mock_client.research.start = AsyncMock(
+        side_effect=ResearchStartUnavailableError(
+            NB_ID,
+            "deep",
+            method_id="QA9ei",
+            found_ids=["QA9ei"],
+        )
+    )
+
+    with pytest.raises(ToolError) as excinfo:
+        await mcp_call(
+            "research_start", {"notebook": NB_ID, "query": "q", "source": "web", "mode": "deep"}
+        )
+
+    msg = str(excinfo.value)
+    assert "RPC:" in msg
+    assert "Deep research failed to start" in msg
+    assert "NotebookLM returned no research run" in msg
+    assert "QA9ei" not in msg
+    assert "Found IDs" not in msg
 
 
 # ---------------------------------------------------------------------------

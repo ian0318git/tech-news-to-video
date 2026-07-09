@@ -15,8 +15,10 @@ from notebooklm import (
     CitedSourceSelection,
     NotebookLMClient,
     ResearchSource,
+    ResearchStartUnavailableError,
     ResearchStatus,
     ResearchTask,
+    RPCError,
 )
 from notebooklm._research import ResearchAPI
 from notebooklm.research import extract_report_urls, normalize_citation_url, select_cited_sources
@@ -703,6 +705,54 @@ class TestResearch:
         assert result.task_id == "task_456"
         assert result.report_id == "report_123"
         assert result.mode == "deep"
+
+    @pytest.mark.asyncio
+    async def test_start_deep_null_result_raises_clean_unavailable_error(
+        self, auth_tokens, httpx_mock, build_rpc_response
+    ):
+        """#1849: a null deep-start body must not leak the RPC method id as a run id."""
+        response_body = build_rpc_response(RPCMethod.START_DEEP_RESEARCH, None)
+        httpx_mock.add_response(content=response_body.encode(), method="POST")
+
+        async with NotebookLMClient(auth_tokens) as client:
+            with pytest.raises(ResearchStartUnavailableError) as exc_info:
+                await client.research.start(notebook_id="nb_123", query="AI research", mode="deep")
+
+        err = exc_info.value
+        message = str(err)
+        assert "Deep research failed to start" in message
+        assert "NotebookLM returned no research run" in message
+        assert RPCMethod.START_DEEP_RESEARCH.value not in message
+        assert "Found IDs" not in message
+        assert err.notebook_id == "nb_123"
+        assert err.mode == "deep"
+        assert err.method_id == RPCMethod.START_DEEP_RESEARCH.value
+        assert err.found_ids == [RPCMethod.START_DEEP_RESEARCH.value]
+        assert isinstance(err.__cause__, RPCError)
+
+    @pytest.mark.asyncio
+    async def test_start_deep_null_result_with_status_raises_clean_unavailable_error(
+        self, auth_tokens, httpx_mock
+    ):
+        """Status-enriched null deep-start frames still have no pollable run."""
+        rpc_id = RPCMethod.START_DEEP_RESEARCH.value
+        chunk = json.dumps(["wrb.fr", rpc_id, None, None, None, [13], "generic"])
+        response_body = f")]}}'\n{len(chunk)}\n{chunk}\n"
+        httpx_mock.add_response(content=response_body.encode(), method="POST")
+
+        async with NotebookLMClient(auth_tokens) as client:
+            with pytest.raises(ResearchStartUnavailableError) as exc_info:
+                await client.research.start(notebook_id="nb_123", query="AI research", mode="deep")
+
+        err = exc_info.value
+        message = str(err)
+        assert "NotebookLM returned no research run" in message
+        assert RPCMethod.START_DEEP_RESEARCH.value not in message
+        assert "Found IDs" not in message
+        assert err.method_id == rpc_id
+        assert err.rpc_code == 13
+        assert err.found_ids == [rpc_id]
+        assert isinstance(err.__cause__, RPCError)
 
     @pytest.mark.asyncio
     async def test_start_research_invalid_source(self, auth_tokens):

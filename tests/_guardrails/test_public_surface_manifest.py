@@ -418,6 +418,7 @@ _TOP_LEVEL_EXCEPTION_EXPORTS = [
     "NotebookNotFoundError",
     "RateLimitError",
     "ResearchError",
+    "ResearchStartUnavailableError",
     "ResearchTaskMismatchError",
     "ResearchTimeoutError",
     "RPCError",

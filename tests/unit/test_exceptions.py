@@ -35,6 +35,7 @@ from notebooklm.exceptions import (
     NotFoundError,
     RateLimitError,
     ResearchError,
+    ResearchStartUnavailableError,
     ResearchTaskMismatchError,
     ResearchTimeoutError,
     RPCError,
@@ -476,12 +477,33 @@ class TestWaitTimeoutErrorUmbrella:
         assert not issubclass(ResearchTaskMismatchError, ResearchError)
         assert not issubclass(ResearchTaskMismatchError, WaitTimeoutError)
 
+    def test_research_start_unavailable_attributes_and_catchability(self):
+        err = ResearchStartUnavailableError(
+            "nb-1",
+            "deep",
+            method_id="QA9ei",
+            found_ids=["QA9ei"],
+        )
+
+        assert issubclass(ResearchStartUnavailableError, RPCError)
+        assert issubclass(ResearchStartUnavailableError, ResearchError)
+        assert ResearchStartUnavailableError.__bases__ == (RPCError, ResearchError)
+        assert err.notebook_id == "nb-1"
+        assert err.mode == "deep"
+        assert err.method_id == "QA9ei"
+        assert err.found_ids == ["QA9ei"]
+        assert "Deep research failed to start" in str(err)
+        assert "QA9ei" not in str(err)
+        assert "Found IDs" not in str(err)
+
     def test_umbrella_and_research_exports(self):
         assert notebooklm.WaitTimeoutError is WaitTimeoutError
         assert notebooklm.ResearchError is ResearchError
+        assert notebooklm.ResearchStartUnavailableError is ResearchStartUnavailableError
         assert notebooklm.ResearchTimeoutError is ResearchTimeoutError
         assert "WaitTimeoutError" in notebooklm.__all__
         assert "ResearchError" in notebooklm.__all__
+        assert "ResearchStartUnavailableError" in notebooklm.__all__
         assert "ResearchTimeoutError" in notebooklm.__all__
 
 

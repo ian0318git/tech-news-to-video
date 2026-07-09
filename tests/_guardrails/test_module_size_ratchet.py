@@ -73,7 +73,7 @@ ALLOWLISTED_CEILINGS: dict[str, int] = {
     # ``exceptions.py`` is the canonical public exception home — ``__all__`` and
     # the public-surface manifest pin every class to ``notebooklm.exceptions``, so
     # the classes cannot move to sibling files without forking that home.
-    "exceptions.py": 1546,
+    "exceptions.py": 1512,
 }
 
 

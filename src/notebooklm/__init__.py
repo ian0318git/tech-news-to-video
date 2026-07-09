@@ -96,6 +96,7 @@ from .exceptions import (
     NotFoundError,
     RateLimitError,
     ResearchError,
+    ResearchStartUnavailableError,
     ResearchTaskMismatchError,
     ResearchTimeoutError,
     RPCError,
@@ -274,6 +275,7 @@ __all__ = [
     # Domain Exceptions: Research
     "AmbiguousResearchTaskError",
     "ResearchError",
+    "ResearchStartUnavailableError",
     "ResearchTimeoutError",
     "ResearchTaskMismatchError",
     # Domain Exceptions: Notes

@@ -28,12 +28,16 @@ from ._types.research import (
 )
 from .exceptions import (
     AmbiguousResearchTaskError,
+    AuthError,
     DecodingError,
     NetworkError,
+    RateLimitError,
+    ResearchStartUnavailableError,
     ResearchTaskMismatchError,
     ResearchTimeoutError,
     RPCError,
     RPCTimeoutError,
+    ServerError,
     ValidationError,
 )
 from .rpc import RPCMethod
@@ -106,6 +110,17 @@ def _coerce_research_source(source: ResearchSourceInput) -> ResearchSource:
 
 def _coerce_research_sources(sources: Sequence[ResearchSourceInput]) -> list[ResearchSource]:
     return [_coerce_research_source(source) for source in sources]
+
+
+def _is_deep_start_null_result_error(exc: RPCError) -> bool:
+    method_id = RPCMethod.START_DEEP_RESEARCH.value
+    # The decoder uses this marker for wrb.fr null payloads, with or without
+    # an attached status code. If the wording drifts, fall through and re-raise
+    # the original RPCError rather than overclassifying unrelated failures.
+    null_result_marker = "returned null result"
+    return (
+        exc.method_id == method_id and method_id in exc.found_ids and null_result_marker in str(exc)
+    )
 
 
 def _is_importable_report_source(
@@ -313,6 +328,7 @@ class ResearchAPI:
 
         Raises:
             ValidationError: If source/mode combination is invalid.
+            ResearchStartUnavailableError: If deep research returns no run.
             DecodingError: On a "couldn't-start" payload — an empty/non-list
                 result or a falsey ``task_id`` (no task created); #1342.
 
@@ -352,11 +368,25 @@ class ResearchAPI:
             params = [None, [1], [query, source_type], 5, notebook_id]
             rpc_id = RPCMethod.START_DEEP_RESEARCH
 
-        result = await self._rpc.rpc_call(
-            rpc_id,
-            params,
-            source_path=f"/notebook/{notebook_id}",
-        )
+        try:
+            result = await self._rpc.rpc_call(
+                rpc_id,
+                params,
+                source_path=f"/notebook/{notebook_id}",
+            )
+        except (AuthError, RateLimitError, ServerError, NetworkError):
+            raise
+        except RPCError as exc:
+            if mode_lower == "deep" and _is_deep_start_null_result_error(exc):
+                raise ResearchStartUnavailableError(
+                    notebook_id,
+                    mode_lower,
+                    method_id=exc.method_id,
+                    raw_response=exc.raw_response,
+                    rpc_code=exc.rpc_code,
+                    found_ids=exc.found_ids,
+                ) from exc
+            raise
 
         if result and isinstance(result, list) and len(result) > 0:
             start_row = ResearchStartRow(result)

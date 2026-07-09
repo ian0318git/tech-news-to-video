@@ -119,6 +119,7 @@ __all__ = [
     "ArtifactInProgressTimeoutError",
     # Domain: Research
     "ResearchError",
+    "ResearchStartUnavailableError",
     "ResearchTimeoutError",
     "ResearchTaskMismatchError",
     "AmbiguousResearchTaskError",
@@ -1267,44 +1268,45 @@ class ArtifactInProgressTimeoutError(ArtifactTimeoutError):
         )
 
 
-# =============================================================================
 # Domain: Research
-# =============================================================================
+# Keep catch behavior explicit: task mismatch remains ValidationError; ambiguous,
+# timeout, and start-unavailable paths are ResearchError domain failures.
 
 
 class ResearchError(NotebookLMError):
-    """Base for research operations.
+    """Research catch-all; ResearchTaskMismatchError stays ValidationError."""
 
-    Added in v0.7.0 to give the research domain a catchable base mirroring
-    :class:`SourceError` / :class:`ArtifactError`. :class:`ResearchTimeoutError`
-    inherits from it (and from :class:`WaitTimeoutError`).
 
-    ``ResearchTaskMismatchError`` deliberately does NOT inherit from this base:
-    it remains a :class:`ValidationError` so existing ``except ValidationError``
-    clauses on :meth:`ResearchAPI.import_sources` keep catching it unchanged.
-    """
+class ResearchStartUnavailableError(RPCError, ResearchError):
+    """No-run start signal; also RPCError because the backend returned a frame."""
+
+    def __init__(
+        self,
+        notebook_id: str,
+        mode: str,
+        *,
+        method_id: str | None = None,
+        raw_response: str | None = None,
+        rpc_code: str | int | None = None,
+        found_ids: list[str] | None = None,
+    ) -> None:
+        self.notebook_id = notebook_id
+        self.mode = mode
+        super().__init__(
+            (
+                f"{mode.capitalize()} research failed to start: "
+                "NotebookLM returned no research run. "
+                "Try mode='fast' or retry later."
+            ),
+            method_id=method_id,
+            raw_response=raw_response,
+            rpc_code=rpc_code,
+            found_ids=found_ids,
+        )
 
 
 class ResearchTimeoutError(WaitTimeoutError, ResearchError):
-    """Research task did not reach a terminal state before timeout.
-
-    Raised by :meth:`ResearchAPI.wait_for_completion` when the research task
-    does not reach ``completed`` / ``failed`` within the wait budget.
-
-    Inherits from :class:`WaitTimeoutError` (and therefore the built-in
-    :class:`TimeoutError`) and :class:`ResearchError`. Before v0.7.0 this path
-    raised the bare built-in :class:`TimeoutError`; routing it through this
-    subclass is backward-compatible for ``except TimeoutError`` callers and
-    newly catchable via ``except WaitTimeoutError`` / ``except ResearchError``.
-
-    Attributes:
-        notebook_id: Notebook containing the research task.
-        task_id: The research task ID (``"unknown"`` when no task id was
-            resolved before the timeout).
-        timeout: Wait budget in seconds.
-        timeout_seconds: Alias for ``timeout``.
-        last_status: Last observed research status before timeout.
-    """
+    """Timeout signal catchable as TimeoutError, WaitTimeoutError, and ResearchError."""
 
     def __init__(
         self,
@@ -1327,24 +1329,7 @@ class ResearchTimeoutError(WaitTimeoutError, ResearchError):
 
 
 class ResearchTaskMismatchError(ValidationError):
-    """Per-source ``research_task_id`` does not match the caller's ``task_id``.
-
-    Raised by :meth:`ResearchAPI.import_sources` when one of the supplied
-    sources carries a ``research_task_id`` that differs from the
-    discriminator ``task_id`` passed by the caller. This is the wire-crossing
-    bug: the caller intends to import results for task A, but one of the
-    source entries was actually discovered under task B. Importing under
-    the wrong task would mis-attribute provenance, so this check fails
-    loud before any RPC traffic is issued.
-
-    Inherits from :class:`ValidationError` so existing ``except
-    ValidationError`` clauses on ``import_sources`` continue to catch it.
-
-    Attributes:
-        task_id: The discriminator ``task_id`` passed by the caller.
-        source_research_task_id: The ``research_task_id`` carried by the
-            offending source dict.
-    """
+    """ValidationError for cross-task source provenance, not a ResearchError."""
 
     def __init__(self, *, task_id: str, source_research_task_id: str):
         self.task_id = task_id
@@ -1358,26 +1343,7 @@ class ResearchTaskMismatchError(ValidationError):
 
 
 class AmbiguousResearchTaskError(ResearchError):
-    """Two or more research tasks are in flight but no ``task_id`` was given.
-
-    Raised by :meth:`ResearchAPI.poll` / :meth:`ResearchAPI.wait_for_completion`
-    when ``task_id`` is ``None`` and the notebook has two or more in-flight
-    tasks: with no discriminator the call would have to guess, risking the wrong
-    task, so it fails loud (ADR-0019: "ambiguous -> raise, never silently
-    guess"). Pass the ``task_id`` from :meth:`ResearchAPI.start`; a single
-    in-flight task is unambiguous and still returned silently.
-
-    .. versionchanged:: 0.8.0 previously warned and returned the latest task.
-
-    Inherits from :class:`ResearchError` and deliberately NOT from
-    :class:`ValidationError` — the counterpoint to
-    :class:`ResearchTaskMismatchError` (which IS a ``ValidationError``), so
-    ``except ValidationError`` does not catch this; catch ``except ResearchError``.
-
-    Attributes:
-        notebook_id: Notebook containing the ambiguous in-flight tasks.
-        task_ids: The ``task_id`` of every in-flight task observed at poll time.
-    """
+    """ResearchError for ambiguous in-flight tasks; callers must pass task_id."""
 
     def __init__(self, *, notebook_id: str, task_ids: list[str]):
         self.notebook_id = notebook_id
