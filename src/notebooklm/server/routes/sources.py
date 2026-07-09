@@ -30,6 +30,7 @@ import shutil
 import tempfile
 from typing import Annotated, Any, Literal
 
+import pydantic
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
 from pydantic import BaseModel
 
@@ -49,6 +50,8 @@ from ._passthrough import passthrough_source_id
 
 __all__ = [
     "MAX_UPLOAD_BYTES",
+    "MAX_WAIT_CONCURRENT_SOURCES",
+    "MAX_WAIT_SOURCE_IDS",
     "MAX_WAIT_TIMEOUT",
     "router",
 ]
@@ -57,6 +60,7 @@ router = APIRouter(prefix="/notebooks/{notebook_id}/sources", tags=["sources"])
 
 ClientDep = Annotated[NotebookLMClient, Depends(get_client)]
 PendingDep = Annotated[PendingRegistry, Depends(get_pending)]
+_field_validator = getattr(pydantic, "field_validator", pydantic.validator)
 
 #: Max accepted upload size. Bounds temp-file disk pressure under concurrent
 #: uploads; an upload exceeding it is rejected with 413 before it is spooled to
@@ -72,6 +76,15 @@ _UPLOAD_CHUNK = 1024 * 1024
 #: backstop that turns a ``timeout=inf`` (valid JSON) into a clean 400 rather
 #: than a request that never returns.
 MAX_WAIT_TIMEOUT = 3600.0
+
+#: Max source ids accepted by one ``source_wait`` request. NotebookLM notebooks
+#: are source-limited; this cap preserves normal all-source waits while blocking
+#: pathological route fanout.
+MAX_WAIT_SOURCE_IDS = 100
+
+#: Max simultaneous per-source wait pollers spawned by one REST wait request.
+MAX_WAIT_CONCURRENT_SOURCES = 8
+
 
 #: Safe-basename sanitizer for a spooled upload. Aliased to the shared neutral
 #: helper (:func:`notebooklm._app.source_add.safe_upload_name`) so the REST
@@ -132,6 +145,12 @@ class SourceWaitBody(BaseModel):
     source_ids: list[str] | None = None
     timeout: float = 120.0
     interval: float = 1.0
+
+    @_field_validator("source_ids")
+    def _limit_source_ids(cls, value: list[str] | None) -> list[str] | None:
+        if value is not None and len(value) > MAX_WAIT_SOURCE_IDS:
+            raise ValueError(f"source_ids must contain at most {MAX_WAIT_SOURCE_IDS} entries")
+        return value
 
 
 async def _add_source(
@@ -543,9 +562,14 @@ async def wait_sources(notebook_id: str, body: SourceWaitBody, client: ClientDep
             raise ValidationError(
                 "source_ids must not be empty; omit it entirely to wait for all sources"
             )
-        ids = list(body.source_ids)
+        ids = _dedupe_source_ids(body.source_ids)
     else:
-        ids = [s.id for s in await client.sources.list(notebook_id)]
+        ids = _dedupe_source_ids([s.id for s in await client.sources.list(notebook_id)])
+        if len(ids) > MAX_WAIT_SOURCE_IDS:
+            raise ValidationError(
+                f"notebook has {len(ids)} sources; wait-all is capped at "
+                f"{MAX_WAIT_SOURCE_IDS}. Pass source_ids to wait for a smaller subset."
+            )
     outcomes = await _wait_all_sources(
         client, notebook_id, ids, timeout=body.timeout, interval=body.interval
     )
@@ -594,25 +618,48 @@ async def _wait_all_sources(
     still-running sibling pollers before re-raising (it then flows through the
     server's classify-once handler) rather than leaking coroutines.
     """
-    tasks = [
-        asyncio.create_task(
-            wait_core.execute_source_wait(
+    if not source_ids:
+        return []
+
+    outcomes: list[wait_core.SourceWaitOutcome | None] = [None] * len(source_ids)
+    source_iter = iter(enumerate(source_ids))
+
+    async def _worker() -> None:
+        for index, sid in source_iter:
+            outcomes[index] = await wait_core.execute_source_wait(
                 client,
                 wait_core.SourceWaitPlan(
-                    notebook_id=notebook_id, source_id=sid, timeout=timeout, interval=interval
+                    notebook_id=notebook_id,
+                    source_id=sid,
+                    timeout=timeout,
+                    interval=interval,
                 ),
             )
-        )
-        for sid in source_ids
+
+    tasks = [
+        asyncio.create_task(_worker())
+        for _ in range(min(len(source_ids), MAX_WAIT_CONCURRENT_SOURCES))
     ]
     try:
-        return list(await asyncio.gather(*tasks))
+        await asyncio.gather(*tasks)
     except BaseException:
         for task in tasks:
             if not task.done():
                 task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         raise
+
+    ready_outcomes: list[wait_core.SourceWaitOutcome] = []
+    for outcome in outcomes:
+        if outcome is None:
+            raise AssertionError("source wait worker exited without producing an outcome")
+        ready_outcomes.append(outcome)
+    return ready_outcomes
+
+
+def _dedupe_source_ids(source_ids: list[str]) -> list[str]:
+    """Return source ids in first-seen order with duplicates removed."""
+    return list(dict.fromkeys(source_ids))
 
 
 def _aggregate_wait_outcomes(

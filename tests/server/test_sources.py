@@ -10,6 +10,7 @@ from notebooklm._types.notebooks import Notebook
 from notebooklm._types.sources import Source
 from notebooklm.rpc.types import SourceStatus
 from notebooklm.server._pagination import MAX_LIMIT
+from notebooklm.server.routes.sources import MAX_WAIT_CONCURRENT_SOURCES, MAX_WAIT_SOURCE_IDS
 
 from .fakes import FakeClient
 
@@ -626,6 +627,62 @@ def test_wait_specific_source_ready(authed_client: TestClient, fake_client: Fake
     assert body["ready_count"] == 1
     assert body["timed_out_count"] == body["failed_count"] == body["not_found_count"] == 0
     assert body["total_count"] == 1
+
+
+def test_wait_explicit_source_ids_over_max_is_validation_error(
+    authed_client: TestClient, fake_client: FakeClient
+) -> None:
+    source_ids = [f"src-{i}" for i in range(MAX_WAIT_SOURCE_IDS + 1)]
+    resp = authed_client.post("/v1/notebooks/nb-1/sources/wait", json={"source_ids": source_ids})
+    assert resp.status_code == 422
+    assert resp.json()["error"]["category"] == "validation"
+    assert fake_client.wait_calls == []
+
+
+def test_wait_duplicate_source_ids_are_deduped(
+    authed_client: TestClient, fake_client: FakeClient
+) -> None:
+    _seed_source(fake_client, "nb-1", "src-1")
+    resp = authed_client.post(
+        "/v1/notebooks/nb-1/sources/wait",
+        json={"source_ids": ["src-1", "src-1", "src-1"], "timeout": 1.0},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [source["id"] for source in body["ready"]] == ["src-1"]
+    assert fake_client.wait_calls == ["src-1"]
+
+
+def test_wait_all_sources_over_max_is_validation_error(
+    authed_client: TestClient, fake_client: FakeClient
+) -> None:
+    for i in range(MAX_WAIT_SOURCE_IDS + 1):
+        _seed_source(fake_client, "nb-1", f"src-{i}")
+    resp = authed_client.post("/v1/notebooks/nb-1/sources/wait", json={"timeout": 1.0})
+    assert resp.status_code == 400
+    assert resp.json()["error"]["category"] == "validation"
+    assert fake_client.wait_calls == []
+
+
+def test_wait_uses_bounded_per_request_concurrency(
+    authed_client: TestClient, fake_client: FakeClient
+) -> None:
+    source_ids = [f"src-{i}" for i in range(MAX_WAIT_CONCURRENT_SOURCES + 3)]
+    for source_id in source_ids:
+        _seed_source(fake_client, "nb-1", source_id)
+    fake_client.wait_delay = 0.01
+
+    resp = authed_client.post(
+        "/v1/notebooks/nb-1/sources/wait",
+        json={"source_ids": source_ids, "timeout": 1.0},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert {source["id"] for source in body["ready"]} == set(source_ids)
+    assert len(fake_client.wait_calls) == len(source_ids)
+    assert set(fake_client.wait_calls) == set(source_ids)
+    assert fake_client.wait_max_active == MAX_WAIT_CONCURRENT_SOURCES
 
 
 def test_wait_all_sources_partial(authed_client: TestClient, fake_client: FakeClient) -> None:

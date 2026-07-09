@@ -13,6 +13,7 @@ record the calls each namespace received.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
@@ -167,18 +168,26 @@ class FakeSources:
     async def wait_until_ready(
         self, notebook_id: str, source_id: str, *, timeout: float, initial_interval: float
     ) -> Source:
-        # Scriptable per-source outcome; default "ready".
-        outcome = self._s.wait_outcomes.get(source_id, "ready")
-        if outcome == "timeout":
-            raise SourceTimeoutError(source_id, timeout)
-        if outcome == "processing":
-            raise SourceProcessingError(source_id)
-        if outcome == "not_found":
-            raise SourceNotFoundError(source_id)
-        src = self._s.sources_store.get(notebook_id, {}).get(source_id)
-        title = src.title if src is not None else "src"
-        url = src.url if src is not None else None
-        return Source(id=source_id, title=title, url=url, status=SourceStatus.READY)
+        self._s.wait_calls.append(source_id)
+        self._s.wait_active += 1
+        self._s.wait_max_active = max(self._s.wait_max_active, self._s.wait_active)
+        try:
+            if self._s.wait_delay:
+                await asyncio.sleep(self._s.wait_delay)
+            # Scriptable per-source outcome; default "ready".
+            outcome = self._s.wait_outcomes.get(source_id, "ready")
+            if outcome == "timeout":
+                raise SourceTimeoutError(source_id, timeout)
+            if outcome == "processing":
+                raise SourceProcessingError(source_id)
+            if outcome == "not_found":
+                raise SourceNotFoundError(source_id)
+            src = self._s.sources_store.get(notebook_id, {}).get(source_id)
+            title = src.title if src is not None else "src"
+            url = src.url if src is not None else None
+            return Source(id=source_id, title=title, url=url, status=SourceStatus.READY)
+        finally:
+            self._s.wait_active -= 1
 
     async def delete(self, notebook_id: str, source_id: str) -> None:
         self._s.sources_store.get(notebook_id, {}).pop(source_id, None)
@@ -589,6 +598,10 @@ class FakeClient:
         self.renamed_mind_maps: list[tuple[str, str, str, Any]] = []
         self.last_mind_map_generate: dict[str, Any] | None = None
         self.wait_outcomes: dict[str, str] = {}
+        self.wait_calls: list[str] = []
+        self.wait_delay = 0.0
+        self.wait_active = 0
+        self.wait_max_active = 0
         self.suggest_rows: list[PromptSuggestion] = [
             PromptSuggestion(title="Q1", prompt="Ask about X"),
             PromptSuggestion(title="Q2", prompt="Ask about Y"),
