@@ -622,6 +622,10 @@ def test_wait_specific_source_ready(authed_client: TestClient, fake_client: Fake
     assert len(body["ready"]) == 1
     assert body["ready"][0]["status_label"] == "ready"
     assert body["timed_out"] == [] and body["failed"] == [] and body["not_found"] == []
+    # Explicit counts mirror the MCP aggregate (#1822): additive, total folds all four.
+    assert body["ready_count"] == 1
+    assert body["timed_out_count"] == body["failed_count"] == body["not_found_count"] == 0
+    assert body["total_count"] == 1
 
 
 def test_wait_all_sources_partial(authed_client: TestClient, fake_client: FakeClient) -> None:
@@ -639,6 +643,11 @@ def test_wait_all_sources_partial(authed_client: TestClient, fake_client: FakeCl
     assert ready_ids == {"src-ok"}
     assert body["timed_out"][0]["source_id"] == "src-slow"
     assert body["failed"][0]["source_id"] == "src-bad"
+    assert body["ready_count"] == 1
+    assert body["timed_out_count"] == 1
+    assert body["failed_count"] == 1
+    assert body["not_found_count"] == 0
+    assert body["total_count"] == 3
 
 
 def test_wait_not_found_bucket(authed_client: TestClient, fake_client: FakeClient) -> None:

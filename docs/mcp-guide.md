@@ -234,6 +234,25 @@ source_wait(notebook="Quantum Computing")                 # block until sources 
 chat_ask(notebook="Quantum Computing", question="What are the open problems?")
 ```
 
+`source_wait` returns a structured aggregate: the four buckets (`ready` carries
+`source_view` rows; `timed_out`/`failed`/`not_found` carry `{source_id, error}`)
+plus explicit `*_count` scalars and a `total_count` for at-a-glance triage — so a
+client reads the counts without folding `len()` over every array. The counts are
+additive; the arrays stay for backward compatibility. `ok` is `true` iff every
+error bucket is empty, and `total_count` = `ready_count` + `timed_out_count` +
+`failed_count` + `not_found_count`:
+
+```text
+source_wait(notebook="Quantum Computing")
+# → {"notebook_id": ..., "ok": false,
+#    "ready":     [{"id": ..., "title": "Notes", "kind": "pasted_text", "status_label": "ready"}],
+#    "timed_out": [{"source_id": ..., "error": "..."}],
+#    "failed":    [],
+#    "not_found": [],
+#    "ready_count": 1, "timed_out_count": 1, "failed_count": 0,
+#    "not_found_count": 0, "total_count": 2}
+```
+
 `source_type` is one of `url`, `text`, `file` (local `path`), `drive` (a
 `document_id` + a **required** `mime_type`, one of
 `google-doc`/`google-slides`/`google-sheets`/`pdf` — there is no default, since
@@ -253,8 +272,11 @@ times out or the import fails, so you can retry or delete it):
 ```text
 source_add_and_wait(notebook="Quantum Computing", source_type="url",
                     url="https://arxiv.org/abs/...")
-# → {"notebook_id": ..., "ok": true, "ready": [{...}], "timed_out": [], "failed": [],
-#    "not_found": [], "source_id": ...}
+# → {"notebook_id": ..., "ok": true,
+#    "ready":     [{"id": ..., "title": "...", "kind": "web_page", "status_label": "ready"}],
+#    "timed_out": [], "failed": [], "not_found": [],
+#    "ready_count": 1, "timed_out_count": 0, "failed_count": 0,
+#    "not_found_count": 0, "total_count": 1, "source_id": ...}
 ```
 
 It is single-source only (no `urls` batch) and cannot one-shot a **remote** `file`

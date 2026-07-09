@@ -126,6 +126,11 @@ async def test_source_wait_is_json_first(mcp_call, mock_client) -> None:
         "timed_out": [],
         "failed": [],
         "not_found": [],
+        "ready_count": 1,
+        "timed_out_count": 0,
+        "failed_count": 0,
+        "not_found_count": 0,
+        "total_count": 1,
     }
     assert_json_first_content(result)
 
@@ -143,6 +148,11 @@ async def test_source_wait_timeout_is_json_first(mcp_call, mock_client) -> None:
         "timed_out": [{"source_id": SRC_ID, "error": str(err)}],
         "failed": [],
         "not_found": [],
+        "ready_count": 0,
+        "timed_out_count": 1,
+        "failed_count": 0,
+        "not_found_count": 0,
+        "total_count": 1,
     }
     assert_json_first_content(result)
 
@@ -165,6 +175,11 @@ async def test_source_add_and_wait_is_json_first(mcp_call, mock_client) -> None:
         "timed_out": [],
         "failed": [],
         "not_found": [],
+        "ready_count": 1,
+        "timed_out_count": 0,
+        "failed_count": 0,
+        "not_found_count": 0,
+        "total_count": 1,
         "source_id": SRC_ID,
     }
     assert_json_first_content(result)

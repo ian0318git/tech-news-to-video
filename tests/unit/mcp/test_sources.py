@@ -703,20 +703,34 @@ async def test_source_delete_with_confirm_deletes(mcp_call, mock_client) -> None
 
 # ---------------------------------------------------------------------------
 # source_wait — both modes share ONE aggregate contract:
-#   {notebook_id, ok, ready, timed_out, failed, not_found}
+#   {notebook_id, ok, ready, timed_out, failed, not_found,
+#    ready_count, timed_out_count, failed_count, not_found_count, total_count}
 # ``ready`` carries _source_view rows; the three error buckets carry
-# {source_id, error}. ``ok`` is True iff all three error buckets are empty.
+# {source_id, error}. ``ok`` is True iff all three error buckets are empty. The
+# ``*_count`` scalars mirror the bucket lengths and ``total_count`` folds all
+# four buckets (#1822) — additive to the arrays, which stay for compatibility.
 # ---------------------------------------------------------------------------
 
-_AGGREGATE_KEYS = {"notebook_id", "ok", "ready", "timed_out", "failed", "not_found"}
+_AGGREGATE_BUCKET_KEYS = ("ready", "timed_out", "failed", "not_found")
+_AGGREGATE_COUNT_KEYS = {
+    "ready_count",
+    "timed_out_count",
+    "failed_count",
+    "not_found_count",
+    "total_count",
+}
+_AGGREGATE_KEYS = {"notebook_id", "ok", *_AGGREGATE_BUCKET_KEYS} | _AGGREGATE_COUNT_KEYS
 
 
 def _assert_aggregate_shape(structured: dict[str, Any]) -> None:
-    """Pin the six-key aggregate so the shape isn't re-asserted per test."""
+    """Pin the aggregate keys + count invariants so they aren't re-asserted per test."""
     assert set(structured) == _AGGREGATE_KEYS
     assert isinstance(structured["ok"], bool)
-    for key in ("ready", "timed_out", "failed", "not_found"):
+    for key in _AGGREGATE_BUCKET_KEYS:
         assert isinstance(structured[key], list)
+        # Each ``*_count`` scalar equals its bucket length (#1822).
+        assert structured[f"{key}_count"] == len(structured[key])
+    assert structured["total_count"] == sum(len(structured[key]) for key in _AGGREGATE_BUCKET_KEYS)
 
 
 def _dispatch_wait_until_ready(by_id: dict[str, Any]) -> Any:
@@ -861,6 +875,12 @@ async def test_source_wait_all_sources_partial_progress(mcp_call, mock_client) -
     assert [e["source_id"] for e in sc["timed_out"]] == [timeout_id]
     assert [e["source_id"] for e in sc["failed"]] == [failed_id]
     assert [e["source_id"] for e in sc["not_found"]] == [missing_id]
+    # Explicit counts mirror the buckets and total across all four (#1822).
+    assert sc["ready_count"] == 1
+    assert sc["timed_out_count"] == 1
+    assert sc["failed_count"] == 1
+    assert sc["not_found_count"] == 1
+    assert sc["total_count"] == 4
 
 
 async def test_source_wait_all_sources_empty_notebook(mcp_call, mock_client) -> None:
@@ -876,6 +896,11 @@ async def test_source_wait_all_sources_empty_notebook(mcp_call, mock_client) -> 
         "timed_out": [],
         "failed": [],
         "not_found": [],
+        "ready_count": 0,
+        "timed_out_count": 0,
+        "failed_count": 0,
+        "not_found_count": 0,
+        "total_count": 0,
     }
 
 

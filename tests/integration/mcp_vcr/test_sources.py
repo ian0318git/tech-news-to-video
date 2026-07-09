@@ -455,7 +455,19 @@ async def test_mcp_source_wait_single_over_vcr() -> None:
     structured = result.structured_content
     assert isinstance(structured, dict)
     # Unified aggregate shape, shared with the all-sources branch.
-    assert set(structured) == {"notebook_id", "ok", "ready", "timed_out", "failed", "not_found"}
+    assert set(structured) == {
+        "notebook_id",
+        "ok",
+        "ready",
+        "timed_out",
+        "failed",
+        "not_found",
+        "ready_count",
+        "timed_out_count",
+        "failed_count",
+        "not_found_count",
+        "total_count",
+    }
     assert structured["notebook_id"] == SOURCES_LIST_NOTEBOOK_ID
     assert structured["ok"] is True
     assert structured["timed_out"] == structured["failed"] == structured["not_found"] == []
@@ -498,7 +510,19 @@ async def test_mcp_source_wait_all_over_vcr() -> None:
 
     structured = result.structured_content
     assert isinstance(structured, dict)
-    assert set(structured) == {"notebook_id", "ok", "ready", "timed_out", "failed", "not_found"}
+    assert set(structured) == {
+        "notebook_id",
+        "ok",
+        "ready",
+        "timed_out",
+        "failed",
+        "not_found",
+        "ready_count",
+        "timed_out_count",
+        "failed_count",
+        "not_found_count",
+        "total_count",
+    }
     assert structured["notebook_id"] == SOURCES_LIST_NOTEBOOK_ID
     assert structured["ok"] is True
     assert structured["timed_out"] == structured["failed"] == structured["not_found"] == []

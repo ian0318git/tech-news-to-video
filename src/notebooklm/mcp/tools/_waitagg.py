@@ -4,8 +4,9 @@ The shared projection behind ``source_wait`` and ``source_add_and_wait``: fan a
 per-source wait out concurrently (:func:`_wait_all_sources`) and fold the typed
 ``SourceWaitOutcome`` values onto the unified aggregate wire shape
 (:func:`_aggregate_wait_outcomes`) — ``{notebook_id, ok, ready, timed_out,
-failed, not_found}`` — so every wait mode reports partial progress with one
-contract. READY web-page rows pick up the advisory thin/soft-404 ``warning`` via
+failed, not_found, *_count, total_count}`` — so every wait mode reports partial
+progress with one contract (the ``*_count`` scalars mirror the bucket lengths;
+see #1822). READY web-page rows pick up the advisory thin/soft-404 ``warning`` via
 :func:`._content_sanity._annotate_thin_warnings`.
 
 Extracted from ``sources.py`` (ADR-0008 module-size budget); reads only
@@ -129,6 +130,13 @@ async def _aggregate_wait_outcomes(
             # being silently dropped from every bucket.
             raise AssertionError(f"unhandled SourceWaitOutcome: {outcome!r}")
     await _annotate_thin_warnings(client, notebook_id, ready_pairs)
+    # Explicit counts alongside the buckets (#1822): clients read simple totals
+    # without recomputing ``len()`` on every array. ``total_count`` folds all four
+    # buckets, so it equals the number of sources the wait fanned out over.
+    ready_count = len(ready)
+    timed_out_count = len(timed_out)
+    failed_count = len(failed)
+    not_found_count = len(not_found)
     return {
         "notebook_id": notebook_id,
         "ok": not (timed_out or failed or not_found),
@@ -136,6 +144,11 @@ async def _aggregate_wait_outcomes(
         "timed_out": timed_out,
         "failed": failed,
         "not_found": not_found,
+        "ready_count": ready_count,
+        "timed_out_count": timed_out_count,
+        "failed_count": failed_count,
+        "not_found_count": not_found_count,
+        "total_count": ready_count + timed_out_count + failed_count + not_found_count,
     }
 
 

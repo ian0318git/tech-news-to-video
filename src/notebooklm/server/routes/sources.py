@@ -511,11 +511,11 @@ async def wait_sources(notebook_id: str, body: SourceWaitBody, client: ClientDep
 
         {"notebook_id", "ok", "ready", "timed_out", "failed", "not_found"}
 
-    ``ready`` holds the sources that reached READY (each with ``kind`` /
-    ``status_label`` labels); the error buckets hold ``{"source_id", "error"}``
-    entries. ``ok`` is true iff all three error buckets are empty — the
-    all-sources mode reports partial progress rather than discarding the sources
-    that did become ready.
+    plus per-bucket ``*_count`` and a ``total_count`` (their sum). ``ready`` holds
+    the sources that reached READY (each with ``kind`` / ``status_label`` labels);
+    the error buckets hold ``{"source_id", "error"}`` entries. ``ok`` is true iff
+    all three error buckets are empty — the all-sources mode reports partial
+    progress rather than discarding the sources that did become ready.
     """
     # Reject non-finite bounds first: JSON allows ``inf`` / ``NaN`` (Python's
     # json module parses ``Infinity`` / ``NaN``), and ``timeout=inf`` would wait
@@ -638,6 +638,12 @@ def _aggregate_wait_outcomes(
             not_found.append(_wait_bucket_entry(outcome.error))
         else:  # exhaustive over the closed SourceWaitOutcome union
             raise AssertionError(f"unhandled SourceWaitOutcome: {outcome!r}")
+    # Explicit counts mirror the MCP aggregate (#1822): additive to the buckets,
+    # ``total_count`` folds all four so it equals the number of sources waited on.
+    ready_count = len(ready)
+    timed_out_count = len(timed_out)
+    failed_count = len(failed)
+    not_found_count = len(not_found)
     return {
         "notebook_id": notebook_id,
         "ok": not (timed_out or failed or not_found),
@@ -645,6 +651,11 @@ def _aggregate_wait_outcomes(
         "timed_out": timed_out,
         "failed": failed,
         "not_found": not_found,
+        "ready_count": ready_count,
+        "timed_out_count": timed_out_count,
+        "failed_count": failed_count,
+        "not_found_count": not_found_count,
+        "total_count": ready_count + timed_out_count + failed_count + not_found_count,
     }
 
 

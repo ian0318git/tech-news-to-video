@@ -358,14 +358,15 @@ def register(mcp: Any) -> None:
 
             {"notebook_id", "ok", "ready", "timed_out", "failed", "not_found"}
 
-        ``ready`` holds sources that reached READY (with ``kind`` / ``status_label``
-        labels); ``timed_out`` / ``failed`` / ``not_found`` hold ``{"source_id",
-        "error"}`` entries. ``ok`` is ``true`` iff all error buckets are empty. Subset
+        plus per-bucket ``*_count`` + ``total_count``. ``ready`` holds sources that
+        reached READY (with ``kind`` / ``status_label`` labels); ``timed_out`` /
+        ``failed`` / ``not_found`` hold ``{"source_id", "error"}`` entries. ``ok`` is
+        ``true`` iff all error buckets empty. Subset
         and all-sources modes report **partial progress** (a slow or failed source no
         longer discards the ones that did become ready).
 
         A READY **web-page** entry may carry a non-blocking ``warning`` when its indexed
-        text is suspiciously thin (likely dead link / soft-404 / paywall); advisory only
+        text is thin (likely dead link / soft-404 / paywall); advisory only
         (still READY, still ``ok`` — verify with ``source_read`` (detail="full")).
 
         An unresolved ref in ``sources`` / ``source`` raises NOT_FOUND before the wait —
@@ -632,8 +633,8 @@ def register(mcp: Any) -> None:
         separate step (use ``source_add(source_type="file")`` then ``source_wait``, or
         ``source_upload_bytes`` for a tiny file).
 
-        Returns the ``source_wait`` aggregate (``{notebook_id, ok, ready, timed_out,
-        failed, not_found}``) plus a top-level ``source_id`` — always on the returned
+        Returns the ``source_wait`` aggregate (buckets + per-bucket ``*_count`` +
+        ``total_count``) plus a top-level ``source_id`` — always on the returned
         aggregate, since the source persists even when the wait does not reach READY, so
         you can retry/delete it. A READY web page with thin/soft-404 text carries a
         non-blocking ``warning``, as in ``source_wait``.
