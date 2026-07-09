@@ -616,7 +616,9 @@ def register(mcp: Any) -> None:
             if output_format is not None:
                 if not spec.format_choices:
                     raise ValidationError(
-                        f"artifact_type {artifact_type!r} does not support an output_format option"
+                        f"output_format {output_format!r} is not valid for artifact_type "
+                        f"{artifact_type!r}; supported formats: default only "
+                        f"(omit output_format)."
                     )
                 if output_format not in spec.format_choices:
                     raise ValidationError(

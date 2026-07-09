@@ -370,6 +370,20 @@ studio_generate(notebook="Quantum Computing", artifact_type="video",
                   style="custom", style_prompt="hand-drawn diagrams")
 ```
 
+`studio_download`'s `output_format` overrides the download file format, but only
+some artifact types have a format axis:
+
+| `artifact_type` | Supported `output_format` |
+| --- | --- |
+| `slide-deck` | `pdf` (default), `pptx` |
+| `quiz`, `flashcards` | `json` (default), `markdown`, `html` |
+| `audio`, `video`, `infographic`, `report`, `mind-map`, `data-table` | none — omit `output_format` |
+
+Passing `output_format` to a type with no format axis (e.g. `report` +
+`markdown`) is a validation error that says `supported formats: default only`
+rather than silently ignoring it, and the message is identical whether the
+download runs over stdio (`path`) or the remote signed-URL connector.
+
 `artifact_type` is one of `audio`, `video`, `cinematic-video`, `slide-deck`, `quiz`, `flashcards`,
 `infographic`, `data-table`, `mind-map`, `report`. Each kind's styling options are agent-settable
 (matching the CLI flags): `audio_format` / `audio_length` (audio); `video_format` / `style` /

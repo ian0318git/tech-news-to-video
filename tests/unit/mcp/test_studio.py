@@ -1213,6 +1213,61 @@ async def test_artifact_download_format_for_unsupported_type_is_validation(
     mock_client.artifacts.download_audio.assert_not_called()
 
 
+async def test_artifact_download_report_markdown_self_documenting(
+    mcp_call, mock_client, tmp_path
+) -> None:
+    """report has no format axis → the rejection tells the caller to omit output_format."""
+    out = str(tmp_path / "out.md")
+    with pytest.raises(ToolError) as excinfo:
+        await mcp_call(
+            "studio_download",
+            {
+                "notebook": NB_ID,
+                "artifact_type": "report",
+                "path": out,
+                "output_format": "markdown",
+            },
+        )
+    msg = str(excinfo.value)
+    assert "supported formats: default only" in msg
+    assert "omit output_format" in msg
+
+
+async def test_artifact_download_audio_pdf_self_documenting(
+    mcp_call, mock_client, tmp_path
+) -> None:
+    """audio has no format axis → same self-documenting rejection (pdf is in-union but wrong-type)."""
+    out = str(tmp_path / "out.mp3")
+    mock_client.artifacts.download_audio = AsyncMock(return_value=out)
+    with pytest.raises(ToolError) as excinfo:
+        await mcp_call(
+            "studio_download",
+            {"notebook": NB_ID, "artifact_type": "audio", "path": out, "output_format": "pdf"},
+        )
+    msg = str(excinfo.value)
+    assert "supported formats: default only" in msg
+    assert "omit output_format" in msg
+    mock_client.artifacts.download_audio.assert_not_called()
+
+
+async def test_artifact_download_supported_type_invalid_format_lists_choices(
+    mcp_call, mock_client, tmp_path
+) -> None:
+    """A type WITH a format axis still lists its allowed values on an invalid choice."""
+    out = str(tmp_path / "quiz.json")
+    mock_client.artifacts.list = AsyncMock(return_value=[_QUIZ_ARTIFACT])
+    with pytest.raises(ToolError) as excinfo:
+        await mcp_call(
+            "studio_download",
+            {"notebook": NB_ID, "artifact_type": "quiz", "path": out, "output_format": "pdf"},
+        )
+    msg = str(excinfo.value)
+    assert "expected one of" in msg
+    assert "json" in msg and "markdown" in msg and "html" in msg
+    # The no-format-axis wording must NOT leak into a type that has a format axis.
+    assert "supported formats: default only" not in msg
+
+
 async def test_artifact_download_no_artifacts(mcp_call, mock_client, tmp_path) -> None:
     out = str(tmp_path / "out.mp3")
     mock_client.artifacts.list = AsyncMock(return_value=[])
