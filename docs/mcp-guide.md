@@ -155,6 +155,14 @@ bearer-only deploy → the two file tools return a clear "not configured" error
   signed-URL flow above.
 - **Download an artifact:** `studio_download` returns a `download_ready` link (a
   clickable `resource_link`); open it to stream the podcast/video/PDF to your device.
+  The `download_ready` payload is self-describing so a client can render a download
+  affordance *before* opening the URL: alongside `url` / `expires_at` / `artifact_type`
+  / `artifact_id` it carries `filename` (the artifact title — or the type name on a
+  latest-by-type download — plus the format-resolved extension), `mime_type` (from a
+  central per-type/format table the `/files/dl` route serves with, so the advertised
+  type and the streamed `Content-Type` can't drift), and `size_bytes` (`null` — the
+  size isn't known without eagerly fetching the artifact, which the broker won't do;
+  the route sets the real `Content-Length` when the link is opened).
 - Links are HMAC-signed and short-lived (upload 15 min, download 30 min) and expire on
   a server restart. Google Drive (`source_add` with a Drive id) remains a no-browser
   alternative for adding files. stdio (local) installs are unchanged — they still read

@@ -506,6 +506,12 @@ async def test_artifact_download_with_config_returns_resource_link(mock_client, 
     assert sc["status"] == "download_ready"
     assert sc["url"].startswith(f"{BASE}/files/dl/")
     assert sc["artifact_type"] == "audio"
+    # Presentation metadata enriches the payload (#1826): a latest-by-type download
+    # has no known title, so the filename falls back to the type name + extension,
+    # the mime comes from the central table, and size is unknown up front.
+    assert sc["filename"] == "audio.mp3"
+    assert sc["mime_type"] == "audio/mpeg"
+    assert sc["size_bytes"] is None
     # A clickable resource_link content item is included for claude.ai.
     assert any(getattr(block, "type", None) == "resource_link" for block in result.content)
     token = sc["url"].rsplit("/", 1)[1]
@@ -522,6 +528,67 @@ async def test_artifact_download_with_config_carries_format(mock_client, config)
     )
     token = result.structured_content["url"].rsplit("/", 1)[1]
     assert config.signer.verify(token, op="dl")["fmt"] == "markdown"
+
+
+async def test_artifact_download_slide_deck_pptx_metadata(mock_client, config) -> None:
+    # A slide-deck pptx download advertises the pptx extension + Office MIME (#1826).
+    # Latest-by-type (no id) → the type-name filename fallback, no list issued.
+    mock_client.artifacts.list = AsyncMock(return_value=[])
+    result = await _call(
+        mock_client,
+        config,
+        "studio_download",
+        {"notebook": NB_ID, "artifact_type": "slide-deck", "output_format": "pptx"},
+    )
+    sc = result.structured_content
+    assert sc["filename"] == "slide-deck.pptx"
+    assert sc["mime_type"] == (
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    )
+    assert sc["size_bytes"] is None
+    mock_client.artifacts.list.assert_not_awaited()
+
+
+async def test_artifact_download_quiz_markdown_metadata(mock_client, config) -> None:
+    # A quiz markdown download advertises the .md extension + text/markdown MIME (#1826).
+    result = await _call(
+        mock_client,
+        config,
+        "studio_download",
+        {"notebook": NB_ID, "artifact_type": "quiz", "output_format": "markdown"},
+    )
+    sc = result.structured_content
+    assert sc["filename"] == "quiz.md"
+    assert sc["mime_type"] == "text/markdown"
+
+
+async def test_artifact_download_explicit_id_pptx_uses_title(mock_client, config) -> None:
+    # Explicit id + a format override: the filename combines the resolved title with
+    # the format-selected extension, and the MIME matches (#1826).
+    deck = Artifact(
+        id=_AID_A,
+        title="Q3 Deck",
+        _artifact_type=ArtifactTypeCode.SLIDE_DECK.value,
+        status=int(ArtifactStatus.COMPLETED),
+        created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+    )
+    mock_client.artifacts.list = AsyncMock(return_value=[deck])
+    result = await _call(
+        mock_client,
+        config,
+        "studio_download",
+        {
+            "notebook": NB_ID,
+            "artifact_type": "slide-deck",
+            "artifact_id": _AID_A,
+            "output_format": "pptx",
+        },
+    )
+    sc = result.structured_content
+    assert sc["filename"] == "Q3 Deck.pptx"
+    assert sc["mime_type"] == (
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    )
 
 
 async def test_artifact_download_config_rejects_bad_format(mock_client, config) -> None:
@@ -613,6 +680,10 @@ async def test_artifact_download_remote_tool_encodes_aid(mock_client, config) ->
     # The structured payload echoes the targeted id (self-describing), not only the
     # token.
     assert sc["artifact_id"] == _AID_A
+    # An explicit id resolves the artifact's title cheaply from the same list, so the
+    # advertised filename is derived from it (not the type-name fallback) (#1826).
+    assert sc["filename"] == "Podcast.mp3"
+    assert sc["mime_type"] == "audio/mpeg"
     url = sc["url"]
     token = url.split("/")[-1]
     payload = config.signer.verify(token, op="dl")

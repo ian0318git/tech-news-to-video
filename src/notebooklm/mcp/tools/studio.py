@@ -549,6 +549,12 @@ def register(mcp: Any) -> None:
         client = get_client(ctx)
         with mcp_errors():
             nb_id = await resolve_notebook(client, notebook)
+            # Title of the resolved target, when known cheaply (the ref path and the
+            # explicit-id pre-validation both already list, so they capture it) —
+            # threaded into the broker payload's ``filename``. The latest-by-type
+            # path lists nothing, so it stays None and the filename falls back to the
+            # type name.
+            resolved_title: str | None = None
             # Two addressing modes (exactly one): an `artifact` name-or-id ref
             # (resolved to its type + id, matching the sibling artifact_* tools) OR
             # an explicit `artifact_type` (+ optional `artifact_id`; else latest of
@@ -588,6 +594,7 @@ def register(mcp: Any) -> None:
                         f"(status: {match.status_str}); wait for it to complete."
                     )
                 artifact_id = resolved_id
+                resolved_title = match.title
             elif artifact_type is None:
                 raise ValidationError("Provide `artifact` (name/id) or `artifact_type`.")
             # Strict IDs-only mode: only the explicit `artifact_id` path needs the
@@ -641,6 +648,9 @@ def register(mcp: Any) -> None:
                     candidates = [{"id": a.id, "title": a.title} for a in typed if a.is_completed]
                     try:
                         artifact_id = _resolve_artifact_id(candidates, artifact_id)
+                        resolved_title = next(
+                            (c["title"] for c in candidates if c["id"] == artifact_id), None
+                        )
                     except ValidationError:
                         # The is_completed filter drops a still-generating artifact from the
                         # candidates, so a full id for one surfaces as a bare "not found".
@@ -662,7 +672,9 @@ def register(mcp: Any) -> None:
                                 f"(status: {incomplete.status_str}); wait for it to complete."
                             ) from None
                         raise
-                return _broker_download(cfg, nb_id, artifact_type, output_format, artifact_id)
+                return _broker_download(
+                    cfg, nb_id, artifact_type, output_format, artifact_id, title=resolved_title
+                )
             # No file-transfer config. On the remote (http) connector the server
             # filesystem is unreachable REGARDLESS of `path`, so fail clearly here —
             # mirroring source_add type=file — BEFORE any server-side download (else a

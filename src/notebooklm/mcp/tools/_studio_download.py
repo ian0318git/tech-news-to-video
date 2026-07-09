@@ -37,6 +37,9 @@ __all__ = [
     "_is_http_transport",
     "_passthrough_download_notebook",
     "_resolve_artifact_id",
+    "download_extension",
+    "download_filename",
+    "download_mime_type",
 ]
 
 #: The downloadable artifact-type keys (the ``artifact_type`` param's enum).
@@ -160,6 +163,60 @@ _KIND_TO_DOWNLOAD_KEY: dict[Any, DownloadType] = {
     spec.kind: cast(DownloadType, key) for key, spec in _DOWNLOAD_SPECS.items()
 }
 
+#: The ONE file-extension → MIME-type table. Both the ``studio_download`` tool
+#: payload (:func:`_broker_download`) and the ``/files/dl`` route derive their
+#: Content-Type from this via :func:`download_mime_type`, so the advertised
+#: ``mime_type`` and the byte stream's ``Content-Type`` can never drift. Keyed by
+#: the extension the spec+format already resolve to, so a new download type only
+#: needs its extension mapped here.
+_EXTENSION_MIME_TYPES: dict[str, str] = {
+    ".mp3": "audio/mpeg",
+    ".mp4": "video/mp4",
+    ".pdf": "application/pdf",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".png": "image/png",
+    ".md": "text/markdown",
+    ".json": "application/json",
+    ".csv": "text/csv",
+    ".html": "text/html",
+}
+
+#: Fallback when an extension isn't in the table (unreachable for minted tokens —
+#: every spec extension is mapped — but keeps the helpers total).
+_DEFAULT_MIME = "application/octet-stream"
+
+
+def download_extension(spec: download_core.DownloadTypeSpec, output_format: str | None) -> str:
+    """The file extension a download of ``spec`` in ``output_format`` will carry.
+
+    ``output_format`` selects the extension for the format-bearing types
+    (slide-deck pdf/pptx; quiz/flashcards json/markdown/html) via the spec's
+    ``format_extension_map``; ``None`` (or a leaf with no format axis) yields the
+    spec's default ``extension`` (which is already the default format's extension).
+    """
+    if output_format:
+        return spec.format_extension_map.get(output_format, spec.extension)
+    return spec.extension
+
+
+def download_filename(
+    spec: download_core.DownloadTypeSpec, title: str | None, output_format: str | None
+) -> str:
+    """The download filename for ``spec`` — the artifact ``title`` (falling back to
+    the type name when unknown, e.g. the latest-by-type path) plus the
+    format-resolved extension, sanitized by the shared
+    :func:`~notebooklm._app.download.artifact_title_to_filename`.
+    """
+    base = title if title else spec.name
+    return download_core.artifact_title_to_filename(
+        base, download_extension(spec, output_format), set()
+    )
+
+
+def download_mime_type(spec: download_core.DownloadTypeSpec, output_format: str | None) -> str:
+    """The MIME type for a download of ``spec`` in ``output_format`` (central table)."""
+    return _EXTENSION_MIME_TYPES.get(download_extension(spec, output_format), _DEFAULT_MIME)
+
 
 async def _passthrough_download_notebook(notebook_id: str) -> str:
     """Async pass-through notebook resolver for the download core."""
@@ -221,6 +278,8 @@ def _broker_download(
     artifact_type: str,
     output_format: str | None,
     artifact_id: str | None = None,
+    *,
+    title: str | None = None,
 ) -> ToolResult:
     """Mint a signed download URL + a clickable ``resource_link`` for a remote
     ``studio_download``.
@@ -228,7 +287,16 @@ def _broker_download(
     Returns a :class:`ToolResult` carrying BOTH a ``resource_link`` content item
     (claude.ai renders it clickable) and the structured ``download_ready`` payload.
     The signer injects expiry; ``expires_at`` mirrors the download TTL.
+
+    The payload is self-describing so a client can render a download affordance
+    before opening the URL: ``filename`` (the artifact ``title`` — falling back to
+    the type name on the latest-by-type path where no id was resolved — plus the
+    format-resolved extension) and ``mime_type`` both come from the SAME central
+    helpers the ``/files/dl`` route serves with, so the advertised metadata and the
+    streamed bytes can't drift. ``size_bytes`` is ``None``: it can't be known
+    without eagerly fetching the artifact, which this must not do.
     """
+    spec = _DOWNLOAD_SPECS[artifact_type]
     payload: dict[str, Any] = {
         "nb": notebook_id,
         "atype": artifact_type,
@@ -242,6 +310,11 @@ def _broker_download(
         "status": "download_ready",
         "notebook_id": notebook_id,
         "artifact_type": artifact_type,
+        "filename": download_filename(spec, title, output_format),
+        "mime_type": download_mime_type(spec, output_format),
+        # Unknown without eagerly downloading (which we refuse to do); the route
+        # sets the real Content-Length when the link is opened.
+        "size_bytes": None,
         "url": url,
         "expires_at": int(time.time()) + DOWNLOAD_TTL,
     }

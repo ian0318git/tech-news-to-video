@@ -49,7 +49,12 @@ from ..exceptions import NotebookLMError, ValidationError
 from ._context import get_client_from_app
 from ._errors import redact
 from ._filelink import FileLinkError, FileTransferConfig
-from .tools._studio_download import _DOWNLOAD_SPECS, _resolve_artifact_id
+from .tools._studio_download import (
+    _DOWNLOAD_SPECS,
+    _resolve_artifact_id,
+    download_filename,
+    download_mime_type,
+)
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -372,15 +377,17 @@ def register_file_routes(mcp: FastMCP, config: FileTransferConfig) -> None:
                 return PlainTextResponse(
                     "Download produced an unexpected output path.", status_code=500
                 )
-            # Hand the user a meaningful name (the core wrote ``artifact<ext>``): the
-            # artifact title + the served file's actual extension.
-            title = str((result.artifact or {}).get("title") or spec.name)
-            download_name = download_core.artifact_title_to_filename(
-                title, Path(served).suffix, set()
-            )
+            # Hand the user a meaningful name + Content-Type via the SAME shared
+            # helpers the studio_download tool payload advertises, so the browser
+            # download matches the ``filename`` / ``mime_type`` the agent was told
+            # (the core wrote ``artifact<ext>``; the title falls back to the type
+            # name when the artifact carries none).
+            title = (result.artifact or {}).get("title")
+            download_name = download_filename(spec, title, fmt)
             response = _SlotHeldFileResponse(
                 served,
                 filename=download_name,
+                media_type=download_mime_type(spec, fmt),
                 temp_dir=temp_dir,
                 headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
             )
