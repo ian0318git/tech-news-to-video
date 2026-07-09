@@ -662,10 +662,10 @@ class RPCTimeoutError(NetworkError):
 class RPCResponseTooLargeError(RPCError):
     """RPC response body exceeded the configured maximum size.
 
-    Raised by the streaming transport when a response body grows past
-    ``MAX_RPC_RESPONSE_BYTES`` (currently 50 MiB) while being read. The guard
-    aborts the read mid-stream rather than buffering an unbounded body, so a
-    runaway or hostile server can't exhaust process memory.
+    Raised by the streaming transport when a response body grows past the
+    configured per-call cap. Calls without override use ``MAX_RPC_RESPONSE_BYTES``
+    (currently 50 MiB). The guard aborts mid-stream rather than buffering an
+    unbounded body, so runaway servers can't exhaust process memory.
 
     Attributes:
         limit_bytes: The configured maximum (in bytes) that was exceeded.

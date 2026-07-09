@@ -68,6 +68,7 @@ from ._notes import NotesAPI
 from ._research import ResearchAPI
 from ._rpc_executor import RpcExecutor
 from ._runtime.config import (
+    DEFAULT_CHAT_RESPONSE_MAX_BYTES,
     DEFAULT_CHAT_TIMEOUT,
     DEFAULT_KEEPALIVE_MIN_INTERVAL,
     DEFAULT_MAX_CONCURRENT_RPCS,
@@ -170,6 +171,7 @@ class NotebookLMClient:
         cookie_saver: CookieSaver | None = None,
         cookie_rotator: CookieRotator | None = None,
         chat_timeout: float | None = DEFAULT_CHAT_TIMEOUT,
+        chat_response_max_bytes: int | None = DEFAULT_CHAT_RESPONSE_MAX_BYTES,
     ):
         """Initialize the NotebookLM client.
 
@@ -180,6 +182,12 @@ class NotebookLMClient:
                 ``client.chat.ask``. Defaults to 180 seconds because shared
                 notebooks can be slow to send the first streamed byte. Pass
                 ``None`` to inherit the normal client timeout for chat.
+            chat_response_max_bytes: Maximum buffered response size for
+                ``client.chat.ask``. Defaults to 256 MiB because the
+                streamed chat endpoint can include notebook-state sync
+                bytes in addition to the answer text. Pass ``None`` to
+                inherit the shared RPC response cap. Must be ``>= 1``
+                when supplied.
             storage_path: Path to the storage state file for loading download cookies.
             keepalive: Optional interval in seconds for a background task that
                 pokes ``accounts.google.com`` while the client is open, eliciting
@@ -297,6 +305,7 @@ class NotebookLMClient:
             cookie_saver=cookie_saver,
             cookie_rotator=cookie_rotator,
             chat_timeout=chat_timeout,
+            chat_response_max_bytes=chat_response_max_bytes,
         )
 
     #: Per-client memo for the signed-in account email so a *successful* live probe
@@ -597,6 +606,7 @@ class NotebookLMClient:
         upload_timeout: httpx.Timeout | None = None,
         on_rpc_event: Callable[[RpcTelemetryEvent], object] | None = None,
         chat_timeout: float | None = DEFAULT_CHAT_TIMEOUT,
+        chat_response_max_bytes: int | None = DEFAULT_CHAT_RESPONSE_MAX_BYTES,
     ) -> _FromStorageContext:
         """Create a client from Playwright storage state file.
 
@@ -648,6 +658,10 @@ class NotebookLMClient:
             chat_timeout: Per-read HTTP timeout in seconds for
                 ``client.chat.ask``. Defaults to 180 seconds. Pass ``None``
                 to inherit ``timeout`` for chat.
+            chat_response_max_bytes: Maximum buffered response size for
+                ``client.chat.ask``. Defaults to 256 MiB. Pass ``None`` to
+                inherit the shared RPC response cap. Must be ``>= 1``
+                when supplied.
             upload_timeout: Optional override for the ``httpx.Timeout`` used
                 by the resumable-upload start handshake and the finalize
                 POST. ``None`` (default) preserves the original hardcoded
@@ -691,6 +705,7 @@ class NotebookLMClient:
             max_concurrent_uploads=max_concurrent_uploads,
             max_concurrent_rpcs=max_concurrent_rpcs,
             chat_timeout=chat_timeout,
+            chat_response_max_bytes=chat_response_max_bytes,
             upload_timeout=upload_timeout,
             on_rpc_event=on_rpc_event,
         )
@@ -885,6 +900,7 @@ class _FromStorageContext:
             max_concurrent_uploads=kwargs["max_concurrent_uploads"],
             max_concurrent_rpcs=kwargs["max_concurrent_rpcs"],
             chat_timeout=kwargs["chat_timeout"],
+            chat_response_max_bytes=kwargs["chat_response_max_bytes"],
             upload_timeout=kwargs["upload_timeout"],
             on_rpc_event=kwargs["on_rpc_event"],
         )

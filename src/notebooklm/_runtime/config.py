@@ -14,8 +14,9 @@ from __future__ import annotations
 
 __all__ = [
     "CORE_LOGGER_NAME",
-    "DEFAULT_CONNECT_TIMEOUT",
+    "DEFAULT_CHAT_RESPONSE_MAX_BYTES",
     "DEFAULT_CHAT_TIMEOUT",
+    "DEFAULT_CONNECT_TIMEOUT",
     "DEFAULT_KEEPALIVE_MIN_INTERVAL",
     "DEFAULT_MAX_CONCURRENT_RPCS",
     "DEFAULT_MAX_CONCURRENT_UPLOADS",
@@ -47,6 +48,11 @@ DEFAULT_CONNECT_TIMEOUT = 10.0  # Connection establishment timeout
 # fast metadata RPCs on the 30s read window, but give chat enough first-byte
 # slack for the verified shared-notebook path.
 DEFAULT_CHAT_TIMEOUT = 180.0
+
+# Chat responses can include large notebook-state sync bytes in addition to
+# the answer text. Keep ordinary metadata RPCs on the shared 50 MiB stream
+# guard, but give chat a larger explicit default.
+DEFAULT_CHAT_RESPONSE_MAX_BYTES = 256 * 1024 * 1024
 
 # Minimum keepalive interval to avoid accidentally rate-limiting accounts.google.com
 DEFAULT_KEEPALIVE_MIN_INTERVAL = 60.0

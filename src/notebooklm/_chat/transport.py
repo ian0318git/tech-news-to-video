@@ -62,6 +62,7 @@ async def chat_aware_authed_post(
     build_request: BuildRequest,
     parse_label: str,
     read_timeout: float | None = None,
+    max_response_bytes: int | None = None,
     disable_read_timeout_retries: bool = False,
 ) -> httpx.Response:
     """Chat-side semantic owner around :meth:`RuntimeTransport.perform_authed_post`.
@@ -88,6 +89,8 @@ async def chat_aware_authed_post(
             transport as ``log_label`` — the two names refer to the same
             value (``parse_label`` is the chat-domain spelling; the chain
             context still names it ``log_label``).
+        max_response_bytes: Optional per-call response-size cap forwarded to
+            the shared streaming transport.
     """
     # Drain admission lives in ``DrainMiddleware`` at the outermost chain
     # position around ``perform_authed_post`` — it reads ``log_label``
@@ -99,6 +102,7 @@ async def chat_aware_authed_post(
             build_request=build_request,
             log_label=parse_label,
             read_timeout=read_timeout,
+            max_response_bytes=max_response_bytes,
             disable_read_timeout_retries=disable_read_timeout_retries,
         )
     except TransportAuthExpired as exc:

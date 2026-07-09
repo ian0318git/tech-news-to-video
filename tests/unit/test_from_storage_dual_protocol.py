@@ -93,6 +93,20 @@ class TestCanonicalAsyncWith:
             f"DeprecationWarning; got: {[str(w.message) for w in deprecations]}"
         )
 
+    @pytest.mark.asyncio
+    async def test_async_with_forwards_chat_response_cap_override(
+        self, tmp_path: Path, httpx_mock: HTTPXMock
+    ) -> None:
+        """Lazy from-storage build forwards chat response byte cap kwargs."""
+        storage_file = _write_storage_state(tmp_path)
+        _stub_homepage(httpx_mock)
+
+        async with NotebookLMClient.from_storage(
+            path=str(storage_file),
+            chat_response_max_bytes=123456,
+        ) as client:
+            assert client.chat._chat_response_max_bytes == 123456
+
 
 class TestLegacyAwaitForm:
     """The legacy path: ``await from_storage(...)`` / ``async with await ...``."""

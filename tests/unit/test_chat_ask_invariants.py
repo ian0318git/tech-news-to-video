@@ -33,6 +33,7 @@ import pytest
 from notebooklm import NotebookLMClient
 from notebooklm._chat import ChatAPI
 from notebooklm._request_types import AuthSnapshot
+from notebooklm._runtime.config import DEFAULT_CHAT_RESPONSE_MAX_BYTES
 from notebooklm.auth import AuthTokens
 from notebooklm.exceptions import ChatError
 from tests._helpers.client_factory import build_client_shell_for_tests
@@ -76,6 +77,7 @@ class TestChatTimeoutRouting:
         client = NotebookLMClient(auth, timeout=75.0)
 
         assert client.chat._chat_timeout == 180.0
+        assert client.chat._chat_response_max_bytes == DEFAULT_CHAT_RESPONSE_MAX_BYTES
 
     def test_client_chat_timeout_none_inherits_transport_timeout(self):
         auth = AuthTokens(cookies={"SID": "x"}, csrf_token="csrf", session_id="sid")
@@ -83,14 +85,33 @@ class TestChatTimeoutRouting:
 
         assert client.chat._chat_timeout is None
 
+    def test_client_chat_response_max_bytes_none_inherits_shared_rpc_cap(self):
+        auth = AuthTokens(cookies={"SID": "x"}, csrf_token="csrf", session_id="sid")
+        client = NotebookLMClient(auth, timeout=75.0, chat_response_max_bytes=None)
+
+        assert client.chat._chat_response_max_bytes is None
+
     def test_client_chat_timeout_override_wins(self):
         auth = AuthTokens(cookies={"SID": "x"}, csrf_token="csrf", session_id="sid")
-        client = NotebookLMClient(auth, timeout=75.0, chat_timeout=180.0)
+        client = NotebookLMClient(
+            auth,
+            timeout=75.0,
+            chat_timeout=180.0,
+            chat_response_max_bytes=123456,
+        )
 
         assert client.chat._chat_timeout == 180.0
+        assert client.chat._chat_response_max_bytes == 123456
+
+    @pytest.mark.parametrize("value", [0, -1])
+    def test_client_rejects_invalid_chat_response_max_bytes(self, value: int):
+        auth = AuthTokens(cookies={"SID": "x"}, csrf_token="csrf", session_id="sid")
+
+        with pytest.raises(ValueError, match="chat_response_max_bytes must be >= 1"):
+            NotebookLMClient(auth, chat_response_max_bytes=value)
 
     @pytest.mark.asyncio
-    async def test_ask_passes_chat_read_timeout_and_disables_timeout_retry(self):
+    async def test_ask_passes_chat_read_timeout_response_cap_and_disables_timeout_retry(self):
         """``ask`` uses the chat-specific read window without retrying timed-out streams."""
         transport = SimpleNamespace(
             perform_authed_post=AsyncMock(
@@ -107,6 +128,7 @@ class TestChatTimeoutRouting:
             reqid=SimpleNamespace(next_reqid=AsyncMock(return_value=100000)),
             loop_guard=SimpleNamespace(assert_bound_loop=lambda: None),
             chat_timeout=45.0,
+            chat_response_max_bytes=987654,
         )
 
         result = await chat.ask(
@@ -118,6 +140,7 @@ class TestChatTimeoutRouting:
 
         assert result.answer == "Refactor answer is long enough."
         assert transport.perform_authed_post.await_args.kwargs.get("read_timeout") == 45.0
+        assert transport.perform_authed_post.await_args.kwargs.get("max_response_bytes") == 987654
         assert (
             transport.perform_authed_post.await_args.kwargs.get("disable_read_timeout_retries")
             is True

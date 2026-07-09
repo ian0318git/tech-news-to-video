@@ -51,6 +51,7 @@ from ._notebooks import NotebooksAPI
 from ._notes import NotesAPI
 from ._research import ResearchAPI
 from ._runtime.config import (
+    DEFAULT_CHAT_RESPONSE_MAX_BYTES,
     DEFAULT_CHAT_TIMEOUT,
     DEFAULT_CONNECT_TIMEOUT,
     DEFAULT_KEEPALIVE_MIN_INTERVAL,
@@ -106,6 +107,7 @@ def _assemble_client(
     cookie_saver: CookieSaver | None = None,
     cookie_rotator: CookieRotator | None = None,
     chat_timeout: float | None = DEFAULT_CHAT_TIMEOUT,
+    chat_response_max_bytes: int | None = DEFAULT_CHAT_RESPONSE_MAX_BYTES,
     # --- Production-default overrides (test factory only) -----------------
     # ``NotebookLMClient.__init__`` never passes these; the sentinels
     # resolve to the exact behavior the constructor had when this logic
@@ -228,6 +230,10 @@ def _assemble_client(
                 "saturation as opaque httpx.PoolTimeout instead of "
                 "clean back-pressure."
             )
+    if chat_response_max_bytes is not None and chat_response_max_bytes < 1:
+        raise ValueError(
+            f"chat_response_max_bytes must be >= 1 when supplied (got {chat_response_max_bytes!r})"
+        )
 
     # The client is the composition root: :func:`compose_client_internals`
     # binds composition state onto ``client._composed`` and returns only the
@@ -364,6 +370,7 @@ def _assemble_client(
         reqid=internals.collaborators.reqid,
         loop_guard=internals.collaborators.lifecycle,
         chat_timeout=chat_timeout,
+        chat_response_max_bytes=chat_response_max_bytes,
         notebooks=client.notebooks,
     )
     client.notes = NotesAPI(

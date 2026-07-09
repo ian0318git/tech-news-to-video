@@ -10,6 +10,7 @@ import httpx
 
 from notebooklm._client_assembly import _assemble_client
 from notebooklm._runtime.config import (
+    DEFAULT_CHAT_RESPONSE_MAX_BYTES,
     DEFAULT_CONNECT_TIMEOUT,
     DEFAULT_KEEPALIVE_MIN_INTERVAL,
     DEFAULT_MAX_CONCURRENT_RPCS,
@@ -42,6 +43,7 @@ def build_client_shell_for_tests(
     on_rpc_event: Callable[[RpcTelemetryEvent], object] | None = None,
     cookie_saver: CookieSaver | None = None,
     cookie_rotator: CookieRotator | None = None,
+    chat_response_max_bytes: int | None = DEFAULT_CHAT_RESPONSE_MAX_BYTES,
     *,
     decode_response: Callable[..., Any] | None = None,
     sleep: Callable[[float], Awaitable[Any]] | None = None,
@@ -97,6 +99,7 @@ def build_client_shell_for_tests(
         on_rpc_event=on_rpc_event,
         cookie_saver=cookie_saver,
         cookie_rotator=cookie_rotator,
+        chat_response_max_bytes=chat_response_max_bytes,
         decode_response=decode_response,
         sleep=sleep,
         is_auth_error=is_auth_error,

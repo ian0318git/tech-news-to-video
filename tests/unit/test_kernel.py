@@ -204,6 +204,64 @@ async def test_post_read_timeout_override_preserves_other_timeout_slots() -> Non
 
 
 @pytest.mark.asyncio
+async def test_post_forwards_response_cap_to_streaming_helper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_stream_post(
+        client: httpx.AsyncClient,
+        url: str,
+        *,
+        body: bytes | str,
+        headers: dict[str, str] | None,
+        timeout: httpx.Timeout | float | None = None,
+        max_bytes: int | None = None,
+    ) -> httpx.Response:
+        captured.update(
+            {
+                "client": client,
+                "url": url,
+                "body": body,
+                "headers": headers,
+                "timeout": timeout,
+                "max_bytes": max_bytes,
+            }
+        )
+        return httpx.Response(200, content=b"ok")
+
+    monkeypatch.setattr(kernel_module, "stream_post_with_size_cap", fake_stream_post)
+
+    kernel = Kernel()
+    await kernel.open(
+        auth=_auth_tokens(),
+        timeout=30.0,
+        connect_timeout=10.0,
+        limits=ConnectionLimits(),
+        capture_cookie_snapshot=lambda _: None,
+    )
+    try:
+        response = await kernel.post(
+            "https://example.com/chat",
+            headers={"X-Test": "yes"},
+            body=b"payload",
+            read_timeout=300.0,
+            max_response_bytes=123456,
+        )
+    finally:
+        await kernel.aclose()
+
+    assert response.text == "ok"
+    assert captured["url"] == "https://example.com/chat"
+    assert captured["body"] == b"payload"
+    assert captured["headers"] == {"X-Test": "yes"}
+    assert captured["max_bytes"] == 123456
+    timeout = captured["timeout"]
+    assert isinstance(timeout, httpx.Timeout)
+    assert timeout.as_dict()["read"] == 300.0
+
+
+@pytest.mark.asyncio
 async def test_aclose_marks_kernel_closed_and_is_idempotent() -> None:
     kernel = Kernel()
     await kernel.open(

@@ -1345,6 +1345,119 @@ async def test_streamed_response_size_cap(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_streaming_default_size_cap_reads_current_constant(monkeypatch):
+    """Omitted ``max_bytes`` resolves the module constant at call time."""
+    from contextlib import asynccontextmanager
+
+    import notebooklm._streaming_post as _streaming_post
+    from notebooklm.exceptions import RPCResponseTooLargeError
+
+    cap = 8
+    monkeypatch.setattr(_streaming_post, "MAX_RPC_RESPONSE_BYTES", cap)
+
+    class _FakeResponse:
+        status_code = 200
+        headers: dict[str, str] = {}
+        request = httpx.Request("POST", "https://example.test/x")
+
+        def raise_for_status(self) -> None:
+            return None
+
+        async def aiter_bytes(self):
+            yield b"x" * (cap + 1)
+
+    @asynccontextmanager
+    async def fake_stream(method, url, **kwargs):
+        yield _FakeResponse()
+
+    client = httpx.AsyncClient()
+    try:
+        monkeypatch.setattr(client, "stream", fake_stream)
+
+        with pytest.raises(RPCResponseTooLargeError) as exc_info:
+            await _streaming_post.stream_post_with_size_cap(
+                client,
+                "https://example.test/x",
+                body=b"",
+                headers=None,
+            )
+
+        assert exc_info.value.limit_bytes == cap
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_perform_authed_post_enforces_explicit_max_response_bytes(monkeypatch):
+    """RuntimeTransport forwards a per-call response cap to the stream guard."""
+    from notebooklm.exceptions import RPCResponseTooLargeError
+
+    core = _make_core()
+    await core.__aenter__()
+    try:
+
+        def build(snapshot: AuthSnapshot) -> tuple[str, str, dict[str, str]]:
+            return "https://example.test/x", "payload", {}
+
+        async def fake_post(url, *, content, **kwargs):
+            return httpx.Response(
+                200,
+                content=b"x" * 9,
+                request=httpx.Request("POST", url),
+            )
+
+        install_post_as_stream(monkeypatch, core._collaborators.kernel.get_http_client(), fake_post)
+
+        with pytest.raises(RPCResponseTooLargeError) as exc_info:
+            await core._composed.transport.perform_authed_post(
+                build_request=build,
+                log_label="test",
+                max_response_bytes=8,
+            )
+
+        assert exc_info.value.limit_bytes == 8
+    finally:
+        await core.close()
+
+
+@pytest.mark.asyncio
+async def test_perform_authed_post_without_cap_uses_shared_stream_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Omitted runtime cap keeps ordinary RPCs on the shared stream default."""
+    import notebooklm._streaming_post as _streaming_post
+    from notebooklm.exceptions import RPCResponseTooLargeError
+
+    cap = 8
+    monkeypatch.setattr(_streaming_post, "MAX_RPC_RESPONSE_BYTES", cap)
+    core = _make_core()
+    await core.__aenter__()
+    try:
+
+        def build(snapshot: AuthSnapshot) -> tuple[str, str, dict[str, str]]:
+            return "https://example.test/x", "payload", {}
+
+        async def fake_post(url, *, content, **kwargs):
+            return httpx.Response(
+                200,
+                content=b"x" * (cap + 1),
+                request=httpx.Request("POST", url),
+            )
+
+        install_post_as_stream(monkeypatch, core._collaborators.kernel.get_http_client(), fake_post)
+
+        with pytest.raises(RPCResponseTooLargeError) as exc_info:
+            await core._composed.transport.perform_authed_post(
+                build_request=build,
+                log_label="test",
+            )
+
+        assert exc_info.value.limit_bytes == cap
+    finally:
+        await core.close()
+
+
+@pytest.mark.asyncio
 async def test_normal_response_below_cap_works(monkeypatch):
     """A normal-sized response decodes through the streaming wrapper unchanged."""
     from contextlib import asynccontextmanager

@@ -24,7 +24,7 @@ from .._row_adapters.chat import (
     unwrap_conversation_turns,
     unwrap_last_conversation_id,
 )
-from .._runtime.config import DEFAULT_CHAT_TIMEOUT
+from .._runtime.config import DEFAULT_CHAT_RESPONSE_MAX_BYTES, DEFAULT_CHAT_TIMEOUT
 from .._runtime.contracts import LoopGuard, RpcCaller
 from ..exceptions import ChatError, NetworkError, UnknownRPCMethodError, ValidationError
 from .notes import save_chat_answer_as_note
@@ -126,6 +126,7 @@ class ChatAPI(LoopBoundPrimitive):
         reqid: ReqidCounter,
         loop_guard: LoopGuard,
         chat_timeout: float | None = DEFAULT_CHAT_TIMEOUT,
+        chat_response_max_bytes: int | None = DEFAULT_CHAT_RESPONSE_MAX_BYTES,
         conversation_cache: ConversationCache | None = None,
         notebooks: NotebookSourceIdProvider | None = None,
     ):
@@ -148,6 +149,8 @@ class ChatAPI(LoopBoundPrimitive):
                 cross-loop follow-up doesn't hang on a lock bound to a dead loop.
             chat_timeout: Per-read HTTP timeout (seconds) for the streamed chat
                 endpoint. ``None`` inherits the underlying transport timeout.
+            chat_response_max_bytes: Maximum buffered streamed-chat response
+                size in bytes. ``None`` inherits the shared RPC response cap.
             conversation_cache: Optional injected cache; defaults to a fresh
                 per-instance ``ConversationCache``.
             notebooks: Optional source-id resolver; defaults to a
@@ -159,6 +162,7 @@ class ChatAPI(LoopBoundPrimitive):
         self._reqid = reqid
         self._loop_guard = loop_guard
         self._chat_timeout = chat_timeout
+        self._chat_response_max_bytes = chat_response_max_bytes
         if notebooks is None:
             from .._notebooks import NotebooksAPI
 
@@ -349,6 +353,7 @@ class ChatAPI(LoopBoundPrimitive):
                     build_request=build_request,
                     parse_label="chat.ask",
                     read_timeout=self._chat_timeout,
+                    max_response_bytes=self._chat_response_max_bytes,
                     disable_read_timeout_retries=True,
                 )
             finally:

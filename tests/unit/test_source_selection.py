@@ -91,7 +91,9 @@ def mock_core():
         build_request,
         log_label,
         read_timeout=None,
+        max_response_bytes=None,
         disable_read_timeout_retries=False,
+        **_kwargs,
     ):
         snapshot = AuthSnapshot(
             csrf_token=auth.csrf_token,

@@ -117,6 +117,30 @@ async def test_chat_aware_authed_post_returns_response_and_balances_bookkeeping(
         build_request=_noop_build_request,
         log_label="chat.ask",
         read_timeout=None,
+        max_response_bytes=None,
+        disable_read_timeout_retries=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_chat_aware_authed_post_forwards_response_cap():
+    """Chat-specific response cap is forwarded to the shared transport."""
+    expected_response = httpx.Response(200, request=_make_request())
+    transport = _make_stub_transport(transport_return_value=expected_response)
+
+    result = await chat_aware_authed_post(
+        transport,  # type: ignore[arg-type]
+        build_request=_noop_build_request,
+        parse_label="chat.ask",
+        max_response_bytes=123,
+    )
+
+    assert result is expected_response
+    transport.perform_authed_post.assert_awaited_once_with(
+        build_request=_noop_build_request,
+        log_label="chat.ask",
+        read_timeout=None,
+        max_response_bytes=123,
         disable_read_timeout_retries=False,
     )
 
