@@ -10,7 +10,11 @@ from notebooklm._types.notebooks import Notebook
 from notebooklm._types.sources import Source
 from notebooklm.rpc.types import SourceStatus
 from notebooklm.server._pagination import MAX_LIMIT
-from notebooklm.server.routes.sources import MAX_WAIT_CONCURRENT_SOURCES, MAX_WAIT_SOURCE_IDS
+from notebooklm.server.routes.sources import (
+    MAX_BATCH_URLS,
+    MAX_WAIT_CONCURRENT_SOURCES,
+    MAX_WAIT_SOURCE_IDS,
+)
 
 from .fakes import FakeClient
 
@@ -66,6 +70,41 @@ def test_upload_over_limit_is_413(authed_client: TestClient, monkeypatch: object
     files = {"file": ("big.bin", io.BytesIO(b"way too many bytes"), "application/octet-stream")}
     resp = authed_client.post("/v1/notebooks/nb-1/sources/file", files=files)
     assert resp.status_code == 413
+
+
+def test_unauthenticated_file_upload_rejected_before_mutation_limiter(
+    monkeypatch: object,
+) -> None:
+    from collections.abc import AsyncIterator
+    from contextlib import asynccontextmanager
+
+    import pytest
+
+    from notebooklm.server._limits import ServerLimiters
+    from notebooklm.server.app import create_app
+
+    assert isinstance(monkeypatch, pytest.MonkeyPatch)
+
+    @asynccontextmanager
+    async def _forbid_acquire(self: ServerLimiters, group: object) -> AsyncIterator[None]:
+        raise AssertionError(f"unauthenticated upload acquired {group} limiter")
+        yield
+
+    @asynccontextmanager
+    async def _factory() -> AsyncIterator[FakeClient]:
+        yield FakeClient()
+
+    monkeypatch.setattr(ServerLimiters, "acquire", _forbid_acquire)
+    app = create_app(client_factory=_factory)
+    with TestClient(app, client=("127.0.0.1", 5555), raise_server_exceptions=False) as client:
+        resp = client.post(
+            "/v1/notebooks/nb-1/sources/file",
+            headers={"Host": "127.0.0.1"},
+            files={"file": ("doc.txt", io.BytesIO(b"file-bytes"), "text/plain")},
+        )
+
+    assert resp.status_code == 401
+    assert resp.json()["error"]["category"] == "auth"
 
 
 def test_poll_known_source_returns_200_pending_then_ready(
@@ -607,6 +646,16 @@ def test_add_batch_per_item_error_is_redacted(
 def test_add_batch_empty_is_400(authed_client: TestClient) -> None:
     resp = authed_client.post("/v1/notebooks/nb-1/sources/batch", json={"urls": []})
     assert resp.status_code == 400
+
+
+def test_add_batch_over_limit_is_422(authed_client: TestClient, fake_client: FakeClient) -> None:
+    _seed_notebook(fake_client)
+    urls = [f"https://{i}.example.com" for i in range(MAX_BATCH_URLS + 1)]
+
+    resp = authed_client.post("/v1/notebooks/nb-1/sources/batch", json={"urls": urls})
+
+    assert resp.status_code == 422
+    assert not fake_client.sources_store.get("nb-1")
 
 
 # --- Phase 4: source_wait ----------------------------------------------------

@@ -24,7 +24,7 @@ from ..._app.chat import ChatModeChoice, ResponseLengthChoice
 from ..._app.serialize import to_jsonable
 from ..._app.views import ask_result_view
 from ...client import NotebookLMClient
-from .._context import get_client
+from .._context import get_client, limit_chat
 
 __all__ = ["router"]
 
@@ -58,7 +58,7 @@ class ChatConfigure(BaseModel):
     response_length: ResponseLengthChoice | None = None
 
 
-@router.post("")
+@router.post("", dependencies=[Depends(limit_chat)])
 async def ask(notebook_id: str, body: ChatAsk, client: ClientDep) -> dict[str, Any]:
     """Ask the notebook's sources a question and return the full answer.
 

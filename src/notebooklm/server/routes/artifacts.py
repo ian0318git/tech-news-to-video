@@ -50,7 +50,7 @@ from ..._app.serialize import to_jsonable
 from ...client import NotebookLMClient
 from ...exceptions import ValidationError
 from ...types import ArtifactType, GenerationState
-from .._context import get_client, get_pending
+from .._context import get_client, get_pending, limit_download, limit_generation
 from .._errors import safe_detail
 from .._pagination import MAX_LIMIT, paginate_envelope
 from .._pending import PendingRegistry
@@ -362,7 +362,7 @@ async def list_artifacts(
     )
 
 
-@router.post("", status_code=202)
+@router.post("", status_code=202, dependencies=[Depends(limit_generation)])
 async def generate(
     notebook_id: str, body: ArtifactGenerate, client: ClientDep, pending: PendingDep
 ) -> dict[str, Any]:
@@ -505,7 +505,7 @@ async def rename(
     }
 
 
-@router.post("/{artifact_id}/retry")
+@router.post("/{artifact_id}/retry", dependencies=[Depends(limit_generation)])
 async def retry(
     notebook_id: str, artifact_id: str, client: ClientDep, pending: PendingDep
 ) -> dict[str, Any]:
@@ -567,7 +567,7 @@ class _CleanupFileResponse(FileResponse):
             _cleanup(self._temp_dir)
 
 
-@router.post("/download")
+@router.post("/download", dependencies=[Depends(limit_download)])
 async def download(notebook_id: str, body: ArtifactDownload, client: ClientDep) -> FileResponse:
     """Download a completed artifact, streaming from a server-generated temp path."""
     spec = DOWNLOAD_SPECS.get(body.type)

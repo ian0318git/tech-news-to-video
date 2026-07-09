@@ -42,13 +42,14 @@ from ..._app.errors import classify
 from ..._app.views import source_view
 from ...client import NotebookLMClient
 from ...exceptions import ValidationError
-from .._context import get_client, get_pending
+from .._context import get_client, get_pending, limit_source_mutation, limit_source_wait
 from .._errors import CATEGORY_STATUS, error_item, safe_detail
 from .._pagination import MAX_LIMIT, paginate_envelope
 from .._pending import PendingRegistry
 from ._passthrough import passthrough_source_id
 
 __all__ = [
+    "MAX_BATCH_URLS",
     "MAX_UPLOAD_BYTES",
     "MAX_WAIT_CONCURRENT_SOURCES",
     "MAX_WAIT_SOURCE_IDS",
@@ -67,6 +68,11 @@ _field_validator = getattr(pydantic, "field_validator", pydantic.validator)
 #: completion. 200 MiB comfortably covers documents/audio while staying
 #: single-user-safe.
 MAX_UPLOAD_BYTES = 200 * 1024 * 1024
+
+#: Max URL entries accepted by the REST batch-add endpoint. Each entry is added
+#: sequentially under the source-mutation limiter, so the cap bounds how long a
+#: single request can occupy one shared mutation slot.
+MAX_BATCH_URLS = 20
 
 #: Chunk size when streaming an upload to the temp file.
 _UPLOAD_CHUNK = 1024 * 1024
@@ -127,6 +133,12 @@ class SourceAddBatch(BaseModel):
 
     urls: list[str]
     allow_internal: bool = False
+
+    @_field_validator("urls")
+    def _limit_urls(cls, value: list[str]) -> list[str]:
+        if len(value) > MAX_BATCH_URLS:
+            raise ValueError(f"urls must contain at most {MAX_BATCH_URLS} entries")
+        return value
 
 
 class SourceRename(BaseModel):
@@ -234,7 +246,7 @@ async def get_source(
     return source_view(source)
 
 
-@router.post("/url", status_code=201)
+@router.post("/url", status_code=201, dependencies=[Depends(limit_source_mutation)])
 async def add_url(
     notebook_id: str, body: SourceAddUrl, client: ClientDep, pending: PendingDep
 ) -> dict[str, Any]:
@@ -250,7 +262,7 @@ async def add_url(
     )
 
 
-@router.post("/text", status_code=201)
+@router.post("/text", status_code=201, dependencies=[Depends(limit_source_mutation)])
 async def add_text(
     notebook_id: str, body: SourceAddText, client: ClientDep, pending: PendingDep
 ) -> dict[str, Any]:
@@ -392,7 +404,7 @@ async def get_source_content(
     }
 
 
-@router.post("/drive", status_code=201)
+@router.post("/drive", status_code=201, dependencies=[Depends(limit_source_mutation)])
 async def add_drive(
     notebook_id: str, body: SourceAddDrive, client: ClientDep, pending: PendingDep
 ) -> dict[str, Any]:
@@ -439,7 +451,7 @@ def _batch_item_is_fatal(exc: BaseException) -> bool:
     return status in (401, 429) or status >= 500
 
 
-@router.post("/batch", status_code=201)
+@router.post("/batch", status_code=201, dependencies=[Depends(limit_source_mutation)])
 async def add_batch(
     notebook_id: str,
     body: SourceAddBatch,
@@ -524,7 +536,7 @@ async def add_batch(
     }
 
 
-@router.post("/wait")
+@router.post("/wait", dependencies=[Depends(limit_source_wait)])
 async def wait_sources(notebook_id: str, body: SourceWaitBody, client: ClientDep) -> dict[str, Any]:
     """Wait for source(s) to finish processing (mirrors MCP ``source_wait``).
 
@@ -576,7 +588,7 @@ async def wait_sources(notebook_id: str, body: SourceWaitBody, client: ClientDep
     return _aggregate_wait_outcomes(notebook_id, outcomes)
 
 
-@router.patch("/{source_id}")
+@router.patch("/{source_id}", dependencies=[Depends(limit_source_mutation)])
 async def rename_source(
     notebook_id: str, source_id: str, body: SourceRename, client: ClientDep
 ) -> dict[str, Any]:
@@ -591,7 +603,7 @@ async def rename_source(
     return source_view(result.source)
 
 
-@router.delete("/{source_id}", status_code=204)
+@router.delete("/{source_id}", status_code=204, dependencies=[Depends(limit_source_mutation)])
 async def delete_source(
     notebook_id: str, source_id: str, client: ClientDep, pending: PendingDep
 ) -> Response:

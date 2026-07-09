@@ -37,7 +37,7 @@ from ..._app import research as research_core
 from ..._app.serialize import to_jsonable
 from ...client import NotebookLMClient
 from ...exceptions import DecodingError, ValidationError
-from .._context import get_client, get_pending
+from .._context import get_client, get_pending, limit_research
 from .._pending import PendingRegistry
 
 __all__ = ["router"]
@@ -56,7 +56,7 @@ class ResearchStartBody(BaseModel):
     mode: Literal["fast", "deep"] = "fast"
 
 
-@router.post("", status_code=202)
+@router.post("", status_code=202, dependencies=[Depends(limit_research)])
 async def start_research(
     notebook_id: str, body: ResearchStartBody, client: ClientDep
 ) -> dict[str, Any]:
@@ -129,7 +129,7 @@ async def research_status(notebook_id: str, run_id: str, client: ClientDep) -> d
     }
 
 
-@router.delete("/{run_id}")
+@router.delete("/{run_id}", dependencies=[Depends(limit_research)])
 async def cancel_research(notebook_id: str, run_id: str, client: ClientDep) -> dict[str, Any]:
     """Cancel an in-flight research run (fire-and-forget).
 
@@ -142,7 +142,7 @@ async def cancel_research(notebook_id: str, run_id: str, client: ClientDep) -> d
     return {"status": "cancelled", "notebook_id": notebook_id, "run_id": run_id, "cancelled": True}
 
 
-@router.post("/{run_id}/import", status_code=201)
+@router.post("/{run_id}/import", status_code=201, dependencies=[Depends(limit_research)])
 async def import_research(
     notebook_id: str, run_id: str, client: ClientDep, pending: PendingDep
 ) -> dict[str, Any]:

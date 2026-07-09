@@ -14,17 +14,31 @@ This module imports NO ``click`` / ``rich`` / ``cli``.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from fastapi import Request
 
+from ._limits import LimitGroup, ServerLimiters
 from ._pending import PendingRegistry
 
 if TYPE_CHECKING:
     from ..client import NotebookLMClient
 
-__all__ = ["AppState", "get_client", "get_client_error", "get_pending"]
+__all__ = [
+    "AppState",
+    "get_client",
+    "get_client_error",
+    "get_pending",
+    "limit_chat",
+    "limit_download",
+    "limit_generation",
+    "limit_research",
+    "limit_source_mutation",
+    "limit_source_wait",
+]
 
 
 @dataclass
@@ -37,6 +51,7 @@ class AppState:
 
     client: NotebookLMClient | None
     pending: PendingRegistry
+    limiters: ServerLimiters
     client_error: BaseException | None = None
 
 
@@ -67,6 +82,48 @@ def get_client_error(request: Request) -> BaseException | None:
 def get_pending(request: Request) -> PendingRegistry:
     """Return the process-lifetime pending-id registry for the current request."""
     return _state(request).pending
+
+
+async def limit_source_mutation(request: Request) -> AsyncIterator[None]:
+    """Backpressure source create/rename/delete routes."""
+    async with _limit(request, "source_mutation"):
+        yield
+
+
+async def limit_source_wait(request: Request) -> AsyncIterator[None]:
+    """Backpressure source wait routes."""
+    async with _limit(request, "source_wait"):
+        yield
+
+
+async def limit_generation(request: Request) -> AsyncIterator[None]:
+    """Backpressure artifact generation routes."""
+    async with _limit(request, "generation"):
+        yield
+
+
+async def limit_download(request: Request) -> AsyncIterator[None]:
+    """Backpressure artifact download routes."""
+    async with _limit(request, "download"):
+        yield
+
+
+async def limit_research(request: Request) -> AsyncIterator[None]:
+    """Backpressure research mutation/import routes."""
+    async with _limit(request, "research"):
+        yield
+
+
+async def limit_chat(request: Request) -> AsyncIterator[None]:
+    """Backpressure blocking chat ask routes."""
+    async with _limit(request, "chat"):
+        yield
+
+
+@asynccontextmanager
+async def _limit(request: Request, group: LimitGroup) -> AsyncIterator[None]:
+    async with _state(request).limiters.acquire(group):
+        yield
 
 
 def _state(request: Request) -> AppState:
