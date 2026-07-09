@@ -2,11 +2,11 @@
 
 Design highlights:
 
-- **One client per process, bound at lifespan.** The ASGI lifespan opens a
+- **One client per process, attempted at lifespan.** The ASGI lifespan opens a
   single :class:`~notebooklm.client.NotebookLMClient` via ``from_storage()``
   inside the server loop (satisfies the ADR-0004 loop-affinity contract) and
-  stows it on ``app.state`` for the process lifetime. Its keepalive task gives
-  long sessions cookie rotation for free.
+  stows it on ``app.state`` for the process lifetime. If startup auth is stale,
+  the app records that failure so diagnostics can still be served.
 - **Transport-neutral.** Routes are thin adapters over the ``_app/`` cores and
   the public client namespaces; this package imports NO ``click`` / ``rich`` /
   ``cli`` (enforced by ``tests/_guardrails/test_server_boundary.py``).
@@ -31,6 +31,7 @@ from typing import cast
 from fastapi import APIRouter, Depends, FastAPI, Request, Response
 
 from ..client import NotebookLMClient
+from ..exceptions import AuthError, NotebookLMError
 from ..paths import get_active_profile, resolve_profile, set_active_profile
 from ._auth import require_auth
 from ._context import AppState
@@ -48,6 +49,12 @@ SERVER_NAME = "notebooklm-server"
 #: yielding a fake client so no real auth/network is needed.
 ClientFactory = Callable[[], AbstractAsyncContextManager[NotebookLMClient]]
 
+_STALE_AUTH_STARTUP_MARKERS = (
+    "authentication expired",
+    "authentication expired or invalid",
+    "run 'notebooklm login'",
+)
+
 
 def _default_factory(profile: str | None = None) -> AbstractAsyncContextManager[NotebookLMClient]:
     # ``from_storage`` returns a dual awaitable / async-context-manager; we use
@@ -56,6 +63,25 @@ def _default_factory(profile: str | None = None) -> AbstractAsyncContextManager[
         "AbstractAsyncContextManager[NotebookLMClient]",
         NotebookLMClient.from_storage(profile=profile),
     )
+
+
+def _normalize_client_startup_error(exc: Exception) -> AuthError | None:
+    """Project stale auth bootstrap ``ValueError``s onto the library auth category.
+
+    The auth bootstrap path historically raises plain ``ValueError`` for stale
+    local profiles. Keep that compatibility at the SDK layer; the REST server
+    only normalizes the exception it records in app state so its existing error
+    projector can return an auth envelope instead of a generic unexpected bug.
+    """
+    if isinstance(exc, AuthError):
+        return AuthError(str(exc))
+    if isinstance(exc, NotebookLMError):
+        return None
+    if isinstance(exc, ValueError):
+        message = " ".join(str(exc).split()).casefold()
+        if any(marker in message for marker in _STALE_AUTH_STARTUP_MARKERS):
+            return AuthError(str(exc))
+    return None
 
 
 def create_app(
@@ -82,9 +108,28 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         previous_profile = get_active_profile()
         set_active_profile(resolve_profile(profile))
+        pending = PendingRegistry()
+        client_started = False
         try:
-            async with factory() as client:
-                app.state.notebooklm = AppState(client=client, pending=PendingRegistry())
+            try:
+                async with factory() as client:
+                    client_started = True
+                    app.state.notebooklm = AppState(client=client, pending=pending)
+                    try:
+                        yield
+                    finally:
+                        app.state.notebooklm = None
+            except Exception as exc:
+                if client_started:
+                    raise
+                startup_error = _normalize_client_startup_error(exc)
+                if startup_error is None:
+                    raise
+                app.state.notebooklm = AppState(
+                    client=None,
+                    pending=pending,
+                    client_error=startup_error,
+                )
                 try:
                     yield
                 finally:

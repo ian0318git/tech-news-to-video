@@ -5,7 +5,9 @@ The REST server binds exactly one
 ASGI lifespan (one client, bound to the server's event loop, satisfying the
 ADR-0004 loop-affinity contract). Route handlers reach it through the
 :func:`get_client` FastAPI dependency, so they never touch app-state internals
-directly.
+directly. If startup could not bind a live client, diagnostics can still inspect
+the recorded failure while client-dependent routes receive the normal structured
+REST error response.
 
 This module imports NO ``click`` / ``rich`` / ``cli``.
 """
@@ -22,7 +24,7 @@ from ._pending import PendingRegistry
 if TYPE_CHECKING:
     from ..client import NotebookLMClient
 
-__all__ = ["AppState", "get_client", "get_pending"]
+__all__ = ["AppState", "get_client", "get_client_error", "get_pending"]
 
 
 @dataclass
@@ -33,22 +35,33 @@ class AppState:
     source / artifact poll handlers (see :mod:`._pending`).
     """
 
-    client: NotebookLMClient
+    client: NotebookLMClient | None
     pending: PendingRegistry
+    client_error: BaseException | None = None
 
 
 def get_client(request: Request) -> NotebookLMClient:
     """Return the lifespan-bound client for the current request.
 
-    The client is stowed on ``app.state`` by the lifespan in :mod:`.app`; it is
-    always present during a real request (the lifespan runs before any request
-    is served).
+    The client, or the startup failure that prevented creating it, is stowed on
+    ``app.state`` by the lifespan in :mod:`.app`.
 
     Raises:
         RuntimeError: If no client was bound (the lifespan did not run — should
             never happen during a real request).
     """
-    return _state(request).client
+    state = _state(request)
+    if state.client_error is not None:
+        raise _fresh_exception(state.client_error)
+    if state.client is None:  # pragma: no cover - defensive invariant guard
+        raise RuntimeError("no client bound to the server")
+    return state.client
+
+
+def get_client_error(request: Request) -> BaseException | None:
+    """Return the startup failure that prevented binding a live client, if any."""
+    error = _state(request).client_error
+    return _fresh_exception(error) if error is not None else None
 
 
 def get_pending(request: Request) -> PendingRegistry:
@@ -61,3 +74,8 @@ def _state(request: Request) -> AppState:
     if state is None:  # pragma: no cover - lifespan always binds before requests
         raise RuntimeError("no client bound to the server (lifespan did not run)")
     return state
+
+
+def _fresh_exception(exc: BaseException) -> BaseException:
+    """Clone a stored startup error so repeated requests do not mutate traceback state."""
+    return exc.__class__(*exc.args)

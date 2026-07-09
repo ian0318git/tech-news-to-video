@@ -15,8 +15,8 @@ DNS-rebinding (loopback-Host) guard.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Any
 
 import pytest
@@ -33,6 +33,11 @@ from .fakes import FakeClient  # noqa: E402
 
 #: The bearer token the test server validates against.
 TEST_TOKEN = "test-secret-token"
+
+STALE_AUTH_MESSAGE = (
+    "Authentication expired or invalid. Redirected to: https://accounts.google.com/signin. "
+    "Run 'notebooklm login' to re-authenticate."
+)
 
 
 @pytest.fixture
@@ -51,6 +56,15 @@ def _factory_for(client: FakeClient) -> Any:
     @asynccontextmanager
     async def factory() -> Any:
         yield client
+
+    return factory
+
+
+def stale_auth_factory() -> Callable[[], AbstractAsyncContextManager[FakeClient]]:
+    @asynccontextmanager
+    async def factory() -> AsyncIterator[FakeClient]:
+        raise ValueError(STALE_AUTH_MESSAGE)
+        yield FakeClient()  # pragma: no cover - makes this an async context manager
 
     return factory
 

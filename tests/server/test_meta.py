@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from notebooklm.server.app import create_app
 from notebooklm.server.routes import meta as meta_route
 
-from .conftest import TEST_TOKEN
+from .conftest import TEST_TOKEN, stale_auth_factory
 from .fakes import FakeClient
 
 
@@ -25,6 +25,7 @@ class _FakeAuthResult:
             "cookies_present": True,
             "sid_cookie": all_passed,
         }
+        self.details = {"account": {"email": "user@example.com", "authuser": 0}}
 
 
 def _patch_auth(monkeypatch: pytest.MonkeyPatch, *, all_passed: bool) -> None:
@@ -140,6 +141,51 @@ def test_server_info_locks_resolved_profile_for_lifespan(
     assert body["auth"]["profile"] == "work"
     assert seen == {"profile": "work", "storage_path": paths.get_storage_path("work")}
     assert paths.get_active_profile() is None
+
+
+def test_server_info_reports_startup_auth_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A startup auth failure is diagnostic state, not an ASGI startup failure."""
+    _patch_auth(monkeypatch, all_passed=True)
+    app = create_app(client_factory=stale_auth_factory())
+    headers = {"Authorization": f"Bearer {TEST_TOKEN}", "Host": "127.0.0.1"}
+
+    with TestClient(
+        app, headers=headers, client=("127.0.0.1", 5555), raise_server_exceptions=False
+    ) as client:
+        resp = client.get("/v1/server/info")
+
+    assert resp.status_code == 200
+    auth = resp.json()["auth"]
+    assert auth["authenticated"] is False
+    assert auth["storage_exists"] is True
+    assert auth["sid_cookie"] is True
+    startup_error = auth["startup_error"]
+    assert startup_error["category"] == "auth"
+    assert startup_error["message"].startswith("Authentication expired or invalid")
+    assert startup_error["retriable"] is False
+    assert startup_error["hint"] == "Re-authenticate and retry."
+
+
+def test_server_info_include_account_degrades_when_startup_auth_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_auth(monkeypatch, all_passed=True)
+    app = create_app(client_factory=stale_auth_factory())
+    headers = {"Authorization": f"Bearer {TEST_TOKEN}", "Host": "127.0.0.1"}
+
+    with TestClient(
+        app, headers=headers, client=("127.0.0.1", 5555), raise_server_exceptions=False
+    ) as client:
+        body = client.get("/v1/server/info", params={"include_account": True}).json()
+
+    assert body["auth"]["authenticated"] is False
+    account = body["account"]
+    assert account["email"] == "user@example.com"
+    assert account["authuser"] == 0
+    assert account["available"] is False
+    assert account["reason"].startswith("Authentication expired or invalid")
 
 
 def test_server_info_include_account(
