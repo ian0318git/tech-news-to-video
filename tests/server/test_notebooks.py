@@ -132,9 +132,20 @@ def test_suggested_prompts_bad_surface_is_422(authed_client: TestClient) -> None
     assert resp.status_code == 422
 
 
-def test_suggest_surface_map_matches_mcp() -> None:
-    """The REST surface→mode map is pinned equal to the MCP tool's copy."""
-    from notebooklm.mcp.tools.chat import _SUGGEST_SURFACE as mcp_map
-    from notebooklm.server.routes.notebooks import _SUGGEST_SURFACE as rest_map
+def test_suggest_surface_map_is_shared_neutral_contract() -> None:
+    """The REST surface→mode map is imported from the neutral app contract."""
+    from notebooklm._app.notebooks import SUGGEST_SURFACE_MAP as neutral_map
+    from notebooklm.server.routes.notebooks import SUGGEST_SURFACE_MAP as rest_map
 
-    assert rest_map == dict(mcp_map)
+    assert rest_map is neutral_map
+    assert rest_map == {
+        "ask": 4,
+        "audio-deep-dive": 1,
+        "audio-brief": 2,
+        "audio-critique": 5,
+        "audio-debate": 6,
+        "video-explainer": 3,
+        "video-short": 10,
+        "quiz": 8,
+        "flashcards": 9,
+    }

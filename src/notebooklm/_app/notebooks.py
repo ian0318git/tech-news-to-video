@@ -29,7 +29,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from ..client import NotebookLMClient
@@ -41,6 +41,38 @@ logger = logging.getLogger(__name__)
 #: injects ``cli.resolve.resolve_notebook_id``; it is read off the wrapper at
 #: call time so the ``monkeypatch`` test seam keeps landing.
 ResolveNotebookIdFn = Callable[..., Awaitable[str]]
+
+#: ``suggest_prompts`` / ``suggested-prompts`` surface → the ``otmP3b``
+#: (GeneratePromptSuggestions) ``mode`` int. The mode selects the product
+#: surface + format the prompts are written for.
+#:
+#: Map established by the #1726 live investigation (2026-07-01): audio formats
+#: browser-verified (each Customize-dialog format card decoded its otmP3b mode),
+#: video from real web captures, quiz/flashcards client-probed. Supersedes the
+#: earlier output-based #1612 guess. ``ask`` (4) is the web chat default.
+SuggestSurface = Literal[
+    "ask",
+    "audio-deep-dive",
+    "audio-brief",
+    "audio-critique",
+    "audio-debate",
+    "video-explainer",
+    "video-short",
+    "quiz",
+    "flashcards",
+]
+
+SUGGEST_SURFACE_MAP: dict[SuggestSurface, int] = {
+    "ask": 4,
+    "audio-deep-dive": 1,
+    "audio-brief": 2,
+    "audio-critique": 5,
+    "audio-debate": 6,
+    "video-explainer": 3,
+    "video-short": 10,
+    "quiz": 8,
+    "flashcards": 9,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -233,6 +265,8 @@ __all__ = [
     "NotebookMetadataResult",
     "NotebookRenameResult",
     "ResolveNotebookIdFn",
+    "SUGGEST_SURFACE_MAP",
+    "SuggestSurface",
     "execute_notebook_create",
     "execute_notebook_delete",
     "execute_notebook_describe",

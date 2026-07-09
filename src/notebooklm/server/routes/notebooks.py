@@ -15,12 +15,13 @@ This module imports NO ``click`` / ``rich`` / ``cli``.
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel
 
 from ..._app import notebooks as core
+from ..._app.notebooks import SUGGEST_SURFACE_MAP, SuggestSurface
 from ..._app.serialize import to_jsonable
 from ...client import NotebookLMClient
 from .._context import get_client
@@ -32,35 +33,6 @@ __all__ = ["router"]
 router = APIRouter(prefix="/notebooks", tags=["notebooks"])
 
 ClientDep = Annotated[NotebookLMClient, Depends(get_client)]
-
-#: ``suggested-prompts`` ``surface`` → the ``otmP3b`` (GeneratePromptSuggestions)
-#: ``mode`` int selecting the product surface/format the prompts are written for.
-#: DUPLICATED from the MCP ``suggest_prompts`` tool's ``_SUGGEST_SURFACE`` (the
-#: server layer must not import ``mcp/``); ``tests/server/test_notebooks.py`` pins
-#: the two equal so they cannot drift. Map established by the #1726 live probe.
-SuggestSurface = Literal[
-    "ask",
-    "audio-deep-dive",
-    "audio-brief",
-    "audio-critique",
-    "audio-debate",
-    "video-explainer",
-    "video-short",
-    "quiz",
-    "flashcards",
-]
-
-_SUGGEST_SURFACE: dict[str, int] = {
-    "ask": 4,
-    "audio-deep-dive": 1,
-    "audio-brief": 2,
-    "audio-critique": 5,
-    "audio-debate": 6,
-    "video-explainer": 3,
-    "video-short": 10,
-    "quiz": 8,
-    "flashcards": 9,
-}
 
 
 class NotebookCreate(BaseModel):
@@ -134,7 +106,7 @@ async def suggested_prompts(
     rows = await client.notebooks.suggest_prompts(
         notebook_id,
         source_ids=list(source_ids) if source_ids else None,
-        mode=_SUGGEST_SURFACE[surface],
+        mode=SUGGEST_SURFACE_MAP[surface],
         query=query,
     )
     return {

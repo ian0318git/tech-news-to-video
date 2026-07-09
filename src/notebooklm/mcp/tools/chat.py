@@ -29,6 +29,7 @@ from fastmcp import Context
 
 from ..._app import chat as core
 from ..._app.chat import ChatModeChoice, ResponseLengthChoice
+from ..._app.notebooks import SUGGEST_SURFACE_MAP, SuggestSurface
 from ..._app.serialize import to_jsonable
 from ..._app.views import ask_result_view
 from ...exceptions import ValidationError
@@ -43,38 +44,6 @@ from .._resolve import resolve_notebook, resolve_sources
 #: ``passage_id`` / ``score`` — useful for deep citation tooling but pure context
 #: bloat for a typical agent, so they are dropped unless ``references="full"``.
 _LITE_REFERENCE_FIELDS = ("source_id", "citation_number", "cited_text")
-
-SuggestSurface = Literal[
-    "ask",
-    "audio-deep-dive",
-    "audio-brief",
-    "audio-critique",
-    "audio-debate",
-    "video-explainer",
-    "video-short",
-    "quiz",
-    "flashcards",
-]
-
-#: ``suggest_prompts`` surface → the ``otmP3b`` (GeneratePromptSuggestions) ``mode``
-#: int. The mode selects the product surface + format the prompts are written for.
-#: Map established by the #1726 live investigation (2026-07-01): audio formats
-#: browser-verified (each Customize-dialog format card decoded its otmP3b mode),
-#: video from real web captures, quiz/flashcards client-probed. Supersedes the
-#: earlier output-based #1612 guess. ``ask`` (4) is the web chat default. Keyed by
-#: ``SuggestSurface`` so mypy rejects any key not in the Literal; a Literal member
-#: missing from the map is caught by the per-surface test in ``test_chat.py``.
-_SUGGEST_SURFACE: dict[SuggestSurface, int] = {
-    "ask": 4,
-    "audio-deep-dive": 1,
-    "audio-brief": 2,
-    "audio-critique": 5,
-    "audio-debate": 6,
-    "video-explainer": 3,
-    "video-short": 10,
-    "quiz": 8,
-    "flashcards": 9,
-}
 
 
 def register(mcp: Any) -> None:
@@ -355,7 +324,7 @@ def register(mcp: Any) -> None:
             rows = await client.notebooks.suggest_prompts(
                 nb_id,
                 source_ids=resolved_source_ids,
-                mode=_SUGGEST_SURFACE[surface],
+                mode=SUGGEST_SURFACE_MAP[surface],
                 query=query,
             )
             payload: dict[str, Any] = {"notebook_id": nb_id}
