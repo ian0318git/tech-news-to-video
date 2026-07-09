@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -50,6 +52,28 @@ def test_start_status_import_happy_path(authed_client: TestClient, fake_client: 
     # The import is keyed on the poll id, not the notebook's current task.
     assert fake_client.imported_research[0][0] == "nb-1"
     assert fake_client.imported_research[0][1] == poll_id
+
+
+def test_import_accepts_json_content_type_without_content_length(
+    authed_client: TestClient, fake_client: FakeClient
+) -> None:
+    resp = authed_client.post("/v1/notebooks/nb-1/research", json={"query": "topic"})
+    poll_id = resp.json()["poll_id"]
+    fake_client.set_research_completed(
+        "nb-1", poll_id, sources=[{"url": "https://a.example", "title": "A"}]
+    )
+
+    def _empty_body() -> Iterator[bytes]:
+        if False:
+            yield b""
+
+    resp = authed_client.post(
+        f"/v1/notebooks/nb-1/research/{poll_id}/import",
+        content=_empty_body(),
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp.status_code == 201
+    assert resp.json()["status"] == "imported"
 
 
 def test_deep_start_poll_id_is_report_id(authed_client: TestClient) -> None:

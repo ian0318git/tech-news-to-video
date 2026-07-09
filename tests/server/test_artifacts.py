@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from collections.abc import Iterator
 
 import pytest
 from fastapi.testclient import TestClient
@@ -327,6 +328,24 @@ def test_retry_artifact_returns_task_id_and_status(
     assert body["status"] == "pending"
     # The kicked-off task is now pollable.
     assert authed_client.get("/v1/notebooks/nb-1/artifacts/a1").json()["status"] == "pending"
+
+
+def test_retry_accepts_json_content_type_without_content_length(
+    authed_client: TestClient, fake_client: FakeClient
+) -> None:
+    fake_client.artifacts_store["nb-1"] = {"a1": make_artifact("a1", "audio")}
+
+    def _empty_body() -> Iterator[bytes]:
+        if False:
+            yield b""
+
+    resp = authed_client.post(
+        "/v1/notebooks/nb-1/artifacts/a1/retry",
+        content=_empty_body(),
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["task_id"] == "a1"
 
 
 def test_retry_records_task_in_pending_registry(

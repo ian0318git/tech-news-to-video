@@ -47,7 +47,11 @@ from .._pagination import MAX_LIMIT, paginate_envelope
 from .._pending import PendingRegistry
 from ._passthrough import passthrough_source_id
 
-__all__ = ["MAX_UPLOAD_BYTES", "MAX_WAIT_TIMEOUT", "router"]
+__all__ = [
+    "MAX_UPLOAD_BYTES",
+    "MAX_WAIT_TIMEOUT",
+    "router",
+]
 
 router = APIRouter(prefix="/notebooks/{notebook_id}/sources", tags=["sources"])
 
@@ -68,7 +72,6 @@ _UPLOAD_CHUNK = 1024 * 1024
 #: backstop that turns a ``timeout=inf`` (valid JSON) into a clean 400 rather
 #: than a request that never returns.
 MAX_WAIT_TIMEOUT = 3600.0
-
 
 #: Safe-basename sanitizer for a spooled upload. Aliased to the shared neutral
 #: helper (:func:`notebooklm._app.source_add.safe_upload_name`) so the REST
