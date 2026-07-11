@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Direct-PDF-URL sources no longer show the raw URL as their title.** Adding a
+  source whose URL points straight at a `.pdf` left the full request URL in the
+  title slot (the server extracts `<title>` for HTML pages but not for a direct
+  PDF link), while HTML sources got proper titles. A PDF source whose title is
+  **exactly the source URL** (the server degradation — not a user-set title that
+  merely resembles a URL) now falls back to the URL path basename — e.g.
+  `https://host/papers/SomePaper.pdf` → `SomePaper` (query and fragment ignored;
+  percent-encoding decoded; a URL whose basename has no `.pdf` extension, such as
+  `…/download?file=x.pdf`, keeps the raw URL rather than a misleading `download`).
+  Applied consistently across `source list`/get (`Source.from_row`) **and**
+  `source fulltext` (`SourceContentRenderer`). No network I/O and no PDF
+  dependency; PDF `/Title` metadata extraction is out of scope. Because the fix
+  lives in the shared read paths it applies **retroactively** — a source added
+  before this release displays the derived title on the next read, so callers
+  that relied on `source delete-by-title "<the raw URL>"` should use the new
+  basename (URL-add idempotency is unaffected — it keys off the source `url`, not
+  title). ([#1850](https://github.com/teng-lin/notebooklm-py/issues/1850))
 - **Drive-hosted PDFs no longer list as `google_spreadsheet`.** The backend
   returns type code `14` for both native Google Sheets and Drive-hosted PDFs,
   and Drive sources carry no URL, so the read paths (`source_list` /
