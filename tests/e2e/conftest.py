@@ -1098,14 +1098,28 @@ def run_cli(
     ``notebooklm use`` (that mutates shared profile state).
     """
     env = os.environ.copy()
+    # Belt for the child's *encode* side: force UTF-8 stdout so a non-Latin-1
+    # char in a live answer can't crash the child on a non-UTF-8-locale runner.
+    # (On Windows the CLI already does this itself via
+    # ``notebooklm_cli._configure_windows_runtime``; this mirrors it for any
+    # other locale.) Set as a base default so ``extra_env`` can override it.
+    env.setdefault("PYTHONUTF8", "1")
     if notebook is not None:
         env["NOTEBOOKLM_NOTEBOOK"] = notebook
     if extra_env:
         env.update(extra_env)
+    # The load-bearing fix is our *decode* side: without ``encoding=``,
+    # ``text=True`` decodes the child's UTF-8 stdout with the locale codec
+    # (cp1252 on Windows), which raises ``UnicodeDecodeError`` on an undefined
+    # byte (e.g. 0x9d, the tail of a closing curly quote U+201D → ``E2 80 9D``);
+    # the reader thread dies, ``proc.stdout`` becomes ``None``, and
+    # ``json.loads(None)`` fails with a misleading ``TypeError``. Pin the decode
+    # to UTF-8; ``errors="replace"`` guarantees a ``str`` (never ``None``).
     return subprocess.run(
         [sys.executable, "-m", "notebooklm.notebooklm_cli", *args],
         capture_output=True,
-        text=True,
+        encoding="utf-8",
+        errors="replace",
         env=env,
         timeout=timeout,
     )
