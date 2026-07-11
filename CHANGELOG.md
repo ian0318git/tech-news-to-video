@@ -20,6 +20,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read-path half of the fix started in #1831 (the add path).
   ([#1832](https://github.com/teng-lin/notebooklm-py/issues/1832))
 
+### Documentation
+
+- **Sandboxed agents (Claude Cowork / headless).** Documented running
+  `notebooklm-py` from Claude Cowork and similar no-display sandboxes in
+  `SKILL.md` and `docs/installation.md`: per-session `pip install` bootstrap (no
+  `[browser]` needed for queries — that extra is only for the interactive
+  `login`, which runs on a host machine), and reusing a host-generated
+  `storage_state.json` via the root `--storage` flag or `NOTEBOOKLM_AUTH_JSON`.
+  ([#1856](https://github.com/teng-lin/notebooklm-py/issues/1856))
+
 ## [0.8.0]
 
 The headline of 0.8.0 is **integrations**: NotebookLM is now reachable from AI
