@@ -9,11 +9,16 @@ makes for each target before deciding what to write. Every transport adapter
 core and renders the classification + outcome into its own surface, prompts,
 and exit-code policy.
 
+This module also owns the **byte construction** of the uploadable skill
+archive (:func:`build_skill_archive_bytes`, used by ``skill package``); it is a
+pure bytes-in/bytes-out helper, so the write boundary below is unchanged.
+
 What stays in the CLI adapter (``cli/skill_cmd.py``):
 
-* the actual atomic file write (``atomic_write_text``) — it reads the
-  ``replace_file_atomically`` helper off the command module at call time so the
-  historical ``monkeypatch.setattr(skill_cmd, "replace_file_atomically", ...)``
+* the actual atomic file writes (``atomic_write_text`` / ``atomic_write_bytes``)
+  — they read the ``replace_file_atomically`` helper off the command module at
+  call time so the historical
+  ``monkeypatch.setattr(skill_cmd, "replace_file_atomically", ...)``
   test seam keeps landing, and
 * the packaged-source loader (``get_skill_source_content``) — it forwards to
   the CLI-owned ``agent_templates`` package-data reader, which tests patch on
@@ -25,7 +30,9 @@ This module is transport-neutral — no ``click`` / ``rich`` / ``cli`` /
 
 from __future__ import annotations
 
+import io
 import re
+import zipfile
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,6 +51,19 @@ TARGETS: dict[str, SkillTarget] = {
     "agents": SkillTarget("Agent Skills", Path(".agents") / "skills" / "notebooklm" / "SKILL.md"),
 }
 SCOPES = ("user", "project")
+
+# Claude custom-skill upload format (chat + Cowork, Settings -> Capabilities):
+# a ZIP whose root contains the skill *folder*; the folder name must equal the
+# SKILL.md frontmatter ``name``.
+SKILL_ARCHIVE_DIRNAME = "notebooklm"
+SKILL_ARCHIVE_ENTRY = f"{SKILL_ARCHIVE_DIRNAME}/SKILL.md"
+DEFAULT_ARCHIVE_FILENAME = "notebooklm-skill.zip"
+
+# Fixed metadata so identical content yields byte-identical archives (within
+# one environment -- deflate output may differ across zlib versions).
+_ARCHIVE_DATE_TIME = (2020, 1, 1, 0, 0, 0)
+_ARCHIVE_CREATE_SYSTEM = 3  # Unix
+_ARCHIVE_EXTERNAL_ATTR = 0o100644 << 16  # S_IFREG | 0644
 
 # Per-target classification used by ``skill install`` to decide whether each
 # target needs a write, would clobber differing content, or is already in sync.
@@ -101,6 +121,26 @@ def add_version_comment(content: str, version: str) -> str:
     return version_comment + content
 
 
+def build_skill_archive_bytes(stamped_content: str) -> bytes:
+    """Build a Claude-uploadable skill archive in memory.
+
+    Returns the bytes of a ZIP whose root contains
+    ``notebooklm/SKILL.md`` (:data:`SKILL_ARCHIVE_ENTRY`) holding
+    ``stamped_content``. Metadata is pinned (fixed timestamp, Unix create
+    system, regular-file mode) so identical input produces byte-identical
+    archives within one environment. Compression is set per entry because
+    ``ZipFile``'s archive-level default does not apply to an explicit
+    ``ZipInfo`` (which would silently fall back to ``ZIP_STORED``).
+    """
+    buffer = io.BytesIO()
+    info = zipfile.ZipInfo(SKILL_ARCHIVE_ENTRY, date_time=_ARCHIVE_DATE_TIME)
+    info.create_system = _ARCHIVE_CREATE_SYSTEM
+    info.external_attr = _ARCHIVE_EXTERNAL_ATTR
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr(info, stamped_content, compress_type=zipfile.ZIP_DEFLATED)
+    return buffer.getvalue()
+
+
 def remove_empty_parents(skill_path: Path, scope: str) -> None:
     """Remove empty skill directories without touching the scope root."""
     stop_at = get_scope_root(scope)
@@ -154,13 +194,17 @@ def report_mixed_no_clobber_up_to_date(
 
 
 __all__ = [
+    "DEFAULT_ARCHIVE_FILENAME",
     "SCOPES",
+    "SKILL_ARCHIVE_DIRNAME",
+    "SKILL_ARCHIVE_ENTRY",
     "TARGET_CREATE",
     "TARGET_OVERWRITE",
     "TARGET_UP_TO_DATE",
     "TARGETS",
     "SkillTarget",
     "add_version_comment",
+    "build_skill_archive_bytes",
     "classify_target",
     "get_installed_content",
     "get_package_version",
