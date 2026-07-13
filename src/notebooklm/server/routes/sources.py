@@ -26,7 +26,7 @@ from __future__ import annotations
 import os
 import shutil
 import tempfile
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, get_args
 
 import pydantic
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
@@ -115,6 +115,24 @@ class SourceAddDrive(BaseModel):
     document_id: str
     title: str | None = None
     mime_type: mut_core.DriveMimeChoice
+
+    # ``field_validator`` (not the v1-compat ``_field_validator`` alias) so mypy
+    # sees the v2 ``mode="before"`` overload — the hint must run BEFORE the
+    # ``Literal`` core check rejects an unsupported value with a bare enum error.
+    @pydantic.field_validator("mime_type", mode="before")
+    def _guide_unsupported_mime(cls, value: object) -> object:
+        """Give an unsupported ``mime_type`` (e.g. ``epub``) the upload hint before
+        the ``Literal`` check rejects it with a bare enum error. Google-native +
+        PDF are the only by-reference Drive types; other Drive files must be
+        downloaded and added as a ``file`` source (#1827)."""
+        if isinstance(value, str) and value not in get_args(mut_core.DriveMimeChoice):
+            raise ValueError(
+                f"{value!r} is not importable via Drive. NotebookLM's Drive import "
+                "supports google-doc/google-slides/google-sheets/pdf only; download an "
+                "upload-only file (epub/docx/txt/md/rtf/odt/csv) and add it as a `file` "
+                "source instead."
+            )
+        return value
 
 
 class SourceAddBatch(BaseModel):

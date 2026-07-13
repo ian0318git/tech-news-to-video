@@ -504,6 +504,10 @@ async def test_add_drive_bad_mime_raises_validation_error() -> None:
     )
     with pytest.raises(ValidationError) as excinfo:
         await execute_source_add_drive(client, plan)
+    msg = str(excinfo.value)
     # The message lists the valid keys so the caller can self-correct.
-    assert "google-doc" in str(excinfo.value)
+    assert "google-doc" in msg
+    # ...and steers upload-only Drive files (e.g. epub) to the `file` source path.
+    assert "file" in msg
+    assert "download" in msg.lower()
     client.sources.add_drive.assert_not_called()

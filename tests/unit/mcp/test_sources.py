@@ -1383,7 +1383,11 @@ async def test_source_add_drive_bad_mime_is_validation_error(mcp_call, mock_clie
                 "mime_type": "bogus",
             },
         )
-    assert "VALIDATION" in str(excinfo.value)
+    msg = str(excinfo.value)
+    assert "VALIDATION" in msg
+    # The error steers the user to the upload path for non-importable Drive types.
+    assert "file" in msg
+    assert "download" in msg.lower()
     mock_client.sources.add_drive.assert_not_called()
 
 
@@ -1406,6 +1410,9 @@ async def test_source_add_drive_missing_mime_is_validation_error(
     msg = str(excinfo.value)
     assert "VALIDATION" in msg
     assert "mime_type" in msg
+    # The message also points at the upload path for non-importable Drive types.
+    assert "file" in msg
+    assert "download" in msg.lower()
     # Rejected before resolve_notebook / the add RPC — nothing is persisted.
     mock_client.sources.add_drive.assert_not_called()
     mock_client.notebooks.get.assert_not_called()

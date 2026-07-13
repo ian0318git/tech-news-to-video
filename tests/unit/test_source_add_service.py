@@ -334,7 +334,14 @@ async def test_add_drive_raises_source_add_error_on_null_result(
         )
 
     assert exc_info.value.url == "Drive Doc"
-    assert "API returned no data for Drive source: Drive Doc" in str(exc_info.value)
+    msg = str(exc_info.value)
+    assert "API returned no data for Drive source: Drive Doc" in msg
+    # The message names the attempted mime and hints (not asserts) that the type
+    # may not be importable via Drive, steering the user to the `file` upload path.
+    assert "mime_type=" in msg
+    assert "may not be importable" in msg
+    assert "file" in msg
+    assert "download" in msg.lower()
 
 
 @pytest.mark.asyncio

@@ -459,12 +459,17 @@ def test_add_drive_pdf_kind_not_spreadsheet(
 
 
 def test_add_drive_bad_mime_is_422(authed_client: TestClient) -> None:
-    # mime_type is a Literal → rejected at the schema boundary.
+    # mime_type is a Literal → rejected at the schema boundary. A before-validator
+    # enriches the 422 with the file-upload hint (Google-native + PDF only).
     resp = authed_client.post(
         "/v1/notebooks/nb-1/sources/drive",
         json={"document_id": "doc-1", "mime_type": "bogus"},
     )
     assert resp.status_code == 422
+    body = resp.text.lower()
+    assert "not importable via drive" in body
+    assert "download" in body
+    assert "file" in body
 
 
 # --- Phase 4: batch URL add --------------------------------------------------

@@ -72,26 +72,26 @@ def _validate_drive_mime(source_type: str, mime_type: str | None) -> None:
     """Require an explicit, supported ``mime_type`` for a Drive add (#1827).
 
     A Drive add no longer defaults an omitted ``mime_type`` to ``google-doc``: a
-    non-Doc Drive file (e.g. a raw ``.md``) so routed through the Google Docs
-    converter failed the import and left an error source stub behind. The client
-    can't sniff Drive metadata from a bare ``document_id``, so the caller must
-    declare the type; rejecting BEFORE ``resolve_notebook`` / the add RPC persists
-    no source row. A no-op for non-Drive types (``mime_type`` is dual-use free-text
-    for ``source_type="file"``).
+    non-Doc Drive file so routed through the Google Docs converter failed the
+    import and left an error source stub. The caller must declare the type;
+    rejecting BEFORE the add RPC persists no source row. No-op for non-Drive types.
     """
     if source_type != "drive":
         return
     if mime_type is None:
         raise ValidationError(
             "source_type 'drive' requires 'mime_type'; pass one of "
-            f"{_DRIVE_MIME_CHOICES_STR} (e.g. 'pdf' for a Drive-hosted PDF, "
-            "'google-doc' for a native Google Doc). An omitted type is no longer "
-            "defaulted to 'google-doc' — a non-Doc Drive file would fail the import "
-            "and leave an error source stub behind (#1827)."
+            f"{_DRIVE_MIME_CHOICES_STR} (e.g. 'pdf' for a Drive-hosted PDF). "
+            "NotebookLM's Drive import only ingests Google-native Docs/Slides/"
+            "Sheets + PDF; upload-only Drive files (epub/docx/txt/md/rtf/odt/"
+            "csv) must be downloaded and added as a `file` source (#1827)."
         )
     if mime_type not in _DRIVE_MIME_CHOICES:
         raise ValidationError(
-            f"Invalid mime_type {mime_type!r} for drive; expected one of {_DRIVE_MIME_CHOICES_STR}"
+            f"Invalid mime_type {mime_type!r} for drive; expected one of "
+            f"{_DRIVE_MIME_CHOICES_STR}. Drive import supports Google-native "
+            "Docs/Slides/Sheets + PDF only — download an upload-only file "
+            "(epub/docx/txt/md/rtf/odt/csv) and add it as a `file` source."
         )
 
 

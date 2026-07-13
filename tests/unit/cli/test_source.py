@@ -1083,6 +1083,19 @@ class TestSourceAddDrive:
 
         assert result.exit_code == 0
 
+    def test_source_add_drive_unsupported_mime_hints_upload(self, runner, mock_auth):
+        """An unsupported Drive mime (e.g. ``epub``) is rejected at the CLI boundary
+        with the file-upload hint, not a bare Click choice error (#1827)."""
+        result = runner.invoke(
+            cli,
+            ["source", "add-drive", "file_id", "Book", "--mime-type", "epub", "-n", "nb_123"],
+        )
+        assert result.exit_code == 2
+        out = result.output.lower()
+        assert "not importable via drive" in out
+        assert "download" in out
+        assert "file" in out
+
     def test_source_add_drive_mime_type_no_deprecation_warning(self, runner, mock_auth):
         """Regression guard: Drive ``--mime-type`` MUST stay deprecation-free.
 

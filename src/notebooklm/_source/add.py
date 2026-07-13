@@ -248,7 +248,15 @@ class SourceAddService:
 
             if result is None:
                 raise SourceAddError(
-                    title, message=f"API returned no data for Drive source: {title}"
+                    title,
+                    message=(
+                        f"API returned no data for Drive source: {title} "
+                        f"(mime_type={mime_type!r}). This Drive file type may not be "
+                        "importable via Drive — NotebookLM's Drive import supports "
+                        "Google-native Docs/Slides/Sheets + PDF only. If it is an "
+                        "upload-only type (e.g. epub/docx/txt/md/rtf/odt/csv), "
+                        "download it and add it as a `file` source instead."
+                    ),
                 )
             return Source.from_api_response(result, method_id=RPCMethod.ADD_SOURCE.value)
 
