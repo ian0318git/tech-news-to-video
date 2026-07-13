@@ -239,11 +239,20 @@ def main(argv: list[str] | None = None) -> None:
         # ourselves via NOTEBOOKLM_MCP_TRUST_PROXY (CF-Connecting-IP only), so keep the ASGI
         # peer the true socket peer. Nothing here derives security from the forwarded scheme
         # (OAuth endpoints + signed links use the explicitly-configured base URL).
+        # DNS-rebinding guard: a loopback bind skips bearer auth, so reject any
+        # request whose Host header isn't a loopback literal (mirrors the REST
+        # server; #1869). Skipped when an external bind is explicitly allowed —
+        # that path already mandates bearer/OAuth auth via _check_http_auth_required.
+        from starlette.middleware import Middleware
+
+        from ._host_guard import LoopbackHostGuardMiddleware
+
         server.run(
             transport="http",
             host=host,
             port=_resolve_port(args.port),
             uvicorn_config={"proxy_headers": False},
+            middleware=[Middleware(LoopbackHostGuardMiddleware, allow_external=allow_external)],
         )
     else:
         # show_banner=False keeps FastMCP's startup banner out of the host's logs

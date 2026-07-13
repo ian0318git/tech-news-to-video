@@ -23,8 +23,24 @@ import pytest
 pytest.importorskip("fastmcp")
 
 from notebooklm.mcp import __main__ as entry  # noqa: E402 - after importorskip guard
+from notebooklm.mcp._host_guard import (  # noqa: E402 - after importorskip guard
+    LoopbackHostGuardMiddleware,
+)
 
 _STRONG_PW = "a-strong-random-password-1234567890"
+
+
+def _assert_http_run(fake_server: MagicMock, *, host: str, port: int, allow_external: bool) -> None:
+    """Assert ``server.run`` got the http transport kwargs + the DNS-rebinding guard."""
+    kwargs = fake_server.run.call_args.kwargs
+    assert kwargs["transport"] == "http"
+    assert kwargs["host"] == host
+    assert kwargs["port"] == port
+    assert kwargs["uvicorn_config"] == {"proxy_headers": False}
+    # The loopback Host guard (#1869) is always installed; allow_external toggles it.
+    (middleware,) = kwargs["middleware"]
+    assert middleware.cls is LoopbackHostGuardMiddleware
+    assert middleware.kwargs == {"allow_external": allow_external}
 
 
 @pytest.fixture(autouse=True)
@@ -102,9 +118,7 @@ def test_explicit_http_transport_binds_loopback(monkeypatch: pytest.MonkeyPatch)
 
     entry.main(["--transport", "http", "--host", "127.0.0.1", "--port", "8123"])
 
-    fake_server.run.assert_called_once_with(
-        transport="http", host="127.0.0.1", port=8123, uvicorn_config={"proxy_headers": False}
-    )
+    _assert_http_run(fake_server, host="127.0.0.1", port=8123, allow_external=False)
     # Loopback + no token → unauthenticated (today's local-dev behavior preserved).
     assert captured["auth"] is None
 
@@ -150,9 +164,24 @@ def test_http_default_port_is_9420(monkeypatch: pytest.MonkeyPatch) -> None:
 
     entry.main(["--transport", "http"])
 
-    fake_server.run.assert_called_once_with(
-        transport="http", host="127.0.0.1", port=9420, uvicorn_config={"proxy_headers": False}
+    _assert_http_run(fake_server, host="127.0.0.1", port=9420, allow_external=False)
+
+
+def test_http_external_bind_installs_guard_in_bypass_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An explicit external bind (which mandates a token) still installs the Host
+    guard, but in bypass mode (allow_external=True) so the operator can front it."""
+    fake_server = MagicMock()
+    monkeypatch.setattr(
+        entry,
+        "create_server",
+        lambda *, profile=None, client_factory=None, auth=None, file_transfer=None: fake_server,
     )
+    monkeypatch.setenv("NOTEBOOKLM_MCP_ALLOW_EXTERNAL_BIND", "1")
+    monkeypatch.setenv("NOTEBOOKLM_MCP_TOKEN", _STRONG_PW)
+
+    entry.main(["--transport", "http", "--host", "0.0.0.0", "--port", "8125"])
+
+    _assert_http_run(fake_server, host="0.0.0.0", port=8125, allow_external=True)
 
 
 def test_http_run_disables_uvicorn_proxy_headers(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -256,9 +285,7 @@ def test_http_non_loopback_with_token_attaches_auth(monkeypatch: pytest.MonkeyPa
 
     entry.main(["--transport", "http", "--host", "0.0.0.0", "--port", "8000"])
 
-    fake_server.run.assert_called_once_with(
-        transport="http", host="0.0.0.0", port=8000, uvicorn_config={"proxy_headers": False}
-    )
+    _assert_http_run(fake_server, host="0.0.0.0", port=8000, allow_external=True)
     assert isinstance(captured["auth"], McpBearerAuthProvider)
 
 
