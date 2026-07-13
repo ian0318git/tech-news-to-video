@@ -235,7 +235,7 @@ async def export_artifact(
     retrieves the content from ``artifact_id`` itself.
     """
     export_type_enum = ExportType.SHEETS if export_type == "sheets" else ExportType.DOCS
-    result = await client.artifacts.export(notebook_id, artifact_id, None, title, export_type_enum)
+    result = await client.artifacts.export(notebook_id, artifact_id, title, export_type_enum)
     return ArtifactExportResult(
         artifact_id=artifact_id,
         title=title,

@@ -33,6 +33,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Artifact-generation validation footguns** ([#1874]). Three input-validation
+  hardenings on the artifact surface: (A) the REST `POST /artifacts`
+  (`ArtifactGenerate`) body now rejects unknown fields (`extra="forbid"`) with a
+  422 instead of silently ignoring a typo (`{"stylee": …}`) and starting a default
+  artifact; (B) `generate_report` now coerces/validates `report_format` at the
+  boundary, raising a clear `ValidationError` (that names `source_ids`) instead of
+  an opaque `TypeError` deep in the payload builder when a caller misplaces a
+  positional `source_ids` list; (C) `export()` enforces exactly-one-of
+  (`artifact_id`, `content`) instead of firing a meaningless no-op RPC when both
+  default to `None`. **Breaking:** `export()`'s `content` is now **keyword-only** so
+  its positional slots match `export_report` / `export_data_table` (title in slot
+  3) — this fixes a silent title→content misbind; pass `content=…` explicitly.
+  ([#1874](https://github.com/teng-lin/notebooklm-py/issues/1874))
+
 - **MCP source tools no longer swallow fatal errors or fan out unbounded.** The MCP
   `source_add` batch and `source_wait` had drifted from the REST route's policy: a
   batch `source_add` caught *every* per-URL exception — so an expired auth / rate

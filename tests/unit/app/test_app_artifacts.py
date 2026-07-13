@@ -222,8 +222,9 @@ async def test_export_maps_type_and_returns_typed_result(export_type, expected_e
         export_type,
         {"url": "https://x"},
     )
-    # content is None so the backend retrieves it from the artifact id.
-    client.artifacts.export.assert_awaited_once_with("nb", "art_1", None, "My Title", expected_enum)
+    # content defaults to None (keyword-only) so the backend retrieves it from
+    # the artifact id; positional slots now match export_report/export_data_table.
+    client.artifacts.export.assert_awaited_once_with("nb", "art_1", "My Title", expected_enum)
 
 
 @pytest.mark.asyncio

@@ -1283,11 +1283,13 @@ result = await client.artifacts.export_data_table(
 )
 # result contains the Google Sheets URL
 
-# Generic export (e.g., export any artifact to Sheets). All trailing
-# parameters have defaults: `artifact_id=None`, `content=None`,
-# `title="Export"`, `export_type=ExportType.DOCS`. Supply `content=...`
-# instead of `artifact_id=...` to export inline text without a pre-existing
-# artifact.
+# Generic export (e.g., export any artifact to Sheets). Signature:
+# `export(notebook_id, artifact_id=None, title="Export",
+# export_type=ExportType.DOCS, *, content=None)`. Exactly one of
+# `artifact_id=` or `content=` must be supplied (both or neither raises
+# `ValidationError`). `content` is keyword-only so the positional slots line
+# up with `export_report` / `export_data_table` (`title` in slot 3); supply
+# `content=...` to export inline text without a pre-existing artifact.
 result = await client.artifacts.export(
     nb_id,
     artifact_id="artifact_789",
