@@ -16,7 +16,6 @@ Extracted from ``sources.py`` (ADR-0008 module-size budget); reads only
 
 from __future__ import annotations
 
-import asyncio
 from typing import TYPE_CHECKING, Any
 
 from ..._app import source_wait as wait_core
@@ -41,43 +40,19 @@ async def _wait_all_sources(
     timeout: float,
     interval: float,
 ) -> list[wait_core.SourceWaitOutcome]:
-    """Wait for every source concurrently, returning one outcome per source.
+    """Wait for many sources, one typed outcome each — via the shared bounded pool.
 
-    Unlike ``client.sources.wait_for_sources`` (which re-raises the first failure
-    and discards the sources that already became ready), each per-source wait runs
-    through :func:`execute_source_wait`, which maps the three handled
-    ``SourceWait*`` failures to a typed outcome instead of raising — so a slow or
-    failed source never throws away its siblings' progress.
-
-    An UNEXPECTED exception (e.g. an auth/transport ``RPCError``, a bug) is NOT a
-    handled outcome: a bare ``asyncio.gather`` would re-raise it without cancelling
-    the still-running sibling pollers, leaking coroutines. Mirror the library's
-    ``wait_for_sources`` discipline (``_source/polling.py``): drive explicit tasks
-    and, on any such escape, cancel + drain the pending siblings before re-raising
-    (it then flows through ``mcp_errors()``).
+    Delegates to :func:`notebooklm._app.source_wait.wait_all_sources`, the single
+    implementation the REST route also uses: it caps in-flight pollers at
+    ``MAX_WAIT_CONCURRENT_SOURCES`` (this adapter previously fanned out one
+    ``create_task`` per source, unbounded — #1871), maps the three handled
+    ``SourceWait*`` failures to typed outcomes so a slow/failed source never
+    discards its siblings' progress, and cancels + drains siblings on any UNEXPECTED
+    escape before re-raising (it then flows through ``mcp_errors()``).
     """
-    tasks = [
-        asyncio.create_task(
-            wait_core.execute_source_wait(
-                client,
-                wait_core.SourceWaitPlan(
-                    notebook_id=notebook_id,
-                    source_id=sid,
-                    timeout=timeout,
-                    interval=interval,
-                ),
-            )
-        )
-        for sid in source_ids
-    ]
-    try:
-        return list(await asyncio.gather(*tasks))
-    except BaseException:
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        raise
+    return await wait_core.wait_all_sources(
+        client, notebook_id, source_ids, timeout=timeout, interval=interval
+    )
 
 
 def _wait_bucket_entry(

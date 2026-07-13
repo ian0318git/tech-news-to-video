@@ -33,6 +33,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **MCP source tools no longer swallow fatal errors or fan out unbounded.** The MCP
+  `source_add` batch and `source_wait` had drifted from the REST route's policy: a
+  batch `source_add` caught *every* per-URL exception — so an expired auth / rate
+  limit / upstream 5xx was reported as a per-item "error" inside a **success**
+  envelope, hiding it from the agent; and multi-source `source_wait` spawned one
+  poller per source with no concurrency limit. The shared policy (the batch/wait
+  caps, the fatal-vs-isolate classifier, and the bounded multi-source wait pool) now
+  lives in the transport-neutral `_app` core (`_app.source_batch` / `_app.source_wait`)
+  and is used by **both** adapters, with a parity guardrail (`tests/_guardrails/
+  test_source_policy_parity.py`) that prevents future drift. Behavior change: a fatal
+  batch item now aborts the whole `source_add` call (so an agent can re-auth/retry),
+  only per-URL 4xx-input failures isolate; `source_wait` now bounds concurrency at 8,
+  caps the source count at 100 on **both** the explicit-subset and the omitted-`sources`
+  wait-all path (enforced at one shared chokepoint so the adapters can't drift), caps
+  timeout at 3600s, and rejects non-finite (`NaN`/`Infinity`) timeout/interval — all via
+  a shared `_app` validator used by the REST route too. Per-URL SSRF/validation isolation
+  is unchanged.
+  ([#1871](https://github.com/teng-lin/notebooklm-py/issues/1871))
 - **Direct-PDF-URL sources no longer show the raw URL as their title.** Adding a
   source whose URL points straight at a `.pdf` left the full request URL in the
   title slot (the server extracts `<title>` for HTML pages but not for a direct

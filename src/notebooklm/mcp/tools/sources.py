@@ -33,6 +33,7 @@ from ..._app import source_listing as listing_core
 from ..._app import source_mutations as mut_core
 from ..._app import source_wait as wait_core
 from ..._app.serialize import to_jsonable
+from ..._app.source_batch import MAX_BATCH_URLS, batch_item_is_fatal
 from ..._app.views import source_view as _source_view
 from ...exceptions import (
     SourceNotFoundError,
@@ -375,10 +376,9 @@ def register(mcp: Any) -> None:
         """
         client = get_client(ctx)
         with mcp_errors():
-            if timeout < 0:
-                raise ValidationError(f"timeout must be >= 0; got {timeout}")
-            if interval <= 0:
-                raise ValidationError(f"interval must be > 0; got {interval}")
+            # Non-finite + range guards (shared with the REST route so the two
+            # can't drift); fail-fast before any I/O.
+            wait_core.validate_wait_bounds(timeout, interval)
 
             # All input guards fire BEFORE any I/O (fail-fast, like the bounds
             # checks above): the empty-``sources`` and mutual-exclusion errors must
@@ -391,6 +391,13 @@ def register(mcp: Any) -> None:
             if coerced is not None and not coerced:
                 raise ValidationError(
                     "'sources' was empty; omit it to wait on all sources, or pass at least one source ref"
+                )
+            # Cap the explicit subset BEFORE resolution so a bad ref can't mask it
+            # (shares _app.source_wait.MAX_WAIT_SOURCE_IDS with the REST route).
+            if coerced is not None and len(coerced) > wait_core.MAX_WAIT_SOURCE_IDS:
+                raise ValidationError(
+                    f"'sources' must contain at most {wait_core.MAX_WAIT_SOURCE_IDS} refs; "
+                    f"got {len(coerced)}. Wait on a smaller subset."
                 )
 
             nb_id = await resolve_notebook(client, notebook)
@@ -494,9 +501,9 @@ def register(mcp: Any) -> None:
         ``"added"`` or ``"error"`` (the ADD outcome). An ``"added"`` item also carries
         the source's ``status_label`` (the async-import status) and, when the add
         response already reflects a failed import, an inline ``warning`` — same
-        failure-signaling as single mode. A failed item NEVER aborts the rest of the
-        batch and an ``error`` item's ``error`` carries the same structured contract a
-        single-mode failure raises. Batch is URL-only: a non-URL entry (plain text,
+        failure-signaling as single mode. A per-URL **input** failure (bad URL / 404 /
+        SSRF-blocked host) isolates as an ``error`` item; a **fatal** service failure
+        (expired auth, rate limit, upstream 5xx) aborts the whole call. Batch is URL-only: a non-URL entry (plain text,
         a local path, ``file://``/``ftp://``) is reported as a per-item ``VALIDATION``
         error — it is never silently added as text or read off the filesystem.
         ``allow_internal`` applies to every entry; the other single-mode named inputs
@@ -525,6 +532,13 @@ def register(mcp: Any) -> None:
                 )
                 if not urls:
                     raise ValidationError("urls must contain at least one URL")
+                # Cap BEFORE resolution so a bad notebook ref can't mask it (shares
+                # _app.source_batch.MAX_BATCH_URLS with the REST batch endpoint).
+                if len(urls) > MAX_BATCH_URLS:
+                    raise ValidationError(
+                        f"urls must contain at most {MAX_BATCH_URLS} entries; got {len(urls)}. "
+                        "Split into multiple source_add calls."
+                    )
                 nb_id = await resolve_notebook(client, notebook)
                 return await _add_url_batch(client, nb_id, urls, allow_internal=allow_internal)
 
@@ -641,10 +655,8 @@ def register(mcp: Any) -> None:
         """
         client = get_client(ctx)
         with mcp_errors():
-            if timeout < 0:
-                raise ValidationError(f"timeout must be >= 0; got {timeout}")
-            if interval <= 0:
-                raise ValidationError(f"interval must be > 0; got {interval}")
+            # Non-finite + range guards (shared with source_wait / the REST route).
+            wait_core.validate_wait_bounds(timeout, interval)
             # The same single-add guards source_add applies, all BEFORE any notebook
             # I/O so a malformed call never pays a round-trip. Shares the drive-mime
             # validator + _reject_single_content_scalars with source_add so the two
@@ -836,15 +848,17 @@ async def _add_url_batch(
     The saving over N single ``source_add`` calls is the per-call MCP/agent
     round-trip overhead: the URL adds themselves run **sequentially** here, on
     purpose — concurrent bulk writes invite backend rate-limiting (CLAUDE.md
-    pitfall #4), and a ``RATE_LIMITED`` failure is then isolated per item and
-    surfaced ``retriable=true`` rather than aborting the batch.
+    pitfall #4). A **fatal** failure (expired auth, ``RATE_LIMITED``, an upstream
+    5xx — classified by :func:`_app.source_batch.batch_item_is_fatal`, shared with
+    the REST route) is re-raised so the whole tool call fails at the top level,
+    letting the agent re-auth/retry; only per-URL 4xx-input failures isolate.
 
     Each entry is added with ``source_type="url"`` so :func:`add_core.validate_url`
     enforces the http/https scheme allowlist + SSRF guard per item; a non-URL entry
     (plain text, a local path, ``file://``/``ftp://``) is reported as a per-item
     ``VALIDATION`` error and is NEVER silently added as text or read off the local
-    filesystem. A per-item failure is isolated (recorded + skipped), never raised,
-    so partial — or total — failure is always visible per item rather than
+    filesystem. A per-item **input** failure is isolated (recorded + skipped), so
+    partial — or total — input failure is always visible per item rather than
     collapsed into one success flag. Results are positional (``results[i]`` ↔
     ``urls[i]``); the per-item ``error`` reuses the same structured contract a
     single-mode failure raises.
@@ -875,6 +889,13 @@ async def _add_url_batch(
                 allow_internal=allow_internal,
             )
         except Exception as exc:  # noqa: BLE001 - per-item isolation; CancelledError (BaseException) still propagates
+            # A service/infra failure (auth expiry, rate limit, upstream 5xx) is not
+            # specific to this URL — re-raise so the tool call fails at the top level
+            # (letting the agent re-auth/retry) instead of masking it as a per-item
+            # "error" in a success envelope. Only per-URL 4xx-input failures isolate.
+            # Shares REST's classifier via _app.source_batch (#1871).
+            if batch_item_is_fatal(exc):
+                raise
             results.append({"input": entry, "status": "error", "error": tool_error_payload(exc)})
         else:
             item: dict[str, Any] = {

@@ -74,6 +74,17 @@ ALLOWLISTED_CEILINGS: dict[str, int] = {
     # the public-surface manifest pin every class to ``notebooklm.exceptions``, so
     # the classes cannot move to sibling files without forking that home.
     "exceptions.py": 1512,
+    # ``mcp/tools/sources.py`` sat at 999 (one under budget) until #1871 added the
+    # shared source-policy wiring: the MAX_WAIT_TIMEOUT / MAX_WAIT_SOURCE_IDS /
+    # MAX_BATCH_URLS caps (irreducible fail-closed validation that must run in the
+    # tool body, before ref resolution) plus the fatal-vs-isolate re-raise in the
+    # URL-batch loop and the agent-facing docstrings documenting that new abort
+    # behavior. The batch helper (``_add_url_batch``) can't cleanly split out — it
+    # is fused to in-module primitives (``_add_one`` / ``_annotate_thin_warnings`` /
+    # ``tool_error_payload``), so extracting it would only trade a size trip for a
+    # circular import. Pinned at its measured LOC; ratchet down when the tool
+    # surface is next reorganized.
+    "mcp/tools/sources.py": 1020,
 }
 
 

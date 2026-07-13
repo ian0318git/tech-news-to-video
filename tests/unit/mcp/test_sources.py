@@ -437,6 +437,24 @@ async def test_source_wait_zero_interval_is_validation_error(mcp_call, mock_clie
     assert "VALIDATION" in str(excinfo.value)
 
 
+async def test_source_wait_all_over_cap_is_rejected(mcp_call, mock_client) -> None:
+    """The omitted-``sources`` wait-all path is capped at MAX_WAIT_SOURCE_IDS via the
+    shared fan-out backstop (parity with REST, which rejected this all along — #1871).
+    Without the backstop MCP silently waited on every source; REST returned 400."""
+    from notebooklm._app.source_wait import MAX_WAIT_SOURCE_IDS
+
+    over = MAX_WAIT_SOURCE_IDS + 1
+    mock_client.sources.list = AsyncMock(
+        return_value=[FakeSource(id=f"{i:08d}-0000-0000-0000-000000000000") for i in range(over)]
+    )
+    mock_client.sources.wait_until_ready = AsyncMock()
+    with pytest.raises(ToolError) as excinfo:
+        await mcp_call("source_wait", {"notebook": NB_ID})
+    assert "VALIDATION" in str(excinfo.value)
+    # Listed to learn the count, but no poller was spawned past the cap.
+    mock_client.sources.wait_until_ready.assert_not_awaited()
+
+
 def test_drive_mime_choices_match_core_map() -> None:
     """The MCP drive-MIME tuple is duplicated from the core's ``_DRIVE_MIME_MAP``;
     pin them equal so a new core MIME type can't silently lag the MCP validation."""
@@ -1639,10 +1657,31 @@ async def test_source_add_batch_non_url_entry_errors_not_text(mcp_call, mock_cli
     mock_client.sources.add_file.assert_not_called()
 
 
-async def test_source_add_batch_server_error_isolated(mcp_call, mock_client) -> None:
-    """A mid-batch server/network failure is isolated to its item; the rest proceed."""
+async def test_source_add_batch_fatal_error_aborts_the_call(mcp_call, mock_client) -> None:
+    """A mid-batch FATAL failure (network/auth/rate-limit/5xx) aborts the whole tool
+    call rather than being masked as a per-item error in a success envelope (#1871).
+    The batch stops at the first fatal item — the second URL is never attempted."""
     mock_client.sources.add_url = AsyncMock(
         side_effect=[NetworkError("boom"), FakeSource(id=SRC2_ID, title="Second")]
+    )
+    with pytest.raises(ToolError) as excinfo:
+        await mcp_call(
+            "source_add",
+            {
+                "notebook": NB_ID,
+                "urls": ["https://first.example.com", "https://second.example.com"],
+            },
+        )
+    assert "NETWORK" in str(excinfo.value)
+    # Aborted at the first fatal item — the batch did NOT continue to the second URL.
+    assert mock_client.sources.add_url.await_count == 1
+
+
+async def test_source_add_batch_isolates_non_fatal_input_error(mcp_call, mock_client) -> None:
+    """A per-URL INPUT failure (a 404 / not-found — non-fatal) is isolated as an
+    ``error`` item while the rest of the batch proceeds (the other half of #1871)."""
+    mock_client.sources.add_url = AsyncMock(
+        side_effect=[SourceNotFoundError("missing"), FakeSource(id=SRC2_ID, title="Second")]
     )
     mock_client.sources.get_fulltext = AsyncMock(
         return_value=FakeFulltext(content="x" * 500, char_count=500)
@@ -1655,19 +1694,43 @@ async def test_source_add_batch_server_error_isolated(mcp_call, mock_client) -> 
     assert sc["added"] == 1
     assert sc["failed"] == 1
     assert sc["results"][0]["status"] == "error"
-    # The per-item error carries the FULL structured contract a single-mode
-    # failure would raise (code/message/retriable/hint), not just a code.
-    assert sc["results"][0]["error"] == tool_error_payload(NetworkError("boom"))
-    assert sc["results"][1] == {
-        "input": "https://second.example.com",
-        "status": "added",
-        "source_id": SRC2_ID,
-        "title": "Second",
-        "status_label": "ready",
-    }
+    assert sc["results"][0]["error"] == tool_error_payload(SourceNotFoundError("missing"))
+    assert sc["results"][1]["status"] == "added"
+    assert sc["results"][1]["source_id"] == SRC2_ID
+    # Non-fatal → the batch continued and attempted the second URL.
     assert mock_client.sources.add_url.await_count == 2
-    # Only the one successfully-added ready item is content-checked.
-    mock_client.sources.get_fulltext.assert_awaited_once_with(NB_ID, SRC2_ID, output_format="text")
+
+
+async def test_source_add_batch_over_cap_rejected_before_any_add(mcp_call, mock_client) -> None:
+    """More than MAX_BATCH_URLS urls is rejected as VALIDATION BEFORE any add I/O —
+    the cap is shared with the REST endpoint (_app.source_batch.MAX_BATCH_URLS)."""
+    from notebooklm._app.source_batch import MAX_BATCH_URLS
+
+    mock_client.sources.add_url = AsyncMock()
+    urls = [f"https://{i}.example.com" for i in range(MAX_BATCH_URLS + 1)]
+    with pytest.raises(ToolError) as excinfo:
+        await mcp_call("source_add", {"notebook": NB_ID, "urls": urls})
+    assert "VALIDATION" in str(excinfo.value)
+    mock_client.sources.add_url.assert_not_awaited()
+
+
+async def test_source_wait_over_id_cap_rejected(mcp_call, mock_client) -> None:
+    """More than MAX_WAIT_SOURCE_IDS explicit refs is rejected (shared cap)."""
+    from notebooklm._app.source_wait import MAX_WAIT_SOURCE_IDS
+
+    refs = [f"src-{i}" for i in range(MAX_WAIT_SOURCE_IDS + 1)]
+    with pytest.raises(ToolError) as excinfo:
+        await mcp_call("source_wait", {"notebook": NB_ID, "sources": refs})
+    assert "VALIDATION" in str(excinfo.value)
+
+
+async def test_source_wait_over_timeout_cap_rejected(mcp_call, mock_client) -> None:
+    """A timeout above MAX_WAIT_TIMEOUT is rejected (shared cap)."""
+    from notebooklm._app.source_wait import MAX_WAIT_TIMEOUT
+
+    with pytest.raises(ToolError) as excinfo:
+        await mcp_call("source_wait", {"notebook": NB_ID, "timeout": MAX_WAIT_TIMEOUT + 1})
+    assert "VALIDATION" in str(excinfo.value)
 
 
 async def test_source_add_batch_flags_failed_import(mcp_call, mock_client) -> None:
