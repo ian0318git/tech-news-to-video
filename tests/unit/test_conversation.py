@@ -92,8 +92,13 @@ class TestAsk:
         assert result.turn_number == 2
 
     @pytest.mark.asyncio
-    async def test_ask_raises_chat_error_on_rate_limit(self, auth_tokens, httpx_mock):
+    async def test_ask_raises_chat_error_on_rate_limit(
+        self, auth_tokens, httpx_mock, mock_get_conversation_id
+    ):
         """ask() raises ChatError when the server returns UserDisplayableError."""
+        # A null ask resolves the notebook's current conversation via hPTbtc
+        # before the POST (issue #1875); mock it so the POST is what fails.
+        mock_get_conversation_id()
         error_chunk = json.dumps(
             [
                 [

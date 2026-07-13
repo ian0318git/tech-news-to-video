@@ -655,6 +655,7 @@ class TestChatAskErrorHandling:
         self,
         auth_tokens,
         httpx_mock: HTTPXMock,
+        mock_get_conversation_id,
     ):
         """Test ask() raises NetworkError on httpx.TimeoutException."""
         import re
@@ -663,6 +664,9 @@ class TestChatAskErrorHandling:
 
         from notebooklm.exceptions import NetworkError
 
+        # A null ask resolves the notebook's current conversation via hPTbtc
+        # before the POST (issue #1875); mock it so the POST is what fails.
+        mock_get_conversation_id()
         httpx_mock.add_exception(
             httpx.TimeoutException("timed out"),
             url=re.compile(r".*GenerateFreeFormStreamed.*"),
@@ -682,6 +686,7 @@ class TestChatAskErrorHandling:
         self,
         auth_tokens,
         httpx_mock: HTTPXMock,
+        mock_get_conversation_id,
     ):
         """Test ask() raises ChatError on httpx.HTTPStatusError.
         After the chat-path refactor, the chat path uses
@@ -696,6 +701,9 @@ class TestChatAskErrorHandling:
 
         from notebooklm.exceptions import ChatError
 
+        # A null ask resolves the notebook's current conversation via hPTbtc
+        # before the POST (issue #1875); mock it so the POST is what fails.
+        mock_get_conversation_id()
         httpx_mock.add_response(
             url=re.compile(r".*GenerateFreeFormStreamed.*"),
             status_code=500,
@@ -714,6 +722,7 @@ class TestChatAskErrorHandling:
         self,
         auth_tokens,
         httpx_mock: HTTPXMock,
+        mock_get_conversation_id,
     ):
         """Test ask() raises NetworkError on httpx.RequestError."""
         import re
@@ -722,6 +731,9 @@ class TestChatAskErrorHandling:
 
         from notebooklm.exceptions import NetworkError
 
+        # A null ask resolves the notebook's current conversation via hPTbtc
+        # before the POST (issue #1875); mock it so the POST is what fails.
+        mock_get_conversation_id()
         httpx_mock.add_exception(
             httpx.ConnectError("connection refused"),
             url=re.compile(r".*GenerateFreeFormStreamed.*"),
@@ -1051,12 +1063,18 @@ class TestAskServerAssignedConversationId:
             content=chat_response_body.encode(),
             method="POST",
         )
-        # hPTbtc returns an empty result -> get_conversation_id() -> None
+        # hPTbtc returns an empty result -> get_conversation_id() -> None.
+        # A null ask now does TWO hPTbtc lookups (issue #1875): a pre-POST
+        # resolve of the notebook's current conversation and the existing
+        # post-POST id recovery. Both hit this empty response, so mark it
+        # reusable — otherwise the second lookup is unmocked and the test
+        # would fail there instead of on the intended ChatError.
         empty_hptbtc = build_rpc_response(RPCMethod.GET_LAST_CONVERSATION_ID, [])
         httpx_mock.add_response(
             url=re.compile(r".*batchexecute.*"),
             content=empty_hptbtc.encode(),
             method="POST",
+            is_reusable=True,
         )
         async with NotebookLMClient(auth_tokens) as client:
             with pytest.raises(ChatError, match="hPTbtc"):
