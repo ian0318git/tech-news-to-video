@@ -441,6 +441,77 @@ async def test_wait_all_until_ready_timeout_reports_each_sources_own_last_status
 
 
 @pytest.mark.asyncio
+async def test_wait_all_until_ready_bounds_overall_duration_regardless_of_source_count(
+    poller: SourcePoller,
+    logger: logging.Logger,
+) -> None:
+    """Regression for #1878: the OVERALL multi-source wait is bounded by ONE
+    ``timeout``, not ``N * timeout``.
+
+    The issue was filed against the pre-#1870 bounded-concurrency wait pool, where
+    each queued source got the full ``timeout`` so the overall wait grew with N
+    (~``ceil(N / workers) * timeout``). #1870 rewrote this into a single-snapshot
+    loop over one shared :class:`RuntimeDeadline`, so N never multiplies the wait.
+
+    Drive 25 sources that ALL stay PROCESSING forever (``list_sources`` always
+    returns the same PROCESSING snapshot) against an injected fake clock whose only
+    time source is the loop's own clamped sleeps. Assert the total *simulated*
+    elapsed time is bounded by ~one ``timeout`` (NOT 25 * timeout), that all 25 come
+    back as :class:`SourceTimeoutError`, and that each carries its own last status.
+    """
+    source_count = 25
+    timeout = 5.0
+    ids = [f"s{i}" for i in range(source_count)]
+    # Every source is stuck PROCESSING and never leaves that state.
+    stuck = [Source(id=sid, status=SourceStatus.PROCESSING) for sid in ids]
+    # The same PROCESSING snapshot on every tick — nothing ever becomes ready.
+    list_sources = _sequenced_list_sources([stuck])
+
+    sleeps: list[float] = []
+    clock = 0.0
+
+    def monotonic() -> float:
+        return clock
+
+    async def sleep(seconds: float) -> None:
+        nonlocal clock
+        sleeps.append(seconds)
+        clock += seconds
+
+    results = await poller.wait_all_until_ready(
+        "nb_1",
+        ids,
+        timeout=timeout,
+        initial_interval=1.0,
+        max_interval=10.0,
+        list_sources=list_sources,
+        sleep=sleep,
+        monotonic=monotonic,
+        logger=logger,
+    )
+
+    # (a) The overall wait is bounded by ~one timeout, NOT source_count * timeout.
+    # Every tick resolves ALL still-pending sources against ONE shared deadline, so
+    # the accumulated sleep budget can never exceed the single ``timeout`` — with 25
+    # sources the old per-source pool would have burned up to 25 * timeout here.
+    assert sum(sleeps) <= timeout
+    assert clock <= timeout
+    assert clock < source_count * timeout
+    # One whole-notebook snapshot per tick (never one-per-source): a handful of
+    # ticks under backoff, not 25 independent per-source waits.
+    assert list_sources.await_count <= 10
+
+    # (b) All 25 stuck sources come back as timeouts, in input order.
+    assert len(results) == source_count
+    assert all(isinstance(result, SourceTimeoutError) for result in results)
+    # (c) Each timeout carries its OWN id and last observed status (PROCESSING).
+    for sid, result in zip(ids, results, strict=True):
+        assert isinstance(result, SourceTimeoutError)
+        assert result.source_id == sid
+        assert result.last_status == SourceStatus.PROCESSING
+
+
+@pytest.mark.asyncio
 async def test_wait_all_until_ready_empty_returns_empty(
     poller: SourcePoller,
     logger: logging.Logger,
