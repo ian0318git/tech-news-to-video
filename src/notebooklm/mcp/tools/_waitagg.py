@@ -40,15 +40,15 @@ async def _wait_all_sources(
     timeout: float,
     interval: float,
 ) -> list[wait_core.SourceWaitOutcome]:
-    """Wait for many sources, one typed outcome each — via the shared bounded pool.
+    """Wait for many sources, one typed outcome each — via the shared snapshot loop.
 
     Delegates to :func:`notebooklm._app.source_wait.wait_all_sources`, the single
-    implementation the REST route also uses: it caps in-flight pollers at
-    ``MAX_WAIT_CONCURRENT_SOURCES`` (this adapter previously fanned out one
-    ``create_task`` per source, unbounded — #1871), maps the three handled
-    ``SourceWait*`` failures to typed outcomes so a slow/failed source never
-    discards its siblings' progress, and cancels + drains siblings on any UNEXPECTED
-    escape before re-raising (it then flows through ``mcp_errors()``).
+    implementation the REST route also uses: it polls the whole notebook source
+    list ONCE per tick and resolves every pending source against that single
+    snapshot (previously one whole-notebook poll per source — O(N^2), #1870),
+    maps the three handled ``SourceWait*`` failures to typed outcomes so a
+    slow/failed source never discards its siblings' progress, and lets any
+    UNEXPECTED escape propagate (it then flows through ``mcp_errors()``).
     """
     return await wait_core.wait_all_sources(
         client, notebook_id, source_ids, timeout=timeout, interval=interval

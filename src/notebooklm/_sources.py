@@ -20,7 +20,7 @@ from ._source import upload as _source_upload
 from ._source.add import SourceAddService
 from ._source.content import SourceContentRenderer
 from ._source.listing import SourceLister
-from ._source.polling import SourcePoller
+from ._source.polling import SourcePoller, SourceWaitResult
 from ._source.upload import SourceUploadPipeline
 from ._source.upload_payloads import build_rename_source_params
 from ._types.research import SourceGuide
@@ -245,6 +245,37 @@ class SourcesAPI:
             backoff_factor=backoff_factor,
             transient_error_types=transient_error_types,
             get_source=self.get_or_none,
+            sleep=asyncio.sleep,
+            monotonic=monotonic,
+            logger=logger,
+        )
+
+    async def wait_all_until_ready(
+        self,
+        notebook_id: str,
+        source_ids: builtins.list[str],
+        timeout: float = 120.0,
+        initial_interval: float = 1.0,
+        max_interval: float = 10.0,
+        backoff_factor: float = 1.5,
+        transient_error_types: tuple[int | None, ...] | None = None,
+    ) -> builtins.list[SourceWaitResult]:
+        """Wait for many sources with ONE notebook snapshot per poll tick.
+
+        Returns one result per id, in input order; terminal per-source failures
+        (:class:`SourceNotFoundError` / :class:`SourceProcessingError` /
+        :class:`SourceTimeoutError`) are RETURNED, not raised. See
+        :meth:`SourcePoller.wait_all_until_ready`.
+        """
+        return await self._poller.wait_all_until_ready(
+            notebook_id,
+            source_ids,
+            timeout=timeout,
+            initial_interval=initial_interval,
+            max_interval=max_interval,
+            backoff_factor=backoff_factor,
+            transient_error_types=transient_error_types,
+            list_sources=self.list,
             sleep=asyncio.sleep,
             monotonic=monotonic,
             logger=logger,

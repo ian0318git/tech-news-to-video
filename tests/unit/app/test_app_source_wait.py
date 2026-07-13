@@ -20,7 +20,6 @@ exit-code policy is exercised in
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock, MagicMock
@@ -137,34 +136,32 @@ async def test_wait_context_exits_even_on_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_wait_all_sources_bounds_concurrency_and_preserves_order() -> None:
-    """The shared multi-source wait caps in-flight pollers at MAX_WAIT_CONCURRENT_SOURCES
-    and returns outcomes in input order (the REST route + MCP tool both use this; the
-    MCP copy was previously unbounded — #1871)."""
-    from notebooklm._app.source_wait import MAX_WAIT_CONCURRENT_SOURCES, wait_all_sources
+async def test_wait_all_sources_maps_results_to_outcomes_in_order() -> None:
+    """wait_all_sources maps each neutral ``wait_all_until_ready`` result to its typed
+    outcome, in input order: a Source -> Ready, and the three RETURNED failures ->
+    NotFound / ProcessingError / Timeout (#1870, single-snapshot loop)."""
+    from notebooklm._app.source_wait import wait_all_sources
 
-    active = 0
-    peak = 0
-
-    async def _wait(notebook_id, source_id, *, timeout, initial_interval):
-        nonlocal active, peak
-        active += 1
-        peak = max(peak, active)
-        try:
-            await asyncio.sleep(0.02)
-        finally:
-            active -= 1
-        return Source(id=source_id, title=source_id)
+    ready = Source(id="s0", title="s0")
+    timed_out = SourceTimeoutError("s1", timeout=1.0)
+    processing = SourceProcessingError("s2", status=4)
+    not_found = SourceNotFoundError("s3")
 
     client = MagicMock()
-    client.sources.wait_until_ready = AsyncMock(side_effect=_wait)
-    ids = [f"s{i}" for i in range(MAX_WAIT_CONCURRENT_SOURCES + 4)]
+    client.sources.wait_all_until_ready = AsyncMock(
+        return_value=[ready, timed_out, processing, not_found]
+    )
+    ids = ["s0", "s1", "s2", "s3"]
 
     outcomes = await wait_all_sources(client, "nb-1", ids, timeout=1.0, interval=0.01)
 
-    assert [outcome.source.id for outcome in outcomes] == ids  # input order preserved
-    assert peak == MAX_WAIT_CONCURRENT_SOURCES  # never more than the cap in flight
-    assert client.sources.wait_until_ready.await_count == len(ids)
+    assert isinstance(outcomes[0], SourceWaitReady) and outcomes[0].source is ready
+    assert isinstance(outcomes[1], SourceWaitTimeout) and outcomes[1].error is timed_out
+    assert isinstance(outcomes[2], SourceWaitProcessingError) and outcomes[2].error is processing
+    assert isinstance(outcomes[3], SourceWaitNotFound) and outcomes[3].error is not_found
+    client.sources.wait_all_until_ready.assert_awaited_once_with(
+        "nb-1", ids, timeout=1.0, initial_interval=0.01
+    )
 
 
 @pytest.mark.asyncio
@@ -182,41 +179,29 @@ async def test_wait_all_sources_rejects_over_cap() -> None:
     from notebooklm._app.source_wait import MAX_WAIT_SOURCE_IDS, wait_all_sources
 
     client = MagicMock()
-    client.sources.wait_until_ready = AsyncMock()
+    client.sources.wait_all_until_ready = AsyncMock()
     ids = [f"s{i}" for i in range(MAX_WAIT_SOURCE_IDS + 1)]
 
     with pytest.raises(ValidationError, match=str(MAX_WAIT_SOURCE_IDS)):
         await wait_all_sources(client, "nb-1", ids, timeout=1.0, interval=0.01)
-    # Rejected before spawning any poller — the cap is a guard, not a partial run.
-    client.sources.wait_until_ready.assert_not_awaited()
+    # Rejected before starting any poll — the cap is a guard, not a partial run.
+    client.sources.wait_all_until_ready.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_wait_all_sources_cancels_siblings_on_unexpected_escape() -> None:
-    """An UNEXPECTED escape (e.g. an RPCError) in one poller cancels + drains the
-    still-running siblings before re-raising, rather than leaking coroutines."""
+async def test_wait_all_sources_propagates_unexpected_error() -> None:
+    """An UNEXPECTED escape (e.g. an RPCError from the snapshot poll) is not one of the
+    three RETURNED per-source failures, so it propagates out of the single await for the
+    adapter's classify-once handler (the snapshot loop is one coroutine — no siblings to
+    leak; #1870)."""
     from notebooklm._app.source_wait import wait_all_sources
     from notebooklm.exceptions import RPCError
 
-    sibling_cancelled = asyncio.Event()
-
-    async def _wait(notebook_id, source_id, *, timeout, initial_interval):
-        if source_id == "boom":
-            await asyncio.sleep(0)  # let the slow sibling start first
-            raise RPCError("unexpected boom")
-        try:
-            await asyncio.sleep(30)  # the slow sibling — should be cancelled
-        except asyncio.CancelledError:
-            sibling_cancelled.set()
-            raise
-        return Source(id=source_id, title=source_id)  # pragma: no cover - never reached
-
     client = MagicMock()
-    client.sources.wait_until_ready = AsyncMock(side_effect=_wait)
+    client.sources.wait_all_until_ready = AsyncMock(side_effect=RPCError("unexpected boom"))
 
     with pytest.raises(RPCError):
         await wait_all_sources(client, "nb-1", ["slow", "boom"], timeout=1.0, interval=0.01)
-    assert sibling_cancelled.is_set(), "slow sibling poller was not cancelled/drained"
 
 
 def test_validate_wait_bounds_accepts_valid() -> None:

@@ -318,6 +318,191 @@ async def test_wait_until_registered_clamps_sleep_to_remaining_timeout(
     assert clock == 1.0
 
 
+def _sequenced_list_sources(snapshots: list[list[Source]]) -> AsyncMock:
+    """Return an ``AsyncMock`` yielding one snapshot per call (last one repeats).
+
+    ``await_count`` is then the number of poll TICKS — the invariant the
+    single-snapshot loop must uphold: ONE whole-notebook list per tick,
+    regardless of how many sources are still pending (#1870).
+    """
+    calls = {"n": 0}
+
+    async def _list(_notebook_id: str) -> list[Source]:
+        index = min(calls["n"], len(snapshots) - 1)
+        calls["n"] += 1
+        return snapshots[index]
+
+    return AsyncMock(side_effect=_list)
+
+
+@pytest.mark.asyncio
+async def test_wait_all_until_ready_polls_notebook_once_per_tick(
+    poller: SourcePoller,
+    logger: logging.Logger,
+) -> None:
+    """The heart of #1870: with four sources pending, each tick issues EXACTLY ONE
+    list_sources call (not one per source), and results come back in input order."""
+    ready0 = Source(id="s0", status=SourceStatus.READY)
+    err2 = Source(id="s2", status=SourceStatus.ERROR, _type_code=3)  # terminal (pdf)
+    proc3 = Source(id="s3", status=SourceStatus.PROCESSING)
+    ready3 = Source(id="s3", status=SourceStatus.READY)
+    # s1 is never in any snapshot → not found. Tick 1 resolves s0/s1/s2; s3 lags.
+    list_sources = _sequenced_list_sources([[ready0, err2, proc3], [ready0, err2, ready3]])
+
+    results = await poller.wait_all_until_ready(
+        "nb_1",
+        ["s0", "s1", "s2", "s3"],
+        timeout=10.0,
+        initial_interval=0.25,
+        list_sources=list_sources,
+        sleep=AsyncMock(),
+        monotonic=MagicMock(return_value=0.0),
+        logger=logger,
+    )
+
+    # Two ticks total (s3 lagged one tick) — ONE list per tick, NOT one per source.
+    assert list_sources.await_count == 2
+    # Input order preserved, one neutral result per id.
+    assert results[0] is ready0
+    assert isinstance(results[1], SourceNotFoundError) and results[1].source_id == "s1"
+    assert isinstance(results[2], SourceProcessingError) and results[2].source_id == "s2"
+    assert results[3] is ready3
+
+
+@pytest.mark.asyncio
+async def test_wait_all_until_ready_tolerates_transient_error_across_ticks(
+    poller: SourcePoller,
+    logger: logging.Logger,
+) -> None:
+    """A transient (audio) ERROR keeps the source pending across ticks, exactly like
+    the single-source loop, until it settles READY."""
+    transient = Source(id="s0", status=SourceStatus.ERROR, _type_code=10)
+    ready = Source(id="s0", status=SourceStatus.READY, _type_code=10)
+    list_sources = _sequenced_list_sources([[transient], [ready]])
+
+    results = await poller.wait_all_until_ready(
+        "nb_1",
+        ["s0"],
+        timeout=10.0,
+        initial_interval=0.25,
+        list_sources=list_sources,
+        sleep=AsyncMock(),
+        monotonic=MagicMock(return_value=0.0),
+        logger=logger,
+    )
+
+    assert results == [ready]
+    assert list_sources.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_wait_all_until_ready_timeout_reports_each_sources_own_last_status(
+    poller: SourcePoller,
+    logger: logging.Logger,
+) -> None:
+    """On timeout every still-pending source gets its OWN last observed status — the
+    per-index ``last_status`` dict, so a scalar can't leak one source's status into
+    another's ``SourceTimeoutError`` (binding correction)."""
+    processing = Source(id="s0", status=SourceStatus.PROCESSING)
+    transient_err = Source(id="s1", status=SourceStatus.ERROR, _type_code=10)  # audio, stays
+    list_sources = _sequenced_list_sources([[processing, transient_err]])
+
+    sleeps: list[float] = []
+    clock = 0.0
+
+    def monotonic() -> float:
+        return clock
+
+    async def sleep(seconds: float) -> None:
+        nonlocal clock
+        sleeps.append(seconds)
+        clock += seconds
+
+    results = await poller.wait_all_until_ready(
+        "nb_1",
+        ["s0", "s1"],
+        timeout=1.0,
+        initial_interval=10.0,  # clamped to the remaining 1.0s
+        list_sources=list_sources,
+        sleep=sleep,
+        monotonic=monotonic,
+        logger=logger,
+    )
+
+    assert list_sources.await_count == 1  # one snapshot, then the clock expires
+    assert sleeps == [1.0]
+    assert isinstance(results[0], SourceTimeoutError)
+    assert results[0].source_id == "s0"
+    assert results[0].last_status == SourceStatus.PROCESSING
+    assert isinstance(results[1], SourceTimeoutError)
+    assert results[1].source_id == "s1"
+    # Distinct per-source last_status — NOT s0's PROCESSING.
+    assert results[1].last_status == SourceStatus.ERROR
+
+
+@pytest.mark.asyncio
+async def test_wait_all_until_ready_empty_returns_empty(
+    poller: SourcePoller,
+    logger: logging.Logger,
+) -> None:
+    list_sources = AsyncMock()
+    results = await poller.wait_all_until_ready(
+        "nb_1",
+        [],
+        list_sources=list_sources,
+        sleep=AsyncMock(),
+        monotonic=MagicMock(return_value=0.0),
+        logger=logger,
+    )
+    assert results == []
+    list_sources.assert_not_awaited()  # nothing pending → no snapshot poll
+
+
+@pytest.mark.asyncio
+async def test_wait_all_until_ready_propagates_unexpected_list_error(
+    poller: SourcePoller,
+    logger: logging.Logger,
+) -> None:
+    """An UNEXPECTED error from the snapshot poll is not a per-source outcome — it
+    propagates out of the single await (no siblings to leak)."""
+
+    class Boom(Exception):
+        pass
+
+    list_sources = AsyncMock(side_effect=Boom())
+    with pytest.raises(Boom):
+        await poller.wait_all_until_ready(
+            "nb_1",
+            ["s0"],
+            list_sources=list_sources,
+            sleep=AsyncMock(),
+            monotonic=MagicMock(return_value=0.0),
+            logger=logger,
+        )
+
+
+@pytest.mark.asyncio
+async def test_sources_api_wait_all_until_ready_delegates_with_list_seam() -> None:
+    """The thin ``SourcesAPI`` delegate wires the poller with ``self.list`` (the
+    single-snapshot source) and the module sleep/clock seams."""
+    api = SourcesAPI(MagicMock(), uploader=MagicMock())
+    ready = [Source(id="s0", status=SourceStatus.READY)]
+
+    with patch.object(SourcePoller, "wait_all_until_ready", new_callable=AsyncMock) as delegate:
+        delegate.return_value = ready
+        result = await api.wait_all_until_ready("nb_1", ["s0"])
+
+    assert result is ready
+    args = delegate.await_args
+    assert args.args == ("nb_1", ["s0"])
+    kwargs = args.kwargs
+    assert kwargs["timeout"] == 120.0
+    assert kwargs["initial_interval"] == 1.0
+    # Wired with the notebook-list seam (NOT get_or_none) — one list per tick.
+    assert kwargs["list_sources"].__self__ is api
+    assert kwargs["list_sources"].__func__ is SourcesAPI.list
+
+
 @pytest.mark.asyncio
 async def test_wait_for_sources_catches_base_exception_and_drains_siblings(
     poller: SourcePoller,

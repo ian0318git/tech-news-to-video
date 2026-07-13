@@ -22,7 +22,6 @@ _POLICY_NAMES = frozenset(
         "MAX_BATCH_URLS",
         "MAX_WAIT_TIMEOUT",
         "MAX_WAIT_SOURCE_IDS",
-        "MAX_WAIT_CONCURRENT_SOURCES",
     }
 )
 

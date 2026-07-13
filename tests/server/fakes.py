@@ -189,6 +189,39 @@ class FakeSources:
         finally:
             self._s.wait_active -= 1
 
+    async def wait_all_until_ready(
+        self,
+        notebook_id: str,
+        source_ids: list[str],
+        *,
+        timeout: float = 120.0,
+        initial_interval: float = 1.0,
+        **kwargs: Any,  # max_interval/backoff_factor/transient_error_types — signature parity
+    ) -> list[Source | SourceNotFoundError | SourceProcessingError | SourceTimeoutError]:
+        # Single-snapshot multi-source wait (#1870): one result per id, in input
+        # order, with terminal failures RETURNED (not raised) — mirrors the real
+        # ``client.sources.wait_all_until_ready``.
+        results: list[
+            Source | SourceNotFoundError | SourceProcessingError | SourceTimeoutError
+        ] = []
+        for source_id in source_ids:
+            self._s.wait_calls.append(source_id)
+            outcome = self._s.wait_outcomes.get(source_id, "ready")
+            if outcome == "timeout":
+                results.append(SourceTimeoutError(source_id, timeout))
+            elif outcome == "processing":
+                results.append(SourceProcessingError(source_id))
+            elif outcome == "not_found":
+                results.append(SourceNotFoundError(source_id))
+            else:
+                src = self._s.sources_store.get(notebook_id, {}).get(source_id)
+                title = src.title if src is not None else "src"
+                url = src.url if src is not None else None
+                results.append(
+                    Source(id=source_id, title=title, url=url, status=SourceStatus.READY)
+                )
+        return results
+
     async def delete(self, notebook_id: str, source_id: str) -> None:
         self._s.sources_store.get(notebook_id, {}).pop(source_id, None)
 

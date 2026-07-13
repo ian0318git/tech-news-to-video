@@ -12,7 +12,6 @@ from notebooklm.rpc.types import SourceStatus
 from notebooklm.server._pagination import MAX_LIMIT
 from notebooklm.server.routes.sources import (
     MAX_BATCH_URLS,
-    MAX_WAIT_CONCURRENT_SOURCES,
     MAX_WAIT_SOURCE_IDS,
 )
 
@@ -713,13 +712,14 @@ def test_wait_all_sources_over_max_is_validation_error(
     assert fake_client.wait_calls == []
 
 
-def test_wait_uses_bounded_per_request_concurrency(
+def test_wait_all_sources_resolves_every_id_in_one_request(
     authed_client: TestClient, fake_client: FakeClient
 ) -> None:
-    source_ids = [f"src-{i}" for i in range(MAX_WAIT_CONCURRENT_SOURCES + 3)]
+    """The multi-source wait resolves every requested id through the single
+    snapshot loop (#1870) — every id is waited on and reported ready."""
+    source_ids = [f"src-{i}" for i in range(12)]
     for source_id in source_ids:
         _seed_source(fake_client, "nb-1", source_id)
-    fake_client.wait_delay = 0.01
 
     resp = authed_client.post(
         "/v1/notebooks/nb-1/sources/wait",
@@ -729,9 +729,7 @@ def test_wait_uses_bounded_per_request_concurrency(
     assert resp.status_code == 200
     body = resp.json()
     assert {source["id"] for source in body["ready"]} == set(source_ids)
-    assert len(fake_client.wait_calls) == len(source_ids)
     assert set(fake_client.wait_calls) == set(source_ids)
-    assert fake_client.wait_max_active == MAX_WAIT_CONCURRENT_SOURCES
 
 
 def test_wait_all_sources_partial(authed_client: TestClient, fake_client: FakeClient) -> None:

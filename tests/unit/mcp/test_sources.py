@@ -9,7 +9,6 @@ preview-then-delete flow, and error projection.
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
 from typing import Any
 from unittest.mock import MagicMock
@@ -447,12 +446,12 @@ async def test_source_wait_all_over_cap_is_rejected(mcp_call, mock_client) -> No
     mock_client.sources.list = AsyncMock(
         return_value=[FakeSource(id=f"{i:08d}-0000-0000-0000-000000000000") for i in range(over)]
     )
-    mock_client.sources.wait_until_ready = AsyncMock()
+    mock_client.sources.wait_all_until_ready = AsyncMock()
     with pytest.raises(ToolError) as excinfo:
         await mcp_call("source_wait", {"notebook": NB_ID})
     assert "VALIDATION" in str(excinfo.value)
-    # Listed to learn the count, but no poller was spawned past the cap.
-    mock_client.sources.wait_until_ready.assert_not_awaited()
+    # Listed to learn the count, but no poll was started past the cap.
+    mock_client.sources.wait_all_until_ready.assert_not_awaited()
 
 
 def test_drive_mime_choices_match_core_map() -> None:
@@ -769,6 +768,22 @@ def _dispatch_wait_until_ready(by_id: dict[str, Any]) -> Any:
     return AsyncMock(side_effect=_side_effect)
 
 
+def _dispatch_wait_all(by_id: dict[str, Any]) -> Any:
+    """Build a ``wait_all_until_ready`` side_effect dispatching on the source id.
+
+    The multi-source tool calls ``wait_all_until_ready(notebook_id, source_ids,
+    timeout=…, initial_interval=…)`` ONCE (single-snapshot loop, #1870) and gets
+    back one result per id, in input order. ``by_id`` maps a source id to either
+    a ``FakeSource`` or a terminal ``Exception`` instance — but here the failures
+    are RETURNED in the list, never raised, mirroring the real neutral union.
+    """
+
+    def _side_effect(_notebook_id: str, source_ids: list[str], **_kwargs: Any) -> list[Any]:
+        return [by_id[source_id] for source_id in source_ids]
+
+    return AsyncMock(side_effect=_side_effect)
+
+
 async def test_source_wait_single_source_ready(mcp_call, mock_client) -> None:
     mock_client.sources.wait_until_ready = AsyncMock(
         return_value=FakeSource(id=SRC_ID, title="Ready")
@@ -841,7 +856,7 @@ async def test_source_wait_all_sources_all_ready(mcp_call, mock_client) -> None:
         return_value=[FakeSource(id=SRC_ID), FakeSource(id=SRC2_ID)]
     )
     mock_client.sources.wait_for_sources = AsyncMock()
-    mock_client.sources.wait_until_ready = _dispatch_wait_until_ready(
+    mock_client.sources.wait_all_until_ready = _dispatch_wait_all(
         {SRC_ID: FakeSource(id=SRC_ID, title="A"), SRC2_ID: FakeSource(id=SRC2_ID, title="B")}
     )
     # Both fakes are READY web_pages → the thin-content check fetches each body;
@@ -855,8 +870,8 @@ async def test_source_wait_all_sources_all_ready(mcp_call, mock_client) -> None:
     assert sc["ok"] is True
     assert {row["id"] for row in sc["ready"]} == {SRC_ID, SRC2_ID}
     assert sc["timed_out"] == sc["failed"] == sc["not_found"] == []
-    # The aggregate fans out per-source wait_until_ready, NOT the throw-on-first
-    # wait_for_sources helper (which would discard partial progress).
+    # The aggregate uses the single-snapshot wait_all_until_ready, NOT the
+    # throw-on-first wait_for_sources helper (which would discard partial progress).
     mock_client.sources.wait_for_sources.assert_not_called()
 
 
@@ -872,7 +887,7 @@ async def test_source_wait_all_sources_partial_progress(mcp_call, mock_client) -
     mock_client.sources.list = AsyncMock(
         return_value=[FakeSource(id=i) for i in (ready_id, timeout_id, failed_id, missing_id)]
     )
-    mock_client.sources.wait_until_ready = _dispatch_wait_until_ready(
+    mock_client.sources.wait_all_until_ready = _dispatch_wait_all(
         {
             ready_id: FakeSource(id=ready_id, title="OK"),
             timeout_id: SourceTimeoutError(timeout_id, 5.0),
@@ -925,48 +940,35 @@ async def test_source_wait_all_sources_empty_notebook(mcp_call, mock_client) -> 
 async def test_source_wait_all_sources_forwards_interval(mcp_call, mock_client) -> None:
     """The all-sources branch honors the advertised ``timeout``/``interval`` per source."""
     mock_client.sources.list = AsyncMock(return_value=[FakeSource(id=SRC_ID)])
-    mock_client.sources.wait_until_ready = AsyncMock(return_value=FakeSource(id=SRC_ID, title="A"))
+    mock_client.sources.wait_all_until_ready = _dispatch_wait_all(
+        {SRC_ID: FakeSource(id=SRC_ID, title="A")}
+    )
     mock_client.sources.get_fulltext = AsyncMock(
         return_value=FakeFulltext(content="x" * 500, char_count=500)
     )
     await mcp_call("source_wait", {"notebook": NB_ID, "timeout": 30.0, "interval": 3.0})
-    mock_client.sources.wait_until_ready.assert_awaited_once_with(
-        NB_ID, SRC_ID, timeout=30.0, initial_interval=3.0
+    mock_client.sources.wait_all_until_ready.assert_awaited_once_with(
+        NB_ID, [SRC_ID], timeout=30.0, initial_interval=3.0
     )
 
 
-async def test_source_wait_all_sources_cancels_siblings_on_unexpected_error(
-    mcp_call, mock_client
-) -> None:
-    """An UNEXPECTED per-source exception (not one of the 3 handled wait failures)
-    propagates as ToolError AND cancels/drains the still-running sibling pollers —
-    no leaked coroutine. Mirrors the library-level wait_for_sources leak guard."""
+async def test_source_wait_all_sources_propagates_unexpected_error(mcp_call, mock_client) -> None:
+    """An UNEXPECTED escape from the snapshot poll (e.g. an RPCError — not one of the
+    3 handled per-source failures the loop RETURNS) propagates as ToolError. The
+    single-snapshot loop is one coroutine, so there are no sibling pollers to leak
+    (#1870)."""
     slow_id, raiser_id = (
         "50000000-0000-0000-0000-000000000005",
         "60000000-0000-0000-0000-000000000006",
     )
-    sibling_cancelled = asyncio.Event()
-
-    async def _wait(_nb: str, source_id: str, **_kwargs: Any) -> Any:
-        if source_id == raiser_id:
-            await asyncio.sleep(0)  # let the slow sibling start first
-            raise RPCError("unexpected boom")
-        try:
-            await asyncio.sleep(30)  # the slow sibling — should be cancelled
-        except asyncio.CancelledError:
-            sibling_cancelled.set()
-            raise
-        return FakeSource(id=slow_id)  # pragma: no cover - never reached
-
     mock_client.sources.list = AsyncMock(
         return_value=[FakeSource(id=slow_id), FakeSource(id=raiser_id)]
     )
-    mock_client.sources.wait_until_ready = _wait
+    mock_client.sources.wait_all_until_ready = AsyncMock(side_effect=RPCError("unexpected boom"))
     mock_client.sources.wait_for_sources = AsyncMock()
 
     with pytest.raises(ToolError):
         await mcp_call("source_wait", {"notebook": NB_ID})
-    assert sibling_cancelled.is_set(), "slow sibling poller was not cancelled/drained"
     mock_client.sources.wait_for_sources.assert_not_called()
 
 
@@ -1101,7 +1103,7 @@ async def test_source_wait_all_sources_thin_warning_per_item(mcp_call, mock_clie
             FakeReadyTextSource(id=text_id),
         ]
     )
-    mock_client.sources.wait_until_ready = _dispatch_wait_until_ready(
+    mock_client.sources.wait_all_until_ready = _dispatch_wait_all(
         {
             thin_id: FakeSource(id=thin_id, title="Ghost"),
             ample_id: FakeSource(id=ample_id, title="Real"),
@@ -1881,7 +1883,7 @@ async def test_source_add_batch_youtube_accepted(mcp_call, mock_client) -> None:
 
 async def test_source_wait_subset_ready(mcp_call, mock_client) -> None:
     """Subset mode: waits only on specified sources; returns aggregate outcomes."""
-    mock_client.sources.wait_until_ready = _dispatch_wait_until_ready(
+    mock_client.sources.wait_all_until_ready = _dispatch_wait_all(
         {
             SRC_ID: FakeSource(id=SRC_ID, title="A"),
             SRC2_ID: FakeSource(id=SRC2_ID, title="B"),
@@ -1901,7 +1903,7 @@ async def test_source_wait_subset_ready(mcp_call, mock_client) -> None:
 
 async def test_source_wait_subset_comma_string(mcp_call, mock_client) -> None:
     """Subset mode: accepts comma-separated string, coerced to list."""
-    mock_client.sources.wait_until_ready = _dispatch_wait_until_ready(
+    mock_client.sources.wait_all_until_ready = _dispatch_wait_all(
         {
             SRC_ID: FakeSource(id=SRC_ID, title="A"),
             SRC2_ID: FakeSource(id=SRC2_ID, title="B"),
@@ -1919,7 +1921,7 @@ async def test_source_wait_subset_comma_string(mcp_call, mock_client) -> None:
 
 async def test_source_wait_subset_partial_failures(mcp_call, mock_client) -> None:
     """Subset mode: wait on multiple sources with some failing/timing out."""
-    mock_client.sources.wait_until_ready = _dispatch_wait_until_ready(
+    mock_client.sources.wait_all_until_ready = _dispatch_wait_all(
         {
             SRC_ID: FakeSource(id=SRC_ID, title="A"),
             SRC2_ID: SourceTimeoutError(SRC2_ID, 5.0),
@@ -1939,11 +1941,11 @@ async def test_source_wait_subset_partial_failures(mcp_call, mock_client) -> Non
 async def test_source_wait_subset_unresolvable_raises(mcp_call, mock_client) -> None:
     """An unresolvable ref in subset raises NOT_FOUND before waiting."""
     mock_client.sources.list = AsyncMock(return_value=[FakeSource(id=SRC_ID, title="Doc")])
-    mock_client.sources.wait_until_ready = AsyncMock()
+    mock_client.sources.wait_all_until_ready = AsyncMock()
     with pytest.raises(ToolError) as excinfo:
         await mcp_call("source_wait", {"notebook": NB_ID, "sources": [SRC_ID, "unresolvable_ref"]})
     assert "NOT_FOUND" in str(excinfo.value)
-    mock_client.sources.wait_until_ready.assert_not_called()
+    mock_client.sources.wait_all_until_ready.assert_not_called()
 
 
 async def test_source_wait_mutual_exclusion(mcp_call, mock_client) -> None:
@@ -1964,7 +1966,7 @@ async def test_source_wait_empty_sources_raises(mcp_call, mock_client) -> None:
 
 async def test_source_wait_subset_json_array_string(mcp_call, mock_client) -> None:
     """Subset mode: accepts a JSON-array string, coerced to a list (end-to-end)."""
-    mock_client.sources.wait_until_ready = _dispatch_wait_until_ready(
+    mock_client.sources.wait_all_until_ready = _dispatch_wait_all(
         {
             SRC_ID: FakeSource(id=SRC_ID, title="A"),
             SRC2_ID: FakeSource(id=SRC2_ID, title="B"),
@@ -1983,8 +1985,8 @@ async def test_source_wait_subset_json_array_string(mcp_call, mock_client) -> No
 
 
 async def test_source_wait_subset_dedupes(mcp_call, mock_client) -> None:
-    """Subset mode: a repeated ref collapses to one poll + one ready row."""
-    mock_client.sources.wait_until_ready = _dispatch_wait_until_ready(
+    """Subset mode: a repeated ref collapses to one ready row + one deduped poll id."""
+    mock_client.sources.wait_all_until_ready = _dispatch_wait_all(
         {SRC_ID: FakeSource(id=SRC_ID, title="A")}
     )
     mock_client.sources.get_fulltext = AsyncMock(
@@ -1994,8 +1996,9 @@ async def test_source_wait_subset_dedupes(mcp_call, mock_client) -> None:
     sc = result.structured_content
     _assert_aggregate_shape(sc)
     assert [row["id"] for row in sc["ready"]] == [SRC_ID]
-    # Deduped BEFORE waiting: the source is polled exactly once, not twice.
-    assert mock_client.sources.wait_until_ready.call_count == 1
+    # Deduped BEFORE waiting: the single snapshot loop is handed one id, not two.
+    mock_client.sources.wait_all_until_ready.assert_awaited_once()
+    assert mock_client.sources.wait_all_until_ready.await_args.args[1] == [SRC_ID]
 
 
 async def test_source_wait_empty_sources_fails_before_notebook_lookup(

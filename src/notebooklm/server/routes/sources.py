@@ -38,7 +38,6 @@ from ..._app import source_mutations as mut_core
 from ..._app import source_wait as wait_core
 from ..._app.source_batch import MAX_BATCH_URLS, batch_item_is_fatal
 from ..._app.source_wait import (
-    MAX_WAIT_CONCURRENT_SOURCES,
     MAX_WAIT_SOURCE_IDS,
     MAX_WAIT_TIMEOUT,
     validate_wait_bounds,
@@ -56,7 +55,6 @@ from ._passthrough import passthrough_source_id
 __all__ = [
     "MAX_BATCH_URLS",
     "MAX_UPLOAD_BYTES",
-    "MAX_WAIT_CONCURRENT_SOURCES",
     "MAX_WAIT_SOURCE_IDS",
     "MAX_WAIT_TIMEOUT",
     "router",
@@ -77,11 +75,11 @@ MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 #: Chunk size when streaming an upload to the temp file.
 _UPLOAD_CHUNK = 1024 * 1024
 
-# The batch/wait cap policy (MAX_BATCH_URLS, MAX_WAIT_TIMEOUT, MAX_WAIT_SOURCE_IDS,
-# MAX_WAIT_CONCURRENT_SOURCES) and the fatal-vs-isolate classifier now live in the
-# transport-neutral _app core (_app.source_batch / _app.source_wait) and are imported
-# above so the MCP adapter shares the exact same policy. tests/_guardrails/
-# test_source_policy_parity.py forbids re-declaring them here.
+# The batch/wait cap policy (MAX_BATCH_URLS, MAX_WAIT_TIMEOUT, MAX_WAIT_SOURCE_IDS)
+# and the fatal-vs-isolate classifier now live in the transport-neutral _app core
+# (_app.source_batch / _app.source_wait) and are imported above so the MCP adapter
+# shares the exact same policy. tests/_guardrails/test_source_policy_parity.py
+# forbids re-declaring them here.
 
 #: Safe-basename sanitizer for a spooled upload. Aliased to the shared neutral
 #: helper (:func:`notebooklm._app.source_add.safe_upload_name`) so the REST

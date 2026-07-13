@@ -28,7 +28,6 @@ This module is transport-neutral — no ``click`` / ``rich`` / ``cli`` /
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import math
 from collections.abc import Callable
@@ -54,9 +53,6 @@ MAX_WAIT_TIMEOUT = 3600.0
 #: Max source ids one ``source_wait`` may target — blocks pathological fan-out while
 #: preserving normal all-source waits (notebooks are source-limited).
 MAX_WAIT_SOURCE_IDS = 100
-
-#: Max simultaneous per-source pollers one multi-source wait spawns.
-MAX_WAIT_CONCURRENT_SOURCES = 8
 
 
 def validate_wait_bounds(timeout: float, interval: float) -> None:
@@ -166,18 +162,19 @@ async def wait_all_sources(
     *,
     timeout: float,
     interval: float,
-    max_concurrent: int = MAX_WAIT_CONCURRENT_SOURCES,
 ) -> list[SourceWaitOutcome]:
-    """Wait for many sources with at most ``max_concurrent`` in-flight pollers.
+    """Wait for many sources with ONE notebook snapshot per poll tick.
 
-    One typed outcome per source, in input order. Each per-source wait runs through
-    :func:`execute_source_wait` (which maps the three handled ``SourceWait*``
-    failures to a typed outcome instead of raising), so a slow/failed source never
-    discards its siblings' progress. An UNEXPECTED escape (auth/transport
-    ``RPCError``, a bug) cancels + drains the still-running sibling pollers before
-    re-raising — the adapter's classify-once handler then maps it — rather than
-    leaking coroutines. This is the single implementation both the REST route and
-    the MCP tool call (previously duplicated; the MCP copy was unbounded).
+    One typed outcome per source, in input order. Delegates to
+    ``client.sources.wait_all_until_ready``, which fetches the whole notebook
+    source list once per tick and resolves every pending source against that
+    single snapshot (instead of fanning out one whole-notebook poll per source,
+    which was O(N^2) — see #1870). It RETURNS the three handled per-source
+    failures instead of raising, so a slow/failed source never discards its
+    siblings' progress; this maps each neutral result to its typed outcome in
+    input order. An UNEXPECTED escape (auth/transport ``RPCError``, a bug)
+    propagates out of the single await for the adapter's classify-once handler.
+    This is the single implementation both the REST route and the MCP tool call.
 
     A shared fan-out backstop rejects more than :data:`MAX_WAIT_SOURCE_IDS` ids so
     no adapter path (an explicit subset OR an omitted-``sources`` wait-all) can
@@ -193,41 +190,34 @@ async def wait_all_sources(
             f"got {len(source_ids)}. Wait on a smaller subset."
         )
 
-    outcomes: list[SourceWaitOutcome | None] = [None] * len(source_ids)
-    source_iter = iter(enumerate(source_ids))
+    results = await client.sources.wait_all_until_ready(
+        notebook_id,
+        source_ids,
+        timeout=timeout,
+        initial_interval=interval,
+    )
+    return [_to_outcome(result) for result in results]
 
-    async def _worker() -> None:
-        for index, sid in source_iter:
-            outcomes[index] = await execute_source_wait(
-                client,
-                SourceWaitPlan(
-                    notebook_id=notebook_id,
-                    source_id=sid,
-                    timeout=timeout,
-                    interval=interval,
-                ),
-            )
 
-    tasks = [asyncio.create_task(_worker()) for _ in range(min(len(source_ids), max_concurrent))]
-    try:
-        await asyncio.gather(*tasks)
-    except BaseException:
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        raise
+def _to_outcome(
+    result: Source | SourceNotFoundError | SourceProcessingError | SourceTimeoutError,
+) -> SourceWaitOutcome:
+    """Map one neutral ``wait_all_until_ready`` result to its typed outcome.
 
-    ready_outcomes: list[SourceWaitOutcome] = []
-    for outcome in outcomes:
-        if outcome is None:
-            raise AssertionError("source wait worker exited without producing an outcome")
-        ready_outcomes.append(outcome)
-    return ready_outcomes
+    The three terminal failures are checked BEFORE the ``Source`` fallback: the
+    loop RETURNS them rather than raising, and anything that is not one of them is
+    the ready source (a ``Source`` is the ready case, not an error).
+    """
+    if isinstance(result, SourceNotFoundError):
+        return SourceWaitNotFound(error=result)
+    if isinstance(result, SourceProcessingError):
+        return SourceWaitProcessingError(error=result)
+    if isinstance(result, SourceTimeoutError):
+        return SourceWaitTimeout(error=result)
+    return SourceWaitReady(source=result)
 
 
 __all__ = [
-    "MAX_WAIT_CONCURRENT_SOURCES",
     "MAX_WAIT_SOURCE_IDS",
     "MAX_WAIT_TIMEOUT",
     "SourceWaitNotFound",
