@@ -106,6 +106,7 @@
     "source": [
       "add",
       "add-drive",
+      "add-drive-file",
       "add-research",
       "clean",
       "delete",
@@ -9469,6 +9470,7 @@
       "commands": [
         "add",
         "add-drive",
+        "add-drive-file",
         "add-research",
         "clean",
         "delete",
@@ -9738,6 +9740,94 @@
         }
       ],
       "short_help": "Add a Google Drive document as a source."
+    },
+    "source add-drive-file": {
+      "class": "Command",
+      "params": [
+        {
+          "kind": "argument",
+          "name": "document_id",
+          "nargs": 1,
+          "required": true,
+          "type": {
+            "name": "text"
+          }
+        },
+        {
+          "default": null,
+          "envvar": "NOTEBOOKLM_NOTEBOOK",
+          "has_custom_shell_complete": true,
+          "help": "Notebook ID (uses current if not set). Supports partial IDs.",
+          "is_flag": false,
+          "kind": "option",
+          "multiple": false,
+          "name": "notebook_id",
+          "opts": [
+            "-n",
+            "--notebook"
+          ],
+          "required": false,
+          "secondary_opts": [],
+          "type": {
+            "name": "text"
+          }
+        },
+        {
+          "default": null,
+          "envvar": null,
+          "has_custom_shell_complete": false,
+          "help": "Custom title (default: the file's Drive name)",
+          "is_flag": false,
+          "kind": "option",
+          "multiple": false,
+          "name": "title",
+          "opts": [
+            "--title"
+          ],
+          "required": false,
+          "secondary_opts": [],
+          "type": {
+            "name": "text"
+          }
+        },
+        {
+          "default": false,
+          "envvar": null,
+          "has_custom_shell_complete": false,
+          "help": "Wait for processing to finish",
+          "is_flag": true,
+          "kind": "option",
+          "multiple": false,
+          "name": "wait",
+          "opts": [
+            "--wait"
+          ],
+          "required": false,
+          "secondary_opts": [],
+          "type": {
+            "name": "boolean"
+          }
+        },
+        {
+          "default": false,
+          "envvar": null,
+          "has_custom_shell_complete": false,
+          "help": "Output as JSON",
+          "is_flag": true,
+          "kind": "option",
+          "multiple": false,
+          "name": "json_output",
+          "opts": [
+            "--json"
+          ],
+          "required": false,
+          "secondary_opts": [],
+          "type": {
+            "name": "boolean"
+          }
+        }
+      ],
+      "short_help": "Add an upload-only Google Drive file..."
     },
     "source add-research": {
       "class": "Command",

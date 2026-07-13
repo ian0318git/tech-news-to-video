@@ -62,9 +62,29 @@ def register_all(mcp: FastMCP) -> None:
     domains; Phase 2b added the artifacts/research/meta domains; the sharing
     domain followed.
     """
-    from .tools import chat, meta, notebooks, notes, research, sharing, sources, studio
+    from .tools import (
+        chat,
+        meta,
+        notebooks,
+        notes,
+        research,
+        sharing,
+        sources,
+        sources_drive,
+        studio,
+    )
 
-    for module in (notebooks, sources, chat, notes, studio, research, sharing, meta):
+    for module in (
+        notebooks,
+        sources,
+        sources_drive,
+        chat,
+        notes,
+        studio,
+        research,
+        sharing,
+        meta,
+    ):
         module.register(mcp)
 
 

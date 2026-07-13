@@ -873,6 +873,7 @@ JSON_SUCCESS_WAIVED: dict[tuple[str, ...], str] = {
     # mutations or wait-loops.
     ("source", "add"): _MUTATION_RATIONALE_SUCCESS,
     ("source", "add-drive"): _MUTATION_RATIONALE_SUCCESS,
+    ("source", "add-drive-file"): _MUTATION_RATIONALE_SUCCESS,
     ("source", "clean"): _MUTATION_RATIONALE_SUCCESS,
     ("source", "delete"): _MUTATION_RATIONALE_SUCCESS,
     ("source", "delete-by-title"): _MUTATION_RATIONALE_SUCCESS,
@@ -960,6 +961,7 @@ JSON_ERROR_WAIVED: dict[tuple[str, ...], str] = {
     # source group — list error is covered; remaining mutations + introspection.
     ("source", "add"): _MUTATION_RATIONALE_ERROR,
     ("source", "add-drive"): _MUTATION_RATIONALE_ERROR,
+    ("source", "add-drive-file"): _MUTATION_RATIONALE_ERROR,
     ("source", "clean"): _MUTATION_RATIONALE_ERROR,
     ("source", "delete"): _MUTATION_RATIONALE_ERROR,
     ("source", "delete-by-title"): _MUTATION_RATIONALE_ERROR,

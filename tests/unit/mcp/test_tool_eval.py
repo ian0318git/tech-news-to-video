@@ -30,7 +30,18 @@ pytest.importorskip("fastmcp")
 #: Ratchet ceilings — calibrated to the current surface (Tier-1 read-merge took it
 #: to ~36.0k). Move these DOWN as the surface gets leaner; a rise means
 #: description/param bloat that must be justified, not rubber-stamped.
-SCHEMA_CHAR_BUDGET = 40_550  # total serialized inputSchema + description chars (current 40_501; +37 for source_add's batch docstring documenting the #1871 fatal-abort semantics — a per-URL input failure isolates, a fatal service failure aborts the whole call — trimmed from +205 to the irreducible signal before this minimal bump)
+SCHEMA_CHAR_BUDGET = (
+    41_700  # total serialized inputSchema + description chars (current 41_645; +55 slack)
+)
+# #1884 added source_add_drive_file (auto-route add-from-Drive: download + upload the
+# upload-only Drive types NotebookLM's native import can't ingest) — a NEW discrete
+# tool (+1_144 chars, 4 params), not growth of an existing one. Per ADR-0025 the
+# discrete verb is preferred over widening source_add(source_type="drive"), which
+# REQUIRES an explicit mime_type (#1827) and only imports Google-native + PDF by
+# reference; auto-download is a categorically different operation. Raised from 40_550.
+# Prior baseline: current was 40_501, +37 for source_add's batch docstring documenting
+# the #1871 fatal-abort semantics (a per-URL input failure isolates, a fatal service
+# failure aborts the whole call).
 # ^ Raised from 36_250 for #1741: research_status gained include_report /
 # report_max_chars / source_limit / source_offset windowing params, and the four
 # research tools' docstrings speak one `poll_task_id` id (tightened to stay lean).

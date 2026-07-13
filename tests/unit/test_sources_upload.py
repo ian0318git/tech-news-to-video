@@ -100,6 +100,21 @@ def sources_api(mock_core):
     return SourcesAPI(mock_core, uploader=uploader)
 
 
+@pytest.mark.asyncio
+async def test_add_drive_file_asserts_bound_loop_before_fetch(sources_api, mock_core):
+    """A cross-loop ``add_drive_file`` fails before any download/fetch runs (#1884).
+
+    The download-gating semaphore's ``assert_bound_loop`` is the seam: it fires
+    from ``get_download_semaphore`` BEFORE ``DriveImportService.add_drive_file``
+    (and thus any network fetch). Getting exactly that ``wrong loop`` error back —
+    not a network/httpx error — proves the fetch never ran.
+    """
+    mock_core.assert_bound_loop = MagicMock(side_effect=RuntimeError("wrong loop"))
+    with pytest.raises(RuntimeError, match="wrong loop"):
+        await sources_api.add_drive_file("nb_1", "https://drive.google.com/open?id=" + "a" * 33)
+    mock_core.assert_bound_loop.assert_called()
+
+
 def test_sources_api_makes_uploader_share_lifecycle_collaborators(sources_api):
     """SourcesAPI is the single owner of the source-lifecycle verbs.
 

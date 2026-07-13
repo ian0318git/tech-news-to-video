@@ -19,6 +19,7 @@ from ._settings import build_get_user_settings_params, extract_account_limits
 from ._source import upload as _source_upload
 from ._source.add import SourceAddService
 from ._source.content import SourceContentRenderer
+from ._source.drive_import import DriveFetcher, DriveImportService
 from ._source.listing import SourceLister
 from ._source.polling import SourcePoller, SourceWaitResult
 from ._source.upload import SourceUploadPipeline
@@ -575,6 +576,53 @@ class SourcesAPI:
             logger=logger,
         )
 
+    async def add_drive_file(
+        self,
+        notebook_id: str,
+        document_id: str,
+        *,
+        title: str | None = None,
+        wait: bool = False,
+        wait_timeout: float = 120.0,
+    ) -> Source:
+        """Auto-route an upload-only Google Drive file: download it, then upload (#1884).
+
+        Covers the Drive file types NotebookLM's native import (:meth:`add_drive`)
+        can't ingest (epub/docx/txt/md/rtf/odt/csv/tsv/pdf): fetches the file
+        SERVER-SIDE using the same live ``.google.com`` cookie jar the upload leg
+        uses (so it works in stdio AND remote MCP mode with no ``upload_required``
+        detour), then streams it through :meth:`add_file`. Native Docs/Slides/
+        Sheets are out of scope (not downloadable) — they raise a
+        :class:`~notebooklm.exceptions.ValidationError` pointing at :meth:`add_drive`.
+
+        Args:
+            notebook_id: The notebook ID.
+            document_id: A raw Drive file id or a Drive share URL (``/d/<id>``,
+                ``/file/d/<id>/…``, or ``?id=<id>``).
+            title: Optional display title; defaults to the file's Drive name.
+            wait: If True, wait for the source to be ready before returning.
+            wait_timeout: Maximum seconds to wait if ``wait=True`` (default: 120).
+
+        Raises:
+            ValidationError: unparseable id/URL, an upload-unsupported type
+                (HTML/other), or a native (non-downloadable) Google Doc/Slides/Sheet.
+        """
+        service = DriveImportService(
+            fetch=DriveFetcher(
+                cookies_provider=self._uploader.live_cookies,
+                authuser=self._uploader.authuser_value(),
+            ),
+            add_file=self.add_file,
+        )
+        # Gate the whole download→upload op on a DEDICATED download semaphore (not
+        # the upload one — ``add_file`` needs that, so reusing it would deadlock) so
+        # concurrent remote-MCP calls can't each buffer a 200 MiB temp and exhaust
+        # disk; at most ``max_concurrent_uploads`` temps exist at once.
+        async with self._uploader.get_download_semaphore():
+            return await service.add_drive_file(
+                notebook_id, document_id, title=title, wait=wait, wait_timeout=wait_timeout
+            )
+
     async def delete(self, notebook_id: str, source_id: str) -> None:
         """Delete a source from a notebook.
 
@@ -902,60 +950,22 @@ class SourcesAPI:
     ) -> None:
         """Stream upload file content to the resumable upload URL.
 
-        Uses streaming to avoid loading the entire file into memory,
-        which is important for large PDFs and documents.
-
-        File-descriptor contract:
-          When called from ``add_file`` (the production path), ``file_obj``
-          is an already-open ``IO[bytes]`` and this helper TAKES OWNERSHIP
-          of the FD lifecycle: a done-callback on the shielded finalize
-          task closes the FD when streaming completes — success, error,
-          OR after the post-finalize background-drain branch from the
-          cancellation contract below. Ownership transfer is required
-          because the shielded background task may outlive the caller's
-          ``add_file`` invocation under post-finalize cancel; if the
-          caller closed the FD on cancel, the still-running background
-          POST would read from a closed FD and abort, breaking the
-          dangling-session guarantee.
-
-          A legacy ``Path`` argument is still accepted; the helper opens
-          + closes the FD itself in that branch. ``add_file`` never
-          takes that path — the Path branch exists only for the
-          existing direct-call unit tests in
-          ``tests/unit/test_sources_upload.py``.
-
-        Cancellation contract:
-          - The finalize POST is wrapped in ``asyncio.shield``. If a
-            ``CancelledError`` arrives while the finalize POST is in
-            flight, the inner Task keeps running so the server-side
-            session reaches a known terminal state instead of dangling.
-            The cancel is then re-raised to the caller.
-          - If the cancel arrives BEFORE the finalize POST is dispatched
-            (e.g. while the local ``httpx.AsyncClient`` is being
-            constructed), a best-effort ``X-Goog-Upload-Command: cancel``
-            POST is fired against the same resumable upload URL via
-            ``asyncio.create_task``. The cleanup task is not awaited —
-            re-raising must not block on best-effort cleanup. The cleanup
-            runs on a detached task with no outer await chain, so a
-            caller-level cancel cannot reach it; no explicit shield is
-            needed at that layer (see ``_cancel_upload_session`` docstring).
+        Thin delegator to :meth:`SourceUploadPipeline.upload_file_streaming`,
+        which owns and documents the full contract: memory-safe streaming, the
+        file-descriptor ownership transfer under the shielded finalize task, and
+        the two-branch cancellation handling (in-flight finalize shielded +
+        re-raised; pre-dispatch cancel fires a best-effort Scotty cancel POST).
+        The legacy ``Path`` ``file_obj`` branch exists only for the direct-call
+        unit tests in ``tests/unit/test_sources_upload.py``.
 
         Args:
-            upload_url: The resumable upload URL from _start_resumable_upload.
-            file_obj: An open binary file object positioned at the bytes to
-                upload, or (legacy) a ``Path`` the helper will open itself.
-                When ``add_file`` is the caller, this is always the open
-                FD and OWNERSHIP TRANSFERS to this helper (see
-                file-descriptor contract above). Passing a ``Path`` is
-                only supported for direct unit tests that bypass
-                ``add_file``.
-            filename: Optional filename used for diagnostic logging.
-                Defaults to ``"<file>"`` when not supplied.
-            on_progress: Optional sync or async callback invoked as
-                ``on_progress(bytes_sent, total_bytes)`` as chunks are yielded.
-            total_bytes: Total bytes expected. Required for the add_file FD
-                path; inferred from the path for legacy direct-call tests when
-                omitted.
+            upload_url: The resumable upload URL from ``_start_resumable_upload``.
+            file_obj: An open binary file object (ownership transfers to the
+                pipeline) positioned at the bytes to upload, or a legacy ``Path``.
+            filename: Optional filename for diagnostic logging.
+            on_progress: Optional ``on_progress(bytes_sent, total_bytes)`` callback.
+            total_bytes: Total bytes expected (required for the FD path; inferred
+                from the path for legacy direct-call tests).
         """
         return await self._uploader.upload_file_streaming(
             upload_url,
