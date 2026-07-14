@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0]
+
+The headline of 0.8.0 is **integrations**: NotebookLM is now reachable from AI
+agents and HTTP clients through two new adapters built over the shared `_app/`
+core (ADR-0021) — an **MCP server** and an experimental **single-tenant REST API
+server** — plus a **remote MCP connector** you can self-host for **claude.ai**
+(and Claude Desktop / Code / Cursor) behind a Cloudflare Tunnel or Tailscale
+Funnel, gated by a single password.
+
+0.8.0 also lands the **breaking half** of the ADR-0019 error contract (the
+[#1346](https://github.com/teng-lin/notebooklm-py/issues/1346) umbrella):
+"absence and refusal **raise**; only success and async-lifecycle state are
+returned." Every flip previewed under `NOTEBOOKLM_FUTURE_ERRORS` in v0.7.0 is
+now the default, and the preview flag — together with the dict-subscript /
+get-returns-None / kwarg-alias deprecation machinery — has been **removed**
+(#1365). See the [Upgrading to v0.8.0](docs/upgrading-to-0.8.0.md) guide and the
+**Breaking** section below.
+
+> **⚠ `NOTEBOOKLM_FUTURE_ERRORS` is gone.** It was the v0.7.0 forward-compat
+> preview gate; its target behavior is now unconditional, so the flag is a no-op
+> (setting it changes nothing). Remove it from your environment / CI config.
+
 ### Added
 
 - **`studio_download` `download_ready` now carries `filename` / `mime` /
@@ -40,162 +62,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   MCP **and** REST `server_info(include_account=True)` account blocks now include a
   `tier` key. The removed `plan_name` label and the promotions RPC/`AccountTier` type
   stay gone. ([#1738](https://github.com/teng-lin/notebooklm-py/issues/1738))
-
-### Fixed
-
-- **Upload-only Drive file types auto-route to the file-upload path.** Adding a
-  Drive file whose type NotebookLM only accepts as an upload (not an add-by-URL)
-  used to fail at the RPC; the add-from-Drive path now detects those types and
-  routes them through the upload flow, and when a Drive add can't be recovered the
-  error now names the file-upload path as the remedy instead of a generic failure.
-  ([#1887](https://github.com/teng-lin/notebooklm-py/issues/1887),
-  [#1885](https://github.com/teng-lin/notebooklm-py/issues/1885))
-- **Loopback MCP HTTP transport rejects non-loopback `Host` headers.** The
-  loopback-bound HTTP transport now refuses requests whose `Host` header is not a
-  loopback name, closing a DNS-rebinding vector against a locally bound MCP server.
-  ([#1876](https://github.com/teng-lin/notebooklm-py/issues/1876))
-- **Null-conversation chat asks are serialized with explicit follow-ups.**
-  Consecutive asks against a fresh (null) conversation could race the
-  conversation-id assignment; they are now serialized and threaded as explicit
-  follow-ups so each ask lands on the intended conversation.
-  ([#1880](https://github.com/teng-lin/notebooklm-py/issues/1880))
-- **Multi-source `source_wait` no longer polls O(N²).** Waiting on N sources took
-  one snapshot per source per tick; the wait now reads a single notebook snapshot
-  per tick and derives every source's state from it, and the overall wait duration
-  is bounded. ([#1882](https://github.com/teng-lin/notebooklm-py/issues/1882))
-- **Raised the streamed chat-response size cap.** Long answers were truncated at
-  the previous streamed-response ceiling; the cap is raised so full responses come
-  through. ([#1852](https://github.com/teng-lin/notebooklm-py/issues/1852))
-- **Aggregate retry deadline threaded through the RPC path; OAuth `fsync`
-  offloaded.** The aggregate retry now honors a single deadline across attempts
-  instead of resetting per call, and the OAuth token `fsync` is moved off the event
-  loop so it can't stall concurrent requests.
-  ([#1881](https://github.com/teng-lin/notebooklm-py/issues/1881))
-- **`studio_download` rejects an unknown `output_format` self-documentingly.** An
-  invalid `output_format` now returns an error that lists the accepted formats
-  instead of an opaque rejection.
-  ([#1833](https://github.com/teng-lin/notebooklm-py/issues/1833))
-- **MCP source waits stay JSON-first.** `source_wait` output is emitted as
-  structured JSON rather than prose, matching the rest of the MCP source surface.
-  ([#1830](https://github.com/teng-lin/notebooklm-py/issues/1830))
-- **Deep-research null-start no longer leaks an internal method id.** A failed
-  deep-research start surfaced the obfuscated RPC method id in the error; it is now
-  hidden. ([#1851](https://github.com/teng-lin/notebooklm-py/issues/1851))
-- **REST server resource-limit hardening.** Several bounds were added to the
-  experimental REST server so a single client can't exhaust it: per-route JSON
-  request-body size caps ([#1846](https://github.com/teng-lin/notebooklm-py/issues/1846)),
-  route-group backpressure to cap concurrent in-flight requests
-  ([#1847](https://github.com/teng-lin/notebooklm-py/issues/1847)), a bounded fanout
-  for multi-source waits ([#1844](https://github.com/teng-lin/notebooklm-py/issues/1844)),
-  a shared suggest-surface map so the suggest routes don't each rebuild it
-  ([#1843](https://github.com/teng-lin/notebooklm-py/issues/1843)), and
-  `PendingRegistry.drop()` now removes the stale FIFO tuple so the pending queue
-  can't leak entries ([#1879](https://github.com/teng-lin/notebooklm-py/issues/1879)).
-  Diagnostics endpoints also stay live when auth is stale instead of failing with
-  the guarded routes ([#1845](https://github.com/teng-lin/notebooklm-py/issues/1845)),
-  and the account block is fetched with a single `GET_USER_SETTINGS` call instead of
-  two ([#1862](https://github.com/teng-lin/notebooklm-py/issues/1862)).
-- **Artifact-generation validation footguns** ([#1874]). Three input-validation
-  hardenings on the artifact surface: (A) the REST `POST /artifacts`
-  (`ArtifactGenerate`) body now rejects unknown fields (`extra="forbid"`) with a
-  422 instead of silently ignoring a typo (`{"stylee": …}`) and starting a default
-  artifact; (B) `generate_report` now coerces/validates `report_format` at the
-  boundary, raising a clear `ValidationError` (that names `source_ids`) instead of
-  an opaque `TypeError` deep in the payload builder when a caller misplaces a
-  positional `source_ids` list; (C) `export()` enforces exactly-one-of
-  (`artifact_id`, `content`) instead of firing a meaningless no-op RPC when both
-  default to `None`. **Breaking:** `export()`'s `content` is now **keyword-only** so
-  its positional slots match `export_report` / `export_data_table` (title in slot
-  3) — this fixes a silent title→content misbind; pass `content=…` explicitly.
-  ([#1874](https://github.com/teng-lin/notebooklm-py/issues/1874))
-
-- **MCP source tools no longer swallow fatal errors or fan out unbounded.** The MCP
-  `source_add` batch and `source_wait` had drifted from the REST route's policy: a
-  batch `source_add` caught *every* per-URL exception — so an expired auth / rate
-  limit / upstream 5xx was reported as a per-item "error" inside a **success**
-  envelope, hiding it from the agent; and multi-source `source_wait` spawned one
-  poller per source with no concurrency limit. The shared policy (the batch/wait
-  caps, the fatal-vs-isolate classifier, and the bounded multi-source wait pool) now
-  lives in the transport-neutral `_app` core (`_app.source_batch` / `_app.source_wait`)
-  and is used by **both** adapters, with a parity guardrail (`tests/_guardrails/
-  test_source_policy_parity.py`) that prevents future drift. Behavior change: a fatal
-  batch item now aborts the whole `source_add` call (so an agent can re-auth/retry),
-  only per-URL 4xx-input failures isolate; `source_wait` now bounds concurrency at 8,
-  caps the source count at 100 on **both** the explicit-subset and the omitted-`sources`
-  wait-all path (enforced at one shared chokepoint so the adapters can't drift), caps
-  timeout at 3600s, and rejects non-finite (`NaN`/`Infinity`) timeout/interval — all via
-  a shared `_app` validator used by the REST route too. Per-URL SSRF/validation isolation
-  is unchanged.
-  ([#1871](https://github.com/teng-lin/notebooklm-py/issues/1871))
-- **Direct-PDF-URL sources no longer show the raw URL as their title.** Adding a
-  source whose URL points straight at a `.pdf` left the full request URL in the
-  title slot (the server extracts `<title>` for HTML pages but not for a direct
-  PDF link), while HTML sources got proper titles. A PDF source whose title is
-  **exactly the source URL** (the server degradation — not a user-set title that
-  merely resembles a URL) now falls back to the URL path basename — e.g.
-  `https://host/papers/SomePaper.pdf` → `SomePaper` (query and fragment ignored;
-  percent-encoding decoded; a URL whose basename has no `.pdf` extension, such as
-  `…/download?file=x.pdf`, keeps the raw URL rather than a misleading `download`).
-  Applied consistently across `source list`/get (`Source.from_row`) **and**
-  `source fulltext` (`SourceContentRenderer`). No network I/O and no PDF
-  dependency; PDF `/Title` metadata extraction is out of scope. Because the fix
-  lives in the shared read paths it applies **retroactively** — a source added
-  before this release displays the derived title on the next read, so callers
-  that relied on `source delete-by-title "<the raw URL>"` should use the new
-  basename (URL-add idempotency is unaffected — it keys off the source `url`, not
-  title). ([#1850](https://github.com/teng-lin/notebooklm-py/issues/1850))
-- **Drive-hosted PDFs no longer list as `google_spreadsheet`.** The backend
-  returns type code `14` for both native Google Sheets and Drive-hosted PDFs,
-  and Drive sources carry no URL, so the read paths (`source_list` /
-  `GET_NOTEBOOK` **and** `source fulltext` / `source_read` / `GET_SOURCE`)
-  mislabeled Drive PDFs as `kind="google_spreadsheet"`. `kind` now disambiguates
-  code `14` by the source MIME (`metadata[19]` / `metadata[9][2]` from a live
-  capture): `application/pdf` → `pdf`, while real Google Sheets
-  (`application/vnd.google-apps.spreadsheet`) are unchanged. This completes the
-  read-path half of the fix started in #1831 (the add path).
-  ([#1832](https://github.com/teng-lin/notebooklm-py/issues/1832))
-
-### Documentation
-
-- **Per-tier quota & limit reference (`docs/quota-limits.md`).** A new reference
-  documenting NotebookLM's published static plan limits — notebooks, sources,
-  chats, and studio artifacts across consumer (5 tiers), Workspace (5 levels), and
-  Enterprise — keyed to the `AccountLimits.tier` int, with evidence classes for the
-  features Google leaves unquantified and a note that live per-account
-  remaining/reset counters are not API-exposed. Distilled from the research in
-  [#1825](https://github.com/teng-lin/notebooklm-py/issues/1825); cross-linked from
-  the `tier` field, `rpc-reference.md`, `mcp-guide.md`, and `python-api.md`.
-- **Sandboxed agents (Claude Cowork / headless).** Documented running
-  `notebooklm-py` from Claude Cowork and similar no-display sandboxes in
-  `SKILL.md` and `docs/installation.md`: per-session `pip install` bootstrap (no
-  `[browser]` needed for queries — that extra is only for the interactive
-  `login`, which runs on a host machine), and reusing a host-generated
-  `storage_state.json` via the root `--storage` flag or `NOTEBOOKLM_AUTH_JSON`.
-  ([#1856](https://github.com/teng-lin/notebooklm-py/issues/1856))
-
-## [0.8.0]
-
-The headline of 0.8.0 is **integrations**: NotebookLM is now reachable from AI
-agents and HTTP clients through two new adapters built over the shared `_app/`
-core (ADR-0021) — an **MCP server** and an experimental **single-tenant REST API
-server** — plus a **remote MCP connector** you can self-host for **claude.ai**
-(and Claude Desktop / Code / Cursor) behind a Cloudflare Tunnel or Tailscale
-Funnel, gated by a single password.
-
-0.8.0 also lands the **breaking half** of the ADR-0019 error contract (the
-[#1346](https://github.com/teng-lin/notebooklm-py/issues/1346) umbrella):
-"absence and refusal **raise**; only success and async-lifecycle state are
-returned." Every flip previewed under `NOTEBOOKLM_FUTURE_ERRORS` in v0.7.0 is
-now the default, and the preview flag — together with the dict-subscript /
-get-returns-None / kwarg-alias deprecation machinery — has been **removed**
-(#1365). See the [Upgrading to v0.8.0](docs/upgrading-to-0.8.0.md) guide and the
-**Breaking** section below.
-
-> **⚠ `NOTEBOOKLM_FUTURE_ERRORS` is gone.** It was the v0.7.0 forward-compat
-> preview gate; its target behavior is now unconditional, so the flag is a no-op
-> (setting it changes nothing). Remove it from your environment / CI config.
-
-### Added
 
 - **Short-form video format** across the client, CLI, MCP, and REST
   ([#1805](https://github.com/teng-lin/notebooklm-py/issues/1805)). Video
@@ -465,6 +331,25 @@ get-returns-None / kwarg-alias deprecation machinery — has been **removed**
   obfuscated method ID — by asserting a 200 plus a recognizable stream frame,
   closing the gap where the chat surface escaped the daily drift canary.
 
+### Documentation
+
+- **Per-tier quota & limit reference (`docs/quota-limits.md`).** A new reference
+  documenting NotebookLM's published static plan limits — notebooks, sources,
+  chats, and studio artifacts across consumer (5 tiers), Workspace (5 levels), and
+  Enterprise — keyed to the `AccountLimits.tier` int, with evidence classes for the
+  features Google leaves unquantified and a note that live per-account
+  remaining/reset counters are not API-exposed. Distilled from the research in
+  [#1825](https://github.com/teng-lin/notebooklm-py/issues/1825); cross-linked from
+  the `tier` field, `rpc-reference.md`, `mcp-guide.md`, and `python-api.md`.
+- **Sandboxed agents (Claude Cowork / headless).** Documented running
+  `notebooklm-py` from Claude Cowork and similar no-display sandboxes in
+  `SKILL.md` and `docs/installation.md`: per-session `pip install` bootstrap (no
+  `[browser]` needed for queries — that extra is only for the interactive
+  `login`, which runs on a host machine), and reusing a host-generated
+  `storage_state.json` via the root `--storage` flag or `NOTEBOOKLM_AUTH_JSON`.
+  ([#1856](https://github.com/teng-lin/notebooklm-py/issues/1856))
+
+
 ### Changed
 
 - **MCP name refs resolve by unique title prefix** (#1786). Notebook, source,
@@ -565,6 +450,118 @@ get-returns-None / kwarg-alias deprecation machinery — has been **removed**
   [docs/deprecations.md](docs/deprecations.md).
 
 ### Fixed
+
+- **Upload-only Drive file types auto-route to the file-upload path.** Adding a
+  Drive file whose type NotebookLM only accepts as an upload (not an add-by-URL)
+  used to fail at the RPC; the add-from-Drive path now detects those types and
+  routes them through the upload flow, and when a Drive add can't be recovered the
+  error now names the file-upload path as the remedy instead of a generic failure.
+  ([#1887](https://github.com/teng-lin/notebooklm-py/issues/1887),
+  [#1885](https://github.com/teng-lin/notebooklm-py/issues/1885))
+- **Loopback MCP HTTP transport rejects non-loopback `Host` headers.** The
+  loopback-bound HTTP transport now refuses requests whose `Host` header is not a
+  loopback name, closing a DNS-rebinding vector against a locally bound MCP server.
+  ([#1876](https://github.com/teng-lin/notebooklm-py/issues/1876))
+- **Null-conversation chat asks are serialized with explicit follow-ups.**
+  Consecutive asks against a fresh (null) conversation could race the
+  conversation-id assignment; they are now serialized and threaded as explicit
+  follow-ups so each ask lands on the intended conversation.
+  ([#1880](https://github.com/teng-lin/notebooklm-py/issues/1880))
+- **Multi-source `source_wait` no longer polls O(N²).** Waiting on N sources took
+  one snapshot per source per tick; the wait now reads a single notebook snapshot
+  per tick and derives every source's state from it, and the overall wait duration
+  is bounded. ([#1882](https://github.com/teng-lin/notebooklm-py/issues/1882))
+- **Raised the streamed chat-response size cap.** Long answers were truncated at
+  the previous streamed-response ceiling; the cap is raised so full responses come
+  through. ([#1852](https://github.com/teng-lin/notebooklm-py/issues/1852))
+- **Aggregate retry deadline threaded through the RPC path; OAuth `fsync`
+  offloaded.** The aggregate retry now honors a single deadline across attempts
+  instead of resetting per call, and the OAuth token `fsync` is moved off the event
+  loop so it can't stall concurrent requests.
+  ([#1881](https://github.com/teng-lin/notebooklm-py/issues/1881))
+- **`studio_download` rejects an unknown `output_format` self-documentingly.** An
+  invalid `output_format` now returns an error that lists the accepted formats
+  instead of an opaque rejection.
+  ([#1833](https://github.com/teng-lin/notebooklm-py/issues/1833))
+- **MCP source waits stay JSON-first.** `source_wait` output is emitted as
+  structured JSON rather than prose, matching the rest of the MCP source surface.
+  ([#1830](https://github.com/teng-lin/notebooklm-py/issues/1830))
+- **Deep-research null-start no longer leaks an internal method id.** A failed
+  deep-research start surfaced the obfuscated RPC method id in the error; it is now
+  hidden. ([#1851](https://github.com/teng-lin/notebooklm-py/issues/1851))
+- **REST server resource-limit hardening.** Several bounds were added to the
+  experimental REST server so a single client can't exhaust it: per-route JSON
+  request-body size caps ([#1846](https://github.com/teng-lin/notebooklm-py/issues/1846)),
+  route-group backpressure to cap concurrent in-flight requests
+  ([#1847](https://github.com/teng-lin/notebooklm-py/issues/1847)), a bounded fanout
+  for multi-source waits ([#1844](https://github.com/teng-lin/notebooklm-py/issues/1844)),
+  a shared suggest-surface map so the suggest routes don't each rebuild it
+  ([#1843](https://github.com/teng-lin/notebooklm-py/issues/1843)), and
+  `PendingRegistry.drop()` now removes the stale FIFO tuple so the pending queue
+  can't leak entries ([#1879](https://github.com/teng-lin/notebooklm-py/issues/1879)).
+  Diagnostics endpoints also stay live when auth is stale instead of failing with
+  the guarded routes ([#1845](https://github.com/teng-lin/notebooklm-py/issues/1845)),
+  and the account block is fetched with a single `GET_USER_SETTINGS` call instead of
+  two ([#1862](https://github.com/teng-lin/notebooklm-py/issues/1862)).
+- **Artifact-generation validation footguns** ([#1874]). Three input-validation
+  hardenings on the artifact surface: (A) the REST `POST /artifacts`
+  (`ArtifactGenerate`) body now rejects unknown fields (`extra="forbid"`) with a
+  422 instead of silently ignoring a typo (`{"stylee": …}`) and starting a default
+  artifact; (B) `generate_report` now coerces/validates `report_format` at the
+  boundary, raising a clear `ValidationError` (that names `source_ids`) instead of
+  an opaque `TypeError` deep in the payload builder when a caller misplaces a
+  positional `source_ids` list; (C) `export()` enforces exactly-one-of
+  (`artifact_id`, `content`) instead of firing a meaningless no-op RPC when both
+  default to `None`. **Breaking:** `export()`'s `content` is now **keyword-only** so
+  its positional slots match `export_report` / `export_data_table` (title in slot
+  3) — this fixes a silent title→content misbind; pass `content=…` explicitly.
+  ([#1874](https://github.com/teng-lin/notebooklm-py/issues/1874))
+
+- **MCP source tools no longer swallow fatal errors or fan out unbounded.** The MCP
+  `source_add` batch and `source_wait` had drifted from the REST route's policy: a
+  batch `source_add` caught *every* per-URL exception — so an expired auth / rate
+  limit / upstream 5xx was reported as a per-item "error" inside a **success**
+  envelope, hiding it from the agent; and multi-source `source_wait` spawned one
+  poller per source with no concurrency limit. The shared policy (the batch/wait
+  caps, the fatal-vs-isolate classifier, and the bounded multi-source wait pool) now
+  lives in the transport-neutral `_app` core (`_app.source_batch` / `_app.source_wait`)
+  and is used by **both** adapters, with a parity guardrail (`tests/_guardrails/
+  test_source_policy_parity.py`) that prevents future drift. Behavior change: a fatal
+  batch item now aborts the whole `source_add` call (so an agent can re-auth/retry),
+  only per-URL 4xx-input failures isolate; `source_wait` now bounds concurrency at 8,
+  caps the source count at 100 on **both** the explicit-subset and the omitted-`sources`
+  wait-all path (enforced at one shared chokepoint so the adapters can't drift), caps
+  timeout at 3600s, and rejects non-finite (`NaN`/`Infinity`) timeout/interval — all via
+  a shared `_app` validator used by the REST route too. Per-URL SSRF/validation isolation
+  is unchanged.
+  ([#1871](https://github.com/teng-lin/notebooklm-py/issues/1871))
+- **Direct-PDF-URL sources no longer show the raw URL as their title.** Adding a
+  source whose URL points straight at a `.pdf` left the full request URL in the
+  title slot (the server extracts `<title>` for HTML pages but not for a direct
+  PDF link), while HTML sources got proper titles. A PDF source whose title is
+  **exactly the source URL** (the server degradation — not a user-set title that
+  merely resembles a URL) now falls back to the URL path basename — e.g.
+  `https://host/papers/SomePaper.pdf` → `SomePaper` (query and fragment ignored;
+  percent-encoding decoded; a URL whose basename has no `.pdf` extension, such as
+  `…/download?file=x.pdf`, keeps the raw URL rather than a misleading `download`).
+  Applied consistently across `source list`/get (`Source.from_row`) **and**
+  `source fulltext` (`SourceContentRenderer`). No network I/O and no PDF
+  dependency; PDF `/Title` metadata extraction is out of scope. Because the fix
+  lives in the shared read paths it applies **retroactively** — a source added
+  before this release displays the derived title on the next read, so callers
+  that relied on `source delete-by-title "<the raw URL>"` should use the new
+  basename (URL-add idempotency is unaffected — it keys off the source `url`, not
+  title). ([#1850](https://github.com/teng-lin/notebooklm-py/issues/1850))
+- **Drive-hosted PDFs no longer list as `google_spreadsheet`.** The backend
+  returns type code `14` for both native Google Sheets and Drive-hosted PDFs,
+  and Drive sources carry no URL, so the read paths (`source_list` /
+  `GET_NOTEBOOK` **and** `source fulltext` / `source_read` / `GET_SOURCE`)
+  mislabeled Drive PDFs as `kind="google_spreadsheet"`. `kind` now disambiguates
+  code `14` by the source MIME (`metadata[19]` / `metadata[9][2]` from a live
+  capture): `application/pdf` → `pdf`, while real Google Sheets
+  (`application/vnd.google-apps.spreadsheet`) are unchanged. This completes the
+  read-path half of the fix started in #1831 (the add path).
+  ([#1832](https://github.com/teng-lin/notebooklm-py/issues/1832))
 
 - **Remote MCP connector: pin `fastmcp==3.4.2` so claude.ai can connect.**
   fastmcp 3.4.3 regressed the RFC 9728 protected-resource-metadata route
