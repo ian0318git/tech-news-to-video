@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`studio_download` `download_ready` now carries `filename` / `mime` /
+  `size_bytes`.** The MCP download-ready payload previously returned only the
+  local path, so an agent had to stat the file to learn what it got; the
+  artifact's server filename, content type, and byte size now travel in the
+  envelope. ([#1835](https://github.com/teng-lin/notebooklm-py/issues/1835))
+- **Explicit per-state counts in the `source_wait` aggregate.** The wait
+  aggregate now reports how many sources finished `ready` vs `error` vs still
+  `pending` (rather than a single rolled-up status), so a caller waiting on a
+  batch can see partial progress and act on the failures.
+  ([#1834](https://github.com/teng-lin/notebooklm-py/issues/1834))
 - **`notebooklm skill package` — Claude-uploadable skill archive** (#1856 item 2;
   the docs half landed in #1857). Builds a deterministic ZIP whose root contains
   the `notebooklm/SKILL.md` skill folder (version-stamped, frontmatter-first),
@@ -33,6 +43,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Upload-only Drive file types auto-route to the file-upload path.** Adding a
+  Drive file whose type NotebookLM only accepts as an upload (not an add-by-URL)
+  used to fail at the RPC; the add-from-Drive path now detects those types and
+  routes them through the upload flow, and when a Drive add can't be recovered the
+  error now names the file-upload path as the remedy instead of a generic failure.
+  ([#1887](https://github.com/teng-lin/notebooklm-py/issues/1887),
+  [#1885](https://github.com/teng-lin/notebooklm-py/issues/1885))
+- **Loopback MCP HTTP transport rejects non-loopback `Host` headers.** The
+  loopback-bound HTTP transport now refuses requests whose `Host` header is not a
+  loopback name, closing a DNS-rebinding vector against a locally bound MCP server.
+  ([#1876](https://github.com/teng-lin/notebooklm-py/issues/1876))
+- **Null-conversation chat asks are serialized with explicit follow-ups.**
+  Consecutive asks against a fresh (null) conversation could race the
+  conversation-id assignment; they are now serialized and threaded as explicit
+  follow-ups so each ask lands on the intended conversation.
+  ([#1880](https://github.com/teng-lin/notebooklm-py/issues/1880))
+- **Multi-source `source_wait` no longer polls O(N²).** Waiting on N sources took
+  one snapshot per source per tick; the wait now reads a single notebook snapshot
+  per tick and derives every source's state from it, and the overall wait duration
+  is bounded. ([#1882](https://github.com/teng-lin/notebooklm-py/issues/1882))
+- **Raised the streamed chat-response size cap.** Long answers were truncated at
+  the previous streamed-response ceiling; the cap is raised so full responses come
+  through. ([#1852](https://github.com/teng-lin/notebooklm-py/issues/1852))
+- **Aggregate retry deadline threaded through the RPC path; OAuth `fsync`
+  offloaded.** The aggregate retry now honors a single deadline across attempts
+  instead of resetting per call, and the OAuth token `fsync` is moved off the event
+  loop so it can't stall concurrent requests.
+  ([#1881](https://github.com/teng-lin/notebooklm-py/issues/1881))
+- **`studio_download` rejects an unknown `output_format` self-documentingly.** An
+  invalid `output_format` now returns an error that lists the accepted formats
+  instead of an opaque rejection.
+  ([#1833](https://github.com/teng-lin/notebooklm-py/issues/1833))
+- **MCP source waits stay JSON-first.** `source_wait` output is emitted as
+  structured JSON rather than prose, matching the rest of the MCP source surface.
+  ([#1830](https://github.com/teng-lin/notebooklm-py/issues/1830))
+- **Deep-research null-start no longer leaks an internal method id.** A failed
+  deep-research start surfaced the obfuscated RPC method id in the error; it is now
+  hidden. ([#1851](https://github.com/teng-lin/notebooklm-py/issues/1851))
+- **REST server resource-limit hardening.** Several bounds were added to the
+  experimental REST server so a single client can't exhaust it: per-route JSON
+  request-body size caps ([#1846](https://github.com/teng-lin/notebooklm-py/issues/1846)),
+  route-group backpressure to cap concurrent in-flight requests
+  ([#1847](https://github.com/teng-lin/notebooklm-py/issues/1847)), a bounded fanout
+  for multi-source waits ([#1844](https://github.com/teng-lin/notebooklm-py/issues/1844)),
+  a shared suggest-surface map so the suggest routes don't each rebuild it
+  ([#1843](https://github.com/teng-lin/notebooklm-py/issues/1843)), and
+  `PendingRegistry.drop()` now removes the stale FIFO tuple so the pending queue
+  can't leak entries ([#1879](https://github.com/teng-lin/notebooklm-py/issues/1879)).
+  Diagnostics endpoints also stay live when auth is stale instead of failing with
+  the guarded routes ([#1845](https://github.com/teng-lin/notebooklm-py/issues/1845)),
+  and the account block is fetched with a single `GET_USER_SETTINGS` call instead of
+  two ([#1862](https://github.com/teng-lin/notebooklm-py/issues/1862)).
 - **Artifact-generation validation footguns** ([#1874]). Three input-validation
   hardenings on the artifact surface: (A) the REST `POST /artifacts`
   (`ArtifactGenerate`) body now rejects unknown fields (`extra="forbid"`) with a
