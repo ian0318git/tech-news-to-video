@@ -147,9 +147,13 @@ async def test_source_add_file_with_config_returns_upload_url(mock_client, confi
     assert payload["title"] == "My Doc"
     assert payload["mime"] == "application/pdf"
     # Human/browser path is first-class (a named object, not prose) so an agent that
-    # can't upload the bytes itself reliably surfaces it to the user (#1801).
+    # can't upload the bytes itself reliably surfaces it to the user (#1801). It is now the
+    # SHORT tap-friendly /u/<shortid> link (a long opaque token gets mangled in mobile chat),
+    # NOT the deprecated top-level /files/ul url — and it resolves to the same signed token.
     human = sc["human_upload"]
-    assert human["url"] == sc["url"]
+    assert human["url"].startswith(f"{BASE}/u/")
+    assert human["url"] != sc["url"]
+    assert config.short_links.get(human["url"].rsplit("/", 1)[1]) == token
     assert "browser" in human["instructions"]
     # The mobile case is what makes the human path first-class — lock it in (#1801).
     assert "mobile" in human["instructions"]

@@ -38,6 +38,7 @@ from starlette.responses import (
     HTMLResponse,
     JSONResponse,
     PlainTextResponse,
+    RedirectResponse,
     Response,
 )
 from starlette.types import Receive, Scope, Send
@@ -419,6 +420,30 @@ def register_file_routes(mcp: FastMCP, config: FileTransferConfig) -> None:
         # there is nothing attacker-controlled to interpolate.
         return HTMLResponse(_UPLOAD_PAGE, headers=_HTML_SECURITY_HEADERS)
 
+    @mcp.custom_route("/u/{shortid}", methods=["GET"])
+    async def short_upload_redirect(request: Request) -> Response:
+        # Tap-friendly ``/u/<shortid>`` → 302 to the canonical ``/files/ul/<token>`` page.
+        # A short id survives mobile-chat corruption that mangles the long opaque token
+        # (tap-truncation, model re-typing, autocorrect — all live-confirmed). The redirect
+        # keeps the upload page + POST route as the single source of truth. The resolved
+        # token still carries the full HMAC + single-use jti, so the short id grants nothing
+        # extra; an unknown/expired id is a flat 404 (a probe learns nothing).
+        token = config.short_links.get(request.path_params["shortid"])
+        if token is None:
+            return HTMLResponse(
+                "<!doctype html><html><body style='font-family:system-ui'>"
+                "<h2>This upload link is invalid or has expired.</h2>"
+                "<p>Re-run the tool from your assistant to get a fresh link.</p>"
+                "</body></html>",
+                status_code=404,
+                headers=_HTML_SECURITY_HEADERS,
+            )
+        return RedirectResponse(
+            f"/files/ul/{token}",
+            status_code=302,
+            headers={"Referrer-Policy": "no-referrer", "Cache-Control": "no-store"},
+        )
+
     @mcp.custom_route("/files/ul/{token}", methods=["POST", "PUT"])
     async def upload_route(request: Request) -> Response:
         token = request.path_params["token"]
@@ -528,8 +553,22 @@ def register_file_routes(mcp: FastMCP, config: FileTransferConfig) -> None:
                     # on success means a failed/aborted upload (handled by the outer
                     # ``finally`` rollback) leaves the link usable for retry, honoring
                     # ADR-0024's large-file retry window. ``exp`` was validated as an int
-                    # by ``verify``.
-                    config.jti_store.commit(jti, payload["exp"])
+                    # by ``verify``. The ``result`` payload feeds the in-process completion
+                    # map so a same-process ``await_upload`` poll surfaces the added source
+                    # (Phase 1); it is success-only by construction — a failed upload writes
+                    # nothing, so ``await_upload`` stays "pending" and the model falls back
+                    # to ``source_list``. ``sha256`` is intentionally absent until the
+                    # deferred client/stream hashing (Phase 4) lands.
+                    config.jti_store.commit(
+                        jti,
+                        payload["exp"],
+                        result={
+                            "source_id": source_id,
+                            "name": filename,
+                            "size": total,
+                            "mime": mime,
+                        },
+                    )
                     committed = True
                     # The documented sandbox-`curl`/PUT path (an agent uploading a file
                     # it holds) gets clean JSON when it asks for it; a human browser gets

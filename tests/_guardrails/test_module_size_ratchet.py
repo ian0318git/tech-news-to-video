@@ -84,6 +84,9 @@ ALLOWLISTED_CEILINGS: dict[str, int] = {
     # ``tool_error_payload``), so extracting it would only trade a size trip for a
     # circular import. Pinned at its measured LOC; ratchet down when the tool
     # surface is next reorganized.
+    # Phase 1 (remote MCP file upload) added the ``await_upload`` tool entirely in the
+    # ``_fileupload`` sibling (``register_file_tools``, wired from ``server.register_all``,
+    # NOT ``sources.register``) precisely so this at-cap module stays untouched at 1020.
     "mcp/tools/sources.py": 1020,
 }
 

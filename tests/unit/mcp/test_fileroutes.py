@@ -477,6 +477,66 @@ def test_upload_post_adds_source_with_title_and_mime_from_token(mock_client, con
     assert kwargs["title"] == "Signed Title"
 
 
+def test_short_link_redirects_to_canonical_upload_page(mock_client, config) -> None:
+    # /u/<shortid> is the tap-friendly link handed to mobile users; it 302-redirects to the
+    # real /files/ul/<token> page (single source of truth for the picker + POST).
+    app = _build(mock_client, config)
+    short = config.short_upload_url({"nb": NB})  # https://files.test/u/<shortid>
+    shortid = short.rsplit("/", 1)[1]
+    with starlette_testclient.TestClient(app) as client:
+        resp = client.get(f"/u/{shortid}", follow_redirects=False)
+        assert resp.status_code in (302, 307)
+        loc = resp.headers["location"]
+        assert "/files/ul/" in loc
+        # following it renders the real upload page
+        page = client.get(loc)
+    assert page.status_code == 200
+    assert "Upload a source to NotebookLM" in page.text
+
+
+def test_short_link_unknown_id_404(mock_client, config) -> None:
+    app = _build(mock_client, config)
+    with starlette_testclient.TestClient(app) as client:
+        resp = client.get("/u/doesnotexist", follow_redirects=False)
+    assert resp.status_code == 404
+
+
+def test_upload_post_records_completion_result_for_await_upload(mock_client, config) -> None:
+    # Phase 1: a successful POST records {source_id, name, size, mime} in the in-process
+    # completion map keyed by jti, so a same-process await_upload poll surfaces the source.
+    add_file = AsyncMock(return_value=MagicMock(id="src-77"))
+    mock_client.sources.add_file = add_file
+    app = _build(mock_client, config)
+    url = config.upload_url({"op": "ul", "nb": NB, "mime": "application/pdf"})
+    jti = config.signer.verify(url.rsplit("/", 1)[1], op="ul")["jti"]
+    assert config.jti_store.completed(jti) is None  # nothing before the upload
+    with starlette_testclient.TestClient(app) as client:
+        resp = client.post(_path(url) + "?filename=paper.pdf", content=b"PDFDATA")
+    assert resp.status_code == 200
+    record = config.jti_store.completed(jti)
+    assert record == {
+        "source_id": "src-77",
+        "name": "paper.pdf",
+        "size": len(b"PDFDATA"),
+        "mime": "application/pdf",
+    }
+
+
+def test_upload_failed_add_records_no_completion_result(monkeypatch, mock_client, config) -> None:
+    # Success-only by design: a failed add rolls the jti back (retryable) and writes NO
+    # completion record, so await_upload stays "pending" rather than reporting a phantom add.
+    from notebooklm.exceptions import NotebookLMError
+
+    mock_client.sources.add_file = AsyncMock(side_effect=NotebookLMError("boom"))
+    app = _build(mock_client, config)
+    url = config.upload_url({"op": "ul", "nb": NB})
+    jti = config.signer.verify(url.rsplit("/", 1)[1], op="ul")["jti"]
+    with starlette_testclient.TestClient(app) as client:
+        resp = client.post(_path(url) + "?filename=x.pdf", content=b"DATA")
+    assert resp.status_code >= 400
+    assert config.jti_store.completed(jti) is None
+
+
 def test_upload_post_filename_is_sanitized_to_basename(mock_client, config) -> None:
     add_file = AsyncMock(return_value=MagicMock(id="src-1"))
     mock_client.sources.add_file = add_file

@@ -87,6 +87,13 @@ def register_all(mcp: FastMCP) -> None:
     ):
         module.register(mcp)
 
+    # ``await_upload`` (Phase 1 upload-completion signal) lives in the ``_fileupload``
+    # sibling of the sources domain — registered here rather than from ``sources.register``
+    # so that fat module (at its ADR-0008 size cap) does not absorb the wiring.
+    from .tools._fileupload import register_file_tools
+
+    register_file_tools(mcp)
+
 
 def create_server(
     *,

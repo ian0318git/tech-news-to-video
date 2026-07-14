@@ -211,6 +211,7 @@ TOOL_COVERAGE: dict[str, str] = {
     "source_add_and_wait": "tests/unit/mcp/test_sources.py (add+wait composite; unit)",
     "source_upload_bytes": "tests/unit/mcp/test_file_tools.py (in-channel bytes upload; unit)",
     "source_add_drive_file": "tests/unit/mcp/test_sources_drive.py (Drive-doc auto-route; unit — needs a real Drive document_id)",
+    "await_upload": "tests/unit/mcp/test_await_upload.py (completion-map poll) + test_fileroutes.py (POST records result; unit — remote signed-URL side-channel, no live browser upload)",
     # chat
     "chat_ask": "TestMcpChat.test_configure_then_ask",
     "chat_configure": "TestMcpChat.test_configure_then_ask",

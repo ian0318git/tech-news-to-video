@@ -31,8 +31,15 @@ pytest.importorskip("fastmcp")
 #: to ~36.0k). Move these DOWN as the surface gets leaner; a rise means
 #: description/param bloat that must be justified, not rubber-stamped.
 SCHEMA_CHAR_BUDGET = (
-    41_700  # total serialized inputSchema + description chars (current 41_645; +55 slack)
+    42_450  # total serialized inputSchema + description chars (current 42_418; +32 slack)
 )
+# Phase 1 (remote MCP file upload) added await_upload — the completion signal for a
+# source_add(source_type="file") link, so the model learns the browser/mobile upload
+# landed without the user narrating it. A NEW discrete tool (+773 chars, 2 params:
+# upload_link, timeout), not growth of an existing one; per ADR-0025 the discrete verb
+# is preferred over widening source_add, and the docstring is kept lean. It reuses the
+# existing ADR-0024 signer + in-process jti store (no new state), so this is the whole
+# schema cost. Raised from 41_700.
 # #1884 added source_add_drive_file (auto-route add-from-Drive: download + upload the
 # upload-only Drive types NotebookLM's native import can't ingest) — a NEW discrete
 # tool (+1_144 chars, 4 params), not growth of an existing one. Per ADR-0025 the

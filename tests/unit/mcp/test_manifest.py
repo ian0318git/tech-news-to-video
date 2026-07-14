@@ -33,7 +33,7 @@ EXPECTED_TOOLS: frozenset[str] = frozenset(
         "notebook_describe",
         "notebook_rename",
         "notebook_delete",
-        # Sources (9)
+        # Sources (10)
         "source_list",
         "source_read",
         "source_rename",
@@ -43,6 +43,7 @@ EXPECTED_TOOLS: frozenset[str] = frozenset(
         "source_add_and_wait",
         "source_add_drive_file",
         "source_upload_bytes",
+        "await_upload",
         # Chat (3)
         "chat_ask",
         "chat_configure",
@@ -102,6 +103,7 @@ READ_ONLY_TOOLS: frozenset[str] = frozenset(
         "notebook_describe",
         "source_list",
         "source_read",
+        "await_upload",
         "studio_list",
         "studio_status",
         "studio_get_prompt",
