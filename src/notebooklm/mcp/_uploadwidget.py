@@ -43,6 +43,10 @@ _WIDGET_URI = "ui://notebooklm/upload-v1"
 #: MCP-Apps hosts like claude.ai, needs the http transport + a public URL, and depends on
 #: host-specific render gates that can shift), so it stays out of the default tool surface.
 _WIDGET_FLAG = "NOTEBOOKLM_MCP_UPLOAD_WIDGET"
+#: Files a single widget invocation can add — the tool mints this many single-use upload tokens
+#: (one per file). A small fixed pool: unused tokens expire harmlessly, and it keeps the multi-file
+#: flow entirely on the existing single-use /files/ul route (no ADR-0024 change).
+_MAX_WIDGET_FILES = 10
 
 
 def _widget_domain(base_url: str) -> str:
@@ -70,9 +74,9 @@ _WIDGET_HTML = """<!doctype html>
  @media(prefers-color-scheme:dark){body{color:#e6eae4}.card{background:#1d231f;border-color:#313a33}#out{color:#b7c0b8}}
 </style></head><body>
 <div class="card">
- <div class="head">📎 Add a file to NotebookLM</div>
+ <div class="head">📎 Add files to NotebookLM</div>
  <div id="sub" style="font-size:12px;color:#6b7a6e;margin-top:3px">starting…</div>
- <input id="f" type="file" disabled>
+ <input id="f" type="file" multiple disabled>
  <button id="up" disabled>Upload</button>
  <div id="out"></div>
 </div>
@@ -82,7 +86,8 @@ _WIDGET_HTML = """<!doctype html>
  const post=m=>{try{window.parent.postMessage(m,"*")}catch(e){}};
  const oai=window.openai;               // ChatGPT/Grok inject this; claude.ai does not
  const hasNative=!!(oai&&typeof oai.uploadFile==="function");  // OpenAI native upload (interop signal)
- let initialized=false, uploadUrl=null;
+ let initialized=false, uploadUrls=null;  // a POOL of single-use tokens, one per file
+ const geturls=o=>o&&((Array.isArray(o.upload_urls)&&o.upload_urls.length&&o.upload_urls)||(o.upload_url&&[o.upload_url]))||null;
  function ready(h){if(initialized)return;initialized=true;
    sub.textContent=(h||(oai?"ChatGPT":"host"))+" · ready"+(hasNative?" · native upload available":"");
    post({jsonrpc:"2.0",method:"ui/notifications/initialized",params:{}});}  // claude.ai render gate
@@ -91,16 +96,17 @@ _WIDGET_HTML = """<!doctype html>
  setTimeout(()=>ready(oai?"ChatGPT":null),500);
  function size(){post({jsonrpc:"2.0",method:"ui/notifications/size-changed",
    params:{height:document.documentElement.scrollHeight,width:document.documentElement.scrollWidth}});}
- function consider(p){ // tool result: {structuredContent:{upload_url}} | {toolResult:…} | content[].text | raw obj
+ function consider(p){ // tool result: {structuredContent:{upload_urls|upload_url}} | {toolResult:…} | content[].text | raw obj
    if(!p)return; if(p.toolResult)p=p.toolResult; // unwrap the ui/notifications/tool-result envelope
    let d=p.structuredContent;
-   // Gate fallbacks on upload_url, not truthiness: a structuredContent without upload_url must not
+   // Gate fallbacks on HAVING a url pool, not truthiness: a structuredContent without one must not
    // block the content[]/raw fallbacks, and a later text fragment must not overwrite a good result.
-   if(!d?.upload_url&&Array.isArray(p.content))for(const c of p.content)if(c&&c.type==="text"){
-     try{const parsed=JSON.parse(c.text);if(parsed?.upload_url)d=parsed}catch(e){}}
-   if(!d?.upload_url&&p.upload_url)d=p;
-   if(d&&d.upload_url&&!uploadUrl){uploadUrl=d.upload_url;document.getElementById('f').disabled=false;
-     sub.textContent="pick a file to add"+(d.notebook?" to "+d.notebook:"");}
+   if(!geturls(d)&&Array.isArray(p.content))for(const c of p.content)if(c&&c.type==="text"){
+     try{const parsed=JSON.parse(c.text);if(geturls(parsed))d=parsed}catch(e){}}
+   if(!geturls(d)&&geturls(p))d=p;
+   const urls=geturls(d);
+   if(urls&&!uploadUrls){uploadUrls=urls;document.getElementById('f').disabled=false;
+     sub.textContent="pick file(s) to add"+(d.notebook?" to "+d.notebook:"");}
  }
  // claude.ai / Grok: tool result arrives via postMessage. We deliberately don't allowlist
  // ev.origin (host origin differs per platform — claude.ai / chatgpt.com / Grok): the only thing
@@ -118,23 +124,36 @@ _WIDGET_HTML = """<!doctype html>
  window.addEventListener("openai:set_globals",pullOai);
  // ChatGPT fetches the template lazily on the FIRST call, so the iframe can attach AFTER the
  // one-shot ui/notifications/tool-result fires — toolOutput is the durable fallback. Poll it until
- // the upload_url lands (first render often sets it late) instead of a few fixed tries, else the
+ // the url pool lands (first render often sets it late) instead of a few fixed tries, else the
  // first widget of a chat renders but stays stuck with no upload target.
- let _pt=0;const _pi=setInterval(()=>{pullOai();if(uploadUrl||++_pt>66)clearInterval(_pi);},300);
+ let _pt=0;const _pi=setInterval(()=>{pullOai();if(uploadUrls||++_pt>66)clearInterval(_pi);},300);
  const fi=document.getElementById('f'),btn=document.getElementById('up');
- fi.addEventListener('change',()=>{btn.disabled=!(fi.files&&fi.files[0]);});
+ fi.addEventListener('change',()=>{btn.disabled=!(fi.files&&fi.files.length);});
  btn.addEventListener('click',async()=>{
-   const file=fi.files&&fi.files[0]; if(!file||!uploadUrl){log("no file or no upload url yet");return;}
-   if(file.size>200*1024*1024){log("❌ file exceeds the 200 MB limit — pick a smaller file");return;} // mirrors server MAX_UPLOAD_BYTES
-   btn.disabled=true;log("uploading "+file.name+" ("+file.size+" B)…");
-   try{
-     const res=await fetch(uploadUrl+"?filename="+encodeURIComponent(file.name),
-       {method:"POST",headers:{"Accept":"application/json","Content-Type":file.type||"application/octet-stream"},body:file});
-     const text=await res.text();
-     log("["+res.status+"] "+text.slice(0,200));
-     if(res.ok)sub.textContent="✅ added — you can close this and continue in chat";
-     else btn.disabled=false; // non-2xx: token uncommitted → link stays retryable, let them click again
-   }catch(e){log("❌ upload failed (CSP/CORS/network): "+e);btn.disabled=false;} // transient failure → retryable
+   const files=fi.files?Array.from(fi.files):[]; if(!files.length||!uploadUrls){log("no file(s) selected yet");return;}
+   const cap=uploadUrls.length;  // one single-use token per file
+   if(files.length>cap)log("⚠ per-batch limit "+cap+": only the first "+cap+" of "+files.length+" files will be added");
+   const n=Math.min(files.length,cap);
+   // FREEZE the selection: retry maps files[i]→uploadUrls[i] by index, so the file list must not
+   // change between clicks (a fresh batch = re-invoke the tool for a new token pool).
+   btn.disabled=true; fi.disabled=true; let ok=0, failed=0, skipped=0;
+   for(let i=0;i<n;i++){ const file=files[i], tok=uploadUrls[i];
+     if(!tok){skipped++;log("• "+file.name+": already added");continue;} // token consumed on a prior click
+     if(file.size>200*1024*1024){log("❌ "+file.name+": exceeds 200 MB — skipped");failed++;continue;} // mirrors MAX_UPLOAD_BYTES
+     log("uploading "+file.name+" ("+file.size+" B)…");
+     try{
+       const res=await fetch(tok+"?filename="+encodeURIComponent(file.name),
+         {method:"POST",headers:{"Accept":"application/json","Content-Type":file.type||"application/octet-stream"},body:file});
+       const text=await res.text();
+       log("["+res.status+"] "+file.name+": "+text.slice(0,160));
+       if(res.ok){ok++;uploadUrls[i]=null;}              // burn locally on success so a retry click skips it
+       else failed++;                                    // non-2xx: token uncommitted → still valid for retry
+     }catch(e){log("❌ "+file.name+": upload failed (CSP/CORS/network): "+e);failed++;} // transient → retryable
+   }
+   sub.textContent = failed ? ("✅ "+ok+" added · "+failed+" to retry — fix and click Upload again")
+     : ok ? ("✅ "+ok+" added — you can close this and continue in chat")
+     : "nothing to upload — already added";           // all files were skipped (tokens consumed): no misleading "0 added"
+   btn.disabled = !failed;  // Upload stays enabled only when there's something to retry; fi stays frozen
  });
 </script></body></html>"""
 
@@ -178,17 +197,28 @@ def register_upload_widget(mcp: FastMCP, config: FileTransferConfig | None) -> N
         app=AppConfig(resource_uri=_WIDGET_URI, visibility=["model"]),
     )
     async def source_add_widget(ctx: Context, notebook: str) -> dict[str, Any]:
-        """Open an in-app file picker to add a file to a notebook (experimental mobile upload
-        widget). Renders inline in MCP-Apps hosts (e.g. claude.ai); the user picks a file and the
-        widget uploads it directly. Call ``await_upload`` with the returned ``upload_url`` to
-        confirm the add landed."""
+        """Open an in-app file picker to add one or more files to a notebook (experimental mobile
+        upload widget). Renders inline in MCP-Apps hosts (e.g. claude.ai); the user picks file(s)
+        and the widget uploads each to its own token in ``upload_urls``. To confirm, call
+        ``await_upload`` on a specific ``upload_urls`` entry (``upload_url`` is just the first), or
+        ``source_list`` to verify the whole batch — the first file may be skipped while later ones
+        land, so don't rely on ``upload_url`` alone for a multi-file add."""
         with mcp_errors():
             cfg = get_file_transfer(ctx)
             if cfg is None:
                 return {"error": "file transfer not configured"}
             nb_id = await resolve_notebook(get_client(ctx), notebook)
-            upload_url = cfg.upload_url(
-                {"nb": nb_id}
-            )  # direct /files/ul POST target for the widget
-            # structuredContent is pushed into the widget by the host; it reads upload_url from here.
-            return {"upload_url": upload_url, "notebook_id": nb_id, "notebook": notebook}
+            # A POOL of independent single-use tokens — one per file the user may pick (each
+            # cfg.upload_url() mints a fresh jti). The widget uploads file[i] to upload_urls[i], so
+            # multi-file needs NO change to the /files/ul route or ADR-0024's single-use invariant;
+            # unused tokens just expire. upload_url (singular) stays for await_upload back-compat.
+            # `first` is minted separately (not urls[0]) to avoid the ADR-0011 positional-index gate.
+            first = cfg.upload_url({"nb": nb_id})
+            urls = [first, *(cfg.upload_url({"nb": nb_id}) for _ in range(_MAX_WIDGET_FILES - 1))]
+            # structuredContent is pushed into the widget by the host; it reads upload_urls from here.
+            return {
+                "upload_urls": urls,
+                "upload_url": first,
+                "notebook_id": nb_id,
+                "notebook": notebook,
+            }
