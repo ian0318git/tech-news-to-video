@@ -31,6 +31,23 @@ get-returns-None / kwarg-alias deprecation machinery — has been **removed**
 
 ### Added
 
+- **`await_upload` — confirm a brokered file upload landed.** A new MCP tool that
+  waits for a source created via the remote signed-URL upload flow to finish,
+  returning the added source (`source_id` / name / size / mime) as soon as the
+  browser POST completes — so an agent that brokered an upload can confirm the add
+  without polling `source_list`. Accepts the upload URL, the `/u/<shortid>`
+  short-link, or the bare token.
+  ([#1889](https://github.com/teng-lin/notebooklm-py/issues/1889))
+- **Experimental in-app upload widget (opt-in).** With
+  `NOTEBOOKLM_MCP_UPLOAD_WIDGET=1` on a remote HTTP deployment, `source_add_widget`
+  renders a file picker *inline* in MCP-Apps hosts (claude.ai, ChatGPT) so a mobile
+  user can pick and upload **one or more files** (up to 10) without leaving the
+  chat — no browser round-trip. Enabling it auto-enables stateless HTTP (which
+  MCP-Apps hosts require to fetch the `ui://` widget resource). It stays off the
+  default tool surface / budgets unless enabled; the portable signed-link flow
+  remains the fallback. See [ADR-0027](docs/adr/0027-mcp-app-upload-widget.md).
+  ([#1891](https://github.com/teng-lin/notebooklm-py/issues/1891),
+  [#1894](https://github.com/teng-lin/notebooklm-py/issues/1894))
 - **`studio_download` `download_ready` now carries `filename` / `mime` /
   `size_bytes`.** The MCP download-ready payload previously returned only the
   local path, so an agent had to stat the file to learn what it got; the
@@ -82,7 +99,8 @@ get-returns-None / kwarg-alias deprecation machinery — has been **removed**
   `source_add(..., wait=True, timeout=…, interval=…)` composes the add with
   `source_wait` for single-source adds — returning the `source_wait` aggregate plus a
   top-level `source_id`. This keeps the MCP surface leaner (ADR-0025): one `source_add`
-  verb with input modes, not three near-duplicate add tools.
+  verb with input modes, not three near-duplicate add tools (MCP tool surface 36 → 34,
+  schema-char budget ratcheted down).
 
 - **Compact roster mode for `source_list` and `studio_list`**
   ([#1806](https://github.com/teng-lin/notebooklm-py/issues/1806)) — a terser
@@ -455,6 +473,15 @@ get-returns-None / kwarg-alias deprecation machinery — has been **removed**
 
 ### Fixed
 
+- **Upstream upload errors surface as a clean, redacted 4xx — not an opaque 500.**
+  An unsupported file type (or other upstream rejection) during a remote
+  `/files/ul` upload used to leak a raw `httpx.HTTPStatusError` as an unclassified
+  500 with no CORS header — which a browser upload widget could only report as
+  "Failed to fetch". Upload HTTP errors are now classified at the client layer
+  (429 → rate-limit, 5xx → server, 401/403/3xx → auth, other 4xx → validation)
+  into a redacted, CORS-carrying response, so the user sees the real reason. Fixes
+  the REST/CLI `add_file` path too.
+  ([#1892](https://github.com/teng-lin/notebooklm-py/issues/1892))
 - **Upload-only Drive file types auto-route to the file-upload path.** Adding a
   Drive file whose type NotebookLM only accepts as an upload (not an add-by-URL)
   used to fail at the RPC; the add-from-Drive path now detects those types and
