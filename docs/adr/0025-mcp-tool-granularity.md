@@ -73,3 +73,36 @@ bounded content reads) proceed independently of this decision.
 - The offline tool-eval harness (schema-token cost + param-count proxy) is the
   tripwire: if either mega-tool grows, or the surface-wide token cost creeps up,
   the ratchet fails and forces a fresh look.
+
+## Update (2026-07, #1890): fold the source-add composites back into `source_add`
+
+> The **35/40** figures in the Context/Consequences above are **historical** —
+> the surface as of this ADR's original authoring. Intervening additions (the
+> sharing domain, `suggest_prompts`, `source_add_drive_file`, `source_upload_bytes`,
+> `source_add_and_wait`, `await_upload`) took it to **36**; this update brings the
+> **current** surface to **34**.
+
+
+Two source tools shipped as **discrete verbs** over the composite-vs-mega-tool
+tension: `source_add_and_wait` (single-mode add + `source_wait` in one call) and
+`source_upload_bytes` (in-channel base64 file-add). Neither is a distinct operation —
+each is just a facet of adding a source: `source_upload_bytes` is a *file input mode*
+(bytes instead of a path, decoded before the add runs), and `source_add_and_wait` is a
+*same-call composition* of an add with the follow-on `source_wait` poll. On top of that,
+`source_add_drive_file` already carried a `wait: bool`, making a separate wait-*verb* an
+inconsistency. They were folded back into `source_add`:
+
+- **add + wait** → `source_add(..., wait=True, timeout=…, interval=…)` — returns the
+  `source_wait` aggregate + top-level `source_id`; single-source only, not for a remote
+  `file` signed-URL upload.
+- **in-channel bytes** → `source_add(source_type="file", bytes_base64=…, filename=…)` —
+  the `file` alternative to `path`, on any transport.
+
+Net **36 → 34 tools** and **−3,099 schema chars** (`SCHEMA_CHAR_BUDGET` ratcheted from
+42,450 to 39,400). `source_add` grows to **15 params** — still well under
+`MAX_PARAMS_PER_TOOL = 22`, and the `test_mega_tools_do_not_grow` param ceiling holds.
+This is the "prefer overloading an existing tool over adding a new one" side of the
+same fewer-tools evidence that argued *against* splitting the mega-tools: consolidating
+these composites lowers the surface-wide schema-token cost the harness ratchets. The
+underlying `_app` add+wait / bytes logic (`_waitagg`, `_fileupload`) is retained
+verbatim — only the two MCP tool *registrations* were removed.
