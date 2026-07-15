@@ -501,6 +501,30 @@ def test_short_link_unknown_id_404(mock_client, config) -> None:
     assert resp.status_code == 404
 
 
+def test_upload_cors_preflight_and_allow_origin(mock_client, config) -> None:
+    # The in-app widget (Phase 3) POSTs cross-origin from its sandboxed iframe, so /files/ul
+    # must answer the CORS preflight and allow-origin the success response.
+    add_file = AsyncMock(return_value=MagicMock(id="src-cors"))
+    mock_client.sources.add_file = add_file
+    app = _build(mock_client, config)
+    url = config.upload_url({"op": "ul", "nb": NB})
+    with starlette_testclient.TestClient(app) as client:
+        pre = client.options(_path(url))
+        assert pre.status_code == 204
+        assert pre.headers["access-control-allow-origin"] == "*"
+        assert "POST" in pre.headers["access-control-allow-methods"]
+        resp = client.post(
+            _path(url) + "?filename=x.pdf", content=b"DATA", headers={"Accept": "application/json"}
+        )
+        # A rejected (bad/expired token) POST must ALSO carry ACAO, so the cross-origin widget
+        # can read the real error instead of an opaque "Failed to fetch".
+        rej = client.post("/files/ul/bogus.token", content=b"DATA")
+    assert resp.status_code == 200
+    assert resp.headers["access-control-allow-origin"] == "*"
+    assert rej.status_code == 403
+    assert rej.headers["access-control-allow-origin"] == "*"
+
+
 def test_upload_post_records_completion_result_for_await_upload(mock_client, config) -> None:
     # Phase 1: a successful POST records {source_id, name, size, mime} in the in-process
     # completion map keyed by jti, so a same-process await_upload poll surfaces the source.
@@ -672,6 +696,9 @@ def test_upload_post_streams_past_cap_413_midstream_and_cleans_up(
     with starlette_testclient.TestClient(app) as client:
         resp = client.post(_path(url), content=body())
     assert resp.status_code == 413
+    # The cross-origin widget must be able to READ the failure status (not a generic
+    # "Failed to fetch") to show a useful message — so error responses carry ACAO too.
+    assert resp.headers["access-control-allow-origin"] == "*"
     add_file.assert_not_awaited()
     assert cleaned, "temp dir must be removed on a mid-stream abort"
 

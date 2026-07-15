@@ -106,6 +106,21 @@ _HTML_SECURITY_HEADERS = {
     ),
 }
 
+#: CORS for the ``/files/ul`` POST — the in-app MCP-App widget (Phase 3) uploads cross-origin
+#: from its sandboxed iframe, so the browser sends a preflight and needs an allow-origin on the
+#: response. ``*`` is safe here: the signed single-use token is the sole auth (no cookies /
+#: ambient credentials, ADR-0024), so a hostile page that can't mint a token gains nothing.
+_UPLOAD_CORS_HEADERS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "POST, PUT, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Accept",
+    "Access-Control-Max-Age": "600",
+}
+#: Just the allow-origin, for the POST route's own responses (success AND error) — without it a
+#: cross-origin widget can't READ the response, so an expired-link 403 surfaces as an opaque
+#: "Failed to fetch" instead of a message the user can act on. Safe for the same reason (#1889).
+_CORS_ORIGIN = {"Access-Control-Allow-Origin": "*"}
+
 
 #: HTTP status each neutral :class:`ErrorCategory` projects onto for the
 #: ``/files/*`` routes. Covers EVERY category (pinned by ``test_fileroutes.py``).
@@ -161,7 +176,8 @@ def _upstream_error_response(exc: NotebookLMError, *, note: str = "") -> PlainTe
     return PlainTextResponse(
         f"{prefix}Upstream NotebookLM error: {redact(str(exc))}",
         status_code=status,
-        headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+        # ACAO so the cross-origin widget can read the (redacted) failure, not "Failed to fetch".
+        headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer", **_CORS_ORIGIN},
     )
 
 
@@ -402,6 +418,12 @@ def register_file_routes(mcp: FastMCP, config: FileTransferConfig) -> None:
                 if temp_dir is not None:
                     _cleanup(temp_dir)
 
+    @mcp.custom_route("/files/ul/{token}", methods=["OPTIONS"])
+    async def upload_preflight(request: Request) -> Response:
+        # CORS preflight for the in-app widget's cross-origin upload (Phase 3). A preflight
+        # carries no body/credentials and grants nothing — the POST itself stays token-gated.
+        return PlainTextResponse("", status_code=204, headers=_UPLOAD_CORS_HEADERS)
+
     @mcp.custom_route("/files/ul/{token}", methods=["GET"])
     async def upload_page_route(request: Request) -> Response:
         token = request.path_params["token"]
@@ -450,7 +472,7 @@ def register_file_routes(mcp: FastMCP, config: FileTransferConfig) -> None:
         try:
             payload = config.signer.verify(token, op="ul")
         except FileLinkError:
-            return PlainTextResponse(_UPLOAD_LINK_REJECTED, status_code=403)
+            return PlainTextResponse(_UPLOAD_LINK_REJECTED, status_code=403, headers=_CORS_ORIGIN)
         # Single-use (jti) guard — ``ul`` only (ADR-0024, #1746). A leaked upload token
         # is a content-agnostic WRITE primitive (anyone can POST arbitrary bytes as a
         # source), so unlike ``dl`` (which stays multi-use for Range/resume) an upload
@@ -458,14 +480,16 @@ def register_file_routes(mcp: FastMCP, config: FileTransferConfig) -> None:
         # ``jti``, so a missing/non-str one means a malformed/hand-built token → 403.
         jti = payload.get("jti")
         if not isinstance(jti, str) or not jti:
-            return PlainTextResponse(_UPLOAD_LINK_REJECTED, status_code=403)
+            return PlainTextResponse(_UPLOAD_LINK_REJECTED, status_code=403, headers=_CORS_ORIGIN)
         # Early 413 on a declared over-cap body (the running cap below is the real
         # defense — a chunked / under-stated Content-Length slips past this).
         declared = request.headers.get("content-length")
         if declared is not None:
             try:
                 if int(declared) > MAX_UPLOAD_BYTES:
-                    return PlainTextResponse("Upload exceeds the size limit.", status_code=413)
+                    return PlainTextResponse(
+                        "Upload exceeds the size limit.", status_code=413, headers=_CORS_ORIGIN
+                    )
             except ValueError:
                 pass
         try:
@@ -480,7 +504,7 @@ def register_file_routes(mcp: FastMCP, config: FileTransferConfig) -> None:
         # and before the slot. ``try_begin`` runs no ``await``, so the check-and-mark
         # is atomic on the one event loop.
         if not config.jti_store.try_begin(jti):
-            return PlainTextResponse(_UPLOAD_LINK_REJECTED, status_code=403)
+            return PlainTextResponse(_UPLOAD_LINK_REJECTED, status_code=403, headers=_CORS_ORIGIN)
         committed = False
         try:
             # Bound aggregate temp-disk: reject (fast, no disk touched) when too many
@@ -489,7 +513,9 @@ def register_file_routes(mcp: FastMCP, config: FileTransferConfig) -> None:
             global _inflight_uploads
             if _inflight_uploads >= _MAX_CONCURRENT_UPLOADS:
                 return PlainTextResponse(
-                    "Too many concurrent uploads in progress; retry shortly.", status_code=429
+                    "Too many concurrent uploads in progress; retry shortly.",
+                    status_code=429,
+                    headers=_CORS_ORIGIN,  # let the cross-origin widget read the status to retry
                 )
             _inflight_uploads += 1
             try:
@@ -516,7 +542,11 @@ def register_file_routes(mcp: FastMCP, config: FileTransferConfig) -> None:
                     return PlainTextResponse(
                         "Upload could not be stored (server storage error).",
                         status_code=500,
-                        headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+                        headers={
+                            "Cache-Control": "no-store",
+                            "Referrer-Policy": "no-referrer",
+                            **_CORS_ORIGIN,
+                        },
                     )
                 temp_path = os.path.join(temp_dir, filename)
                 try:
@@ -529,7 +559,9 @@ def register_file_routes(mcp: FastMCP, config: FileTransferConfig) -> None:
                             total += len(chunk)
                             if total > MAX_UPLOAD_BYTES:
                                 return PlainTextResponse(
-                                    "Upload exceeds the size limit.", status_code=413
+                                    "Upload exceeds the size limit.",
+                                    status_code=413,
+                                    headers=_CORS_ORIGIN,  # cross-origin widget reads the status
                                 )
                             out.write(chunk)
                     plan = add_core.build_source_add_plan(
@@ -579,6 +611,9 @@ def register_file_routes(mcp: FastMCP, config: FileTransferConfig) -> None:
                             headers={
                                 "Cache-Control": "no-store",
                                 "Referrer-Policy": "no-referrer",
+                                # Let the cross-origin widget read the result (ADR-0024: token-auth,
+                                # not cookies, so allow-origin * is safe).
+                                "Access-Control-Allow-Origin": "*",
                             },
                         )
                     return HTMLResponse(
@@ -595,7 +630,11 @@ def register_file_routes(mcp: FastMCP, config: FileTransferConfig) -> None:
                     return PlainTextResponse(
                         f"Upload rejected: {redact(str(exc))}",
                         status_code=400,
-                        headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+                        headers={
+                            "Cache-Control": "no-store",
+                            "Referrer-Policy": "no-referrer",
+                            **_CORS_ORIGIN,
+                        },
                     )
                 except NotebookLMError as exc:
                     # An upstream auth/server/rate-limit error from execute_source_add
@@ -610,7 +649,11 @@ def register_file_routes(mcp: FastMCP, config: FileTransferConfig) -> None:
                 except OSError:
                     # A bad filename / fs error (e.g. a name that survives sanitization
                     # but the fs rejects) is a clean 400, not a bare 500.
-                    return PlainTextResponse("Upload could not be processed.", status_code=400)
+                    return PlainTextResponse(
+                        "Upload could not be processed.",
+                        status_code=400,
+                        headers=_CORS_ORIGIN,  # cross-origin widget reads the status
+                    )
                 finally:
                     # Always remove the temp dir — on success (bytes already uploaded), a
                     # rejection, an fs error, or a mid-stream client disconnect.
