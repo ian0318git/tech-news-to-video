@@ -543,6 +543,11 @@ gate the destructive ones.
   searches common install dirs beyond `PATH`.
 - **Client doesn't see the tools.** Confirm the config was written (`notebooklm mcp install <client>`)
   and **restart the client** — most hosts only read MCP config at startup.
+- **`Unknown tool: '<name>'` after upgrading the server.** The claude.ai connector caches the tool
+  list from when it connected, so a version upgrade that **renamed or folded** a tool leaves the old
+  name callable-but-failing until you **reconnect the connector** (disconnect + reconnect, or toggle it
+  off/on). Newly-added *optional* parameters on existing tools forward through the stale schema and keep
+  working without a reconnect. See [troubleshooting.md](troubleshooting.md#unknown-tool-from-the-claudeai-connector-after-upgrading-the-server).
 - **Wrong account.** The server binds one profile per process. Start it with `--profile <name>`, or set
   `NOTEBOOKLM_PROFILE`. See [configuration.md](configuration.md#multiple-accounts).
 - **`RATE_LIMITED`.** NotebookLM enforces per-account quotas; the error is `retriable=true` — back off
