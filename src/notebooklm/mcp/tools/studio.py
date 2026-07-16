@@ -343,6 +343,9 @@ def register(mcp: Any) -> None:
 
         Non-blocking: returns immediately with a ``task_id``; poll
         ``studio_status(notebook, task_id)`` until ``is_complete`` is true.
+        Exception: ``mind-map`` renders synchronously and returns NO ``task_id``
+        (there is nothing to poll) — the rendered map is returned inline under
+        ``mind_map`` instead.
 
         ``artifact_type`` selects the artifact kind (each routes to its own
         generator):
@@ -370,8 +373,7 @@ def register(mcp: Any) -> None:
         Each per-kind option is valid ONLY for the kind(s) listed above; passing one
         to a different ``artifact_type`` (e.g. ``orientation`` to ``quiz``) is a
         validation error rather than a silent no-op. Options default to the standard
-        choice when omitted. Note ``style`` is shared by ``video`` and ``infographic``
-        but accepts each kind's own set of values.
+        choice when omitted.
 
         ``source_ids`` (optional) scopes generation to specific sources; omit it
         to use every source. It accepts a real list, a JSON-array string, or a
@@ -910,13 +912,24 @@ def _generation_payload(
 
     Surfaces the ``task_id`` an agent polls with ``studio_status`` plus the
     generation outcome (status / url / error) or, for mind maps, the rendered
-    map. Mind-map generation renders synchronously (no ``task_id`` to poll).
+    map. Mind-map generation renders synchronously (no ``task_id`` to poll), so
+    its payload carries the rendered map inline under ``mind_map`` and omits the
+    poll fields — documented on ``studio_generate`` (#1908).
     """
     payload: dict[str, Any] = {
         "notebook_id": notebook_id,
         "kind": result.kind,
     }
-    if result.mind_map is not None:
+    if result.kind == "mind-map":
+        # Mind-map generation renders synchronously — no pollable ``task_id`` — so
+        # the payload carries the rendered map inline under ``mind_map`` and omits
+        # the poll fields. Branch on the KIND (not a populated ``mind_map``): every
+        # mind-map — interactive AND note-backed — returns through this synchronous
+        # path (never the ``generation`` outcome), so an empty/``None`` map still
+        # takes this branch rather than falling through to the poll-shape below.
+        # NOTE: ``mind_map``'s shape currently varies by ``map_kind`` (interactive
+        # returns a MindMap; note-backed a MindMapResult) — normalizing it to the
+        # bare tree at one key is tracked separately (#1914).
         payload["mind_map"] = to_jsonable(result.mind_map)
         return payload
     outcome = result.generation

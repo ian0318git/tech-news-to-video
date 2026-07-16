@@ -723,6 +723,35 @@ async def test_artifact_generate_mind_map_interactive_default(mcp_call, mock_cli
     mock_client.artifacts.generate_mind_map.assert_not_called()
 
 
+async def test_artifact_generate_mind_map_payload_is_synchronous(mcp_call, mock_client) -> None:
+    """Mind-map generation renders synchronously (#1908): its payload carries the
+    rendered map inline under ``mind_map`` and returns NO pollable ``task_id`` (nor
+    ``status``), unlike every other kind which returns a ``task_id`` to poll."""
+    mock_client.mind_maps.generate = AsyncMock(return_value={"id": "mm1"})
+    result = await mcp_call("studio_generate", {"notebook": NB_ID, "artifact_type": "mind-map"})
+    payload = result.structured_content
+    assert payload["kind"] == "mind-map"
+    assert payload["mind_map"] == {"id": "mm1"}
+    assert "task_id" not in payload
+    assert "status" not in payload
+
+
+async def test_artifact_generate_mind_map_empty_result_takes_sync_branch(
+    mcp_call, mock_client
+) -> None:
+    """An empty/None backend map still takes the synchronous mind-map branch (#1908
+    review): branching on the KIND, not on a populated ``mind_map``, keeps it out of
+    the poll-shape path — so it returns ``mind_map=None`` with no spurious ``task_id``
+    rather than falling through to a pollable-artifact shape."""
+    mock_client.mind_maps.generate = AsyncMock(return_value=None)
+    result = await mcp_call("studio_generate", {"notebook": NB_ID, "artifact_type": "mind-map"})
+    payload = result.structured_content
+    assert payload["kind"] == "mind-map"
+    assert payload["mind_map"] is None
+    assert "task_id" not in payload
+    assert "status" not in payload
+
+
 async def test_artifact_generate_mind_map_note_backed_routes(mcp_call, mock_client) -> None:
     """``map_kind=note-backed`` routes to ``artifacts.generate_mind_map`` instead."""
     mock_client.artifacts.generate_mind_map = AsyncMock(return_value={"id": "mm1"})
