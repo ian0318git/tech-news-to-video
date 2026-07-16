@@ -25,6 +25,8 @@ This module imports NOTHING from ``server/`` (which pulls ``fastapi`` — absent
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import html
 import os
 import shutil
@@ -187,6 +189,22 @@ def _upstream_error_response(exc: NotebookLMError, *, note: str = "") -> PlainTe
 #: ``/files/ul`` route and the REST ``add_file`` route sanitize identically
 #: (strip control chars, reject ``.``/``..``, basename the path, stem-truncate).
 _safe_upload_name = add_core.safe_upload_name
+
+
+#: Lowercase hex chars a SHA-256 digest can contain — the exact alphabet a valid
+#: ``?sha256=`` claim must be drawn from (64 of them).
+_HEX_LOWER = frozenset("0123456789abcdef")
+
+
+def _is_sha256_hex(value: str) -> bool:
+    """True iff ``value`` is a well-formed lowercase SHA-256 hex digest (64 hex chars).
+
+    The client's ``?sha256=`` claim is validated with this BEFORE it reaches
+    :func:`hmac.compare_digest` — which raises ``TypeError`` on any non-ASCII string
+    (e.g. a ``?sha256=%C3%A9`` probe would otherwise 500). A malformed claim is a clean
+    400, never a crash.
+    """
+    return len(value) == 64 and all(c in _HEX_LOWER for c in value)
 
 
 def _cleanup(path: str) -> None:
@@ -527,6 +545,22 @@ def register_file_routes(mcp: FastMCP, config: FileTransferConfig) -> None:
                 filename = _safe_upload_name(request.query_params.get("filename"))
                 raw_mime = payload.get("mime") or request.headers.get("content-type")
                 mime = raw_mime.split(";")[0].strip() if raw_mime else None
+                # Optional client-provided SHA-256 of the file bytes (?sha256=<hex>). When the
+                # client hashed the bytes it holds, we verify the stream we received matches
+                # (end-to-end transit-integrity, #1889 Phase 4). A blank / whitespace-only value
+                # means "no claim" (skip verification, uniformly with the param being absent). A
+                # present-but-malformed claim (wrong length, non-hex, or non-ASCII — the last
+                # would make ``compare_digest`` raise ``TypeError`` → 500) is rejected here as a
+                # clean 400, BEFORE spooling the body, so garbage never drives a 200 MiB write.
+                claimed_raw = request.query_params.get("sha256")
+                # Blank / whitespace-only → None (== absent); otherwise the normalized hex.
+                claimed_sha: str | None = (claimed_raw or "").strip().lower() or None
+                if claimed_sha is not None and not _is_sha256_hex(claimed_sha):
+                    return PlainTextResponse(
+                        "Malformed sha256 parameter (expected 64 hex chars).",
+                        status_code=400,
+                        headers=_CORS_ORIGIN,  # cross-origin widget reads the status
+                    )
 
                 try:
                     temp_dir = tempfile.mkdtemp(prefix="nblm-mcp-ul-")  # mkdtemp is 0o700
@@ -553,6 +587,7 @@ def register_file_routes(mcp: FastMCP, config: FileTransferConfig) -> None:
                 try:
                     fd = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
                     total = 0
+                    hasher = hashlib.sha256()  # digest of exactly the bytes that landed
                     with os.fdopen(fd, "wb") as out:
                         async for chunk in request.stream():
                             if not chunk:
@@ -564,7 +599,22 @@ def register_file_routes(mcp: FastMCP, config: FileTransferConfig) -> None:
                                     status_code=413,
                                     headers=_CORS_ORIGIN,  # cross-origin widget reads the status
                                 )
+                            hasher.update(chunk)  # incremental — no extra buffering
                             out.write(chunk)
+                    sha256 = hasher.hexdigest()
+                    # Integrity gate (#1889): if the client sent a (well-formed, validated above)
+                    # hash, the bytes we received must match — else the transfer corrupted them.
+                    # Reject BEFORE the add so a corrupted file never becomes a source; the outer
+                    # ``finally`` rolls the jti back (uncommitted), so a corrected retry on the
+                    # same link works. ``compare_digest`` is the idiomatic digest comparison —
+                    # both operands are ASCII hex here (so it never raises), and timing isn't
+                    # sensitive (a client-supplied integrity value, not a secret).
+                    if claimed_sha is not None and not hmac.compare_digest(sha256, claimed_sha):
+                        return PlainTextResponse(
+                            "Upload integrity check failed (sha256 mismatch); retry the upload.",
+                            status_code=400,
+                            headers=_CORS_ORIGIN,  # cross-origin widget reads the status
+                        )
                     plan = add_core.build_source_add_plan(
                         content=os.path.realpath(temp_path),
                         source_type="file",
@@ -590,8 +640,10 @@ def register_file_routes(mcp: FastMCP, config: FileTransferConfig) -> None:
                     # map so a same-process ``await_upload`` poll surfaces the added source
                     # (Phase 1); it is success-only by construction — a failed upload writes
                     # nothing, so ``await_upload`` stays "pending" and the model falls back
-                    # to ``source_list``. ``sha256`` is intentionally absent until the
-                    # deferred client/stream hashing (Phase 4) lands.
+                    # to ``source_list``. ``sha256`` is the digest of exactly the bytes that
+                    # landed, so ``await_upload`` can confirm byte-integrity of what was uploaded
+                    # (#1889 Phase 4) — already checked against the client's claim above when one
+                    # was sent.
                     config.jti_store.commit(
                         jti,
                         payload["exp"],
@@ -600,6 +652,7 @@ def register_file_routes(mcp: FastMCP, config: FileTransferConfig) -> None:
                             "name": filename,
                             "size": total,
                             "mime": mime,
+                            "sha256": sha256,
                         },
                     )
                     committed = True

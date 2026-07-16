@@ -526,8 +526,9 @@ def test_upload_cors_preflight_and_allow_origin(mock_client, config) -> None:
 
 
 def test_upload_post_records_completion_result_for_await_upload(mock_client, config) -> None:
-    # Phase 1: a successful POST records {source_id, name, size, mime} in the in-process
-    # completion map keyed by jti, so a same-process await_upload poll surfaces the source.
+    # Phase 1/4: a successful POST records {source_id, name, size, mime, sha256} in the in-process
+    # completion map keyed by jti, so a same-process await_upload poll surfaces the source AND the
+    # byte-integrity digest of exactly what landed (#1889).
     add_file = AsyncMock(return_value=MagicMock(id="src-77"))
     mock_client.sources.add_file = add_file
     app = _build(mock_client, config)
@@ -543,7 +544,92 @@ def test_upload_post_records_completion_result_for_await_upload(mock_client, con
         "name": "paper.pdf",
         "size": len(b"PDFDATA"),
         "mime": "application/pdf",
+        "sha256": hashlib.sha256(b"PDFDATA").hexdigest(),  # digest of exactly the bytes received
     }
+
+
+def test_upload_post_verifies_matching_client_sha256(mock_client, config) -> None:
+    # #1889: a client that hashed the bytes it holds can pass ?sha256=<hex>; a MATCHING digest
+    # of the received stream lets the add proceed (end-to-end transit integrity confirmed).
+    add_file = AsyncMock(return_value=MagicMock(id="src-ok"))
+    mock_client.sources.add_file = add_file
+    app = _build(mock_client, config)
+    url = config.upload_url({"op": "ul", "nb": NB})
+    digest = hashlib.sha256(b"PDFDATA").hexdigest()
+    with starlette_testclient.TestClient(app) as client:
+        resp = client.post(
+            _path(url) + f"?filename=paper.pdf&sha256={digest.upper()}", content=b"PDFDATA"
+        )
+    assert resp.status_code == 200  # case-insensitive hex accepted
+    add_file.assert_awaited_once()
+
+
+def test_upload_post_mismatched_client_sha256_rejected_and_retryable(mock_client, config) -> None:
+    # #1889: a WRONG ?sha256= means the bytes corrupted in transit → reject with a clean 400
+    # BEFORE the add (no source created), and the jti rolls back so a corrected retry works.
+    add_file = AsyncMock(return_value=MagicMock(id="src-1"))
+    mock_client.sources.add_file = add_file
+    app = _build(mock_client, config)
+    url = config.upload_url({"op": "ul", "nb": NB})
+    bad = "0" * 64  # valid-shaped hex that cannot match the real digest
+    with starlette_testclient.TestClient(app) as client:
+        rejected = client.post(_path(url) + f"?filename=a.pdf&sha256={bad}", content=b"PDFDATA")
+        # jti rolled back → the SAME link works on a corrected retry (no sha256 claim this time)
+        retried = client.post(_path(url) + "?filename=a.pdf", content=b"PDFDATA")
+    assert rejected.status_code == 400
+    assert "integrity check failed" in rejected.text.lower()
+    assert rejected.headers["access-control-allow-origin"] == "*"  # widget can read the reason
+    add_file.assert_awaited_once()  # only the retry added a source; the mismatch never did
+    assert retried.status_code == 200
+
+
+@pytest.mark.parametrize(
+    "bad_sha",
+    [
+        "%C3%A9",  # non-ASCII (é) — would make hmac.compare_digest raise TypeError → 500
+        "deadbeef",  # too short
+        "z" * 64,  # right length, non-hex alphabet
+        "0" * 63,  # off-by-one length
+    ],
+)
+def test_upload_post_malformed_client_sha256_is_clean_400_not_500(
+    mock_client, config, bad_sha
+) -> None:
+    # A present-but-malformed ?sha256= (esp. non-ASCII) must be a clean 400 BEFORE any spool,
+    # never reach compare_digest (which raises TypeError on non-ASCII), and never add a source.
+    add_file = AsyncMock(return_value=MagicMock(id="src-1"))
+    mock_client.sources.add_file = add_file
+    app = _build(mock_client, config)
+    url = config.upload_url({"op": "ul", "nb": NB})
+    with starlette_testclient.TestClient(app) as client:  # default raise_server_exceptions=True
+        resp = client.post(_path(url) + f"?filename=a.pdf&sha256={bad_sha}", content=b"PDFDATA")
+    assert resp.status_code == 400
+    assert "malformed sha256" in resp.text.lower()
+    assert resp.headers["access-control-allow-origin"] == "*"
+    add_file.assert_not_awaited()  # rejected before the add
+
+
+def test_upload_post_blank_client_sha256_skips_verification(mock_client, config) -> None:
+    # A blank / whitespace-only ?sha256= is "no claim" (uniform with the param being absent):
+    # verification is skipped and the add proceeds, but the server digest is still recorded.
+    add_file = AsyncMock(return_value=MagicMock(id="src-blank"))
+    mock_client.sources.add_file = add_file
+    app = _build(mock_client, config)
+    url = config.upload_url({"op": "ul", "nb": NB})
+    jti = config.signer.verify(url.rsplit("/", 1)[1], op="ul")["jti"]
+    with starlette_testclient.TestClient(app) as client:
+        resp = client.post(_path(url) + "?filename=a.pdf&sha256=%20%20", content=b"PDFDATA")
+    assert resp.status_code == 200
+    add_file.assert_awaited_once()
+    assert config.jti_store.completed(jti)["sha256"] == hashlib.sha256(b"PDFDATA").hexdigest()
+
+
+def test_is_sha256_hex_helper() -> None:
+    # Unit-level guard on the validator the route relies on to keep non-ASCII off compare_digest.
+    assert _fileroutes._is_sha256_hex(hashlib.sha256(b"x").hexdigest())
+    assert not _fileroutes._is_sha256_hex("é" * 64)  # non-ASCII
+    assert not _fileroutes._is_sha256_hex("A" * 64)  # uppercase (route lowercases first)
+    assert not _fileroutes._is_sha256_hex("abc")  # too short
 
 
 def test_upload_failed_add_records_no_completion_result(monkeypatch, mock_client, config) -> None:
