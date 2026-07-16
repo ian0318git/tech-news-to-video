@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pytest
 
-from notebooklm.mcp._host_guard import LoopbackHostGuardMiddleware
+pytest.importorskip("fastmcp")  # __main__ pulls in fastmcp via _auth
+
+from notebooklm.mcp.__main__ import (
+    _host_guard_bypass_allowed,  # noqa: E402 - after importorskip guard
+)
+from notebooklm.mcp._host_guard import (
+    LoopbackHostGuardMiddleware,  # noqa: E402 - after importorskip guard
+)
 
 
 class _Recorder:
@@ -86,3 +95,33 @@ async def test_non_http_scope_passes_through() -> None:
         {"type": "lifespan"}, receive, send
     )
     assert app.reached is True
+
+
+# --- who may bypass the guard (the #1935 fix: flag alone is NOT enough) ---------
+@pytest.mark.parametrize(
+    ("allow_external", "token", "has_oauth", "expected_bypass"),
+    [
+        # default loopback dev — guard active
+        (False, None, False, False),
+        # loopback + bearer, no flag — guard stays active (defense-in-depth)
+        (False, "tok", False, False),
+        # OAuth but no flag — guard stays active (flag is necessary even with auth)
+        (False, None, True, False),
+        # flag set but NO auth (loopback default host) — guard MUST stay active (#1935)
+        (True, None, False, False),
+        # flag + bearer — authed external/tunnel bypasses
+        (True, "tok", False, True),
+        # flag + OAuth — authed external bypasses
+        (True, None, True, True),
+        # flag + both auth kinds — bypasses
+        (True, "tok", True, True),
+    ],
+)
+def test_host_guard_bypass_requires_flag_and_auth(
+    allow_external: bool, token: str | None, has_oauth: bool, expected_bypass: bool
+) -> None:
+    oauth = cast(Any, object()) if has_oauth else None
+    assert (
+        _host_guard_bypass_allowed(allow_external=allow_external, token=token, oauth=oauth)
+        is expected_bypass
+    )

@@ -111,6 +111,24 @@ def _check_http_auth_required(host: str, token: str | None, oauth: OAuthConfig |
         )
 
 
+def _host_guard_bypass_allowed(
+    *, allow_external: bool, token: str | None, oauth: OAuthConfig | None
+) -> bool:
+    """Whether the loopback ``Host``-header (DNS-rebinding) guard may be bypassed.
+
+    The guard is safe to skip only when the operator opted into an external bind
+    (``ALLOW_EXTERNAL_BIND``) **and** auth is configured — a bearer/OAuth server can't
+    be DNS-rebound because the attacker's page can't present the credential. The env
+    flag ALONE is NOT sufficient (#1935): with the flag set but ``--host`` left at the
+    loopback default, :func:`_check_http_auth_required` does not require auth (a loopback
+    bind), so a flag-keyed bypass would leave a *tokenless* local server open to
+    DNS-rebinding — the exact hole #1876 set out to close. Keying on auth also keeps the
+    guard active for the default no-flag Claude Code bind (defense-in-depth) while still
+    letting an authed external/tunnel deployment accept its public-origin ``Host``.
+    """
+    return allow_external and (token is not None or oauth is not None)
+
+
 #: Values of ``FASTMCP_STATELESS_HTTP`` that FastMCP (pydantic-settings) reads as False.
 #: An explicit one of these (paired with the upload widget) is the footgun this warning
 #: guards (#1915). Kept in sync with pydantic's bool-false set (case-insensitive).
@@ -286,13 +304,19 @@ def main(argv: list[str] | None = None) -> None:
         # ourselves via NOTEBOOKLM_MCP_TRUST_PROXY (CF-Connecting-IP only), so keep the ASGI
         # peer the true socket peer. Nothing here derives security from the forwarded scheme
         # (OAuth endpoints + signed links use the explicitly-configured base URL).
-        # DNS-rebinding guard: a loopback bind skips bearer auth, so reject any
-        # request whose Host header isn't a loopback literal (mirrors the REST
-        # server; #1869). Skipped when an external bind is explicitly allowed —
-        # that path already mandates bearer/OAuth auth via _check_http_auth_required.
+        # DNS-rebinding guard: a loopback bind that isn't otherwise authenticated must
+        # reject any request whose Host header isn't a loopback literal (mirrors the REST
+        # server; #1869). The guard is bypassed ONLY when the operator opted into an
+        # external bind AND auth is configured (a credential the rebinding page can't
+        # present); the ALLOW_EXTERNAL_BIND flag alone is not enough, since with the flag
+        # set but --host left at loopback the auth-required check is skipped (#1935).
         from starlette.middleware import Middleware
 
         from ._host_guard import LoopbackHostGuardMiddleware
+
+        host_guard_bypass = _host_guard_bypass_allowed(
+            allow_external=allow_external, token=token, oauth=oauth_config
+        )
 
         # The MCP-App upload widget needs stateless HTTP: an MCP-Apps host (claude.ai) fetches the
         # ui:// widget resource on a connection WITHOUT the chat Mcp-Session-Id, which a stateful
@@ -307,7 +331,7 @@ def main(argv: list[str] | None = None) -> None:
             port=_resolve_port(args.port),
             stateless_http=stateless_http,
             uvicorn_config={"proxy_headers": False},
-            middleware=[Middleware(LoopbackHostGuardMiddleware, allow_external=allow_external)],
+            middleware=[Middleware(LoopbackHostGuardMiddleware, allow_external=host_guard_bypass)],
         )
     else:
         # show_banner=False keeps FastMCP's startup banner out of the host's logs

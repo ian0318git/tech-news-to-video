@@ -125,6 +125,42 @@ def test_explicit_http_transport_binds_loopback(monkeypatch: pytest.MonkeyPatch)
     assert fake_server.run.call_args.kwargs["stateless_http"] is None
 
 
+def test_flagged_loopback_without_auth_keeps_host_guard_active(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1935 regression guard (entrypoint wiring): ALLOW_EXTERNAL_BIND=1 + default loopback
+    host + no auth must NOT bypass the Host guard. Auth is only *required* on a non-loopback
+    bind, so a flag-keyed bypass would leave a tokenless local server open to DNS-rebinding.
+    Catches a revert of the middleware wiring back to the raw flag (the direct
+    ``_host_guard_bypass_allowed`` unit test would not)."""
+    # OAuth env is cleared by the autouse _clear_oauth_env fixture; no token below → no auth.
+    fake_server = MagicMock()
+    monkeypatch.setattr(entry, "create_server", lambda **_: fake_server)
+    monkeypatch.setenv("NOTEBOOKLM_MCP_ALLOW_EXTERNAL_BIND", "1")
+    monkeypatch.delenv("NOTEBOOKLM_MCP_TOKEN", raising=False)
+
+    entry.main(["--transport", "http", "--host", "127.0.0.1", "--port", "8123"])
+
+    _assert_http_run(fake_server, host="127.0.0.1", port=8123, allow_external=False)
+
+
+def test_flagged_loopback_with_oauth_bypasses_host_guard(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A flagged loopback bind WITH OAuth (a tunnel deployment) bypasses the Host guard so the
+    tunnel's public-origin Host isn't rejected — OAuth authenticates every request, so a
+    DNS-rebinding page can't present a credential."""
+    fake_server = MagicMock()
+    monkeypatch.setattr(entry, "create_server", lambda **_: fake_server)
+    monkeypatch.setenv("NOTEBOOKLM_MCP_ALLOW_EXTERNAL_BIND", "1")
+    monkeypatch.delenv("NOTEBOOKLM_MCP_TOKEN", raising=False)
+    _set_oauth_env(monkeypatch)
+
+    entry.main(["--transport", "http", "--host", "127.0.0.1", "--port", "8123"])
+
+    _assert_http_run(fake_server, host="127.0.0.1", port=8123, allow_external=True)
+
+
 def _run_http(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     fake_server = MagicMock()
     monkeypatch.setattr(entry, "create_server", lambda **_: fake_server)
