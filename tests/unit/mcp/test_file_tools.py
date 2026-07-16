@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import mimetypes
 import os
 import textwrap
 from collections.abc import AsyncIterator
@@ -310,6 +311,171 @@ async def test_source_add_bytes_default_filename_and_no_mime(mock_client) -> Non
     # No filename → the shared safe-name default; no mime → None passed through.
     assert os.path.basename(seen["path"]) == "upload.bin"
     assert seen["mime"] is None
+
+
+# _seed_upload_filename (#1955): a bytes upload with no `filename` must still land a
+# real extension (NotebookLM 400s an extensionless upload) by seeding it from the
+# title + mime, and must NEVER regress the extensioned `upload.bin` fallback nor
+# bypass the shared safe_upload_name security pass.
+#
+# ``application/pdf`` is a single, stable mime→ext mapping, so ``.pdf`` is asserted
+# literally. ``text/plain`` maps to many extensions whose order (hence
+# ``guess_extension``'s pick) depends on the platform's mime.types, so those rows
+# compute the expected extension from ``mimetypes`` rather than hardcoding it —
+# what the fix guarantees is "an extension is seeded", not which one.
+_TXT_EXT = mimetypes.guess_extension("text/plain")
+
+
+@pytest.mark.parametrize(
+    ("filename", "title", "mime_type", "expected"),
+    [
+        # Explicit filename always wins verbatim — title/mime don't touch it.
+        ("report.pdf", "My Title", "text/plain", "report.pdf"),
+        # title + mime → stem from title, extension from mime.
+        (None, "b3-stress-bytes", "text/plain", f"b3-stress-bytes{_TXT_EXT}"),
+        # A parameterized Content-Type (charset param) is normalized to the bare type
+        # before the extension lookup — otherwise it'd miss and reproduce #1955.
+        (None, "b3-stress-bytes", "text/plain; charset=utf-8", f"b3-stress-bytes{_TXT_EXT}"),
+        # mime only (no title) → the default "upload" stem + mime extension.
+        (None, None, "application/pdf", "upload.pdf"),
+        (None, "", "application/pdf", "upload.pdf"),
+        # Title already spells the mime extension → don't double it.
+        (None, "report.pdf", "application/pdf", "report.pdf"),
+        # No mime, but the title carries its own extension → seed from the title.
+        (None, "notes.txt", None, "notes.txt"),
+        # A generic octet-stream mime carries no real extension → don't let its ".bin"
+        # guess clobber the title's own extension (notes.txt, NOT notes.txt.bin).
+        (None, "notes.txt", "application/octet-stream", "notes.txt"),
+        (None, "notes.txt", "binary/octet-stream", "notes.txt"),
+        # Generic octet-stream with no title extension → no signal → None (upload.bin).
+        (None, "data", "application/octet-stream", None),
+        (None, None, "application/octet-stream", None),
+        # No usable extension signal at all → None (→ safe_upload_name's upload.bin).
+        (None, "notes", None, None),
+        (None, None, None, None),
+        (None, "   ", None, None),
+        # Unknown mime yields no extension → fall back like the no-signal case.
+        (None, "blob", "application/x-not-a-real-mime", None),
+    ],
+)
+def test_seed_upload_filename(filename, title, mime_type, expected) -> None:
+    assert fileupload_mod._seed_upload_filename(filename, title, mime_type) == expected
+
+
+def test_text_plain_resolves_to_an_extension() -> None:
+    # Guards the assumption the #1955 fix rests on: a text/plain bytes upload can be
+    # given a real extension. If a platform's mimetypes can't map text/plain, the seed
+    # would fall back to upload.bin — surface that here rather than in a confusing
+    # basename mismatch elsewhere.
+    assert _TXT_EXT and _TXT_EXT.startswith(".")
+
+
+async def test_source_add_bytes_title_and_mime_seed_extension(mock_client) -> None:
+    # The #1955 trap: bytes + title (no filename) with a known mime must reach disk
+    # under a real extension (…​.txt), not the extensionless upload.bin that 400s.
+    seen: dict[str, Any] = {}
+
+    async def _capture(nb_id, path, mime, *, title=None):
+        seen["path"] = path
+        seen["mime"] = mime
+        seen["title"] = title
+        return FakeReadyPdf(id="s")
+
+    mock_client.sources.add_file = AsyncMock(side_effect=_capture)
+    result = await _call(
+        mock_client,
+        None,
+        "source_add",
+        {
+            "notebook": NB_ID,
+            "source_type": "file",
+            "bytes_base64": base64.b64encode(b"Hello. Grounded RAG rocks.\n").decode(),
+            "title": "b3-stress-bytes",
+            "mime_type": "text/plain",
+        },
+    )
+    assert result.structured_content["status"] == "added"
+    assert os.path.basename(seen["path"]) == f"b3-stress-bytes{_TXT_EXT}"
+    # The title still rides through as the source label, independent of the basename.
+    assert seen["title"] == "b3-stress-bytes"
+    assert seen["mime"] == "text/plain"
+
+
+async def test_source_add_bytes_mime_only_seeds_extension(mock_client) -> None:
+    # No filename, no title — just a mime. The default "upload" stem gets the
+    # mime-inferred extension so the spooled file isn't extensionless.
+    seen: dict[str, Any] = {}
+
+    async def _capture(nb_id, path, mime, *, title=None):
+        seen["path"] = path
+        return FakeReadyPdf(id="s")
+
+    mock_client.sources.add_file = AsyncMock(side_effect=_capture)
+    await _call(
+        mock_client,
+        None,
+        "source_add",
+        {
+            "notebook": NB_ID,
+            "source_type": "file",
+            "bytes_base64": base64.b64encode(b"%PDF-1.4 hi").decode(),
+            "mime_type": "application/pdf",
+        },
+    )
+    assert os.path.basename(seen["path"]) == "upload.pdf"
+
+
+async def test_source_add_bytes_unknown_mime_keeps_upload_bin(mock_client) -> None:
+    # An unknown mime yields no extension → the extensioned upload.bin fallback holds
+    # (never a bare extensionless name that would 400).
+    seen: dict[str, Any] = {}
+
+    async def _capture(nb_id, path, mime, *, title=None):
+        seen["path"] = path
+        return FakeReadyPdf(id="s")
+
+    mock_client.sources.add_file = AsyncMock(side_effect=_capture)
+    await _call(
+        mock_client,
+        None,
+        "source_add",
+        {
+            "notebook": NB_ID,
+            "source_type": "file",
+            "bytes_base64": base64.b64encode(b"data").decode(),
+            "title": "just-a-label",
+            "mime_type": "application/x-not-a-real-mime",
+        },
+    )
+    assert os.path.basename(seen["path"]) == "upload.bin"
+
+
+async def test_source_add_bytes_seeded_name_still_sanitized(mock_client) -> None:
+    # The seeded candidate is NOT trusted — it still flows through safe_upload_name,
+    # so a traversal-shaped title can't escape the temp dir (#1955 must not weaken the
+    # security pass shared with the /files/ul route).
+    seen: dict[str, Any] = {}
+
+    async def _capture(nb_id, path, mime, *, title=None):
+        seen["path"] = path
+        return FakeReadyPdf(id="s")
+
+    mock_client.sources.add_file = AsyncMock(side_effect=_capture)
+    await _call(
+        mock_client,
+        None,
+        "source_add",
+        {
+            "notebook": NB_ID,
+            "source_type": "file",
+            "bytes_base64": base64.b64encode(b"x").decode(),
+            "title": "../../etc/passwd",
+            "mime_type": "text/plain",
+        },
+    )
+    # basename strips the traversal; the mime extension is appended to the safe leaf.
+    assert os.path.basename(seen["path"]) == f"passwd{_TXT_EXT}"
+    assert "/etc/passwd" not in seen["path"]
 
 
 async def test_source_add_bytes_sanitizes_traversal_filename(mock_client) -> None:
