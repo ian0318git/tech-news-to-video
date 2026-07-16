@@ -47,6 +47,7 @@ from typing import Any
 __all__ = [
     "DOWNLOAD_TTL",
     "UPLOAD_TTL",
+    "WIDGET_UPLOAD_TTL",
     "ConsumedJtiStore",
     "FileLinkError",
     "FileLinkSigner",
@@ -61,6 +62,24 @@ __all__ = [
 #: ``Referrer-Policy: no-referrer``).
 UPLOAD_TTL = 15 * 60
 DOWNLOAD_TTL = 30 * 60
+
+#: Lifetime of a token in the in-app upload **widget's** pool (ADR-0027). Longer than
+#: the single-link ``UPLOAD_TTL`` because the widget uploads a whole *batch*
+#: sequentially through one browser: it mints the pool up front (all tokens share this
+#: one mint instant), then uploads file[0], file[1], … one after another, so the LAST
+#: token must still be live after the sum of every earlier file's transfer plus the
+#: user's file-picking think-time. At the 15-min link TTL a slow mobile link could
+#: expire a later token mid-batch → a silent 403, the file lost (#1894). An hour
+#: comfortably covers a realistic mobile batch of documents/photos.
+#:
+#: The longer window is a different — and smaller — risk class than the human_upload
+#: link's: a pool token is (a) single-use (it authorizes exactly one *successful* add,
+#: burned via :class:`ConsumedJtiStore`), (b) notebook-scoped, and (c) never shown to
+#: the user or placed in a URL bar — it lives only inside the widget's
+#: ``structuredContent`` / ``fetch`` body, never a location bar, history entry, or
+#: ``Referer``. The tight ``UPLOAD_TTL`` guards the *human* link the user opens in a
+#: browser (a genuinely higher-exposure surface); the widget pool never enters it.
+WIDGET_UPLOAD_TTL = 60 * 60
 
 #: Reject a token longer than this BEFORE any base64/HMAC/JSON work — an absurdly
 #: long path segment must not drive decode/allocation cost. Real tokens are well
@@ -175,7 +194,8 @@ class FileLinkSigner:
 
 
 #: Cap on the consumed-jti record. The server mints one jti per file-tool call and
-#: every entry is inline-swept once its token's ``exp`` passes (≤ ``UPLOAD_TTL``), so
+#: every entry is inline-swept once its token's ``exp`` passes (≤ the token's TTL —
+#: ``UPLOAD_TTL``, or ``WIDGET_UPLOAD_TTL`` for a widget-pool token), so
 #: the live set is tiny in practice; an attacker cannot mint jtis (no key). This bound
 #: is pure defense-in-depth against a runaway — 8192 is generous headroom.
 _MAX_SEEN_JTIS = 8192
@@ -211,7 +231,8 @@ class ConsumedJtiStore:
     #: (Phase 1 ``await_upload``): the ``/files/ul`` POST route and the polling tool run
     #: in the same single process (ADR-0024), so a same-loop poll reads what the route
     #: wrote — no DB, no cross-process state. Keyed by jti and swept with :attr:`_seen`,
-    #: so a record never outlives its token's ``exp`` (≤ ``UPLOAD_TTL``).
+    #: so a record never outlives its token's ``exp`` (≤ that token's TTL — ``UPLOAD_TTL``,
+    #: or ``WIDGET_UPLOAD_TTL`` for a widget-pool token).
     _results: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def _sweep(self, now: int) -> None:
@@ -371,14 +392,18 @@ class FileTransferConfig:
         shortid = self.short_links.put(token, exp)
         return f"{self.base_url.rstrip('/')}/u/{shortid}"
 
-    def upload_url(self, payload: dict[str, Any]) -> str:
+    def upload_url(self, payload: dict[str, Any], *, ttl: int = UPLOAD_TTL) -> str:
         """Sign ``payload`` with the upload TTL and build the ``/files/ul`` URL.
 
         The builder OWNS the ``op`` claim (stamps ``"ul"``) so the token always
         matches the route it is minted for — a caller cannot accidentally produce
         a token the route would 403.
+
+        ``ttl`` defaults to the single-link :data:`UPLOAD_TTL`; the in-app upload
+        widget passes the longer :data:`WIDGET_UPLOAD_TTL` for its sequentially-uploaded
+        token pool (ADR-0027). The route enforces single-use regardless of TTL.
         """
-        return self._build("ul", self.signer.sign({**payload, "op": "ul"}, UPLOAD_TTL))
+        return self._build("ul", self.signer.sign({**payload, "op": "ul"}, ttl))
 
     def download_url(self, payload: dict[str, Any]) -> str:
         """Sign ``payload`` with the download TTL and build the ``/files/dl`` URL.
