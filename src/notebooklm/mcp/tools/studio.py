@@ -65,6 +65,7 @@ from ._studio_items import (
     studio_items,
     summarize_studio_item,
 )
+from ._studio_payloads import _artifact_rename_payload, _generation_payload
 
 if TYPE_CHECKING:
     from ...client import NotebookLMClient
@@ -352,9 +353,8 @@ def register(mcp: Any) -> None:
 
         Non-blocking: returns immediately with a ``task_id``; poll
         ``studio_status(notebook, task_id)`` until ``is_complete`` is true.
-        Exception: ``mind-map`` renders synchronously and returns NO ``task_id``
-        (there is nothing to poll) — the rendered map is returned inline under
-        ``mind_map`` instead.
+        Exception: ``mind-map`` renders synchronously (no ``task_id``) — its node
+        tree is under ``mind_map`` (or ``null``), the map's id under ``mind_map_id``.
 
         ``artifact_type`` selects the artifact kind (each routes to its own
         generator):
@@ -931,63 +931,3 @@ def register(mcp: Any) -> None:
                 "type": resolved.type,
                 "was_note_backed": was_note_backed,
             }
-
-
-def _artifact_rename_payload(
-    notebook_id: str, result: artifact_core.ArtifactRenameResult, item_type: str
-) -> dict[str, Any]:
-    """Project an :class:`ArtifactRenameResult` onto the ``studio_rename`` wire shape.
-
-    Shared by the two artifact-rename branches (the full-UUID carve-out and the
-    resolved-artifact path), which differ only in the ``type`` label they surface —
-    the carve-out can't know the type from a list it wasn't in, the resolved path
-    carries ``resolved.type``.
-    """
-    return {
-        "status": "renamed",
-        "notebook_id": notebook_id,
-        "item_id": result.artifact_id,
-        "type": item_type,
-        "new_title": result.new_title,
-        "is_mind_map": result.is_mind_map,
-    }
-
-
-def _generation_payload(
-    notebook_id: str, result: generate_core.GenerationExecutionResult
-) -> dict[str, Any]:
-    """Project a :class:`GenerationExecutionResult` onto the wire shape.
-
-    Surfaces the ``task_id`` an agent polls with ``studio_status`` plus the
-    generation outcome (status / url / error) or, for mind maps, the rendered
-    map. Mind-map generation renders synchronously (no ``task_id`` to poll), so
-    its payload carries the rendered map inline under ``mind_map`` and omits the
-    poll fields — documented on ``studio_generate`` (#1908).
-    """
-    payload: dict[str, Any] = {
-        "notebook_id": notebook_id,
-        "kind": result.kind,
-    }
-    if result.kind == "mind-map":
-        # Mind-map generation renders synchronously — no pollable ``task_id`` — so
-        # the payload carries the rendered map inline under ``mind_map`` and omits
-        # the poll fields. Branch on the KIND (not a populated ``mind_map``): every
-        # mind-map — interactive AND note-backed — returns through this synchronous
-        # path (never the ``generation`` outcome), so an empty/``None`` map still
-        # takes this branch rather than falling through to the poll-shape below.
-        # NOTE: ``mind_map``'s shape currently varies by ``map_kind`` (interactive
-        # returns a MindMap; note-backed a MindMapResult) — normalizing it to the
-        # bare tree at one key is tracked separately (#1914).
-        payload["mind_map"] = to_jsonable(result.mind_map)
-        return payload
-    outcome = result.generation
-    if outcome is not None:
-        payload.update(
-            {
-                "task_id": outcome.task_id,
-                "status": outcome.status,
-                "url": outcome.url,
-                "error": outcome.error,
-            }
-        )
-    return payload
