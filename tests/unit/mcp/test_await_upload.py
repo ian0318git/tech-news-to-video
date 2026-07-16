@@ -9,15 +9,21 @@ status dict. Testing it directly avoids standing up the whole HTTP MCP server
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
+from collections.abc import AsyncIterator
+from unittest.mock import MagicMock
 
 import pytest
 
 pytest.importorskip("fastmcp")
 
+from fastmcp import Client  # noqa: E402
+
 import notebooklm.mcp._filelink as filelink  # noqa: E402
 from notebooklm.exceptions import ValidationError  # noqa: E402
 from notebooklm.mcp._filelink import FileLinkSigner, FileTransferConfig  # noqa: E402
+from notebooklm.mcp.server import create_server  # noqa: E402
 from notebooklm.mcp.tools._fileupload import (  # noqa: E402
     _await_upload,
     _broker_upload,
@@ -165,3 +171,67 @@ async def test_expired_token_with_no_committed_result_stays_invalid(monkeypatch)
     monkeypatch.setattr(filelink.time, "time", lambda: exp + 5)
     out = await _await_upload(cfg, url, timeout_s=0, poll_interval_s=0)
     assert out["status"] == "expired_or_invalid"
+
+
+# --------------------------------------------------------------------------- #
+# Progress keepalive (Item 3 / #1889) — the host sees liveness across the ~45s poll
+# --------------------------------------------------------------------------- #
+async def test_progress_keepalive_invoked_at_t0_and_each_tick() -> None:
+    # The progress hook fires at t=0 AND on every poll tick, so an MCP host watching for a
+    # stalled call sees liveness across the whole wait (not just once).
+    cfg = _cfg()
+    url, _ = _mint(cfg)
+    calls = 0
+
+    async def _progress() -> None:
+        nonlocal calls
+        calls += 1
+
+    # Nothing committed → polls until the timeout; expect the t=0 emit plus ≥1 tick emit.
+    out = await _await_upload(cfg, url, timeout_s=0.05, poll_interval_s=0.01, progress=_progress)
+    assert out["status"] == "pending"
+    assert calls >= 2
+
+
+async def test_progress_keepalive_errors_are_swallowed() -> None:
+    # Best-effort by contract: a keepalive that raises (no client progressToken / transient
+    # notify failure) must NOT abort the poll or surface as an error.
+    cfg = _cfg()
+    url, jti = _mint(cfg)
+    cfg.jti_store.commit(jti, int(time.time()) + 60, result={"source_id": "s-ok"})
+
+    async def _boom() -> None:
+        raise RuntimeError("notify channel closed")
+
+    out = await _await_upload(cfg, url, timeout_s=0.05, poll_interval_s=0.01, progress=_boom)
+    assert out["status"] == "received"  # the raising keepalive did not break the wait
+    assert out["source_id"] == "s-ok"
+
+
+async def test_await_upload_tool_delivers_progress_over_the_protocol() -> None:
+    # End-to-end over the REAL MCP protocol (in-memory Client with a progressToken-bearing
+    # request): the await_upload tool's keepalive reaches the client as an actual progress
+    # notification — not merely that ctx.report_progress was called.
+    cfg = _cfg()
+    url, jti = _mint(cfg)
+    cfg.jti_store.commit(jti, int(time.time()) + 60, result={"source_id": "s-ok"})
+
+    @contextlib.asynccontextmanager
+    async def factory() -> AsyncIterator[MagicMock]:
+        yield MagicMock()
+
+    server = create_server(client_factory=factory, file_transfer=cfg)
+    updates: list[tuple[float, str | None]] = []
+
+    async def on_progress(progress: float, total: float | None, message: str | None) -> None:
+        updates.append((progress, message))
+
+    async with Client(server) as client:
+        result = await client.call_tool(
+            "await_upload", {"upload_link": url, "timeout": 0.0}, progress_handler=on_progress
+        )
+
+    assert result.data["status"] == "received"
+    assert updates, "the keepalive must reach the client as a real progress notification"
+    # It carries a human-readable status message (an honest liveness ping).
+    assert any(msg for _progress, msg in updates)
