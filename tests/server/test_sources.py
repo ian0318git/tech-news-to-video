@@ -619,6 +619,50 @@ def test_add_batch_mid_item_rate_limit_is_top_level_429(
     assert "results" not in resp.json()
 
 
+def test_add_batch_mid_item_source_add_error_isolates_not_aborts(
+    authed_client: TestClient, fake_client: FakeClient, monkeypatch: object
+) -> None:
+    # A per-URL SourceAddError (bad domain) is a 4xx INPUT failure specific to the
+    # one URL — it must isolate as a per-item source_add error (422 partition) while
+    # the rest of the batch proceeds, NOT abort with a misleading top-level 5xx
+    # (regression for #1905; the same shared classifier the MCP tool uses).
+    import pytest
+
+    from notebooklm.exceptions import SourceAddError
+
+    assert isinstance(monkeypatch, pytest.MonkeyPatch)
+    _seed_notebook(fake_client)
+
+    real_add_url = fake_client.sources.add_url
+
+    async def _maybe_bad(notebook_id: str, url: str) -> object:
+        if "bad-domain" in url:
+            raise SourceAddError(url)
+        return await real_add_url(notebook_id, url)
+
+    monkeypatch.setattr(fake_client.sources, "add_url", _maybe_bad)
+    resp = authed_client.post(
+        "/v1/notebooks/nb-1/sources/batch",
+        json={
+            "urls": [
+                "https://good-a.example.com",
+                "https://bad-domain.example.com",
+                "https://good-b.example.com",
+            ]
+        },
+    )
+    # Isolated, not aborted: a 201 batch envelope with per-item results.
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["status"] == "added"
+    assert body["added"] == 2
+    assert body["failed"] == 1
+    assert [item["status"] for item in body["results"]] == ["added", "error", "added"]
+    err = body["results"][1]["error"]
+    assert err["category"] == "source_add"
+    assert err["retriable"] is False
+
+
 def test_add_batch_per_item_error_is_redacted(
     authed_client: TestClient, fake_client: FakeClient, monkeypatch: object
 ) -> None:

@@ -24,6 +24,7 @@ from notebooklm._types.sources import SourceType  # noqa: E402 - after importors
 from notebooklm.exceptions import (  # noqa: E402 - after importorskip guard
     NetworkError,
     RPCError,
+    SourceAddError,
     SourceNotFoundError,
     SourceProcessingError,
     SourceTimeoutError,
@@ -1710,6 +1711,64 @@ async def test_source_add_batch_isolates_non_fatal_input_error(mcp_call, mock_cl
     assert sc["results"][1]["source_id"] == SRC2_ID
     # Non-fatal → the batch continued and attempted the second URL.
     assert mock_client.sources.add_url.await_count == 2
+
+
+async def test_source_add_batch_isolates_source_add_error(mcp_call, mock_client) -> None:
+    """A per-URL ``SourceAddError`` (bad domain) isolates as a SOURCE_ADD error and
+    later URLs still process — regression for #1905.
+
+    Before the fix, ``SourceAddError`` classified as the fatal ``LIBRARY`` category,
+    so a single bad-domain URL aborted the whole batch (the 3rd + 4th entries were
+    never attempted). Now it is the non-fatal ``SOURCE_ADD`` category, so the batch
+    isolates it per item. ``[valid, bad-domain, valid, non-http]`` must yield 4 result
+    entries: 2 ``added``, 1 ``SOURCE_ADD`` error (the bad domain, wrapped by
+    ``_source/add.py`` from a residual ADD RPCError), 1 ``VALIDATION`` error (the
+    non-http entry, rejected by ``validate_url`` before any client call) — with no
+    abort.
+    """
+    mock_client.sources.add_url = AsyncMock(
+        side_effect=[
+            FakeSource(id=SRC_ID, title="A"),
+            SourceAddError("https://bad-domain.example.com"),
+            FakeSource(id=SRC2_ID, title="B"),
+        ]
+    )
+    mock_client.sources.get_fulltext = AsyncMock(
+        return_value=FakeFulltext(content="x" * 500, char_count=500)
+    )
+    result = await mcp_call(
+        "source_add",
+        {
+            "notebook": NB_ID,
+            "urls": [
+                "https://valid-a.example.com",
+                "https://bad-domain.example.com",
+                "https://valid-b.example.com",
+                "ftp://not-http.example.com",
+            ],
+        },
+    )
+    sc = result.structured_content
+    # The whole call did NOT raise (isolated, not aborted).
+    assert sc["status"] == "added"
+    assert sc["added"] == 2
+    assert sc["failed"] == 2
+    assert [item["status"] for item in sc["results"]] == ["added", "error", "added", "error"]
+
+    assert sc["results"][0]["source_id"] == SRC_ID
+    # The bad domain is isolated as a per-item SOURCE_ADD error (non-fatal).
+    bad = sc["results"][1]
+    assert bad["input"] == "https://bad-domain.example.com"
+    assert bad["error"]["code"] == "SOURCE_ADD"
+    assert bad["error"]["retriable"] is False
+    # The URL AFTER the bad domain was still processed (not dropped by an abort).
+    assert sc["results"][2]["source_id"] == SRC2_ID
+    # The non-http entry is a VALIDATION error (rejected before any client call).
+    non_http = sc["results"][3]
+    assert non_http["input"] == "ftp://not-http.example.com"
+    assert non_http["error"]["code"] == "VALIDATION"
+    # add_url was attempted for the 3 http(s) entries; the non-http one never reached it.
+    assert mock_client.sources.add_url.await_count == 3
 
 
 async def test_source_add_batch_over_cap_rejected_before_any_add(mcp_call, mock_client) -> None:

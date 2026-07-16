@@ -30,6 +30,7 @@ _EXEMPLARS: list[tuple[ErrorCategory, BaseException]] = [
     (ErrorCategory.SERVER, exc.ServerError("upstream 503")),
     (ErrorCategory.RPC, exc.RPCError("decode failed", method_id="abc123")),
     (ErrorCategory.SOURCE_MUTATION, SourceMutationError("ambiguous", "AMBIGUOUS_ID")),
+    (ErrorCategory.SOURCE_ADD, exc.SourceAddError("http://bad.example")),
     (ErrorCategory.LIBRARY, exc.NotebookLMError("some library error")),
     (ErrorCategory.UNEXPECTED, RuntimeError("boom")),
 ]
@@ -50,6 +51,7 @@ _EXPECTED_FATAL: dict[ErrorCategory, bool] = {
     ErrorCategory.SERVER: True,  # 502
     ErrorCategory.RPC: True,  # 502
     ErrorCategory.SOURCE_MUTATION: False,  # 422
+    ErrorCategory.SOURCE_ADD: False,  # 422 — per-URL input failure isolates (#1905)
     ErrorCategory.LIBRARY: True,  # 500
     ErrorCategory.UNEXPECTED: True,  # 500
 }

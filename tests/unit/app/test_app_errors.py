@@ -103,6 +103,14 @@ def test_every_library_exception_classifies_as_a_library_category(cls: type) -> 
             ErrorCategory.SOURCE_MUTATION,
             False,
         ),
+        # A per-URL ADD failure classifies as its own non-fatal category (#1905)
+        # so a bad URL isolates in a batch add instead of aborting it. Not
+        # retriable — the same input will not succeed unchanged.
+        (
+            exc.SourceAddError("http://bad.example"),
+            ErrorCategory.SOURCE_ADD,
+            False,
+        ),
         (ValueError("not ours"), ErrorCategory.UNEXPECTED, False),
         (RuntimeError("not ours"), ErrorCategory.UNEXPECTED, False),
     ],
@@ -209,6 +217,42 @@ def test_app_raised_errors_are_in_public_hierarchy_and_classify(
     result = classify(app_error)
     assert result.category is expected_category
     assert result.category is not ErrorCategory.UNEXPECTED
+
+
+def test_source_add_error_is_its_own_non_library_category() -> None:
+    """``SourceAddError`` classifies as ``SOURCE_ADD``, not the LIBRARY catch-all (#1905).
+
+    This is what keeps a bad-URL item non-fatal in a batch add: ``LIBRARY`` is a
+    fatal category (aborts the batch), whereas ``SOURCE_ADD`` isolates per item.
+    A bare rejection (no cause) and a per-source rejection code both isolate.
+    """
+    for e in (
+        exc.SourceAddError("http://bad.example"),
+        exc.SourceAddError("http://bad.example", cause=exc.RPCError("boom", rpc_code=9)),
+    ):
+        result = classify(e)
+        assert result.category is ErrorCategory.SOURCE_ADD
+        assert result.category is not ErrorCategory.LIBRARY
+        assert result.retriable is False
+
+
+def test_source_add_error_with_transient_cause_stays_fatal() -> None:
+    """A ``SourceAddError`` wrapping a *transient/server* bare-RPCError cause stays FATAL.
+
+    ``rpc/decoder.py`` can raise a bare ``RPCError`` with an infra ``rpc_code`` (e.g. a
+    null-result-with-status INTERNAL 13, or an HTTP 5xx) that ``_source/add.py`` wraps as
+    ``SourceAddError``. Isolating that as a per-item error would mask a rate-limit/5xx and
+    let a batch add report partial success instead of aborting for retry/backoff (#1905
+    review). So it must NOT be SOURCE_ADD.
+    """
+    for code in (13, 14, 8, 4, 503):
+        e = exc.SourceAddError("http://x", cause=exc.RPCError("transient", rpc_code=code))
+        result = classify(e)
+        assert result.category is not ErrorCategory.SOURCE_ADD, f"code {code} should stay fatal"
+        assert result.category is ErrorCategory.SERVER
+        from notebooklm._app.source_batch import batch_item_is_fatal
+
+        assert batch_item_is_fatal(e) is True, f"code {code} must abort the batch"
 
 
 def test_source_mutation_error_keeps_cli_attributes() -> None:

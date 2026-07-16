@@ -222,7 +222,8 @@ These conventions hold across every tool:
   `failed` tallies + per-item `results[].status` for partial outcomes.)
 - **Structured errors.** Failures arrive as `CODE: message (retriable=…)`, where `CODE` is one of
   `AUTH`, `RATE_LIMITED`, `NOT_FOUND`, `VALIDATION`, `TIMEOUT`, `NETWORK`, `SERVER`, `RPC`,
-  `CONFIG`, `NOTEBOOK_LIMIT`, `ARTIFACT_TIMEOUT`, `SOURCE_MUTATION`, `ERROR`, or `UNEXPECTED`. The
+  `CONFIG`, `NOTEBOOK_LIMIT`, `ARTIFACT_TIMEOUT`, `SOURCE_MUTATION`, `SOURCE_ADD`, `ERROR`, or
+  `UNEXPECTED`. The
   `retriable` flag tells an agent whether a retry could succeed (e.g. `RATE_LIMITED`, `TIMEOUT`,
   `NETWORK`). Many errors also carry an actionable `hint` (e.g. `AUTH → run notebooklm login`); a
   near-miss name lookup puts its `Did you mean: …` candidates (title + id) in that hint (see

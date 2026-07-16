@@ -112,6 +112,7 @@ CATEGORY_STATUS: dict[ErrorCategory, int] = {
     ErrorCategory.SERVER: 502,
     ErrorCategory.RPC: 502,
     ErrorCategory.SOURCE_MUTATION: 422,
+    ErrorCategory.SOURCE_ADD: 422,
     ErrorCategory.LIBRARY: 500,
     ErrorCategory.UNEXPECTED: 500,
 }

@@ -47,6 +47,7 @@ _CATEGORY_TO_STATUS: dict[ErrorCategory, int] = {
     ErrorCategory.SERVER: 502,
     ErrorCategory.RPC: 502,
     ErrorCategory.SOURCE_MUTATION: 422,
+    ErrorCategory.SOURCE_ADD: 422,
     ErrorCategory.LIBRARY: 500,
     ErrorCategory.UNEXPECTED: 500,
 }
@@ -65,6 +66,7 @@ _EXEMPLARS: list[tuple[ErrorCategory, BaseException]] = [
     (ErrorCategory.SERVER, exc.ServerError("upstream 503")),
     (ErrorCategory.RPC, exc.RPCError("decode failed", method_id="abc123")),
     (ErrorCategory.SOURCE_MUTATION, SourceMutationError("ambiguous", "AMBIGUOUS_ID")),
+    (ErrorCategory.SOURCE_ADD, exc.SourceAddError("http://bad.example")),
     (ErrorCategory.LIBRARY, exc.NotebookLMError("some library error")),
     (ErrorCategory.UNEXPECTED, RuntimeError("boom")),
 ]

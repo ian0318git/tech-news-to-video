@@ -51,6 +51,7 @@ _EXEMPLARS: list[tuple[ErrorCategory, BaseException]] = [
     (ErrorCategory.SERVER, exc.ServerError("upstream 503")),
     (ErrorCategory.RPC, exc.RPCError("decode failed", method_id="abc123")),
     (ErrorCategory.SOURCE_MUTATION, SourceMutationError("ambiguous", "AMBIGUOUS_ID")),
+    (ErrorCategory.SOURCE_ADD, exc.SourceAddError("http://bad.example")),
     (ErrorCategory.LIBRARY, exc.NotebookLMError("some library error")),
     (ErrorCategory.UNEXPECTED, RuntimeError("boom")),
 ]
@@ -76,6 +77,7 @@ _CATEGORY_TO_MCP_CODE: dict[ErrorCategory, str] = {
     ErrorCategory.SERVER: "SERVER",
     ErrorCategory.RPC: "RPC",
     ErrorCategory.SOURCE_MUTATION: "SOURCE_MUTATION",
+    ErrorCategory.SOURCE_ADD: "SOURCE_ADD",
     ErrorCategory.LIBRARY: "ERROR",
     ErrorCategory.UNEXPECTED: "UNEXPECTED",
 }

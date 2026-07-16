@@ -73,6 +73,7 @@ _CATEGORY_CODES: dict[ErrorCategory, str] = {
     ErrorCategory.SERVER: "SERVER",
     ErrorCategory.RPC: "RPC",
     ErrorCategory.SOURCE_MUTATION: "SOURCE_MUTATION",
+    ErrorCategory.SOURCE_ADD: "SOURCE_ADD",
     ErrorCategory.LIBRARY: "ERROR",
     ErrorCategory.UNEXPECTED: "UNEXPECTED",
 }

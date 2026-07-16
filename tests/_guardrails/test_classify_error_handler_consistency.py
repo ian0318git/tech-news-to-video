@@ -45,6 +45,7 @@ _CATEGORY_TO_CLI_CODE: dict[ErrorCategory, str] = {
     ErrorCategory.SERVER: "NOTEBOOKLM_ERROR",
     ErrorCategory.RPC: "NOTEBOOKLM_ERROR",
     ErrorCategory.SOURCE_MUTATION: "NOTEBOOKLM_ERROR",
+    ErrorCategory.SOURCE_ADD: "NOTEBOOKLM_ERROR",
     ErrorCategory.LIBRARY: "NOTEBOOKLM_ERROR",
     ErrorCategory.UNEXPECTED: "UNEXPECTED_ERROR",
 }
@@ -66,6 +67,7 @@ _EXEMPLARS: list[tuple[ErrorCategory, BaseException]] = [
     (ErrorCategory.SERVER, exc.ServerError("upstream 503")),
     (ErrorCategory.RPC, exc.RPCError("decode failed", method_id="abc123")),
     (ErrorCategory.SOURCE_MUTATION, SourceMutationError("ambiguous", "AMBIGUOUS_ID")),
+    (ErrorCategory.SOURCE_ADD, exc.SourceAddError("http://bad.example")),
     (ErrorCategory.LIBRARY, exc.NotebookLMError("some library error")),
     (ErrorCategory.UNEXPECTED, RuntimeError("boom")),
 ]
