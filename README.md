@@ -310,10 +310,6 @@ asyncio.run(main())
 - **[Changelog](CHANGELOG.md)** - Version history and release notes
 - **[Security](SECURITY.md)** - Security policy and credential handling
 
-## Star History
-
-[![Star History Chart](https://api.star-history.com/image?repos=teng-lin/notebooklm-py&type=timeline&legend=top-left)](https://www.star-history.com/?repos=teng-lin%2Fnotebooklm-py&type=timeline&legend=top-left)
-
 ## License
 
 MIT License. See [LICENSE](LICENSE) for details.
