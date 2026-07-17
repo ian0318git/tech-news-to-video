@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **MCP `source_add` bytes upload no longer defaults to an extensionless
+  `upload.bin`.** Passing `bytes_base64` without an explicit `filename` used to
+  spool the file as `upload.bin`, which NotebookLM rejected with an HTTP 400
+  ("file type unsupported") even for plain text. The filename/extension is now
+  seeded from the `title` and/or `mime_type` (falling back to `upload.bin` only
+  when neither yields one), so a bytes upload succeeds without a caller-supplied
+  filename ([#1955](https://github.com/teng-lin/notebooklm-py/issues/1955)).
 - **Research import is now idempotent.** Re-importing a completed research task
   no longer duplicates its sources: `import_sources_with_verification` (and the
   MCP `research_import` tool that drives it) pre-filters requested sources whose
