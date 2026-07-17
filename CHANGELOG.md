@@ -7,12 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- **Fresh conversations are no longer reported as follow-ups.** A null-conversation
-  ask now checks whether the server-assigned current conversation has any turns
-  before setting `AskResult.is_follow_up` ([#1973](https://github.com/teng-lin/notebooklm-py/issues/1973)).
-
 ## [0.8.0]
 
 The headline of 0.8.0 is **integrations**: NotebookLM is now reachable from AI
@@ -519,6 +513,9 @@ get-returns-None / kwarg-alias deprecation machinery — has been **removed**
 
 ### Fixed
 
+- **Fresh conversations are no longer reported as follow-ups.** A null-conversation
+  ask now checks whether the server-assigned current conversation has any turns
+  before setting `AskResult.is_follow_up` ([#1973](https://github.com/teng-lin/notebooklm-py/issues/1973)).
 - **MCP `source_add` bytes upload no longer defaults to a generic
   `upload.bin`.** Passing `bytes_base64` without an explicit `filename` used to
   spool the file as `upload.bin`, which NotebookLM rejected with an HTTP 400
