@@ -120,14 +120,18 @@ class TestChatGoldenDecoded:
             "This notebook is about **NotebookLM**, an online research"
         ), f"Unexpected answer head: {reprlib.repr(result.answer)}"
 
-        # Conversation id + turn metadata.
+        # Conversation id + turn metadata. The cassette's pre-POST hPTbtc
+        # resolve returns a current conversation id (bc0666c8), so this null ask
+        # resumes the notebook's existing conversation → is_follow_up is True
+        # (#1965). turn_number is 1 because this fresh client has no locally
+        # cached turns for that conversation yet.
         assert_decoded_equals(
             result.conversation_id,
             "bc0666c8-34b5-4bf8-817f-554867ea6ee8",
             field="chat_ask.conversation_id",
         )
         assert_decoded_equals(result.turn_number, 1, field="chat_ask.turn_number")
-        assert_decoded_equals(result.is_follow_up, False, field="chat_ask.is_follow_up")
+        assert_decoded_equals(result.is_follow_up, True, field="chat_ask.is_follow_up")
 
         # References: pin (citation_number, source_id, start_char, end_char) for
         # every reference, in order. This is the positional-decode canary — a

@@ -31,6 +31,7 @@ from .deleted_tracker import RecentlyDeletedConversations
 from .notes import save_chat_answer_as_note
 from .transport import chat_aware_authed_post
 from .wire import (
+    _extract_next_turn_content,
     build_streaming_chat_request,
     collect_texts_from_nested,
     extract_answer_and_refs_from_chunk,
@@ -61,42 +62,6 @@ from ..types import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _extract_next_turn_content(next_turn: Any) -> str | None:
-    """Extract the response content from a streaming-chat next_turn frame.
-
-    The ``khqZz`` (``GET_CONVERSATION_TURNS``) response packs each AI answer
-    as ``turn[4][0][0]`` — three nested wrappers around the answer text. The
-    descent goes through :func:`safe_index` under strict decoding (the only
-    mode since the ``NOTEBOOKLM_STRICT_DECODE=0`` opt-out was retired in
-    v0.7.0; rationale in ADR-0011): a genuine descent failure raises
-    :class:`~notebooklm.exceptions.UnknownRPCMethodError` so callers fail
-    fast on Google-side shape drift.
-
-    ``next_turn`` is a validated answer row (a list with ``len > 4`` and the
-    answer role code — see ``ConversationTurnRow.is_answer``). Returns the
-    answer-text string, or ``None`` when the leaf descends successfully to a
-    non-string value (the caller's empty-answer fallback).
-    """
-    content = safe_index(
-        next_turn,
-        4,
-        0,
-        0,
-        method_id=RPCMethod.GET_CONVERSATION_TURNS.value,
-        source="_chat._extract_next_turn_content",
-    )
-    if not isinstance(content, str):
-        # A non-string leaf at a structurally-valid path is normalised to
-        # ``None`` so the caller's empty-answer fallback fires uniformly. This
-        # is distinct from shape drift, which safe_index raises on.
-        logger.debug(
-            "next_turn content is not a string (type=%s); treating as drift",
-            type(content).__name__,
-        )
-        return None
-    return content
 
 
 class ChatAPI(LoopBoundPrimitive):
@@ -314,6 +279,12 @@ class ChatAPI(LoopBoundPrimitive):
             source_ids = await self._notebooks.get_source_ids(notebook_id)
 
         is_new_conversation = conversation_id is None
+        # ``is_follow_up`` records whether this ask CONTINUED an existing
+        # conversation. An explicit ``conversation_id`` is always a follow-up.
+        # A null ask is a follow-up only when the notebook already had a current
+        # conversation that we resumed — refined on the null-ask path below,
+        # where a first-ever (or just-deleted) conversation starts fresh (#1965).
+        is_follow_up = not is_new_conversation
 
         async def perform_request(
             *,
@@ -468,6 +439,10 @@ class ChatAPI(LoopBoundPrimitive):
                     # conversation for the null POST, so drop the override and
                     # recover the real id post-POST, not the deleted one (#1875).
                     override = None if current_id in self._deleted_conversations else current_id
+                    # Resuming a live current conversation is a genuine
+                    # follow-up; a deleted one makes the server start fresh, so
+                    # it is not (override is None ⇒ new conversation) (#1965).
+                    is_follow_up = override is not None
                     posted = await perform_request(
                         conversation_history=None,
                         active_conversation_id=None,
@@ -497,7 +472,7 @@ class ChatAPI(LoopBoundPrimitive):
             answer=answer_text,
             conversation_id=resolved_conversation_id,
             turn_number=turn_number,
-            is_follow_up=not is_new_conversation,
+            is_follow_up=is_follow_up,
             references=references,
             raw_response=raw_response[:1000],
         )

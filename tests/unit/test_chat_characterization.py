@@ -589,7 +589,9 @@ class TestChatReferences:
             )
         assert result.answer == "This is a valid answer returned without the answer marker."
         assert result.conversation_id is not None
-        assert result.is_follow_up is False
+        # The pre-POST hPTbtc resolve returns a current conversation id, so this
+        # null ask resumes an existing conversation → a follow-up (#1965).
+        assert result.is_follow_up is True
 
     @pytest.mark.asyncio
     async def test_ask_prefers_marked_over_unmarked_in_streaming_response(
@@ -989,16 +991,22 @@ class TestAskServerAssignedConversationId:
             content=chat_response_body.encode(),
             method="POST",
         )
-        # Post-ask hPTbtc returns the REAL conversation_id. AskResult
-        # must adopt this, NOT first[2][0].
-        real_conv = "real-1111-2222-3333-444444444444"
-        hptbtc_response = build_rpc_response(
-            RPCMethod.GET_LAST_CONVERSATION_ID,
-            [[[real_conv]]],
-        )
+        # Genuine new conversation: the pre-POST hPTbtc resolve finds no current
+        # conversation (empty envelope → None), so ask() creates a fresh one and
+        # keeps is_follow_up False (#1965)...
         httpx_mock.add_response(
-            url=re.compile(r".*batchexecute.*"),
-            content=hptbtc_response.encode(),
+            url=re.compile(r".*batchexecute.*rpcids=hPTbtc.*"),
+            content=build_rpc_response(RPCMethod.GET_LAST_CONVERSATION_ID, [[[]]]).encode(),
+            method="POST",
+        )
+        # ...then recovers the REAL conversation_id via the post-POST hPTbtc
+        # round-trip. AskResult must adopt this, NOT first[2][0].
+        real_conv = "real-1111-2222-3333-444444444444"
+        httpx_mock.add_response(
+            url=re.compile(r".*batchexecute.*rpcids=hPTbtc.*"),
+            content=build_rpc_response(
+                RPCMethod.GET_LAST_CONVERSATION_ID, [[[real_conv]]]
+            ).encode(),
             method="POST",
         )
         async with NotebookLMClient(auth_tokens) as client:
