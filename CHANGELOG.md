@@ -7,41 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- **MCP `source_add` bytes upload no longer defaults to an extensionless
-  `upload.bin`.** Passing `bytes_base64` without an explicit `filename` used to
-  spool the file as `upload.bin`, which NotebookLM rejected with an HTTP 400
-  ("file type unsupported") even for plain text. The filename/extension is now
-  seeded from the `title` and/or `mime_type` (falling back to `upload.bin` only
-  when neither yields one), so a bytes upload succeeds without a caller-supplied
-  filename ([#1955](https://github.com/teng-lin/notebooklm-py/issues/1955)).
-- **Research import is now idempotent.** Re-importing a completed research task
-  no longer duplicates its sources: `import_sources_with_verification` (and the
-  MCP `research_import` tool that drives it) pre-filters requested sources whose
-  URL already exists in the notebook on *every* attempt, not only on the
-  timeout-retry path. A repeat import adds nothing and reports the skipped
-  sources — the MCP result gains `newly_imported` / `already_present` (with the
-  existing source ids) and a `status` of `already_imported`. Pass
-  `allow_duplicate=True` (MCP) to force a re-add. Report / pasted-text entries
-  have no dedupable URL and are unaffected
-  ([#1961](https://github.com/teng-lin/notebooklm-py/issues/1961)).
-- `chat.ask()` (and the `chat_ask` MCP tool / `AskResult`) now report
-  `is_follow_up=True` when an implicit ask (no `conversation_id`) continues the
-  notebook's existing current conversation, instead of always reporting `False`
-  on the implicit path. A genuinely new (first-ever) conversation still reports
-  `is_follow_up=False`
-  ([#1965](https://github.com/teng-lin/notebooklm-py/issues/1965)).
-- **A missing optional-dependency error now points at the right fix.** Reading a
-  source with `output_format="markdown"` without the `markdownify` extra
-  installed used to report the wrong remediation ("Check the auth profile /
-  storage configuration.") because the missing-extra error was classified as a
-  configuration error. It now raises a dedicated `MissingDependencyError`
-  (classified as a new `DEPENDENCY` category) whose hint names the install
-  command — e.g. `pip install 'notebooklm-py[markdown]'` — across the MCP
-  (`DEPENDENCY` code) and REST (`dependency` / HTTP 500) surfaces
-  ([#1959](https://github.com/teng-lin/notebooklm-py/issues/1959)).
-
 ## [0.8.0]
 
 The headline of 0.8.0 is **integrations**: NotebookLM is now reachable from AI
@@ -548,6 +513,38 @@ get-returns-None / kwarg-alias deprecation machinery — has been **removed**
 
 ### Fixed
 
+- **MCP `source_add` bytes upload no longer defaults to a generic
+  `upload.bin`.** Passing `bytes_base64` without an explicit `filename` used to
+  spool the file as `upload.bin`, which NotebookLM rejected with an HTTP 400
+  ("file type unsupported") even for plain text. The filename/extension is now
+  seeded from the `title` and/or `mime_type` (falling back to `upload.bin` only
+  when neither yields one), so a bytes upload succeeds without a caller-supplied
+  filename ([#1955](https://github.com/teng-lin/notebooklm-py/issues/1955)).
+- **Research import is now idempotent.** Re-importing a completed research task
+  no longer duplicates its sources: `import_sources_with_verification` (and the
+  MCP `research_import` tool that drives it) pre-filters requested sources whose
+  URL already exists in the notebook on *every* attempt, not only on the
+  timeout-retry path. A repeat import adds nothing and reports the skipped
+  sources — the MCP result gains `newly_imported` / `already_present` (with the
+  existing source ids) and a `status` of `already_imported`. Pass
+  `allow_duplicate=True` (MCP) to force a re-add. Report / pasted-text entries
+  have no dedupable URL and are unaffected
+  ([#1961](https://github.com/teng-lin/notebooklm-py/issues/1961)).
+- `chat.ask()` (and the `chat_ask` MCP tool / `AskResult`) now report
+  `is_follow_up=True` when an implicit ask (no `conversation_id`) continues the
+  notebook's existing current conversation, instead of always reporting `False`
+  on the implicit path. A genuinely new (first-ever) conversation still reports
+  `is_follow_up=False`
+  ([#1965](https://github.com/teng-lin/notebooklm-py/issues/1965)).
+- **A missing optional-dependency error now points at the right fix.** Reading a
+  source with `output_format="markdown"` without the `markdownify` extra
+  installed used to report the wrong remediation ("Check the auth profile /
+  storage configuration.") because the missing-extra error was classified as a
+  configuration error. It now raises a dedicated `MissingDependencyError`
+  (classified as a new `DEPENDENCY` category) whose hint names the install
+  command — e.g. `pip install 'notebooklm-py[markdown]'` — across the MCP
+  (`DEPENDENCY` code) and REST (`dependency` / HTTP 500) surfaces
+  ([#1959](https://github.com/teng-lin/notebooklm-py/issues/1959)).
 - **MCP `notebook_describe(include_metadata=true)` no longer reports a source
   count that disagrees with its own `sources` list.** The exposed
   `metadata.notebook.sources_count` is now re-projected to the enumerated
