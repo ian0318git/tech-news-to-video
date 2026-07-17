@@ -445,3 +445,58 @@ async def test_wait_runs_inside_injected_wait_context() -> None:
     )
 
     assert events == ["enter", "exit"]
+
+
+# ---------------------------------------------------------------------------
+# import_research_sources (#1961 idempotent import wrapper)
+# ---------------------------------------------------------------------------
+
+
+async def test_import_research_sources_reports_already_present() -> None:
+    from notebooklm._app.research import ResearchImportOutcome, import_research_sources
+    from notebooklm._research import _imported_result
+
+    client = MagicMock()
+    client.research = MagicMock()
+    client.research.import_sources_with_verification = AsyncMock(
+        return_value=_imported_result(
+            [{"id": "new_1", "title": "New"}],
+            [{"id": "old_1", "title": "Old", "url": "https://old.example.com"}],
+        )
+    )
+
+    outcome = await import_research_sources(
+        client, "nb_1", "task_1", [{"url": "https://new.example.com", "title": "New"}]
+    )
+
+    assert isinstance(outcome, ResearchImportOutcome)
+    assert outcome.newly_imported == [{"id": "new_1", "title": "New"}]
+    assert outcome.already_present == [
+        {"id": "old_1", "title": "Old", "url": "https://old.example.com"}
+    ]
+    assert outcome.newly_imported_count == 1
+    assert outcome.already_present_count == 1
+    # First three args are positional (MCP tests assert args[0]/args[1]); the
+    # opt-out threads through as a keyword.
+    args, kwargs = client.research.import_sources_with_verification.await_args
+    assert args[0] == "nb_1"
+    assert args[1] == "task_1"
+    assert args[2] == [{"url": "https://new.example.com", "title": "New"}]
+    assert kwargs == {"allow_duplicate": False}
+
+
+async def test_import_research_sources_plain_list_return_has_empty_already_present() -> None:
+    from notebooklm._app.research import import_research_sources
+
+    client = MagicMock()
+    client.research = MagicMock()
+    client.research.import_sources_with_verification = AsyncMock(
+        return_value=[{"id": "new_1", "title": "New"}]
+    )
+
+    outcome = await import_research_sources(client, "nb_1", "task_1", [], allow_duplicate=True)
+
+    assert outcome.newly_imported == [{"id": "new_1", "title": "New"}]
+    assert outcome.already_present == []
+    _, kwargs = client.research.import_sources_with_verification.await_args
+    assert kwargs == {"allow_duplicate": True}

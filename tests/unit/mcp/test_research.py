@@ -1098,3 +1098,59 @@ async def test_research_alias_and_canonical_conflict_rejected(mcp_call, mock_cli
         )
     assert "VALIDATION" in str(excinfo.value)
     mock_client.research.poll.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# research_import idempotency (#1961)
+# ---------------------------------------------------------------------------
+
+
+async def test_research_import_already_imported_when_all_present(mcp_call, mock_client) -> None:
+    """A repeat import (everything already present) adds nothing and reports it."""
+    from notebooklm._research import _imported_result
+
+    mock_client.research.poll = AsyncMock(
+        return_value=FakeResearchTask(
+            status=FakeResearchStatus.COMPLETED,
+            sources=[FakeSource(url="http://a", title="A")],
+            task_id=TASK_ID,
+        )
+    )
+    mock_client.research.import_sources_with_verification = AsyncMock(
+        return_value=_imported_result([], [{"id": "existing-1", "title": "A", "url": "http://a"}])
+    )
+
+    result = await mcp_call("research_import", {"notebook": NB_ID, "poll_task_id": TASK_ID})
+    sc = result.structured_content
+    assert sc["status"] == "already_imported"
+    assert sc["newly_imported"] == []
+    assert sc["imported"] == []  # historical alias for newly_imported
+    assert sc["newly_imported_count"] == 0
+    assert sc["already_present"] == [{"id": "existing-1", "title": "A", "url": "http://a"}]
+    assert sc["already_present_count"] == 1
+
+
+async def test_research_import_allow_duplicate_threads_through(mcp_call, mock_client) -> None:
+    """allow_duplicate=True re-adds and is forwarded to the import wrapper."""
+    mock_client.research.poll = AsyncMock(
+        return_value=FakeResearchTask(
+            status=FakeResearchStatus.COMPLETED,
+            sources=[FakeSource(url="http://a", title="A")],
+            task_id=TASK_ID,
+        )
+    )
+    mock_client.research.import_sources_with_verification = AsyncMock(
+        return_value=[{"id": "dup-1", "title": "A"}]
+    )
+
+    result = await mcp_call(
+        "research_import",
+        {"notebook": NB_ID, "poll_task_id": TASK_ID, "allow_duplicate": True},
+    )
+    sc = result.structured_content
+    assert sc["status"] == "imported"
+    assert sc["newly_imported"] == [{"id": "dup-1", "title": "A"}]
+    assert sc["already_present"] == []
+    assert sc["already_present_count"] == 0
+    _, kwargs = mock_client.research.import_sources_with_verification.await_args
+    assert kwargs.get("allow_duplicate") is True

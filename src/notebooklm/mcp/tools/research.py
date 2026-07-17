@@ -375,6 +375,7 @@ def register(mcp: Any) -> None:
         task_id: str | None = None,
         max_sources: int | None = None,
         cited_only: bool = False,
+        allow_duplicate: bool = False,
     ) -> dict[str, Any]:
         """Import a completed research task's sources into the notebook.
 
@@ -382,13 +383,12 @@ def register(mcp: Any) -> None:
         value from ``research_start`` / ``research_status``. ``task_id`` is a
         deprecated alias (removed in v0.9.0).
 
-        The id pins the task: only its sources import (else ``not_found``).
-        Timeout-tolerant: a timed-out import reconciles against what the server
-        actually committed. Returns the imported sources (verify with
-        ``source_list``).
+        The id pins the task. Timeout-tolerant: a timed-out import reconciles
+        what committed. Idempotent: sources already present (by URL) are skipped
+        as ``already_present``; ``allow_duplicate`` re-adds them.
 
         ``cited_only`` imports only report-cited sources (all, if none resolve).
-        ``max_sources`` caps the count (after ``cited_only``).
+        ``max_sources`` caps the count.
         """
         client = get_client(ctx)
         with mcp_errors():
@@ -431,25 +431,49 @@ def register(mcp: Any) -> None:
                 cited_fallback = selection.used_fallback
             if max_sources is not None:
                 sources_to_import = sources_to_import[:max_sources]
-            # Import via the timeout-tolerant variant (as the CLI does): the
-            # underlying IMPORT_RESEARCH RPC commonly runs >30 s on deep payloads
-            # and a one-shot call times out client-side even after the server
-            # committed. On timeout this probes sources.list and reconciles against
+            # Import via the transport-neutral idempotent wrapper, which drives
+            # the timeout-tolerant variant (as the CLI does): the underlying
+            # IMPORT_RESEARCH RPC commonly runs >30 s on deep payloads and a
+            # one-shot call times out client-side even after the server
+            # committed. On timeout it probes sources.list and reconciles against
             # what actually landed instead of raising as if nothing imported.
+            # The wrapper also pre-filters sources already present by URL (unless
+            # allow_duplicate) so re-importing the same task doesn't duplicate its
+            # sources (#1961), and reports the skipped set.
             #
             # TOCTOU note: the sources come from the poll snapshot above rather
             # than an atomic re-fetch, so a concurrent/external change between poll
             # and import could theoretically race. Acceptable: research tasks are
             # user-driven, and the pinned id prevents cross-task wiring.
-            imported = await client.research.import_sources_with_verification(
-                nb_id, poll_task_id, sources_to_import
+            outcome = await research_core.import_research_sources(
+                client,
+                nb_id,
+                poll_task_id,
+                sources_to_import,
+                allow_duplicate=allow_duplicate,
             )
+            newly_imported = to_jsonable(outcome.newly_imported)
+            already_present = to_jsonable(outcome.already_present)
             result: dict[str, Any] = {
-                "status": "imported",
+                # ``already_imported`` when a repeat import added nothing but the
+                # task's sources are already present, else ``imported``.
+                "status": (
+                    "already_imported"
+                    if not outcome.newly_imported and outcome.already_present
+                    else "imported"
+                ),
                 "notebook_id": nb_id,
                 "poll_task_id": poll_task_id,
                 "task_id": poll_task_id,
-                "imported": to_jsonable(imported),
+                # ``imported`` kept as the historical alias for ``newly_imported``.
+                "imported": newly_imported,
+                "newly_imported": newly_imported,
+                "newly_imported_count": outcome.newly_imported_count,
+                # Sources skipped because their URL already exists in the notebook
+                # (each ``{id, title, url}`` of the existing source) — a repeat
+                # import surfaces them here instead of duplicating them (#1961).
+                "already_present": already_present,
+                "already_present_count": outcome.already_present_count,
                 # ``sources_found`` keeps its cross-surface meaning: the total the
                 # research run discovered (pre-narrowing), matching the REST route
                 # and CLI. ``sources_selected`` is the post-``cited_only`` /

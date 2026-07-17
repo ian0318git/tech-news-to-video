@@ -34,7 +34,7 @@ This module is transport-neutral — no ``click`` / ``rich`` / ``cli`` /
 from __future__ import annotations
 
 import contextlib
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, NoReturn, Protocol
 
@@ -191,6 +191,65 @@ async def poll_sources_for_import(
     """
     sources, _report = await poll_importable_research(client, notebook_id, run_id)
     return sources
+
+
+# ===========================================================================
+# research import
+# ===========================================================================
+
+
+@dataclass(frozen=True)
+class ResearchImportOutcome:
+    """Typed outcome of an idempotent research import (#1961).
+
+    ``newly_imported`` are the entries this call actually added;
+    ``already_present`` are the requested sources skipped because their URL
+    already existed in the notebook (each an ``{id, title, url}`` of the
+    EXISTING source). On a repeat import ``newly_imported`` is empty and
+    ``already_present`` lists the previously-imported sources.
+    """
+
+    newly_imported: list[dict[str, str]]
+    already_present: list[dict[str, str]]
+
+    @property
+    def newly_imported_count(self) -> int:
+        return len(self.newly_imported)
+
+    @property
+    def already_present_count(self) -> int:
+        return len(self.already_present)
+
+
+async def import_research_sources(
+    client: Any,
+    notebook_id: str,
+    task_id: str,
+    sources: Sequence[Any],
+    *,
+    allow_duplicate: bool = False,
+) -> ResearchImportOutcome:
+    """Import a completed run's sources idempotently, reporting skips.
+
+    Drives the timeout-tolerant ``client.research.import_sources_with_verification``
+    (which pre-filters requested sources whose URL already exists in the
+    notebook unless ``allow_duplicate`` is true) and lifts its ``already_present``
+    side channel into a typed result, so every adapter (the MCP tool today, a
+    REST route tomorrow) surfaces the same idempotency contract without
+    re-implementing URL dedup. The first three arguments are passed positionally
+    to match the underlying method's call shape.
+    """
+    imported = await client.research.import_sources_with_verification(
+        notebook_id,
+        task_id,
+        sources,
+        allow_duplicate=allow_duplicate,
+    )
+    already_present = list(getattr(imported, "already_present", []) or [])
+    return ResearchImportOutcome(
+        newly_imported=list(imported),
+        already_present=already_present,
+    )
 
 
 # ===========================================================================
@@ -429,6 +488,7 @@ async def execute_research_wait(
 
 __all__ = [
     "ResearchImportLike",
+    "ResearchImportOutcome",
     "ResearchStatusKind",
     "ResearchStatusResult",
     "ResearchWaitOutcome",
@@ -436,6 +496,7 @@ __all__ = [
     "ResearchWaitResult",
     "cancel_research",
     "execute_research_wait",
+    "import_research_sources",
     "poll_and_classify",
     "poll_importable_research",
     "poll_sources_for_import",
