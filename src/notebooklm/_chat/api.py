@@ -439,10 +439,19 @@ class ChatAPI(LoopBoundPrimitive):
                     # conversation for the null POST, so drop the override and
                     # recover the real id post-POST, not the deleted one (#1875).
                     override = None if current_id in self._deleted_conversations else current_id
-                    # Resuming a live current conversation is a genuine
-                    # follow-up; a deleted one makes the server start fresh, so
-                    # it is not (override is None ⇒ new conversation) (#1965).
-                    is_follow_up = override is not None
+                    # A current id can refer to an auto-created, zero-turn
+                    # conversation. Query the server even when local turns are
+                    # cached because another client may have deleted them (#1973).
+                    is_follow_up = False
+                    if override is not None:
+                        turns_data = await self.get_conversation_turns(
+                            notebook_id, override, limit=1
+                        )
+                        is_follow_up = bool(
+                            unwrap_conversation_turns(
+                                turns_data, source="_chat.ask.follow_up_probe"
+                            )
+                        )
                     posted = await perform_request(
                         conversation_history=None,
                         active_conversation_id=None,
