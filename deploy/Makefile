@@ -50,6 +50,11 @@ DC_BUILD = $(DC) -f docker-compose.yml -f docker-compose.build.yml
 # Run the container as YOUR uid/gid so the mounted profile needs no chown.
 export NOTEBOOKLM_UID ?= $(shell id -u)
 export NOTEBOOKLM_GID ?= $(shell id -g)
+# Short commit of the checkout, handed to the from-source build so the image's
+# server_info reports it (.dockerignore strips .git). Empty outside a checkout.
+# Guard on ../.git first (matches hatch_build.py) so an *enclosing* repo can't
+# leak its unrelated hash when `..` is not itself a checkout.
+export GIT_COMMIT ?= $(shell [ -e ../.git ] && git -C .. rev-parse --short=8 HEAD 2>/dev/null)
 # NOTE: do NOT set/export NOTEBOOKLM_PROFILE_DIR here. make does not read .env, so a
 # `?=` default would resolve to "default" and `export` would push it into compose's
 # env, where it OUTRANKS the .env value (shell env > .env) — silently ignoring the
