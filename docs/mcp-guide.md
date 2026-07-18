@@ -559,11 +559,12 @@ gate the destructive ones.
   searches common install dirs beyond `PATH`.
 - **Client doesn't see the tools.** Confirm the config was written (`notebooklm mcp install <client>`)
   and **restart the client** — most hosts only read MCP config at startup.
-- **`Unknown tool: '<name>'` after upgrading the server.** The claude.ai connector caches the tool
-  list from when it connected, so a version upgrade that **renamed or folded** a tool leaves the old
-  name callable-but-failing until you **reconnect the connector** (disconnect + reconnect, or toggle it
-  off/on). Newly-added *optional* parameters on existing tools forward through the stale schema and keep
-  working without a reconnect. See [troubleshooting.md](troubleshooting.md#unknown-tool-from-the-claudeai-connector-after-upgrading-the-server).
+- **`Unknown tool: '<name>'` after upgrading the server.** The MCP host (claude.ai, ChatGPT, …) caches
+  the tool list from when it connected, so a version upgrade that **renamed or folded** a tool leaves the
+  old name callable-but-failing. **Remove and re-add the connector** to refresh it — a reconnect / re-auth
+  is often *not* enough (some hosts, notably ChatGPT, keep the cached manifest across reconnects). The
+  server's live manifest is correct; only *removed/renamed tools* ghost — newly-added *optional* parameters
+  on existing tools forward through the stale schema and keep working. See [troubleshooting.md](troubleshooting.md#unknown-tool-from-an-mcp-host-claudeai-chatgpt--after-upgrading-the-server).
 - **Wrong account.** The server binds one profile per process. Start it with `--profile <name>`, or set
   `NOTEBOOKLM_PROFILE`. See [configuration.md](configuration.md#multiple-accounts).
 - **`RATE_LIMITED`.** NotebookLM enforces per-account quotas; the error is `retriable=true` — back off
