@@ -125,6 +125,22 @@ before you start: the auth model and remote file transfer.
 Use a **dedicated/throwaway Google account** — the mounted `master_token.json` is a durable
 full-account credential. Multi-tenant hosting is out of scope for this single-tenant setup.
 
+**Where OAuth state lives.** The registered clients + issued tokens persist to a
+deployment-scoped file keyed on `NOTEBOOKLM_MCP_OAUTH_BASE_URL` (the OAuth issuer), **not**
+the served account profile: `<home>/oauth/<slug>.json` by default (the Docker deploy mounts
+this at `/data/oauth` — the `make` targets pre-create the host dir `0700`; direct `docker
+compose up` users must `mkdir -p ./oauth-state && chmod 700 ./oauth-state` first), or set
+`NOTEBOOKLM_MCP_OAUTH_STATE_PATH` to override. Because it's keyed on the base_url, **switching the served profile/account no longer
+orphans your registered clients** (ChatGPT/claude.ai stay connected), and two servers with
+different origins on one host keep separate registries. On first startup after upgrading, a
+legacy `oauth_state.json` in the **active profile dir** is migrated once (then renamed
+`.migrated`, so it's never re-read); if you keep OAuth state elsewhere or had already switched
+profiles, copy it across manually first — `cp <old-profile-dir>/oauth_state.json <new-path>`
+(Docker: into your `./oauth-state` mount). Treat the file as a full-account secret. Keying
+on the issuer also isolates two servers reachable via different origins (a token minted for
+one base_url is never routed through another), but it requires a **stable** hostname — an
+ephemeral tunnel URL that changes on restart shifts the slug and re-orphans clients.
+
 ### File upload & download (remote)
 
 The MCP/JSON-RPC channel can't carry large binaries, so over a remote connector

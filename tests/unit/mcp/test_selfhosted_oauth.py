@@ -10,8 +10,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
+import os
 import re
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -31,11 +34,15 @@ from notebooklm.mcp._oauth import (  # noqa: E402
     MAX_LOGIN_ATTEMPTS,
     OAUTH_BASE_URL_ENV,
     OAUTH_PASSWORD_ENV,
+    OAUTH_STATE_PATH_ENV,
     THROTTLE_MAX_FAILURES,
     TRUST_PROXY_ENV,
     OAuthConfig,
     SelfHostedOAuthProvider,
     _client_ip,
+    _derived_state_path,
+    _migrate_legacy_state,
+    _slug_for_base_url,
     build_oauth_provider,
     get_oauth_config,
 )
@@ -117,40 +124,223 @@ def test_config_fail_closed(
     assert needle in str(e.value)
 
 
-def test_config_ok_with_state_path(_clear_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_config_state_path_is_base_url_keyed_derived_default(
+    _clear_env: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Default state_path is deployment-scoped: <home>/oauth/<slug(base_url)>.json,
+    NOT the served profile dir (#1765 reversal). legacy_state_path still points at the
+    old profile-dir file so an existing install can be migrated once."""
     monkeypatch.setenv(OAUTH_PASSWORD_ENV, _PW)
     monkeypatch.setenv(OAUTH_BASE_URL_ENV, "https://host.example.com")
-    monkeypatch.setenv("NOTEBOOKLM_HOME", "/data")
+    monkeypatch.setenv("NOTEBOOKLM_HOME", str(tmp_path))
     monkeypatch.setenv("NOTEBOOKLM_PROFILE", "server")
     cfg = get_oauth_config()
     assert cfg is not None and cfg.state_path is not None
-    # Path.parts is OS-agnostic (Windows uses backslash separators, so a string suffix
-    # check on forward slashes would spuriously fail on the Windows CI matrix).
-    assert cfg.state_path.parts[-3:] == ("profiles", "server", "oauth_state.json")
+    assert cfg.state_path == _derived_state_path("https://host.example.com")
+    assert cfg.state_path.parent == tmp_path / "oauth"
+    assert cfg.state_path.name.startswith("host.example.com.")
+    # legacy migration source still tracks the served profile
+    assert cfg.legacy_state_path is not None
+    assert cfg.legacy_state_path.parts[-3:] == ("profiles", "server", "oauth_state.json")
 
 
-def test_config_state_path_honors_profile_without_env(
-    _clear_env: None, monkeypatch: pytest.MonkeyPatch
+def test_config_state_path_env_override_wins(
+    _clear_env: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """#1765: state_path resolves through the canonical profile resolver. An explicit
-    profile (the --profile flag) is honored even when NOTEBOOKLM_PROFILE is unset (the
-    old code read env only and ignored it), and with NOTEBOOKLM_HOME also unset it still
-    resolves to a real path under the default home instead of silently going None."""
+    """NOTEBOOKLM_MCP_OAUTH_STATE_PATH is used verbatim and wins over the derived default;
+    an empty value is treated as unset (falls back to derived)."""
     monkeypatch.setenv(OAUTH_PASSWORD_ENV, _PW)
     monkeypatch.setenv(OAUTH_BASE_URL_ENV, "https://host.example.com")
-    cfg = get_oauth_config(profile="work")  # no HOME/PROFILE env set
-    assert cfg is not None and cfg.state_path is not None
-    assert cfg.state_path.parts[-3:] == ("profiles", "work", "oauth_state.json")
+    monkeypatch.setenv("NOTEBOOKLM_HOME", str(tmp_path))
+    custom = tmp_path / "custom" / "oauth.json"
+    monkeypatch.setenv(OAUTH_STATE_PATH_ENV, str(custom))
+    cfg = get_oauth_config()
+    assert cfg is not None and cfg.state_path == custom
+    # empty string → treated as unset → derived default
+    monkeypatch.setenv(OAUTH_STATE_PATH_ENV, "")
+    cfg2 = get_oauth_config()
+    assert cfg2 is not None and cfg2.state_path == _derived_state_path("https://host.example.com")
 
 
-def test_config_rejects_malformed_profile(
-    _clear_env: None, monkeypatch: pytest.MonkeyPatch
+def test_config_malformed_profile_yields_no_legacy_not_systemexit(
+    _clear_env: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """A path-traversal profile name fails clean (SystemExit), not a raw traceback."""
+    """A path-traversal profile name no longer aborts OAuth startup: the derived
+    (base_url-keyed) state_path is unaffected, and legacy_state_path degrades to None
+    (nothing to migrate) rather than raising SystemExit."""
     monkeypatch.setenv(OAUTH_PASSWORD_ENV, _PW)
     monkeypatch.setenv(OAUTH_BASE_URL_ENV, "https://host.example.com")
-    with pytest.raises(SystemExit):
-        get_oauth_config(profile="../escape")
+    monkeypatch.setenv("NOTEBOOKLM_HOME", str(tmp_path))
+    cfg = get_oauth_config(profile="../escape")
+    assert cfg is not None
+    assert cfg.state_path == _derived_state_path("https://host.example.com")
+    assert cfg.legacy_state_path is None
+
+
+def test_slug_is_collision_resistant() -> None:
+    """Distinct origins → distinct slug even when the sanitized readable prefix collides
+    (the 64-bit hash of the normalized origin disambiguates); same origin differing only
+    by case/trailing-slash → same slug."""
+    # readable-prefix collisions that MUST still differ (hash disambiguates)
+    for a, b in [
+        ("https://bücher.example", "https://b_cher.example"),
+        ("https://host:1", "https://host_1"),
+        ("https://[::1]", "https://__1"),
+    ]:
+        assert _slug_for_base_url(a) != _slug_for_base_url(b), (a, b)
+    # case- and trailing-slash-insensitive (same server)
+    assert _slug_for_base_url("https://Host.Example.com") == _slug_for_base_url(
+        "https://host.example.com/"
+    )
+    # output is filesystem-safe (single path component, no separators/traversal)
+    slug = _slug_for_base_url("https://host.example.com")
+    assert "/" not in slug and "\\" not in slug and slug not in (".", "..")
+
+
+def test_derived_state_path_distinct_per_origin(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("NOTEBOOKLM_HOME", str(tmp_path))
+    a = _derived_state_path("https://a.example.com")
+    b = _derived_state_path("https://b.example.com")
+    assert a != b
+    assert a.parent == b.parent == tmp_path / "oauth"
+
+
+def test_migrate_legacy_state_copies_renames_and_is_revocation_safe(tmp_path: Path) -> None:
+    """Legacy oauth_state.json is migrated once into the new path (0600), the legacy file
+    is renamed .migrated, re-runs are no-ops, and after a revocation (rm the new file) it
+    is NOT re-created — the legacy source no longer exists as a fallback."""
+    legacy = tmp_path / "profiles" / "server" / "oauth_state.json"
+    legacy.parent.mkdir(parents=True)
+    payload = {"clients": {"c1": {"redirect_uris": ["https://claude.ai/cb"]}}, "access_tokens": {}}
+    legacy.write_text(json.dumps(payload), encoding="utf-8")
+    new = tmp_path / "oauth" / "host.abcd.json"
+
+    _migrate_legacy_state(new, legacy)
+
+    assert json.loads(new.read_text()) == payload
+    assert not legacy.exists()
+    assert legacy.with_name("oauth_state.json.migrated").exists()
+    if os.name == "posix":
+        assert (new.stat().st_mode & 0o777) == 0o600
+    # idempotent: a second run (new exists) is a no-op
+    _migrate_legacy_state(new, legacy)
+    # revocation-safe: delete the live state file → no legacy source remains to re-migrate
+    new.unlink()
+    _migrate_legacy_state(new, legacy)
+    assert not new.exists()
+
+
+def test_migrate_legacy_state_skips_malformed_and_missing(tmp_path: Path) -> None:
+    """Corrupt legacy JSON is skipped without crashing; a None/missing legacy is a no-op."""
+    new = tmp_path / "oauth" / "host.abcd.json"
+    bad = tmp_path / "oauth_state.json"
+    bad.write_text("not json at all", encoding="utf-8")
+    _migrate_legacy_state(new, bad)  # must not raise
+    assert not new.exists()
+    _migrate_legacy_state(new, None)  # no-op
+    _migrate_legacy_state(new, tmp_path / "does-not-exist.json")  # no-op
+    assert not new.exists()
+
+
+def test_migrate_legacy_state_rolls_back_on_write_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If the state write fails after the legacy file is retired, the rename is rolled
+    back so the next startup retries cleanly — no live state_path is left to trap a later
+    revocation, and the data isn't stranded in .migrated."""
+    import notebooklm.mcp._oauth as oauth_mod
+
+    legacy = tmp_path / "profiles" / "server" / "oauth_state.json"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(json.dumps({"clients": {}}), encoding="utf-8")
+    new = tmp_path / "oauth" / "host.abcd.json"
+
+    def _boom(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(oauth_mod, "atomic_update_json", _boom)
+    _migrate_legacy_state(new, legacy)  # must not raise
+
+    assert legacy.exists()  # rolled back — legacy restored for a clean retry
+    assert not legacy.with_name("oauth_state.json.migrated").exists()
+    assert not new.exists()
+
+
+def test_migrate_legacy_state_retires_lingering_legacy_when_state_exists(tmp_path: Path) -> None:
+    """Defensive cleanup: state_path already exists but a legacy file lingers (an earlier
+    rename failed) — retire the legacy so it can't be re-migrated after a revocation,
+    without touching the authoritative live state."""
+    legacy = tmp_path / "oauth_state.json"
+    legacy.write_text(json.dumps({"clients": {"old": {}}}), encoding="utf-8")
+    new = tmp_path / "oauth" / "host.abcd.json"
+    new.parent.mkdir(parents=True)
+    new.write_text(json.dumps({"clients": {"live": {}}}), encoding="utf-8")
+
+    _migrate_legacy_state(new, legacy)
+
+    assert not legacy.exists()
+    assert legacy.with_name("oauth_state.json.migrated").exists()
+    assert json.loads(new.read_text()) == {"clients": {"live": {}}}  # live state untouched
+
+
+def test_migrate_legacy_state_retires_non_dict_payload(tmp_path: Path) -> None:
+    """A valid-JSON-but-non-object legacy file is retired (not re-parsed every startup)
+    and never written as state."""
+    legacy = tmp_path / "oauth_state.json"
+    legacy.write_text("[1, 2, 3]", encoding="utf-8")
+    new = tmp_path / "oauth" / "host.abcd.json"
+
+    _migrate_legacy_state(new, legacy)
+
+    assert not new.exists()
+    assert not legacy.exists()
+    assert legacy.with_name("oauth_state.json.migrated").exists()
+
+
+def test_migrate_legacy_state_noop_when_override_equals_legacy(tmp_path: Path) -> None:
+    """If NOTEBOOKLM_MCP_OAUTH_STATE_PATH points the live state AT the legacy file itself,
+    migration is a no-op — the file must NOT be retired out from under the provider that
+    then loads it (which would orphan every registered client)."""
+    same = tmp_path / "oauth_state.json"
+    same.write_text(json.dumps({"clients": {"c1": {}}}), encoding="utf-8")
+
+    _migrate_legacy_state(same, same)
+
+    assert same.exists()  # untouched — not renamed to .migrated
+    assert not same.with_name("oauth_state.json.migrated").exists()
+    assert json.loads(same.read_text()) == {"clients": {"c1": {}}}
+
+
+def test_migrate_legacy_state_retires_invalid_utf8(tmp_path: Path) -> None:
+    """A legacy file with invalid UTF-8 bytes is unusable → retired (not a startup crash;
+    UnicodeDecodeError ⊂ ValueError is caught), never written as state."""
+    legacy = tmp_path / "oauth_state.json"
+    legacy.write_bytes(b"\xff\xfe not utf-8 at all")
+    new = tmp_path / "oauth" / "host.abcd.json"
+
+    _migrate_legacy_state(new, legacy)  # must not raise
+
+    assert not new.exists()
+    assert not legacy.exists()
+    assert legacy.with_name("oauth_state.json.migrated").exists()
+
+
+def test_migrate_legacy_state_ignores_reappeared_backup_when_marker_exists(tmp_path: Path) -> None:
+    """After a one-time migration (``.migrated`` marker present) and a revocation (live
+    state deleted), a restored/leftover oauth_state.json must NOT be re-imported — it is
+    retired, not migrated, so revoked tokens can't be resurrected from a backup."""
+    legacy = tmp_path / "oauth_state.json"
+    legacy.write_text(json.dumps({"clients": {"revoked": {}}}), encoding="utf-8")
+    (tmp_path / "oauth_state.json.migrated").write_text("{}", encoding="utf-8")  # prior marker
+    new = tmp_path / "oauth" / "host.abcd.json"  # revoked → live state absent
+
+    _migrate_legacy_state(new, legacy)
+
+    assert not new.exists()  # NOT re-imported
+    assert not legacy.exists()  # retired (folded into the marker)
+    assert legacy.with_name("oauth_state.json.migrated").exists()
 
 
 # --------------------------------------------------------------------------- routes / DCR
@@ -654,9 +844,9 @@ def test_throttle_separates_buckets_by_cf_header_when_trusted() -> None:
 def test_build_oauth_provider_wires_state_without_warning(
     tmp_path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """#1765: state_path now always resolves (get_oauth_config binds it to the active
-    profile dir), so build_oauth_provider just wires it through — the old "state not
-    persisted" startup warning was removed and must not fire."""
+    """state_path always resolves (get_oauth_config derives a base_url-keyed path), so
+    build_oauth_provider wires it through — the old "state not persisted" startup warning
+    was removed and must not fire. With no legacy_state_path set, migration is a no-op."""
     cfg = OAuthConfig(
         password=_PW, base_url="https://h.example.com", state_path=tmp_path / "oauth_state.json"
     )

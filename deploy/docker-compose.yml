@@ -5,6 +5,12 @@
 #   docker compose --profile tailscale  up -d   # Tailscale Funnel (no domain; *.ts.net)
 #   # (the Makefile wraps this: `make dev` / `make dev TUNNEL=tailscale`)
 #
+# OAuth users invoking `docker compose up` DIRECTLY (not via `make`) must first create
+# the OAuth-state mount dir as yourself: `mkdir -p ./oauth-state && chmod 700 ./oauth-state`.
+# Otherwise Docker auto-creates it root-owned and the (uid 1000) container cannot write it;
+# the chmod keeps this full-account-secret dir private (shell mkdir honors umask). `make`
+# targets do this for you.
+#
 # The notebooklm-mcp service runs under either profile; exactly one tunnel sidecar
 # is selected. No host ports are published — the ONLY way in is through the chosen
 # tunnel, which terminates TLS at its edge (no CA cert for you to manage). See README.md.
@@ -34,9 +40,15 @@ services:
       NOTEBOOKLM_MCP_ALLOW_EXTERNAL_BIND: "1"
       # Optional self-hosted OAuth (for claude.ai). Unset → bearer-only; set both
       # together (partial → refuses to start). See .env.example. The OAuth state
-      # (registered clients + tokens) persists under the mounted profile volume.
+      # (registered clients + tokens) persists under the dedicated /data/oauth mount
+      # below — keyed on the base_url, INDEPENDENT of the served profile, so switching
+      # NOTEBOOKLM_PROFILE_DIR no longer orphans registered clients.
       NOTEBOOKLM_MCP_OAUTH_PASSWORD: ${NOTEBOOKLM_MCP_OAUTH_PASSWORD:-}
       NOTEBOOKLM_MCP_OAUTH_BASE_URL: ${NOTEBOOKLM_MCP_OAUTH_BASE_URL:-}
+      # Optional explicit OAuth-state path. Unset → derived default
+      # /data/oauth/<slug>.json on the mount below. Must be listed here to reach the
+      # container (compose `.env` is interpolation-source only, not container env).
+      NOTEBOOKLM_MCP_OAUTH_STATE_PATH: ${NOTEBOOKLM_MCP_OAUTH_STATE_PATH:-}
       # Optional (Cloudflare profile only): trust the tunnel's CF-Connecting-IP header as
       # the per-IP login-throttle key. Default off → throttle keys on the socket peer (the
       # tunnel egress), i.e. one global bucket. Tailscale Funnel does not set this header.
@@ -65,6 +77,11 @@ services:
       # in .env to point at a different profile dir (e.g. a dedicated/throwaway one).
       # Treat the dir as a secret — master_token.json is a full-account credential.
       - "${NOTEBOOKLM_PROFILE_DIR:-${HOME}/.notebooklm/profiles/default}:/data/profiles/server:rw"
+      # READ-WRITE, deployment-scoped: the OAuth client registry + issued tokens live
+      # here (/data/oauth/<slug>.json), NOT in the profile dir — so switching the served
+      # profile keeps registered clients. Pre-create the host dir as yourself (the `make`
+      # targets do; direct `docker compose up` users: `mkdir -p ./oauth-state && chmod 700 ./oauth-state`).
+      - "${NOTEBOOKLM_OAUTH_STATE_DIR:-./oauth-state}:/data/oauth:rw"
     # No `ports:` — not reachable except via the tunnel.
 
   # --- Tunnel option A: Cloudflare (needs a domain in your Cloudflare account) ----

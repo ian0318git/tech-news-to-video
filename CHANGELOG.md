@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Self-hosted MCP OAuth: switching the served account no longer resets the client
+  registry.** OAuth-registered clients + issued tokens (`oauth_state.json`) were stored
+  under the *served account's profile dir*, so pointing the server at a different profile
+  silently orphaned every connected client (ChatGPT / claude.ai → "Client ID not found").
+  The OAuth state is now **deployment-scoped**, keyed on `NOTEBOOKLM_MCP_OAUTH_BASE_URL`
+  (the OAuth issuer) at `<home>/oauth/<slug>.json` — independent of the served profile,
+  and distinct per issuer so two servers on one host stay isolated. New
+  `NOTEBOOKLM_MCP_OAUTH_STATE_PATH` overrides the path; the Docker deploy mounts a
+  dedicated `/data/oauth` volume (`NOTEBOOKLM_OAUTH_STATE_DIR`). Existing installs are
+  migrated once on startup (the legacy profile-dir `oauth_state.json` is copied over, then
+  renamed `.migrated` so it is never re-read). This deliberately reverses the profile-dir
+  coupling introduced in #1765, and applies the deployment-vs-data separation that the
+  proposed multi-profile server
+  ([#1901](https://github.com/teng-lin/notebooklm-py/issues/1901)) builds on — without
+  implementing it.
+
 ## [0.8.0]
 
 The headline of 0.8.0 is **integrations**: NotebookLM is now reachable from AI
