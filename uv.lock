@@ -1304,7 +1304,7 @@ wheels = [
 
 [[package]]
 name = "notebooklm-py"
-version = "0.8.0b5"
+version = "0.8.0rc1"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
