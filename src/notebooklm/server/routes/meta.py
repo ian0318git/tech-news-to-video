@@ -83,7 +83,14 @@ async def _account_block(client: NotebookLMClient, *, authenticated: bool) -> di
         "source_limit": limits.source_limit,
         # Subscription tier enum (GET_USER_SETTINGS limits[4]); mirrors the MCP block.
         "tier": limits.tier,
+        # Global account output language, ``None`` when the account has never set
+        # one; ``output_language_is_default`` disambiguates that ``None`` (``True``
+        # = the account uses NotebookLM's default language, not a missing value).
+        # Mirrors the MCP block — envelope-level drift degrades to ``available:
+        # False`` rather than reaching here; per ADR-0011 drift at the optional
+        # language slot is treated as unset (i.e. the default) too.
         "output_language": output_language,
+        "output_language_is_default": output_language is None,
     }
 
 

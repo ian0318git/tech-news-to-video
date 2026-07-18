@@ -202,6 +202,25 @@ def test_server_info_include_account(
     assert account["source_limit"] == 50
     assert account["tier"] == 1
     assert account["output_language"] == "en"
+    # An explicit code is not the account default.
+    assert account["output_language_is_default"] is False
+
+
+def test_server_info_include_account_output_language_default(
+    authed_client: TestClient, fake_client: FakeClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No explicit output language on a live session → the account uses NotebookLM's
+    default, signalled by ``output_language_is_default: True`` (not a bare null that
+    reads as missing/broken). Mirrors the MCP null-fields contract; a genuinely
+    unparseable response would degrade to available:False instead."""
+    _patch_auth(monkeypatch, all_passed=True)
+    fake_client.output_language = None
+    account = authed_client.get("/v1/server/info", params={"include_account": True}).json()[
+        "account"
+    ]
+    assert account["available"] is True
+    assert account["output_language"] is None
+    assert account["output_language_is_default"] is True
 
 
 def test_server_info_include_account_degrades_on_settings_error(
