@@ -1517,6 +1517,64 @@ async def test_source_add_drive(mcp_call, mock_client) -> None:
     assert called_args[1] == "drivefile123"
 
 
+async def test_source_add_url_title_miss_is_flagged(mcp_call, mock_client) -> None:
+    """#1960: when the honored ``title`` did not stick (the returned source kept its
+    upstream title), source_add flags ``title_override_applied: false`` + a warning."""
+    mock_client.sources.add_url = AsyncMock(return_value=FakeSource(id=SRC_ID, title="Upstream"))
+    result = await mcp_call(
+        "source_add",
+        {
+            "notebook": NB_ID,
+            "source_type": "url",
+            "url": "https://example.com/a",
+            "title": "My Title",
+        },
+    )
+    sc = result.structured_content
+    assert sc["title_override_applied"] is False
+    assert "My Title" in sc["warning"]
+    assert "Upstream" in sc["warning"]
+    mock_client.sources.add_url.assert_awaited_once_with(
+        NB_ID, "https://example.com/a", title="My Title"
+    )
+
+
+async def test_source_add_url_title_applied_is_not_flagged(mcp_call, mock_client) -> None:
+    """When the returned title matches the request, no override warning is emitted."""
+    mock_client.sources.add_url = AsyncMock(return_value=FakeSource(id=SRC_ID, title="My Title"))
+    result = await mcp_call(
+        "source_add",
+        {
+            "notebook": NB_ID,
+            "source_type": "url",
+            "url": "https://example.com/a",
+            "title": "My Title",
+        },
+    )
+    sc = result.structured_content
+    assert "title_override_applied" not in sc
+    assert "warning" not in sc
+
+
+async def test_source_add_drive_title_miss_is_flagged(mcp_call, mock_client) -> None:
+    mock_client.sources.add_drive = AsyncMock(
+        return_value=FakeSource(id=SRC_ID, title="Drive Name")
+    )
+    result = await mcp_call(
+        "source_add",
+        {
+            "notebook": NB_ID,
+            "source_type": "drive",
+            "document_id": "drivefile123",
+            "title": "My Title",
+            "mime_type": "google-sheets",
+        },
+    )
+    sc = result.structured_content
+    assert sc["title_override_applied"] is False
+    assert "My Title" in sc["warning"]
+
+
 async def test_source_add_missing_input_is_validation_error(mcp_call, mock_client) -> None:
     """type=url with no url projects as a VALIDATION ToolError."""
     with pytest.raises(ToolError) as excinfo:
@@ -1660,7 +1718,7 @@ async def test_source_add_single_lists_all_foreign_scalars(mcp_call, mock_client
 async def test_source_add_single_metadata_not_rejected(mcp_call, mock_client) -> None:
     """``title`` / ``mime_type`` are optional metadata, NOT content scalars — a
     valid single add carrying them alongside its one content scalar still works."""
-    mock_client.sources.add_url = AsyncMock(return_value=FakeSource(id=SRC_ID, title="Page"))
+    mock_client.sources.add_url = AsyncMock(return_value=FakeSource(id=SRC_ID, title="My Page"))
     result = await mcp_call(
         "source_add",
         {
@@ -1674,12 +1732,15 @@ async def test_source_add_single_metadata_not_rejected(mcp_call, mock_client) ->
     assert result.structured_content == {
         "notebook_id": NB_ID,
         "status": "added",
-        "source": {"id": SRC_ID, "title": "Page", "kind": "web_page", "status_label": "ready"},
+        "source": {"id": SRC_ID, "title": "My Page", "kind": "web_page", "status_label": "ready"},
     }
     # The add actually proceeded (not silently rejected). A url source ignores
-    # title/mime_type downstream — add_url takes only (notebook_id, url) — so the
-    # point here is that supplying them does not trip the content-scalar gate.
-    mock_client.sources.add_url.assert_awaited_once_with(NB_ID, "https://example.com/a")
+    # mime_type downstream but now honors ``title`` via a post-add rename (#1960),
+    # so add_url is forwarded the title; the point here is that supplying this
+    # metadata does not trip the content-scalar gate.
+    mock_client.sources.add_url.assert_awaited_once_with(
+        NB_ID, "https://example.com/a", title="My Page"
+    )
 
 
 async def test_source_read_not_found_projects_tool_error(mcp_call, mock_client) -> None:

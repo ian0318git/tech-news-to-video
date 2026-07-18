@@ -17,7 +17,7 @@ from ._runtime.config import DEFAULT_MAX_CONCURRENT_UPLOADS
 from ._runtime.contracts import RpcCaller
 from ._settings import build_get_user_settings_params, extract_account_limits
 from ._source import upload as _source_upload
-from ._source.add import SourceAddService
+from ._source.add import SourceAddService, honor_requested_title
 from ._source.content import SourceContentRenderer
 from ._source.drive_import import DriveFetcher, DriveImportService
 from ._source.listing import SourceLister
@@ -383,6 +383,7 @@ class SourcesAPI:
         *,
         wait: bool = False,
         wait_timeout: float = 120.0,
+        title: str | None = None,
     ) -> Source:
         """Add a URL source to a notebook.
 
@@ -393,16 +394,17 @@ class SourcesAPI:
             url: The URL to add.
             wait: If True, wait for source to be ready before returning.
             wait_timeout: Maximum seconds to wait if wait=True (default: 120).
+            title: Optional display title. YouTube/web-page imports re-derive it
+                server-side; a supplied one is honored via best-effort :meth:`rename`
+                (non-fatal; #1960).
 
         Returns:
             The created Source object. If wait=False, status may be PROCESSING.
 
         Example:
             source = await client.sources.add_url(nb_id, url, wait=True)
-            # ``wait=False`` returns immediately; poll later via
-            # ``wait_for_sources(nb_id, [s.id for s in sources])``.
         """
-        return await self._adder.add_url(
+        source = await self._adder.add_url(
             notebook_id,
             url,
             wait=wait,
@@ -415,6 +417,7 @@ class SourcesAPI:
             is_youtube_url=is_youtube_url,
             logger=logger,
         )
+        return await honor_requested_title(self.rename, notebook_id, source, title, logger)
 
     async def add_text(
         self,
@@ -540,9 +543,9 @@ class SourcesAPI:
         Args:
             notebook_id: The notebook ID.
             file_id: The Google Drive file ID.
-            title: Display title. **Ignored for native Drive imports** —
-                NotebookLM re-derives it from live Drive metadata, keeping the
-                file's Drive name. Call :meth:`rename` after the add to retitle.
+            title: Display title. Native Drive imports re-derive the title from
+                live Drive metadata server-side, so a supplied ``title`` is honored
+                via a best-effort follow-up :meth:`rename` (non-fatal; #1960).
             mime_type: MIME type of the Drive document. Common values:
                 - application/vnd.google-apps.document (Google Docs)
                 - application/vnd.google-apps.presentation (Slides)
@@ -558,14 +561,10 @@ class SourcesAPI:
             from notebooklm.types import DriveMimeType
 
             source = await client.sources.add_drive(
-                notebook_id,
-                file_id="1abc123xyz",
-                title="My Document",
-                mime_type=DriveMimeType.GOOGLE_DOC.value,
-                wait=True,  # Wait for processing
-            )
+                notebook_id, file_id="1abc123xyz", title="My Document",
+                mime_type=DriveMimeType.GOOGLE_DOC.value, wait=True)
         """
-        return await self._adder.add_drive(
+        source = await self._adder.add_drive(
             notebook_id,
             file_id,
             title,
@@ -577,6 +576,7 @@ class SourcesAPI:
             wait_until_ready=self.wait_until_ready,
             logger=logger,
         )
+        return await honor_requested_title(self.rename, notebook_id, source, title, logger)
 
     async def add_drive_file(
         self,

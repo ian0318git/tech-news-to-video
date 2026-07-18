@@ -221,14 +221,17 @@ class TestSourcesAPI:
             source = await client.sources.add_drive(
                 MUTABLE_NOTEBOOK_ID,
                 file_id="1oAk_INJHbIPsIh49jgNqj3FESSGHZrzxFY7t05Lvvl0",
-                title="VCR Test Drive Doc",
+                # Pass the doc's actual Drive title so the #1960 honor-title path is a
+                # no-op (add returns this title, so no post-add rename fires — the
+                # cassette records only the ADD_SOURCE call). A DIFFERENT title would
+                # trigger a follow-up rename, covered by the unit tests.
+                title="Rubisco Research: Status and Future",
                 mime_type="application/vnd.google-apps.document",
                 wait=False,  # Don't wait for processing during VCR recording
             )
         assert source is not None
         assert source.id, "Expected non-empty source ID"
-        # Drive sources use the actual document title, not the passed title
-        assert source.title, "Expected non-empty source title"
+        assert source.title == "Rubisco Research: Status and Future"
 
 
 # =============================================================================

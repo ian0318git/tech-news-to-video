@@ -24,6 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   proposed multi-profile server
   ([#1901](https://github.com/teng-lin/notebooklm-py/issues/1901)) builds on — without
   implementing it.
+- **`source_add` now honors an explicit `title` for YouTube, Google Drive, and
+  web-page imports.** These source types re-derive the display title server-side
+  (from the video / Drive / page metadata), so a caller-supplied `title` was
+  silently dropped. `SourcesAPI.add_url` (new optional `title=`) and
+  `add_drive` now apply the requested title via a best-effort post-add
+  `rename` — a rename failure is non-fatal (the added source is kept with its
+  upstream title and a warning is logged). The MCP `source_add` tool flags a miss
+  with `title_override_applied: false` + a `warning`
+  ([#1960](https://github.com/teng-lin/notebooklm-py/issues/1960)).
 
 ## [0.8.0]
 

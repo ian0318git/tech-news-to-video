@@ -132,7 +132,13 @@ def _source_compact(source: Source) -> dict[str, Any]:
     return {k: view.get(k) for k in _COMPACT_SOURCE_FIELDS}
 
 
-def _add_result_payload(source: Any, base: dict[str, Any], *, notebook_id: str) -> dict[str, Any]:
+def _add_result_payload(
+    source: Any,
+    base: dict[str, Any],
+    *,
+    notebook_id: str,
+    requested_title: str | None = None,
+) -> dict[str, Any]:
     """Project a ``source_add`` result: enrich the added source + flag failure.
 
     Replaces ``base["source"]`` (the bare ``to_jsonable`` source dict) with the
@@ -150,6 +156,13 @@ def _add_result_payload(source: Any, base: dict[str, Any], *, notebook_id: str) 
     PROCESSING/PREPARING and the failure only surfaces later — but when the
     backend echoes ERROR at add-time we say so immediately rather than letting it
     look like a successful add.
+
+    ``requested_title`` (youtube/drive/url adds): the client honors an explicit
+    ``title`` via a best-effort post-add rename, but the backend can still keep the
+    upstream title (a rename that failed or hasn't landed yet). When the final
+    title differs from what was requested, flag it with ``title_override_applied:
+    False`` + a non-blocking ``warning`` so the caller can re-issue ``source_rename``
+    rather than silently getting the upstream name (#1960).
     """
     base["notebook_id"] = notebook_id
     base["status"] = "added"
@@ -159,6 +172,14 @@ def _add_result_payload(source: Any, base: dict[str, Any], *, notebook_id: str) 
             "Import failed: the source row was created but processing errored "
             "(status_label='error'). It persists as an incomplete row — delete it "
             "with source_delete, or list failures via source_list(status='error')."
+        )
+    elif requested_title and (requested := requested_title.strip()) and source.title != requested:
+        # Best-effort rename didn't stick — tell the caller instead of silently
+        # returning the upstream title (the original #1960 footgun).
+        base["title_override_applied"] = False
+        base["warning"] = (
+            f"Requested title {requested!r} was not applied; the source "
+            f"kept its upstream title {source.title!r}. Retry with source_rename."
         )
     return base
 
@@ -461,36 +482,35 @@ def register(mcp: Any) -> None:
 
         * ``url`` / ``youtube`` — require ``url`` (``youtube`` → a YouTube link).
         * ``text``    — requires ``text``; ``title`` optional.
-        * ``file``    — over **stdio**, requires ``path`` (a local file path on the
+        * ``file``    — over **stdio**, requires ``path`` (a local path on the
           server host). Over the **remote (http) connector** the host filesystem is
           unreachable, so it returns ``upload_required`` with two actor paths:
-          ``human_upload`` (open the signed URL in a browser — works on mobile) and
-          ``agent_upload`` (an agent holding the bytes POSTs them as the raw body);
-          ``agent_instructions`` is the rule (try ``agent_upload``, fall back to
-          ``human_upload.url``). Alternatively pass ``bytes_base64`` to add a SMALL
-          file in-channel (any transport, no signed URL): standard base64 (not
-          URL-safe) ≤ 10,000 chars (≈ 7 KB); ``filename`` seeds the title/extension.
-          A bigger file must take the ``upload_required`` signed URL (≤ 200 MiB).
+          ``human_upload`` (open the signed URL in a browser) and ``agent_upload`` (an
+          agent POSTs the bytes as the raw body); ``agent_instructions`` gives the rule
+          (try ``agent_upload``, else ``human_upload.url``). Alternatively pass
+          ``bytes_base64`` to add a SMALL file in-channel (any transport, no signed URL):
+          standard base64 (not URL-safe) ≤ 10,000 chars (≈ 7 KB); ``filename`` seeds the
+          title/extension. A bigger file must take the signed URL (≤ 200 MiB).
         * ``drive``   — requires ``document_id`` + ``mime_type`` (one of
           google-doc|google-slides|google-sheets|pdf; required, no default — a wrong
-          default fails non-Doc imports, #1827); ``title`` optional.
+          default fails non-Doc imports, #1827).
 
         The single-mode content inputs are mutually exclusive — supply only the one
         your ``source_type`` requires (``bytes_base64`` is the ``file`` alternative to
-        ``path``).
+        ``path``). An explicit ``title`` for url/youtube/drive is honored via a post-add
+        rename; a miss returns ``title_override_applied: false`` (#1960).
 
         Pass ``wait=true`` to block until the ONE added source finishes processing and
         return the ``source_wait`` aggregate (buckets + per-bucket ``*_count`` +
-        ``total_count``) with a top-level ``source_id`` (present even on timeout/failure,
-        so you can retry/delete); ``timeout``/``interval`` tune the poll. ``wait`` is
-        single-mode only and NOT for a remote ``file`` signed-URL upload (add it, then
-        ``source_wait``). Without ``wait`` the added source is echoed under ``source``
-        with string ``kind`` / ``status_label`` labels; imports are ASYNCHRONOUS so the
-        echo is usually still ``processing``/``preparing`` — confirm with ``source_wait``
-        or ``source_list(status="error")``. A failed import is flagged inline
-        (``status_label="error"`` + a top-level ``warning``); ``source_wait`` also flags a
-        READY web page whose fetched text is suspiciously thin (dead link / soft-404 /
-        paywall).
+        ``total_count``) with a top-level ``source_id`` (present even on timeout/failure);
+        ``timeout``/``interval`` tune the poll. ``wait`` is single-mode only and NOT for a
+        remote ``file`` signed-URL upload (add it, then ``source_wait``). Without ``wait``
+        the added source is echoed under ``source`` with string ``kind`` /
+        ``status_label`` labels; imports are ASYNCHRONOUS so the echo is usually still
+        ``processing``/``preparing`` — confirm with ``source_wait`` or
+        ``source_list(status="error")``. A failed import is flagged inline
+        (``status_label="error"`` + a ``warning``); ``source_wait`` also flags a READY web
+        page with suspiciously thin text (dead link/soft-404/paywall).
 
         **Batch mode** — pass ``urls`` (a list of **http/https URLs**, YouTube links
         included) to add many in one call instead of one round-trip each. Each entry is
@@ -663,7 +683,10 @@ def register(mcp: Any) -> None:
                         interval=interval,
                     )
                 return _add_result_payload(
-                    drive_result.source, to_jsonable(drive_result), notebook_id=nb_id
+                    drive_result.source,
+                    to_jsonable(drive_result),
+                    notebook_id=nb_id,
+                    requested_title=title,
                 )
 
             content = _select_content(source_type, url=url, text=text, path=path)
@@ -680,8 +703,13 @@ def register(mcp: Any) -> None:
                 return await _wait_after_add(
                     client, nb_id, src, source_type=source_type, timeout=timeout, interval=interval
                 )
+            # url/youtube re-derive the title server-side; surface a rename miss
+            # (#1960). ``text`` honors ``title`` directly so it never mismatches.
             return _add_result_payload(
-                src, to_jsonable(add_core.SourceAddResult(source=src)), notebook_id=nb_id
+                src,
+                to_jsonable(add_core.SourceAddResult(source=src)),
+                notebook_id=nb_id,
+                requested_title=title if source_type in ("url", "youtube") else None,
             )
 
 

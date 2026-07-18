@@ -219,6 +219,10 @@ class TestWaitArgsKeywordOnly:
         target = sources_api._uploader if method_name == "add_file" else sources_api._adder
         patched = AsyncMock(return_value=Source(id="src_123", title="Source"))
         setattr(target, method_name, patched)
+        # #1960: add_url/add_drive run a best-effort post-add rename when a requested
+        # title differs from the returned one; stub it so this wait-arg forwarding
+        # test stays focused on the adder call.
+        sources_api.rename = AsyncMock(return_value=Source(id="src_123", title="Source"))
 
         method = getattr(sources_api, method_name)
         with warnings.catch_warnings():
