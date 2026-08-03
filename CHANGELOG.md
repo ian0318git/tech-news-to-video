@@ -126,6 +126,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `_ALLOWED_BASE_HOSTS` — that set governs where credentials may be sent, which
   is a narrower question than where a response may have come from
   ([#2038](https://github.com/teng-lin/notebooklm-py/issues/2038)).
+- **`login` now explains bundled-Chromium launch failures instead of asking for a bug report.**
+  The friendly launch-failure branch was gated on `CHANNEL_BROWSERS` (`chrome` / `msedge`), which
+  excludes the *default* bundled Chromium — so every bundled launch failure fell through to a bare
+  re-raise and surfaced as `Unexpected error: … This may be a bug` with exit 2. It is now classified:
+  a missing download points at `python -m playwright install chromium`, and Windows'
+  `spawn UNKNOWN` is named as an execution veto (AppLocker / WDAC / Software Restriction Policies,
+  or Defender blocking `%LOCALAPPDATA%\ms-playwright`) with the working alternatives — a system
+  browser under `Program Files`, or signing in elsewhere and shipping `storage_state.json` — plus
+  an explicit note that `--headless` does not help. `spawn UNKNOWN` on `--browser chrome`/`msedge`
+  is covered too, and so is `login --master-token`, whose one-time bootstrap spawns a headed
+  browser and previously hit the same raw-traceback dead end. The veto itself is an environment
+  policy this client cannot bypass ([#2004](https://github.com/teng-lin/notebooklm-py/issues/2004)).
+
+### Documentation
+
+- `docs/troubleshooting.md`: new Windows `spawn UNKNOWN` section (why libuv reports `UNKNOWN`
+  rather than `ENOENT`/`EACCES`, why headless does not help, and the ship-`storage_state.json`
+  path for locked-down hosts), and a correction to the master-token note — the one-time
+  `login --master-token` bootstrap **does** launch a browser, so only `--oauth-token` (manual
+  paste) and `--cdp-url` (attach) avoid spawning one.
 
 ## [0.8.0] - 2026-08-03
 

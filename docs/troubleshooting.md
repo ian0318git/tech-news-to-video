@@ -117,11 +117,41 @@ Workarounds, most reliable first:
 
 2. **Set up a master token (best for unattended / long-lived use).** `notebooklm login --master-token` (needs the `[headless]` extra: `pip install "notebooklm-py[headless]"`) stores a durable `master_token.json` beside your profile. When cookies are missing or fully expired, the client re-mints a complete, fresh cookie jar — including `__Secure-1PSIDTS` — from the master token in-process, so it does not depend on what the browser login happened to hand back. If Google blocks sign-in inside the automated capture window ("This browser or app may not be secure"), use the CDP-attach or manual `oauth_token` variants described in the [master-token troubleshooting note](#cookie-freshness-for-long-running--unattended-use) above. See also [installation.md#d-headless-server-or-ci](installation.md#d-headless-server-or-ci).
 
+   > ⚠️ **The one-time bootstrap is not browser-free.** Plain `notebooklm login --master-token` launches a headed Playwright browser to capture the single-use `oauth_token`, so on a machine where the browser cannot start at all (see [`spawn UNKNOWN`](#windows-browser-fails-to-start-with-spawn-unknown) below) it fails the same way. Only the two manual variants avoid spawning a browser: `--master-token --oauth-token <value>` (paste the cookie yourself) and `--master-token --cdp-url <url>` (attach to a Chrome you started). What *is* browser-free is everything *after* bootstrap — the layer-4 re-mint from the stored `master_token.json`.
+
 3. **Retry the Playwright login on a fresh profile.** Sometimes a stale persistent profile is the culprit rather than automation detection:
    ```bash
    notebooklm login --fresh
    ```
    If three attempts (normal, `--fresh` + password, `--fresh` + passkey) all reproduce the missing cookie, treat it as the automation-detection case and switch to Firefox or a master token above.
+
+#### Windows: browser fails to start with `spawn UNKNOWN`
+
+```text
+BrowserType.launch_persistent_context: spawn UNKNOWN
+Failed to launch: Error: spawn UNKNOWN
+```
+
+**Cause: something on the machine vetoed *executing* the browser** — this is not a missing install and not a `notebooklm-py` bug (issue [#2004](https://github.com/teng-lin/notebooklm-py/issues/2004)). `UNKNOWN` is libuv's `UV_UNKNOWN`: `CreateProcessW` returned a Win32 error that has no entry in libuv's translation table. A missing binary would surface as `ENOENT` and an ordinary ACL denial as `EACCES`, so what actually reaches `UNKNOWN` is policy- or antivirus-shaped:
+
+- `ERROR_ACCESS_DISABLED_BY_POLICY` — AppLocker, Software Restriction Policies, or WDAC blocking execution from `%LOCALAPPDATA%\ms-playwright`.
+- `ERROR_VIRUS_INFECTED` / `ERROR_VIRUS_DELETED` — Microsoft Defender or another endpoint-security agent quarantining the Chromium build.
+
+Upstream Playwright reports ([microsoft/playwright#35363](https://github.com/microsoft/playwright/issues/35363), [#28307](https://github.com/microsoft/playwright/issues/28307), [#28858](https://github.com/microsoft/playwright/issues/28858)) all resolve to group policy or endpoint security, most often on managed corporate machines.
+
+**`--headless` does not help.** It launches the identical binary through the identical spawn; the veto happens at process creation, before any window would exist.
+
+Workarounds, most reliable first:
+
+1. **Use a system browser.** Chrome and Edge install under `Program Files`, a different path — so a rule scoped to Playwright's directory does not cover them:
+   ```bash
+   notebooklm login --browser chrome
+   notebooklm login --browser msedge
+   ```
+2. **Sign in elsewhere and ship the credentials in.** This is the right answer for a non-interactive or locked-down Windows host, and needs no browser on that host at all: run `notebooklm login` on a machine with a display, then copy `storage_state.json` over (or set `NOTEBOOKLM_AUTH_JSON`) — see [installation.md#d-headless-server-or-ci](installation.md#d-headless-server-or-ci).
+3. **Have IT allow-list the directory.** Permit execution from `%LOCALAPPDATA%\ms-playwright` (or wherever `PLAYWRIGHT_BROWSERS_PATH` points), and exclude it from real-time antivirus scanning.
+
+Note that `--browser-cookies chrome` is *not* a workaround on Windows: it runs into App-Bound Encryption instead (see [the section above](#windows-missing-required-cookies-__secure-1psidts-after-login-and---browser-cookies-could-not-decrypt)). Use `--browser-cookies firefox` if you want the cookie-extraction route.
 
 #### "Unauthorized" or redirect to login page
 
@@ -711,6 +741,8 @@ playwright install chromium
 - Allow in System Preferences → Security & Privacy
 
 ### Windows
+
+> **Login problems?** Two Windows-specific login failures are covered under Authentication Errors above: [`spawn UNKNOWN` when the browser will not start](#windows-browser-fails-to-start-with-spawn-unknown), and [`Could not decrypt` / missing `__Secure-1PSIDTS`](#windows-missing-required-cookies-__secure-1psidts-after-login-and---browser-cookies-could-not-decrypt).
 
 **CLI hangs indefinitely (issue #75):**
 
