@@ -7,34 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- `notebooklm login --storage <path>` now gives each custom storage file an
-  isolated persistent browser profile, with login, logout, `status --paths`,
-  doctor's L3 readiness row, and L3 headless re-auth resolving the same
-  storage-specific path. New explicit-storage browser directories carry an
-  ownership marker: `login --fresh` refuses to recursively delete unowned
-  sidecars and logout leaves them intact (and reports the preserved path).
-  Canonical legacy and named-profile layouts remain managed even when selected
-  through `--storage`. Very long storage filenames use a stable canonical-path hash to
-  stay within filesystem component limits. Existing custom-storage browser
-  sessions are not auto-migrated because the old shared profile cannot be safely
-  attributed to a storage file or account. (#2026)
-- `notebooklm login --master-token` now starts Playwright with the required Windows
-  event-loop policy, avoiding a pre-browser `NotImplementedError` (#2011).
-- `notebooklm login` now recognizes `notebook.google.com` as the personal app landing
-  host after the Gemini Notebook rebrand, preventing successful browser sign-ins from
-  timing out after five minutes. Enterprise and RPC base-host validation remain
-  unchanged. (#2013)
-- `server_info(include_account=True)` (MCP tool and the REST `GET /v1/server/info`
-  route) now adds an `output_language_is_default` boolean to the account block. When
-  the account has never set an explicit output language, `output_language` is `null`
-  **and** `output_language_is_default` is `true`, signalling that the account uses
-  NotebookLM's default language rather than a bare null that reads as
-  missing/broken. A genuinely unparseable settings response still degrades to
-  `available: false` (so it stays distinguishable from the unset-uses-default case).
-
-## [0.8.0]
+## [0.8.0] - 2026-08-03
 
 The headline of 0.8.0 is **integrations**: NotebookLM is now reachable from AI
 agents and HTTP clients through two new adapters built over the shared `_app/`
@@ -540,6 +513,30 @@ get-returns-None / kwarg-alias deprecation machinery — has been **removed**
 
 ### Fixed
 
+- `notebooklm login --storage <path>` now gives each custom storage file an
+  isolated persistent browser profile, with login, logout, `status --paths`,
+  doctor's L3 readiness row, and L3 headless re-auth resolving the same
+  storage-specific path. New explicit-storage browser directories carry an
+  ownership marker: `login --fresh` refuses to recursively delete unowned
+  sidecars and logout leaves them intact (and reports the preserved path).
+  Canonical legacy and named-profile layouts remain managed even when selected
+  through `--storage`. Very long storage filenames use a stable canonical-path hash to
+  stay within filesystem component limits. Existing custom-storage browser
+  sessions are not auto-migrated because the old shared profile cannot be safely
+  attributed to a storage file or account. (#2026)
+- `notebooklm login --master-token` now starts Playwright with the required Windows
+  event-loop policy, avoiding a pre-browser `NotImplementedError` (#2011).
+- `notebooklm login` now recognizes `notebook.google.com` as the personal app landing
+  host after the Gemini Notebook rebrand, preventing successful browser sign-ins from
+  timing out after five minutes. Enterprise and RPC base-host validation remain
+  unchanged. (#2013)
+- `server_info(include_account=True)` (MCP tool and the REST `GET /v1/server/info`
+  route) now adds an `output_language_is_default` boolean to the account block. When
+  the account has never set an explicit output language, `output_language` is `null`
+  **and** `output_language_is_default` is `true`, signalling that the account uses
+  NotebookLM's default language rather than a bare null that reads as
+  missing/broken. A genuinely unparseable settings response still degrades to
+  `available: false` (so it stays distinguishable from the unset-uses-default case).
 - **Self-hosted MCP OAuth: switching the served account no longer resets the client
   registry.** OAuth-registered clients + issued tokens (`oauth_state.json`) were stored
   under the *served account's profile dir*, so pointing the server at a different profile
