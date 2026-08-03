@@ -206,35 +206,77 @@ def repair_playwright_account_metadata(
 # Chromium install pre-flight (CLI-install concern; stays in the adapter)
 # ---------------------------------------------------------------------------
 
+CHROMIUM_PRESENT_MARKER = "notebooklm-chromium-present"
+CHROMIUM_MISSING_MARKER = "notebooklm-chromium-missing"
+
+# Detection source for the pre-flight, run in an isolated interpreter.
+#
+# It asks Playwright itself where the bundled Chromium build lives
+# (``BrowserType.executable_path``, a stable public API) and tests that path
+# on disk, printing one of the markers above.
+#
+# It deliberately does NOT parse ``playwright install --dry-run`` output
+# (#2031): that command prints the same ``browser:`` / ``Install location:`` /
+# ``Download url:`` block whether or not the browser is on disk — it reports
+# where a build *would* go, not whether it is there — so it cannot answer this
+# question in either direction. Its human-readable text is also not a stable
+# interface (the historical ``"will download"`` marker this pre-flight matched
+# on is emitted by no shipping Playwright release).
+#
+# Running it out-of-process keeps the check timeout-bounded (an in-process
+# ``sync_playwright()`` start cannot be interrupted), starts the driver with a
+# clean default event-loop policy on Windows, and leaves no Playwright state in
+# the CLI process before the real launch.
+CHROMIUM_PROBE_SOURCE = f"""\
+import os
+import sys
+
+from playwright.sync_api import sync_playwright
+
+with sync_playwright() as playwright:
+    path = playwright.chromium.executable_path
+sys.stdout.write(
+    "{CHROMIUM_PRESENT_MARKER}" if path and os.path.exists(path) else "{CHROMIUM_MISSING_MARKER}"
+)
+"""
+
 
 def ensure_chromium_installed(io: LoginIO) -> None:
     """Check if Chromium is installed and install if needed.
 
-    Runs ``playwright install --dry-run chromium`` to detect a missing browser,
-    then auto-installs. Silently proceeds on any error so Playwright handles it
-    during launch. Both subprocess calls are timeout-bounded (30 s dry-run,
-    300 s install) so a network-stalled CLI cannot hang ``notebooklm login``;
-    ``TimeoutExpired`` is a pre-flight failure — the warning surfaces and login
-    continues. ``io`` carries the presentation / exit sink (an install failure
-    exits 1 via ``io.fail``; the ``except SystemExit: raise`` re-raise keeps
-    that terminal path intact).
+    Resolves Playwright's bundled-Chromium executable path in an isolated
+    interpreter (:data:`CHROMIUM_PROBE_SOURCE`) and auto-installs when that
+    path is absent. Silently proceeds on any error — including an unreadable
+    probe answer — so Playwright handles it during launch. Both subprocess
+    calls are timeout-bounded (30 s probe, 300 s install) so a network-stalled
+    CLI cannot hang ``notebooklm login``; ``TimeoutExpired`` is a pre-flight
+    failure — the warning surfaces and login continues. ``io`` carries the
+    presentation / exit sink (an install failure exits 1 via ``io.fail``; the
+    ``except SystemExit: raise`` re-raise keeps that terminal path intact).
     """
     try:
         result = subprocess.run(
-            [sys.executable, "-m", "playwright", "install", "--dry-run", "chromium"],
+            [sys.executable, "-c", CHROMIUM_PROBE_SOURCE],
             capture_output=True,
             text=True,
             timeout=30,
         )
-        stdout_lower = result.stdout.lower()
-        if "chromium" not in stdout_lower or "will download" not in stdout_lower:
-            # The dry-run probe succeeded but didn't see a "will download"
-            # marker; nothing to do. If the probe printed an unexpected
-            # diagnostic to stderr, surface a sanitised version at debug
-            # level so operators can investigate without leaking env values.
+        saw_present = CHROMIUM_PRESENT_MARKER in result.stdout
+        saw_missing = CHROMIUM_MISSING_MARKER in result.stdout
+        # Install only on an unambiguous "missing" answer from a probe that
+        # ran to completion. Anything else — the browser is on disk, the probe
+        # exited non-zero, or it returned an answer we cannot read (printed
+        # neither marker, or printed both) — means "nothing to do": installing
+        # on a guess would re-download on every login, and a genuinely missing
+        # browser still raises an actionable Playwright error at launch.
+        chromium_missing = result.returncode == 0 and saw_missing and not saw_present
+        if not chromium_missing:
+            # If the probe printed an unexpected diagnostic to stderr, surface
+            # a sanitised version at debug level so operators can investigate
+            # without leaking env values.
             if result.stderr:
                 logger.debug(
-                    "playwright install --dry-run stderr: %s",
+                    "chromium pre-flight probe stderr: %s",
                     redact_subprocess_output(result.stderr),
                 )
             return
@@ -283,8 +325,9 @@ def ensure_chromium_installed(io: LoginIO) -> None:
             f"{exc.timeout}s. Proceeding anyway.[/dim]"
         )
     except Exception as e:
-        # FileNotFoundError: playwright CLI not found but sync_playwright imported
-        # Other exceptions: dry-run check failed — let Playwright handle it during launch.
+        # FileNotFoundError: the interpreter that runs the probe is gone.
+        # Other exceptions: the probe could not run — let Playwright handle it
+        # during launch.
         io.emit(f"[dim]Warning: Chromium pre-flight check failed: {e}. Proceeding anyway.[/dim]")
 
 

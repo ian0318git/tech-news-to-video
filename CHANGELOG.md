@@ -74,6 +74,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cookie-*scoping* failure that surfaced as a generic "authentication expired"
   line, leaving the nightly log with nothing to diagnose it from
   ([#2019](https://github.com/teng-lin/notebooklm-py/issues/2019)).
+- **`notebooklm login` now actually auto-installs Chromium**
+  ([#2031](https://github.com/teng-lin/notebooklm-py/issues/2031)). The
+  pre-flight in `cli/services/playwright_login.py` scraped
+  `playwright install --dry-run chromium` for a `"will download"` marker no
+  Playwright release emits, so it always returned early and the user hit a raw
+  `Executable doesn't exist` error at launch. `--dry-run` cannot answer the
+  question in either direction — it prints the same `Install location:` block
+  whether or not the browser is on disk — so the probe now resolves
+  Playwright's own `chromium.executable_path` (in an isolated, timeout-bounded
+  interpreter) and tests that path.
 
 ## [0.8.0] - 2026-08-03
 

@@ -4,7 +4,8 @@ These tests target branches not exercised by the existing
 * :func:`_select_playwright_account` ambiguity-reason branches.
 * :func:`repair_playwright_account_metadata` clear-metadata-failure path.
 * :func:`windows_playwright_event_loop` win32 policy swap.
-* :func:`ensure_chromium_installed` timeout + generic-exception pre-flight
+* :func:`ensure_chromium_installed` detection contract (present / missing /
+  unreadable probe answer) plus its timeout + generic-exception pre-flight
   failures.
 * :func:`recover_page` TargetClosed + non-TargetClosed PlaywrightError paths.
 * :func:`validate_login_flag_conflicts` remaining mutual-exclusion gates.
@@ -18,6 +19,7 @@ with stub/mocked collaborators so no real browser / network is required.
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -29,6 +31,9 @@ import notebooklm.auth as auth_module
 from notebooklm.cli.playwright_login_io import make_login_io
 from notebooklm.cli.services import playwright_login
 from notebooklm.cli.services.playwright_login import (
+    CHROMIUM_MISSING_MARKER,
+    CHROMIUM_PRESENT_MARKER,
+    CHROMIUM_PROBE_SOURCE,
     Conflict,
     PathError,
     PreparedPaths,
@@ -183,6 +188,144 @@ def test_windows_event_loop_noop_off_win32(monkeypatch) -> None:
     monkeypatch.setattr(playwright_login.sys, "platform", "linux")
     with windows_playwright_event_loop():
         pass  # no exception, nothing swapped
+
+
+# ---------------------------------------------------------------------------
+# ensure_chromium_installed — detection contract (#2031)
+# ---------------------------------------------------------------------------
+def _record_subprocess(
+    monkeypatch, probe_stdout: str, probe_returncode: int = 0
+) -> list[list[str]]:
+    """Stub ``subprocess.run``: probe returns ``probe_stdout``, install succeeds."""
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **_):
+        calls.append(cmd)
+        if "install" in cmd:
+            return SimpleNamespace(stdout="", stderr="", returncode=0)
+        return SimpleNamespace(stdout=probe_stdout, stderr="", returncode=probe_returncode)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    return calls
+
+
+def test_probe_is_programmatic_not_dry_run_output_scraping(monkeypatch) -> None:
+    """The probe runs :data:`CHROMIUM_PROBE_SOURCE`, never ``install --dry-run``.
+
+    ``playwright install --dry-run`` prints the same block whether or not the
+    browser is on disk, so its output can never answer this question (#2031).
+    """
+    calls = _record_subprocess(monkeypatch, CHROMIUM_PRESENT_MARKER)
+    ensure_chromium_installed(make_login_io())
+
+    assert calls == [[sys.executable, "-c", CHROMIUM_PROBE_SOURCE]]
+    assert "--dry-run" not in calls[0]
+
+
+def test_both_subprocess_calls_stay_timeout_bounded(monkeypatch) -> None:
+    """30 s probe / 300 s install: an unbounded call could hang ``notebooklm login``."""
+    timeouts: list[Any] = []
+
+    def fake_run(cmd, **kwargs):
+        timeouts.append(kwargs.get("timeout"))
+        if "install" in cmd:
+            return SimpleNamespace(stdout="", stderr="", returncode=0)
+        return SimpleNamespace(stdout=CHROMIUM_MISSING_MARKER, stderr="", returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    ensure_chromium_installed(make_login_io())
+
+    assert timeouts == [30, 300]
+
+
+def test_present_marker_skips_install(monkeypatch, capsys) -> None:
+    """A present answer installs nothing and prints nothing."""
+    calls = _record_subprocess(monkeypatch, CHROMIUM_PRESENT_MARKER)
+    ensure_chromium_installed(make_login_io())
+
+    assert len(calls) == 1  # probe only
+    assert capsys.readouterr().out == ""
+
+
+def test_missing_marker_runs_the_install(monkeypatch, capsys) -> None:
+    """A missing answer triggers ``playwright install chromium`` (the #2031 bug)."""
+    calls = _record_subprocess(monkeypatch, f"{CHROMIUM_MISSING_MARKER}\n")
+    ensure_chromium_installed(make_login_io())
+
+    assert calls[1] == [sys.executable, "-m", "playwright", "install", "chromium"]
+    out = capsys.readouterr().out
+    assert "Chromium browser not installed" in out
+    assert "installed successfully" in out
+
+
+@pytest.mark.parametrize(
+    "probe_stdout",
+    [
+        pytest.param("", id="empty"),
+        pytest.param("Traceback (most recent call last): ...", id="crashed"),
+        pytest.param(f"{CHROMIUM_PRESENT_MARKER}{CHROMIUM_MISSING_MARKER}", id="both-markers"),
+    ],
+)
+def test_unreadable_probe_answer_does_not_install(monkeypatch, capsys, probe_stdout) -> None:
+    """An ambiguous answer must not install — guessing re-downloads every login."""
+    calls = _record_subprocess(monkeypatch, probe_stdout)
+    ensure_chromium_installed(make_login_io())
+
+    assert len(calls) == 1  # probe only, no install
+    assert capsys.readouterr().out == ""
+
+
+def test_missing_marker_from_failed_probe_does_not_install(monkeypatch, capsys) -> None:
+    """A non-zero probe exit is unreadable even when the marker reached stdout.
+
+    A probe that dies after writing the marker (or a wrapper that echoes it)
+    must not be trusted to start a download.
+    """
+    calls = _record_subprocess(monkeypatch, CHROMIUM_MISSING_MARKER, probe_returncode=1)
+    ensure_chromium_installed(make_login_io())
+
+    assert len(calls) == 1  # probe only, no install
+    assert capsys.readouterr().out == ""
+
+
+@pytest.mark.requires_playwright
+def test_probe_source_detects_both_states_against_real_playwright(tmp_path, monkeypatch) -> None:
+    """The probe answers correctly against a REAL Playwright install (#2031).
+
+    Regression guard for the class of bug this replaced: the previous
+    pre-flight scraped ``playwright install --dry-run chromium`` for a
+    ``"will download"`` marker no Playwright release emits, and every unit test
+    fed ``subprocess.run`` fabricated output — so the probe was never once
+    checked against the real tool. This test runs the actual probe source.
+    """
+    browsers_dir = tmp_path / "browsers"
+    browsers_dir.mkdir()
+    monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", str(browsers_dir))
+
+    def run_source(source: str) -> str:
+        result = subprocess.run(
+            [sys.executable, "-c", source], capture_output=True, text=True, timeout=120
+        )
+        assert result.returncode == 0, result.stderr
+        return result.stdout.strip()
+
+    # Empty browsers dir → the bundled build is genuinely absent.
+    assert run_source(CHROMIUM_PROBE_SOURCE) == CHROMIUM_MISSING_MARKER
+
+    # Materialise the exact executable Playwright resolves → detected present.
+    resolved = Path(
+        run_source(
+            "import sys\n"
+            "from playwright.sync_api import sync_playwright\n"
+            "with sync_playwright() as playwright:\n"
+            "    sys.stdout.write(playwright.chromium.executable_path)\n"
+        )
+    )
+    assert browsers_dir in resolved.parents
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    resolved.touch()
+
+    assert run_source(CHROMIUM_PROBE_SOURCE) == CHROMIUM_PRESENT_MARKER
 
 
 # ---------------------------------------------------------------------------
@@ -597,28 +740,6 @@ def test_redact_subprocess_output_skips_non_string_env_value() -> None:
     out = playwright_login.redact_subprocess_output("leak supersecretvalue here", env=env)
     assert "<redacted>" in out
     assert "supersecretvalue" not in out
-
-
-# ---------------------------------------------------------------------------
-# ensure_chromium_installed — install success path
-# ---------------------------------------------------------------------------
-def test_ensure_chromium_install_success(monkeypatch, capsys) -> None:
-    """When the dry-run reports a missing browser and install succeeds, the
-    success banner is printed ."""
-    calls: list[list[str]] = []
-
-    def fake_run(cmd, **_):
-        calls.append(cmd)
-        if "--dry-run" in cmd:
-            return SimpleNamespace(stdout="chromium will download to ...", stderr="", returncode=0)
-        # The real install call.
-        return SimpleNamespace(stdout="", stderr="", returncode=0)
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
-    ensure_chromium_installed(make_login_io())
-    out = capsys.readouterr().out
-    assert "installed successfully" in out
-    assert len(calls) == 2
 
 
 # ---------------------------------------------------------------------------
