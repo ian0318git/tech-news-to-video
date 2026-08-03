@@ -224,7 +224,7 @@ notebooklm generate mind-map                       # interactive studio map (def
 notebooklm generate data-table "compare key concepts"
 
 # 5. Download artifacts
-notebooklm download audio ./podcast.mp3
+notebooklm download audio ./podcast.m4a
 notebooklm download video ./overview.mp4
 notebooklm download cinematic-video ./documentary.mp4
 notebooklm download quiz --format markdown ./quiz.md
@@ -274,7 +274,7 @@ async def main():
         # Generate content (podcast, video, quiz, etc.)
         status = await client.artifacts.generate_audio(nb.id, instructions="make it fun")
         await client.artifacts.wait_for_completion(nb.id, status.task_id)
-        await client.artifacts.download_audio(nb.id, "podcast.mp3")
+        await client.artifacts.download_audio(nb.id, "podcast.m4a")
 
         # Generate quiz and download as JSON
         status = await client.artifacts.generate_quiz(nb.id)

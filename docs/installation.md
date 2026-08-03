@@ -442,7 +442,7 @@ curl -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
      -d '{"type":"quiz"}' $BASE/v1/notebooks/<id>/artifacts        # → {"task_id": ...}
 curl -H "Authorization: Bearer $TOKEN" $BASE/v1/notebooks/<id>/artifacts/<task_id>  # poll
 curl -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-     -d '{"type":"audio"}' $BASE/v1/notebooks/<id>/artifacts/download -o out.mp3     # download
+     -d '{"type":"audio"}' $BASE/v1/notebooks/<id>/artifacts/download -o out.m4a     # download
 # File upload is multipart (the original filename + content-type are preserved):
 curl -H "Authorization: Bearer $TOKEN" -F 'file=@./notes.pdf' \
      $BASE/v1/notebooks/<id>/sources/file
