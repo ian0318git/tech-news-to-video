@@ -235,8 +235,12 @@ jobs:
     # so a drift hit files an issue rather than red-failing the canary outright.
     - name: Run bundle drift monitor
       id: bundle
-      # Reads auth from the profile materialized above (load_auth_from_storage
-      # falls back to the storage_state.json file when the env var is absent).
+      # Reads auth from the profile materialized above
+      # (build_httpx_cookies_from_storage falls back to the storage_state.json
+      # file when the env var is absent). It must stay the DOMAIN-PRESERVING
+      # loader: a flat name->value mapping handed to httpx.get(cookies=...)
+      # carries no domain, so every cookie is sent to every host in the
+      # redirect chain regardless of which auth source fed it — issue #2019.
       continue-on-error: true
       shell: bash
       run: |
