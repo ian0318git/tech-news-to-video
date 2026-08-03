@@ -139,10 +139,29 @@ notebooklm login
 **Cause:** The CSRF token (`SNlM0e`) couldn't be extracted from the NotebookLM page response. The exact wording depends on which code path raised it:
 
 - `Failed to extract CSRF token (SNlM0e). Page structure may have changed or authentication expired. Preview: '...'` — raised by `refresh_auth()` when the WIZ_global_data extraction fails ([`client.py`](../src/notebooklm/client.py)).
-- `CSRF token not found in HTML. Final URL: <url> This may indicate the page structure has changed.` — raised by the lower-level extractor when no auth redirect was detected ([`auth.py`](../src/notebooklm/auth.py)).
+- `CSRF token not found in HTML. Final URL: <url> This may indicate the page structure has changed.` — raised by the lower-level extractor when the response *did* come from a NotebookLM app host but carried no token ([`auth.py`](../src/notebooklm/auth.py)). This is the genuine "file a bug" case.
+- `CSRF token not found in HTML. Final URL: <url> The response did not come from a NotebookLM app host, so the request never reached the app …` — same extractor, but the chain landed somewhere else entirely. **The final URL is the diagnosis**: follow it to see where the request actually went. Nothing is wrong with your login.
 - `Failed to extract 'SNlM0e' from NotebookLM HTML response. This usually means Google changed the page structure. Preview: '...'` — raised as `AuthExtractionError` directly (rare; usually wrapped by one of the messages above) ([`exceptions.py`](../src/notebooklm/exceptions.py)).
 
-A related auth-redirect message — `Authentication expired. Run 'notebooklm login' to re-authenticate.` (or `Authentication expired or invalid. ...`) — surfaces the same root cause when the page redirected to Google's login flow.
+A related auth-redirect message — `Authentication expired. Run 'notebooklm login' to re-authenticate.` (or `Authentication expired or invalid. Final URL: …` / `… Redirected to: …`) — surfaces the same root cause when the page redirected to Google's login flow. Every one of these messages carries the final URL; if it does not name `accounts.google.com`, the session did not expire.
+
+> **Note:** the "did not come from a NotebookLM app host" wording exists because these two conditions used to be indistinguishable. A page-body scan for `accounts.google.com` links reported *any* Google-served page (help articles, the region gate, the app itself) as an expired login — see [#2038](https://github.com/teng-lin/notebooklm-py/issues/2038) and the six-day false alarm in [#2019](https://github.com/teng-lin/notebooklm-py/issues/2019). If you are reading an older error that says "Authentication expired" with **no URL at all**, it came from that removed code path and should not be trusted.
+
+#### "Google's CookieMismatch page was reached during this request"
+
+**Cause:** the request's redirect chain passed through `accounts.google.com/CookieMismatch` (which then forwards to a `support.google.com` help article). Google rejected the cookies as not matching the host they were sent to. This is a cookie **scoping** problem, not necessarily an expired session — the credentials themselves may be perfectly valid.
+
+Common causes:
+
+- a `storage_state.json` whose per-cookie `domain` values were flattened to a single host, so cookies scoped to `.google.com` get sent to hosts they were never issued for,
+- cookies belonging to a different Google account or session than the one being addressed,
+- a stale `__Secure-1PSIDTS` that Google could not reconcile.
+
+**Solution:**
+```bash
+notebooklm login   # re-extract cookies with their original domains
+```
+If it recurs, inspect `storage_state.json` and confirm each cookie kept its own `domain` field rather than being rewritten to one host. See [`docs/auth-cookie-lifecycle.md`](auth-cookie-lifecycle.md) for the cookie-domain model.
 
 **Note:** These errors should rarely surface, since the client automatically retries with a fresh CSRF token on auth failures (see *Automatic Token Refresh* above). When one does reach you, the automatic refresh also failed.
 

@@ -84,6 +84,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whether or not the browser is on disk — so the probe now resolves
   Playwright's own `chromium.executable_path` (in an isolated, timeout-bounded
   interpreter) and tests that path.
+- **Token-extraction failures no longer misreport a wrong page as an expired
+  login.** When `SNlM0e` / `FdrFJe` could not be extracted, `extract_csrf_from_html`
+  and `extract_session_id_from_html` fell back to scanning the page *body* for any
+  `accounts.google.com` URL and, on a hit, raised `Authentication expired or
+  invalid. Run 'notebooklm login' to re-authenticate.` — with no URL attached.
+  Practically every Google-served page carries such a link, so a valid session that
+  simply landed on the wrong page was reported as expired. The scheduled
+  `rpc-health` workflow failed this way every day from 2026-07-28 to 2026-08-03
+  while the credentials were provably valid, and three users piled onto the
+  auto-filed issue diagnosing an unrelated login bug
+  ([#2038](https://github.com/teng-lin/notebooklm-py/issues/2038),
+  [#2019](https://github.com/teng-lin/notebooklm-py/issues/2019)).
+
+  The body scan is gone; classification is now driven by the authoritative final
+  URL, and **every** failure message carries it. Four conditions are now
+  distinguishable: the region/anti-abuse gate, a cookie mismatch, a genuine auth
+  redirect, and a token-missing response — the last split into "we never reached a
+  NotebookLM app host" (a redirect/environment problem) versus "the app answered
+  but the token moved" (a real page-structure change worth filing). The
+  `"CSRF token not found"` / `"Session ID not found"` / `"Authentication expired"`
+  message substrings and the `ValueError` type are unchanged.
+
+- **A `accounts.google.com/CookieMismatch` hop is now its own diagnostic.** It
+  means the cookies were sent to a host they were not scoped for — commonly a
+  `storage_state.json` whose per-cookie domains were flattened — which needs a
+  different fix than re-authenticating. Because the interstitial redirects onward
+  to a `support.google.com` help article, it is invisible to the final URL alone,
+  so `_fetch_tokens_with_jar` now threads the redirect history into the extractors
+  via a new optional keyword-only `redirect_urls` argument on
+  `extract_csrf_from_html` / `extract_session_id_from_html` (additive; existing
+  positional calls are unaffected)
+  ([#2038](https://github.com/teng-lin/notebooklm-py/issues/2038)).
+
+- **`notebook.google.com` is now recognised as a NotebookLM app host** when
+  deciding whether a token-less response actually reached the app. Google serves
+  the personal app from this alias after the "Gemini Notebook" rebrand, and
+  `_auth/browser_capture.url_matches_base_host` already honoured it; without the
+  matching entry a genuine app response would have been reported as "the request
+  never reached the app". The alias is deliberately *not* added to
+  `_ALLOWED_BASE_HOSTS` — that set governs where credentials may be sent, which
+  is a narrower question than where a response may have come from
+  ([#2038](https://github.com/teng-lin/notebooklm-py/issues/2038)).
 
 ## [0.8.0] - 2026-08-03
 
