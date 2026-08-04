@@ -40,7 +40,7 @@ See [Configuration](configuration.md) for full env-var precedence and CI/CD setu
 - **Session commands** - Authentication and context management
 - **Notebook commands** - CRUD operations on notebooks
 - **Chat commands** - Querying and conversation management
-- **Grouped commands** - `source`, `label`, `artifact`, `agent`, `generate`, `download`, `note`, `share`, `research`, `language`, `skill`, `auth`, `profile`, `mcp`
+- **Grouped commands** - `source`, `label`, `collection`, `artifact`, `agent`, `generate`, `download`, `note`, `share`, `research`, `language`, `skill`, `auth`, `profile`, `mcp`
 - **Utility commands** - `metadata`, `doctor`
 
 ---
@@ -201,6 +201,22 @@ Source labels group a notebook's sources into topic buckets. A `<id|name>` argum
 All `label` subcommands accept `-n/--notebook ID` (resolves via flag > `NOTEBOOKLM_NOTEBOOK` env > active context).
 
 `label generate --scope all` (wipes and regenerates every label with new ids) and `label delete` are destructive and require `-y/--yes` to confirm (or an interactive prompt). `label generate --scope unlabeled` (the default) only labels currently-unlabeled sources and needs no confirmation. `label add` appends sources (existing members survive; labels may overlap) and `label remove` un-assigns sources from the label only — the sources stay in the notebook (and in any other label). `label delete` removes the label only — its sources become unlabeled, not deleted. `source_id` arguments to `label add`/`label remove` accept partial-prefix matching like every other source-id command.
+
+### Collection Commands (`notebooklm collection <cmd>`)
+
+Collections group whole **notebooks** into named, account-level buckets (playlist-style) — the sibling of `label`, which groups sources *within* a notebook. A notebook can belong to multiple collections. A `<id|name>` argument accepts a collection id (or partial prefix) **or** an exact collection name; an ambiguous name lists the matching ids so you can disambiguate.
+
+| Command | Arguments | Options | Example |
+|---------|-----------|---------|---------|
+| `list` | - | `--json` | `collection list` |
+| `notebooks <id\|name>` | Collection id or name | `--json` | `collection notebooks "Research Q3"` |
+| `create <name>` | Collection name | `--json` | `collection create "Research Q3"` |
+| `rename <id\|name> <new_name>` | Collection ref, new name | `--json` | `collection rename "Research Q3" "Research Q4"` |
+| `add <id\|name> <notebook_id>...` | Collection ref, one+ notebook ids | `--json` | `collection add "Research Q3" nb123 nb456` |
+| `remove <id\|name> <notebook_id>...` | Collection ref, one+ notebook ids | `--json` | `collection remove "Research Q3" nb123` |
+| `delete <id\|name>...` | One+ collection refs | `-y/--yes`, `--json` | `collection delete "Research Q3" -y` |
+
+Collections are account-level, so — unlike `label` — the `collection` commands take **no** `-n/--notebook` option; their membership arguments *are* notebooks. `collection add` appends notebooks (existing members survive; a notebook may belong to multiple collections) and `collection remove` un-assigns a notebook from that collection only — the notebook is not deleted and stays in any other collection. `collection delete` (destructive, requires `-y/--yes`) removes the collection only, never its member notebooks. `notebook_id` arguments to `collection add`/`collection remove` accept partial-prefix matching like every other notebook-id command.
 
 ### Research Commands (`notebooklm research <cmd>`)
 
