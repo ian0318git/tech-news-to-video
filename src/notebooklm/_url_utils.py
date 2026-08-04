@@ -17,7 +17,7 @@ _TITLE_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 _MAX_URL_TITLE_LEN = 200
 
 # The NotebookLM marketing/landing host (note: no ``.com``). A request to the
-# app host ``notebooklm.google.com`` is redirected here — typically
+# app host (either personal host) is redirected here — typically
 # ``notebooklm.google/?location=unsupported`` — when Google's region /
 # anti-abuse risk-control declines the request's *environment* (VPN/proxy or
 # datacenter IP, IP/timezone/language mismatch, non-browser access pattern).
@@ -249,7 +249,7 @@ def find_cookie_mismatch_hop(urls: Iterable[str]) -> str | None:
 def is_notebooklm_unavailable_redirect(url: str) -> bool:
     """Check if a URL is the NotebookLM marketing/landing host (an access gate).
 
-    A request to the app (``notebooklm.google.com``) redirected to the bare
+    A request to an app host redirected to the bare
     ``notebooklm.google`` host means Google's region / anti-abuse risk-control
     declined the request's environment — *not* expired auth (that goes to
     ``accounts.google.com``) and *not* a page-structure change. The bare host is

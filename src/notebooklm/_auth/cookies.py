@@ -84,7 +84,8 @@ def flatten_cookie_map(cookies: CookieInput | None) -> FlatCookieMap:
 
     Duplicate-name resolution mirrors :func:`extract_cookies_from_storage`:
     domains are ranked by :func:`_auth_domain_priority` (``.google.com`` >
-    ``.notebooklm.google.com`` > ``notebooklm.google.com`` > regional > other).
+    dotted app hosts > their no-dot variants > regional > other; both personal
+    hosts share a tier at each level, so neither outranks the other).
     The cross-tier case from #375 (e.g. ``OSID`` on ``myaccount.google.com``
     (tier 0) vs ``notebooklm.google.com`` (tier 2)) resolves the same way
     regardless of input order. But tiers are **not** all distinct — several
@@ -177,8 +178,10 @@ def extract_cookies_from_storage(storage_state: dict[str, Any]) -> dict[str, str
         .google.com and .google.com.sg), we use this priority order:
 
         1. .google.com (base domain) - ALWAYS preferred when present
-        2. .notebooklm.google.com (Playwright canonical NotebookLM subdomain)
-        3. notebooklm.google.com (no-dot NotebookLM subdomain)
+        2. Dotted app-host domains (``.notebook.google.com``,
+           ``.notebooklm.google.com``) — the Playwright canonical form
+        3. Their no-dot variants (``notebook.google.com``,
+           ``notebooklm.google.com``)
         4. Regional domains (e.g. .google.de, .google.com.sg, .google.co.uk)
         5. Other allowlisted domains (e.g. .googleusercontent.com)
 

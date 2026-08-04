@@ -361,9 +361,12 @@ def missing_cookies_hint(
 # (``tests/cassettes/*.yaml``) and the live auth-refresh path. Only the
 # following domains are actually exercised during login + token refresh +
 # source-add + chat-ask flows:
-#   - ``notebooklm.google.com`` (the API host — all CLI RPCs land here)
-#   - ``notebook.google.com`` (the Gemini Notebook rebrand host; Google sets
-#     the per-product ``OSID`` / ``__Secure-OSID`` binding cookies here too)
+#   - ``notebook.google.com`` (the default app host since #2067 — CLI RPCs
+#     land here, and Google sets the per-product ``OSID`` /
+#     ``__Secure-OSID`` binding cookies here)
+#   - ``notebooklm.google.com`` (the pre-rebrand host; still served, still
+#     selectable via ``NOTEBOOKLM_BASE_URL``, and sets the same binding
+#     cookies — both must stay accepted)
 #   - ``.google.com`` (carries ``SID``/``HSID``/``SSID``/etc.)
 #   - ``accounts.google.com`` (token refresh + ``RotateCookies`` endpoint at
 #     :data:`KEEPALIVE_ROTATE_URL`)

@@ -882,7 +882,7 @@ def register_session_commands(cli):
         Default mode is a one-shot keepalive: opens a session, runs the
         layer-1 poke against ``accounts.google.com`` to elicit
         ``__Secure-1PSIDTS`` rotation, fetches CSRF + session ID from
-        ``notebooklm.google.com`` (discarded; their side effect is the cookie
+        the configured app host (discarded; their side effect is the cookie
         jar), and persists the rotated jar to ``storage_state.json`` on close.
 
         With ``--browser-cookies``, re-extracts cookies from the selected

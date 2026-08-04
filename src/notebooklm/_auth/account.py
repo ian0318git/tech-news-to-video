@@ -85,7 +85,7 @@ def extract_email_from_html(html: str) -> str | None:
     (e.g. ``support@google.com``, ``noreply@accounts.google.com``).
 
     Args:
-        html: Page HTML from ``notebooklm.google.com/?authuser=N``.
+        html: Page HTML from ``<configured base URL>/?authuser=N``.
 
     Returns:
         The account's email, or ``None`` if no plausible address was found
@@ -105,7 +105,7 @@ def extract_email_from_html(html: str) -> str | None:
 # UA, Google serves a stripped-down page that omits the WIZ_global_data block
 # (and therefore the active user's email), and ``extract_email_from_html``
 # returns None — looking like "no signed-in account". Empirically validated
-# against ``notebooklm.google.com/?authuser=N``.
+# against ``<configured base URL>/?authuser=N``.
 _BROWSER_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
@@ -143,7 +143,8 @@ async def enumerate_accounts(
 ) -> list[Account]:
     """Enumerate Google accounts visible to the given cookie jar.
 
-    Probes ``https://notebooklm.google.com/?authuser=N`` for ``N`` in
+    Probes ``<configured base URL>/?authuser=N`` (see
+    :func:`~notebooklm._env.get_base_url`) for ``N`` in
     ``0..max_authuser`` and parses the active user's email from each response.
 
     Stop condition: when the email at index ``N>0`` matches the email at
@@ -178,7 +179,7 @@ async def enumerate_accounts(
         # The browser's on-disk cookie DB rotates ``__Secure-1PSIDTS`` every
         # few minutes, but only when Chrome itself is actively running. A
         # ``--browser-cookies`` extraction against an idle Chrome lands here
-        # with a stale SIDTS — the SID is fine, but ``notebooklm.google.com``
+        # with a stale SIDTS — the SID is fine, but the app host
         # responds with a redirect to ``accounts.google.com`` and we'd
         # incorrectly conclude the user is signed out. Poke once to fetch
         # fresh SIDTS via Set-Cookie before the probes start.

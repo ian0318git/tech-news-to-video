@@ -390,7 +390,7 @@ def extract_csrf_from_html(
     It's required for all RPC calls to prevent cross-site request forgery.
 
     Args:
-        html: Page HTML content from notebooklm.google.com
+        html: Page HTML content from the configured app host
         final_url: The final URL after redirects (for error messages)
         redirect_urls: The redirect chain that preceded ``final_url``, in order
             (``[str(r.url) for r in response.history]``). Optional, and only
@@ -433,7 +433,7 @@ def extract_session_id_from_html(
     It's passed in URL query parameters for RPC calls.
 
     Args:
-        html: Page HTML content from notebooklm.google.com
+        html: Page HTML content from the configured app host
         final_url: The final URL after redirects (for error messages)
         redirect_urls: The redirect chain that preceded ``final_url``. See
             :func:`extract_csrf_from_html`.

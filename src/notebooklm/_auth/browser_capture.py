@@ -456,7 +456,7 @@ def run_browser_capture(
             # Retry navigation on transient connection errors with backoff
             for attempt in range(1, LOGIN_MAX_RETRIES + 1):
                 try:
-                    # wait_until="commit": notebooklm.google.com is a streaming
+                    # wait_until="commit": the app host serves a streaming
                     # SPA that never fires the "load" event (readyState stays
                     # "interactive"), so Playwright's default wait_until="load"
                     # would block until timeout. "commit" resolves once response
@@ -819,7 +819,7 @@ def run_cdp_capture(
             # is actively using.
             page = context.new_page()
             # wait_until="commit": same streaming-SPA reason as the headed login
-            # arm -- the default "load" never fires on notebooklm.google.com, so
+            # arm -- the default "load" never fires on the app host, so
             # this CDP re-auth goto would otherwise waste 30s then TimeoutError
             # before landing classification. See #1697.
             page.goto(f"{get_base_url()}/", wait_until="commit", timeout=30000)

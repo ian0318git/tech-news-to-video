@@ -37,7 +37,7 @@ logger = logging.getLogger("notebooklm.auth")
 # partners of __Secure-1PSID / __Secure-3PSID. Their server-side validity window
 # is short (minutes-to-hours scale) and Google only emits a rotated value when
 # the client asks the identity surface to rotate. Pure RPC traffic against
-# notebooklm.google.com never triggers rotation, so a long-lived storage_state
+# the app host never triggers rotation, so a long-lived storage_state
 # silently stales out and every subsequent call fails with the
 # "Authentication expired or invalid" redirect (see issue #312).
 #
@@ -208,7 +208,7 @@ async def _poke_session(client: httpx.AsyncClient, storage_path: Path | None = N
     """Best-effort POST to ``accounts.google.com/RotateCookies`` to rotate SIDTS.
 
     Failures are logged at DEBUG and swallowed: this is purely a freshness
-    optimisation. The caller's request to notebooklm.google.com is the
+    optimisation. The caller's request to the app host is the
     authoritative health check.
 
     Three layered guards keep the POST from stampeding ``accounts.google.com``:

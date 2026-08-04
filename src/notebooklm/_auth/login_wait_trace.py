@@ -53,8 +53,8 @@ def trace_url(url: str) -> str:
     the host.
 
     Nothing is lost: the entire diagnostic this tracing exists to provide is
-    *which host the browser is on* — "waiting for notebooklm.google.com, landed
-    on notebook.google.com". The path never contributed to that answer.
+    *which host the browser is on* — "waiting for notebook.google.com, landed
+    on notebooklm.google.com". The path never contributed to that answer.
 
     Userinfo (``https://TOKEN@host/``) is dropped by rebuilding from
     ``hostname``; query and fragment are dropped by never reading them.
