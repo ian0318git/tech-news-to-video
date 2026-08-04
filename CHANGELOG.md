@@ -7,7 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`AuthTokens.cookie_header_for(url)` — a domain-correct `Cookie:` header.**
+  Selects cookies per RFC 6265 for a specific URL via the session's
+  `cookie_jar`, so a cookie scoped to one host is never sent to another. Use it
+  instead of `AuthTokens.cookie_header`, which collapses every domain into one
+  `name -> value` slot and therefore has to pick an arbitrary winner when the
+  same name exists on two hosts. `url` is required — a default would
+  reintroduce the fabricated target the method exists to remove — and a
+  non-`https` URL raises rather than returning a quietly truncated header
+  ([#2054](https://github.com/teng-lin/notebooklm-py/issues/2054)).
+
 ### Fixed
+
+- **The nightly RPC-health probes no longer send one host's cookies to
+  another.** All three authenticated probes in `scripts/check_rpc_health.py`
+  — two `batchexecute` calls and one streamed-chat call —
+  hand-built their `Cookie:` header from the flat `AuthTokens.cookie_header`
+  projection, so the `accounts.google.com`-scoped `LSID` was sent to the app
+  host on **every** request, and where a name existed on more than one host
+  (`OSID` and `__Secure-OSID` legitimately do, post-rebrand, with different
+  values per host) the surviving value was arbitrary — decided by
+  `storage_state` iteration order, because the domain-priority tiers are not
+  all distinct. The probes now share one client carrying the domain-scoped jar.
+  This is the same defect class as [#2019](https://github.com/teng-lin/notebooklm-py/issues/2019)
+  / [#2018](https://github.com/teng-lin/notebooklm-py/issues/2018), which fixed
+  the script's *auth* path and left its *request* path untouched
+  ([#2054](https://github.com/teng-lin/notebooklm-py/issues/2054)).
+
+- **`scripts/diagnose_get_notebook.py` can authenticate again, and honours
+  `NOTEBOOKLM_BASE_URL`.** Two independent defects in the same ~40 lines: it
+  built its `Cookie:` header by joining `AuthTokens.cookies`, whose keys became
+  `(name, domain, path)` tuples in #369 — emitting a syntactically malformed
+  `('SID', '.google.com', '/')=…` header, so the script has been unable to
+  authenticate for anyone since [#369](https://github.com/teng-lin/notebooklm-py/issues/369) —
+  and it read the eager module-level
+  `BATCHEXECUTE_URL` constant, ignoring `NOTEBOOKLM_BASE_URL` and so pointing
+  enterprise users at the consumer host. Both are fixed together, and the
+  script now loads auth domain-preserving (`extract_cookies_with_domains`)
+  rather than through the flat map, so its jar routes per host instead of
+  broadcasting
+  ([#2054](https://github.com/teng-lin/notebooklm-py/issues/2054)).
 
 - **`doctor` no longer warns Windows users about permissions the client
   deliberately never sets.** `notebooklm doctor` compared the profile
