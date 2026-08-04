@@ -534,6 +534,7 @@ the default dependency.
 | [`_auth/browser_launch_errors.py`](../src/notebooklm/_auth/browser_launch_errors.py) | Transport-neutral leaf for `browser_capture`: the `CHANNEL_BROWSERS` channel registry plus `classify_launch_failure`, which maps a Playwright launch failure to actionable help (system browser not installed, bundled Chromium not downloaded, or a Windows `spawn UNKNOWN` execution veto from AppLocker/WDAC/Defender) or to `None` so the original exception propagates. Pure string-in/string-out — no Playwright, no I/O, no CLI. |
 | [`_auth/login_wait_trace.py`](../src/notebooklm/_auth/login_wait_trace.py) | Transport-neutral leaf for `browser_capture`: `log_observed_navigations`, a context manager that logs each main-frame navigation observed during the five-minute interactive login wait at DEBUG so `notebooklm -vv login` is self-diagnosing when a login never lands. Inert unless DEBUG is enabled (no listener attached) and swallows every listener exception so it can never destabilise the wait. Redaction goes through its own `trace_url`, which keeps **only** scheme + host — deliberately stricter than `extraction._safe_url` (which preserves the path outside a Google-OAuth allowlist), because this traces arbitrary SSO redirects where a federated IdP can carry a one-time assertion in the path. |
 | [`_auth/headless_reauth.py`](../src/notebooklm/_auth/headless_reauth.py) | Layer-3 (deepest) auth recovery: when first-party cookies are dead, drive a headless browser against the persistent profile to silently re-mint cookies. Typed honest outcomes (`HeadlessReauthStatus` UNAVAILABLE/FAILED/SUCCESS — never silent `None`). Opt-in only (`refresh_auth(allow_headless=True)` or `NOTEBOOKLM_HEADLESS_REAUTH=1`); local-unattended-only, never the remote/MCP auth path. Alternative credential source: `NOTEBOOKLM_HEADLESS_REAUTH_CDP_URL` (or `attempt_headless_reauth(cdp_url=...)`) attaches to an operator-pointed running Chrome instead of the dedicated profile (freshness mitigation). Also exposes `headless_reauth_readiness()` — a credential-free, browser-free probe (profile present + playwright installed) surfaced by `doctor`. |
+| [`_auth/recovery.py`](../src/notebooklm/_auth/recovery.py) | Client-neutral L3/L4 recovery adapters plus same-loop cold-start coordination. Equivalent callers share one complete task; heterogeneous policies serialize mutation by canonical storage path. |
 | [`_auth/account.py`](../src/notebooklm/_auth/account.py) | Account profile + multi-account switching. |
 | [`_auth/session.py`](../src/notebooklm/_auth/session.py) | `refresh_auth_session(auth=..., kernel=..., auth_coord=..., lifecycle=..., cookie_persistence=...)` implementation called by `AuthRefreshCoordinator`. Takes five explicit keyword-only collaborators instead of a Session-shaped owner Protocol; the previous `RefreshAuthCore` Protocol and the `update_auth_tokens` / `update_auth_headers` Session-level forwards have been removed. |
 | [`_auth/refresh.py`](../src/notebooklm/_auth/refresh.py) | Token refresh driver (external login command, coalesced runs, secret redaction). |
@@ -644,6 +645,7 @@ The cross-command helpers form a small internal CLI stack:
 | [`cli/runtime.py`](../src/notebooklm/cli/runtime.py) | Leaf runtime helpers: root `--quiet` lookup and the single `asyncio.run(...)` bridge for sync Click handlers. |
 | [`cli/auth_runtime.py`](../src/notebooklm/cli/auth_runtime.py) | Shared auth bootstrap, command-body error wrapping, and optional opened-client workflow helper. |
 | [`cli/master_token_login.py`](../src/notebooklm/cli/master_token_login.py) | Command driver for `notebooklm login --master-token[-refresh]`, rendering over the master-token login service [`cli/services/login/master_token.py`](../src/notebooklm/cli/services/login/master_token.py) (mint/persist/refresh + browser `oauth_token` capture; ADR-0023). |
+| [`cli/services/auth_refresh.py`](../src/notebooklm/cli/services/auth_refresh.py) | Missing-storage preflight for `auth refresh`: conditionally mint from the exact sibling master token without changing healthy or malformed-storage behavior. |
 | [`cli/services/auth_source.py`](../src/notebooklm/cli/services/auth_source.py) | Single resolver for CLI auth-source precedence (`--storage`, `NOTEBOOKLM_AUTH_JSON`, active profile). |
 | [`cli/context.py`](../src/notebooklm/cli/context.py) | Profile/storage-scoped `context.json` persistence for active notebook, conversation, and account metadata. |
 | [`cli/resolve.py`](../src/notebooklm/cli/resolve.py) | Notebook/source/artifact/note ID resolution, including partial-ID matching against public client list calls. |
@@ -1179,6 +1181,7 @@ src/notebooklm/
 │   ├── keepalive.py             # Cookie keepalive + __Secure-1PSIDTS rotation
 │   ├── psidts_recovery.py       # Inline PSIDTS recovery for cold-start (issue #865)
 │   ├── master_token.py          # Headless master-token auth: mint cookies + layer-4 re-mint (ADR-0023)
+│   ├── recovery.py              # Client-neutral cold-start L3/L4 adapters + same-loop coordination
 │   ├── refresh.py               # Token refresh driver (external login cmd, coalesced runs, redaction)
 │   └── tokens.py                # AuthTokens container + load_auth_from_storage loader
 ├── _types/                      # Dataclass implementation package re-exported by types.py
@@ -1294,6 +1297,7 @@ src/notebooklm/
     └── services/                # CLI-specific service layer (ADR-0008 Click-to-service extraction)
         ├── __init__.py
         ├── auth_diagnostics.py  # `auth check` CLI adapter over `_app/auth_check.py` — re-exports AuthCheckPlan/Result; builds the plan from the AuthSource Click-context precedence (plan_from_click_context + the auth_source display label) and injects read_env_auth_json into the neutral run_auth_check
+        ├── auth_refresh.py      # Missing-storage bootstrap from the exact sibling master token
         ├── auth_source.py       # Single source of truth for the active CLI auth source (Click-context precedence resolver; stays in cli/ — reads ctx.obj + NOTEBOOKLM_AUTH_JSON)
         ├── confirming_mutation.py # Shared confirmed-mutation pipeline for CLI resources
         ├── download.py          # CLI adapter over _app/download.py: re-exports plan types, injects cli.resolve resolvers (keeps resolve_notebook_id patch seam), projects DownloadResult → envelope dict

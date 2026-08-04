@@ -60,6 +60,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   RPC is in flight cannot make the message name a host that failure never
   touched ([#2067](https://github.com/teng-lin/notebooklm-py/issues/2067)).
 
+- **File-backed clients now recover fully expired cookies during cold start.**
+  The same opt-in layer-3 browser recovery and automatic layer-4 master-token
+  re-mint used by live clients now run behind the shared initial token fetch,
+  with same-loop recovery coalescing and post-recovery cookie/account reloads.
+  `AuthTokens.from_storage()` and `NotebookLMClient.from_storage()` gain the
+  keyword-only `allow_headless=False` opt-in. `notebooklm auth refresh` gains
+  `--allow-headless`, honors root `--storage`, and can mint missing storage from
+  a sibling master token before one passive validation. The forced
+  `login --master-token-refresh` route remains compatible but is labeled legacy
+  in favor of conditional `auth refresh`
+  ([#2068](https://github.com/teng-lin/notebooklm-py/issues/2068)).
+
 - **Corrected the last cookie-domain tier claim that still said the ranking is
   decisive.** #2057 rewrote the `_auth_domain_priority` docstring and its two
   consumers, but the tier comment added by

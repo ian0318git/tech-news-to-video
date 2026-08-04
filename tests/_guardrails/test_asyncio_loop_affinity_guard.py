@@ -150,6 +150,13 @@ ALLOWLIST: tuple[_AllowlistEntry, ...] = (
         "Module-global per-running-loop lock registry (keyed by "
         "asyncio.get_running_loop()); structurally immune to cross-loop reuse.",
     ),
+    _AllowlistEntry(
+        "src/notebooklm/_auth/recovery.py",
+        None,
+        "Module-global per-running-loop lock and in-flight task registries "
+        "(weakly keyed by asyncio.get_running_loop()); structurally immune "
+        "to cross-loop reuse.",
+    ),
 )
 
 _ALLOWLIST_BY_KEY = {entry.key: entry for entry in ALLOWLIST}
