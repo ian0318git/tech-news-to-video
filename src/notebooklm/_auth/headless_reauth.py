@@ -73,7 +73,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn
 
 from ..exceptions import HeadlessLoginRequiredError
-from .browser_capture import BrowserCapturePlan, run_browser_capture, run_cdp_capture
+from .browser_capture import (
+    BrowserCapturePlan,
+    _CaptureAbortKind,
+    _HeadlessCaptureAbort,
+    run_browser_capture,
+    run_cdp_capture,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -263,9 +269,9 @@ class _SilentRaisingCaptureIO:
       leak through this sink.
     * ``fail`` raises :class:`HeadlessLoginRequiredError` instead of exiting the
       process — an unattended library call must never call ``sys.exit``. The
-      neutral core routes user-facing aborts through ``io.fail``; mapping them
-      to this exception lets :func:`attempt_headless_reauth` classify them as
-      :attr:`HeadlessReauthStatus.FAILED` rather than hanging or exiting.
+      neutral core routes user-facing aborts through ``io.fail``; infrastructure
+      aborts use a private typed marker so they cannot be mistaken for these
+      dead-session paths.
     * ``run_async`` is never reached on the capture path (the core only calls it
       from the interactive adapter's account-metadata repair, which the
       headless arm does not run); it raises if somehow invoked so a contract
@@ -289,6 +295,21 @@ class _SilentRaisingCaptureIO:
             "run_async is not supported on the headless re-auth IO sink "
             "(the headless arm performs no account-metadata repair)."
         )
+
+
+def _capture_abort_reason(kind: _CaptureAbortKind) -> str:
+    """Return a stable, non-sensitive public reason for an infrastructure abort."""
+    if kind is _CaptureAbortKind.BROWSER_CLOSED:
+        return (
+            "headless capture failed: browser was closed during capture; "
+            "retry headless re-authentication"
+        )
+    if kind is _CaptureAbortKind.CONNECTION_EXHAUSTED:
+        return (
+            "headless capture failed: connection retries were exhausted; "
+            "check network connectivity and retry"
+        )
+    return "headless capture failed: infrastructure aborted the capture"
 
 
 def _resolve_reusable_profile(
@@ -660,6 +681,14 @@ def _drive_capture(
         # the core aborted via io.fail. Honest FAILED — never masked as success.
         logger.warning("Layer-3 re-auth failed: %s", exc)
         return HeadlessReauthResult(HeadlessReauthStatus.FAILED, source_dead_reason)
+    except _HeadlessCaptureAbort as exc:
+        # Only the private, stable category crosses into the public result.
+        # Never expose the marker's text or a Playwright exception/endpoint.
+        logger.warning("Layer-3 re-auth aborted: %s", exc.kind.value)
+        return HeadlessReauthResult(
+            HeadlessReauthStatus.FAILED,
+            _capture_abort_reason(exc.kind),
+        )
     except Exception as exc:  # noqa: BLE001 - recovery is best-effort
         # Any other capture failure (launch/attach error, navigation failure,
         # filesystem error) is a non-fatal recovery failure: surface FAILED so

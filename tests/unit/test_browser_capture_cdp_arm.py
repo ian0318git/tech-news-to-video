@@ -31,7 +31,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from notebooklm._auth.browser_capture import BrowserCapturePlan, run_cdp_capture
+from notebooklm._auth.browser_capture import (
+    TARGET_CLOSED_ERROR,
+    BrowserCapturePlan,
+    _CaptureAbortKind,
+    _HeadlessCaptureAbort,
+    run_cdp_capture,
+)
 from notebooklm.exceptions import HeadlessLoginRequiredError
 
 
@@ -204,6 +210,22 @@ def test_cdp_no_context_raises_and_persists_nothing(tmp_path: Path) -> None:
     assert not (tmp_path / "storage_state.json").exists()
     # We still disconnected, and never fabricated a context.
     browser.new_context.assert_not_called()
+    browser.close.assert_called_once()
+
+
+@pytest.mark.requires_playwright
+def test_cdp_target_closed_is_typed_instead_of_session_expired(tmp_path: Path) -> None:
+    """A closed attached browser is infrastructure failure, not a dead session."""
+    playwright, browser, _context, page = _fake_cdp_browser("https://notebooklm.google.com/")
+    from playwright.sync_api import Error as PlaywrightError
+
+    page.goto.side_effect = PlaywrightError(TARGET_CLOSED_ERROR)
+
+    with pytest.raises(_HeadlessCaptureAbort) as excinfo:
+        _run_cdp(_plan(tmp_path), _RaisingCaptureIO(), playwright, "http://127.0.0.1:9222")
+
+    assert excinfo.value.kind is _CaptureAbortKind.BROWSER_CLOSED
+    assert not (tmp_path / "storage_state.json").exists()
     browser.close.assert_called_once()
 
 

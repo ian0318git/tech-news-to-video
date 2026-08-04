@@ -25,8 +25,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from notebooklm._auth import browser_capture
 from notebooklm._auth.browser_capture import (
+    RETRYABLE_CONNECTION_ERRORS,
+    TARGET_CLOSED_ERROR,
     BrowserCapturePlan,
+    _CaptureAbortKind,
+    _HeadlessCaptureAbort,
     _reject_unsupported_mode,
     run_browser_capture,
 )
@@ -170,6 +175,56 @@ def test_headless_redirected_to_login_raises_loudly(tmp_path: Path) -> None:
     page.wait_for_url.assert_not_called()
     # Nothing was persisted on the dead-session path.
     assert not storage.exists()
+
+
+@pytest.mark.requires_playwright
+def test_headless_browser_close_is_typed_instead_of_session_expired(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A dead browser is infrastructure failure, not a dead Google session."""
+    storage = tmp_path / "storage_state.json"
+    profile = tmp_path / "browser_profile"
+    profile.mkdir()
+    playwright, context, page = _fake_playwright_landing("https://notebooklm.google.com/")
+    from playwright.sync_api import Error as PlaywrightError
+
+    closed = PlaywrightError(TARGET_CLOSED_ERROR)
+    page.goto.side_effect = closed
+    context.new_page.return_value = page
+    context.close.side_effect = closed
+    monkeypatch.setattr(browser_capture.time, "sleep", lambda _: None)
+
+    with pytest.raises(_HeadlessCaptureAbort) as excinfo:
+        _run_headless(
+            BrowserCapturePlan(browser="chromium", browser_profile=profile, storage_path=storage),
+            _RaisingCaptureIO(),
+            playwright,
+        )
+
+    assert excinfo.value.kind is _CaptureAbortKind.BROWSER_CLOSED
+
+
+@pytest.mark.requires_playwright
+def test_headless_connection_retry_exhaustion_is_typed(tmp_path: Path, monkeypatch) -> None:
+    """Exhausted navigation retries must retain their network failure class."""
+    storage = tmp_path / "storage_state.json"
+    profile = tmp_path / "browser_profile"
+    profile.mkdir()
+    playwright, context, page = _fake_playwright_landing("https://notebooklm.google.com/")
+    from playwright.sync_api import Error as PlaywrightError
+
+    page.goto.side_effect = PlaywrightError(RETRYABLE_CONNECTION_ERRORS[0])
+    context.new_page.return_value = page
+    monkeypatch.setattr(browser_capture.time, "sleep", lambda _: None)
+
+    with pytest.raises(_HeadlessCaptureAbort) as excinfo:
+        _run_headless(
+            BrowserCapturePlan(browser="chromium", browser_profile=profile, storage_path=storage),
+            _RaisingCaptureIO(),
+            playwright,
+        )
+
+    assert excinfo.value.kind is _CaptureAbortKind.CONNECTION_EXHAUSTED
 
 
 # ---------------------------------------------------------------------------

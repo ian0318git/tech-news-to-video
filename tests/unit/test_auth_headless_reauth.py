@@ -21,6 +21,7 @@ from typing import Any
 import pytest
 
 from notebooklm._auth import headless_reauth as hr
+from notebooklm._auth.browser_capture import _CaptureAbortKind, _HeadlessCaptureAbort
 from notebooklm._auth.headless_reauth import (
     HeadlessReauthResult,
     HeadlessReauthStatus,
@@ -211,6 +212,62 @@ def test_failed_on_unexpected_capture_error(tmp_path: Path, monkeypatch) -> None
     assert result.status is HeadlessReauthStatus.FAILED
     # Error TYPE only — never a cookie value.
     assert "RuntimeError" in result.reason
+
+
+@pytest.mark.parametrize(
+    ("kind", "expected"),
+    [
+        (_CaptureAbortKind.BROWSER_CLOSED, "browser was closed"),
+        (_CaptureAbortKind.CONNECTION_EXHAUSTED, "connection retries were exhausted"),
+    ],
+)
+def test_typed_capture_abort_maps_to_safe_infrastructure_reason(
+    tmp_path: Path, monkeypatch, kind: _CaptureAbortKind, expected: str
+) -> None:
+    """Typed capture aborts stay FAILED without masquerading as expired sessions."""
+
+    def _abort(*_args, **_kwargs):
+        raise _HeadlessCaptureAbort(kind)
+
+    monkeypatch.setattr(hr, "run_browser_capture", _abort)
+    monkeypatch.setitem(__import__("sys").modules, "playwright", _DummyModule())
+    monkeypatch.setitem(__import__("sys").modules, "playwright.sync_api", _DummyModule())
+
+    result = attempt_headless_reauth(
+        storage_path=tmp_path / "storage_state.json",
+        allow_headless=True,
+        browser_profile=_make_profile(tmp_path),
+        env={},
+    )
+
+    assert result.status is HeadlessReauthStatus.FAILED
+    assert expected in result.reason
+    assert "expired" not in result.reason
+    assert "http" not in result.reason
+    assert "cookie" not in result.reason
+
+
+def test_typed_capture_abort_from_cdp_uses_same_safe_mapping(tmp_path: Path, monkeypatch) -> None:
+    """The CDP arm shares the profile arm's infrastructure classification."""
+
+    def _abort(*_args, **_kwargs):
+        raise _HeadlessCaptureAbort(_CaptureAbortKind.BROWSER_CLOSED)
+
+    monkeypatch.setattr(hr, "run_cdp_capture", _abort)
+    monkeypatch.setattr(hr, "_playwright_installed", lambda: True)
+
+    result = attempt_headless_reauth(
+        storage_path=tmp_path / "storage_state.json",
+        allow_headless=True,
+        cdp_url="http://127.0.0.1:9222",
+        env={},
+    )
+
+    assert result.status is HeadlessReauthStatus.FAILED
+    assert result.reason == (
+        "headless capture failed: browser was closed during capture; "
+        "retry headless re-authentication"
+    )
 
 
 def test_env_optin_drives_browser_without_explicit_flag(tmp_path: Path, monkeypatch) -> None:
