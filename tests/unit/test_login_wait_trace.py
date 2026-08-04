@@ -99,6 +99,32 @@ def test_accepted_hosts_drive_the_predicate(monkeypatch: pytest.MonkeyPatch) -> 
     assert not url_matches_base_host("https://accounts.google.com/")
 
 
+@pytest.mark.parametrize(
+    "selected", ["https://notebooklm.google.com", "https://notebook.google.com"]
+)
+def test_either_personal_host_accepts_both(monkeypatch: pytest.MonkeyPatch, selected: str) -> None:
+    """Pinning *either* personal host must still accept the other one.
+
+    Google's login can land on the legacy host or the post-rebrand alias
+    regardless of which one we navigated to. Keying the accept set on the
+    selected host alone would reject a good landing — and would make a rollback
+    to (or a future default flip toward) the other host un-loginnable, which is
+    precisely the escape hatch this pair of hosts exists to preserve.
+    """
+    monkeypatch.setenv("NOTEBOOKLM_BASE_URL", selected)
+
+    hosts = accepted_login_hosts()
+    assert set(hosts) == {"notebooklm.google.com", "notebook.google.com"}
+    # The selected host leads, so the login-wait DEBUG line names the host we
+    # actually navigated to first; the rest is ordered, not arbitrary.
+    assert hosts[0] == selected.removeprefix("https://")
+    assert len(hosts) == len(set(hosts))
+
+    for host in ("notebooklm.google.com", "notebook.google.com"):
+        assert url_matches_base_host(f"https://{host}/notebook/abc")
+    assert not url_matches_base_host("https://notebooklm.cloud.google.com/")
+
+
 def test_enterprise_host_has_no_personal_alias(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("NOTEBOOKLM_BASE_URL", "https://notebooklm.cloud.google.com")
 

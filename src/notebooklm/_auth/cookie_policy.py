@@ -6,7 +6,7 @@ import logging
 from collections.abc import Mapping
 from typing import Any
 
-from notebooklm._env import PERSONAL_APP_ALIAS_HOST
+from notebooklm._env import PERSONAL_APP_ALIAS_HOST, PERSONAL_APP_HOSTS, get_base_host
 
 logger = logging.getLogger("notebooklm.auth")
 
@@ -133,6 +133,84 @@ def _validate_required_cookies(
             )
 
 
+def app_host_scope_note() -> str:
+    """Return the both-hosts caveat to append to "open the app in your browser" advice.
+
+    Every hint that tells a user to open the NotebookLM app in their browser is
+    really telling them to *mint the per-product binding cookie* (``OSID`` /
+    ``__Secure-OSID``). Google now serves the personal app from two hosts and
+    redirects between them, and those binding cookies are **host-scoped**: a
+    cookie set on one host is never sent to the other. So the browser visit can
+    succeed and still leave the configured host without a binding — which is the
+    #2019 shape all over again (a working session read as an expired one).
+
+    Naming a different URL in the advice does not fix that: the redirect happens
+    either way. What the user needs is the *outcome* named — which host the
+    cookies landed on, which host this client is talking to — plus a recovery
+    that works. Hence this note, appended to the binding-related hints.
+
+    Both recoveries are real, and ordered deliberately:
+
+    1. Re-run ``notebooklm login`` and complete the sign-in. That re-mints the
+       account-wide ``.google.com`` cookies, and ``APISID`` + ``SAPISID`` (which
+       live on ``.google.com``) satisfy the binding on *either* host — see
+       :func:`_has_valid_secondary_binding`.
+    2. Select the host that actually holds the cookies via
+       ``NOTEBOOKLM_BASE_URL``.
+
+    Recovery 2 carries a caveat, but only in one direction. The sibling host is
+    computed *relative to the configured one*, so it is the rebrand host
+    (:data:`notebooklm._env.PERSONAL_APP_ALIAS_HOST`) for a default-host user and
+    the long-established default for a rebrand-host user. Attaching the caveat
+    unconditionally therefore warned rebrand-host users off the legacy host —
+    exactly backwards, and it discourages the one fallback whose behavior this
+    project has exercised end to end.
+
+    What the caveat may and may not claim: a live probe (issue #1977) reached
+    ``batchexecute`` on the rebrand host — a 400 on a deliberately malformed
+    payload proves the endpoint is there. So the host is *not* "unverified to
+    serve the API". It is simply experimental here: not the documented default,
+    and not covered by this repository's cassettes. The note says that and no
+    more — overclaiming in either direction sends users into a different failure,
+    which is the bug this note exists to avoid.
+
+    Returns:
+        The note as plain text (no trailing newline), or ``""`` when the
+        configured host has no sibling — i.e. the enterprise host, which has no
+        alias, so there is no cross-host scope to warn about.
+    """
+    base_host = get_base_host()
+    siblings = sorted(PERSONAL_APP_HOSTS - {base_host})
+    if base_host not in PERSONAL_APP_HOSTS or not siblings:
+        return ""
+    other_host = siblings[0]
+    # Asymmetric by design — see the "only in one direction" paragraph above.
+    # Never inline the alias literal here: the centralization guardrail AST-walks
+    # f-string parts too, so the host must arrive via the constant.
+    caveat = (
+        " (that host is experimental — not the documented default)"
+        if other_host == PERSONAL_APP_ALIAS_HOST
+        else ""
+    )
+    return (
+        f"Heads-up: Google serves the personal app from both {base_host} and "
+        f"{other_host} and redirects between them, but the OSID binding is "
+        f"host-scoped — a cookie set on {other_host} is never sent to {base_host}, "
+        f"which is the host this client is configured to use.\n"
+        f"If the binding is still missing afterwards it landed on {other_host}: "
+        f"re-run 'notebooklm login' and complete the sign-in (that re-mints the "
+        f"account-wide .google.com binding APISID+SAPISID, which both hosts "
+        f"accept), or select the host that has the cookies with "
+        f"NOTEBOOKLM_BASE_URL=https://{other_host}{caveat}."
+    )
+
+
+def _with_scope_note(hint: str) -> str:
+    """Append :func:`app_host_scope_note` to ``hint`` when there is one to append."""
+    note = app_host_scope_note()
+    return f"{hint}\n{note}" if note else hint
+
+
 def missing_cookies_hint(
     cookie_names: set[str],
     *,
@@ -160,6 +238,11 @@ def missing_cookies_hint(
     - Secondary binding missing (Tier-2 warning case): the session works for
       now but is fragile. Visiting NotebookLM populates the missing cookies.
 
+    Every branch names the *configured* host rather than a fixed URL, and the
+    two binding-related branches carry :func:`app_host_scope_note` — the browser
+    visit they ask for can land the host-scoped binding on the sibling personal
+    host, which no re-wording of the URL prevents.
+
     Args:
         cookie_names: Names of cookies that survived extraction.
         browser_label: Optional browser label for the message
@@ -183,27 +266,30 @@ def missing_cookies_hint(
     has_secondary = _has_valid_secondary_binding(cookie_names)
 
     if psidts_missing and not has_secondary:
-        return (
+        return _with_scope_note(
             f"Your {browser_phrase} session is signed in to Google but is missing "
             f"the cookies NotebookLM needs (OSID or APISID+SAPISID, plus "
             f"__Secure-1PSIDTS).\n"
-            f"Open https://notebooklm.google.com in {browser_phrase} (sign in if "
+            f"Open https://{get_base_host()} in {browser_phrase} (sign in if "
             f"prompted), reload the page, then re-run this command."
         )
 
     if psidts_missing:
+        # No scope note here: the missing cookie is ``__Secure-1PSIDTS``, which
+        # lives on ``.google.com`` and is therefore sent to both personal hosts.
+        # Only the host-scoped OSID binding has a cross-host failure mode.
         return (
             f"__Secure-1PSIDTS is missing and the automatic RotateCookies recovery "
             f"did not succeed.\n"
-            f"Open https://notebooklm.google.com in {browser_phrase} (this triggers "
+            f"Open https://{get_base_host()} in {browser_phrase} (this triggers "
             f"Google to refresh the cookie), then re-run this command."
         )
 
     if not has_secondary:
-        return (
+        return _with_scope_note(
             f"Your {browser_phrase} cookies are missing the NotebookLM binding "
             f"(OSID, or APISID+SAPISID).\n"
-            f"Open https://notebooklm.google.com in {browser_phrase} (sign in if "
+            f"Open https://{get_base_host()} in {browser_phrase} (sign in if "
             f"prompted), reload the page, then re-run this command."
         )
 

@@ -166,10 +166,54 @@ jobs:
           echo "::warning::NOTEBOOKLM_MASTER_TOKEN_JSON secret is empty/absent — cookie-only profile (no rotation immunity)."
         fi
 
+    # Rebrand-host lane state, carried between nightly runs so the lane can
+    # report a *state change* rather than re-announcing the same observation
+    # forever. Restore-only + a run-scoped save key, because cache entries are
+    # immutable: a fixed key would pin the first night's answer permanently.
+    #
+    # A cache miss is harmless by construction: ``load_rebrand_state`` falls
+    # back to the documented ABSENT baseline, so the worst case is that a
+    # genuine PRESENT is announced twice — never a false alarm out of the
+    # steady state.
+    - name: Restore rebrand-host lane state
+      uses: actions/cache/restore@v6
+      continue-on-error: true
+      with:
+        path: rebrand-state.json
+        key: rpc-rebrand-state-${{ needs.resolve-branch.outputs.branch }}-
+        restore-keys: |
+          rpc-rebrand-state-${{ needs.resolve-branch.outputs.branch }}-
+
+    # The restored document is the PREVIOUS run's, and it carries a run-scoped
+    # ``changed`` flag. Move it into its own slot so it can never be read as
+    # tonight's result: the health script writes ``rebrand-state.json`` fresh,
+    # so from here on that filename existing MEANS this run produced it. Without
+    # this, a script that exits early (``load_auth`` exiting 2 on an auth
+    # failure writes no state at all) would leave yesterday's document in place
+    # and the detect step would replay yesterday's transition (#2062).
+    - name: Move restored rebrand state into the previous-run slot
+      shell: bash
+      run: |
+        if [ -f rebrand-state.json ]; then
+          mv rebrand-state.json rebrand-state-prev.json
+        fi
+
     - name: Run RPC Health Check
       id: health
       # Auth comes from the profile materialized above (NOT an inline
       # NOTEBOOKLM_AUTH_JSON env var) so the layer-4 re-mint can engage.
+      #
+      # The rebrand-host lane reads its previous state from the restored-and-
+      # renamed ``rebrand-state-prev.json`` and writes this run's state to
+      # ``rebrand-state.json``, stamped with ``GITHUB_RUN_ID``. Separate paths
+      # plus the stamp are what let the detect step below prove the document it
+      # reads is tonight's. The lane is exit-code-free by construction, so it
+      # cannot change ``exit_code`` here — see the "Rebrand host" steps below
+      # for its own, separately-deduped issues.
+      #
+      # No ``--base-url``: the nightly MUST stay on the default host, otherwise
+      # the legacy signal (the only named trigger for a future default flip)
+      # stops being collected. The flag exists for manual investigation.
       continue-on-error: true
       shell: bash
       env:
@@ -179,7 +223,10 @@ jobs:
       run: |
         echo "Testing branch: $TARGET_BRANCH"
         set +e
-        uv run python scripts/check_rpc_health.py --full 2>&1 | tee health-report.txt
+        uv run python scripts/check_rpc_health.py --full \
+          --rebrand-state-file rebrand-state.json \
+          --rebrand-previous-state-file rebrand-state-prev.json \
+          --rebrand-run-id "${GITHUB_RUN_ID}" 2>&1 | tee health-report.txt
         exit_code=${PIPESTATUS[0]}
         echo "exit_code=${exit_code}" >> "$GITHUB_OUTPUT"
         exit "$exit_code"
@@ -447,6 +494,170 @@ jobs:
         title: "Studio customization cohort flipped — re-capture VideoStyle codes"
         content-filepath: health-report.txt
         labels: rpc-breakage, automated
+
+    # ------------------------------------------------------------------
+    # Rebrand-host lane (notebook.google.com) — SEPARATE from everything
+    # above. It has no exit code: the script keeps its probes out of
+    # ``compute_exit_code`` entirely. That separation is the whole point.
+    # The legacy "Non-transient ERROR detected" issue is deduped by TITLE
+    # ALONE, so a rebrand probe reported through it would open one issue on
+    # the first failing night and then suppress every legacy-degradation
+    # issue after it — disabling the very gate this lane feeds.
+    #
+    # This lane therefore has: its own titles, its own PER-CAPABILITY dedup
+    # keys, and a state-change trigger (ABSENT -> PRESENT) rather than a
+    # recurring error. A rebrand host that never serves RPC files nothing,
+    # ever.
+    #
+    # Step order matters: detect -> report -> save. The cached state is the
+    # baseline the NEXT run compares against, so it may only be advanced once
+    # every transition it absorbs has actually been reported.
+    # ------------------------------------------------------------------
+    - name: Detect rebrand-host state change
+      id: rebrand
+      if: always()
+      shell: bash
+      run: |
+        if [ ! -f rebrand-state.json ]; then
+          echo "::warning::rebrand-state.json not produced; rebrand lane reported nothing."
+          echo "changed=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        # A malformed state file must not fail the job: this lane is advisory.
+        if ! uv run python - <<'PY' >> "$GITHUB_OUTPUT"
+        import json
+        import os
+        from pathlib import Path
+
+        state = json.loads(Path("rebrand-state.json").read_text(encoding="utf-8"))
+        stamp = state.get("run_id")
+        expected = os.environ["GITHUB_RUN_ID"]
+        if stamp != expected:
+            # Belt-and-braces with the previous-run slot rename above: the
+            # ``changed`` flag is RUN-SCOPED, so only a document this run wrote
+            # may be read as this run's result. A restored-but-not-rewritten
+            # file would otherwise replay a transition that did not happen.
+            # stdout is the step's output file here, so the annotation is
+            # handed back to bash to emit.
+            Path("rebrand-detect-warning.txt").write_text(
+                f"::warning::rebrand-state.json is stamped {stamp!r}, not this "
+                f"run ({expected!r}); treating the lane as unchanged.\n",
+                encoding="utf-8",
+            )
+            print("changed=false")
+        else:
+            print(f"changed={'true' if state.get('changed') else 'false'}")
+        PY
+        then
+          echo "::warning::rebrand-state.json unreadable; treating the lane as unchanged."
+          echo "changed=false" >> "$GITHUB_OUTPUT"
+        fi
+        if [ -s rebrand-detect-warning.txt ]; then
+          cat rebrand-detect-warning.txt
+        fi
+        {
+          echo "## Rebrand-host lane"
+          echo ""
+          grep '^REBRAND' health-report.txt || echo "(no rebrand lane output)"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    # One issue PER CAPABILITY, and a comment when that capability's issue is
+    # already open. A single shared dedup key would let a ``chat`` transition be
+    # suppressed by an open ``batchexecute`` issue — and because the new state
+    # becomes the cached baseline, the next run would see no change, so the
+    # suppressed transition would never be reported at all. Commenting rather
+    # than dropping keeps that true even for a repeat transition on the same
+    # capability. ``gh`` rather than the pinned create-issue action because the
+    # title is per-capability and the update path needs ``issue comment``.
+    - name: Report rebrand-host state changes
+      id: rebrand_report
+      if: always() && steps.rebrand.outputs.changed == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set -uo pipefail
+        failed=false
+        if ! uv run python - <<'PY' > rebrand-transitions.tsv
+        import json
+        from pathlib import Path
+
+        doc = json.loads(Path("rebrand-state.json").read_text(encoding="utf-8"))
+        for transition in doc.get("transitions", []):
+            row = [str(transition.get(key, "?")) for key in ("capability", "from", "to")]
+            print("\t".join(cell.replace("\t", " ") for cell in row))
+        PY
+        then
+          # Unreadable here but readable in the detect step means a race or a
+          # truncated write. Fail loudly rather than advancing the baseline past
+          # transitions we never enumerated.
+          echo "::warning::Could not read rebrand transitions; nothing reported."
+          failed=true
+        fi
+        while IFS=$'\t' read -r capability from_state to_state; do
+          [ -n "$capability" ] || continue
+          TITLE="Rebrand host RPC availability changed: ${capability}"
+          {
+            echo "## Rebrand host (notebook.google.com): \`${capability}\` ${from_state} -> ${to_state}"
+            echo ""
+            echo "**Commit:** ${GITHUB_SHA}"
+            echo ""
+            echo "This is the rebrand-host lane of the nightly RPC health check. It"
+            echo "carries NO exit code and is independent of the legacy-host signal;"
+            echo "the legacy lane's issues are unaffected by anything reported here."
+            echo ""
+            grep '^REBRAND' health-report.txt || echo "(no rebrand lane output)"
+            echo ""
+            echo "### Still unanswered"
+            echo ""
+            echo "The \`/upload/_/\` (Scotty) sub-question is NOT probed by this"
+            echo "workflow: \`check_rpc_health.py\` exercises \`ADD_SOURCE_FILE\` as an"
+            echo "RPC only and issues no upload POST anywhere. Answering it needs a"
+            echo "manual authenticated capture (upload-session start only, no bytes),"
+            echo "scrubbed via \`tests/cassette_patterns.py\` before it leaves the machine."
+            echo ""
+            echo "A PRESENT verdict here is evidence the host serves that endpoint from"
+            echo "these credentials — it is NOT on its own a reason to change any default."
+          } > rebrand-issue-body.md
+          if ! existing=$(TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" \
+            --state open --label automated \
+            --search 'in:title "Rebrand host RPC availability changed"' \
+            --json number,title \
+            --jq 'map(select(.title == env.TITLE)) | .[0].number // empty'); then
+            echo "::warning::Rebrand-host dedup probe failed for ${capability}; creating a new issue"
+            existing=""
+          fi
+          if [ -n "$existing" ]; then
+            echo "Rebrand issue #${existing} already open for ${capability}; commenting."
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" \
+              --body-file rebrand-issue-body.md || failed=true
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
+              --label automated --body-file rebrand-issue-body.md || failed=true
+          fi
+        done < rebrand-transitions.tsv
+        if [ "$failed" = true ]; then
+          echo "::warning::A rebrand-host transition could not be reported; not advancing the cached baseline."
+        fi
+        echo "report_failed=${failed}" >> "$GITHUB_OUTPUT"
+
+    # Saved LAST, and only when this run both produced a state document and
+    # managed to report whatever it observed. Caching an unreported transition
+    # would bake it into the baseline and lose it permanently.
+    - name: Save rebrand-host lane state
+      if: |
+        always()
+        && hashFiles('rebrand-state.json') != ''
+        && steps.rebrand_report.outputs.report_failed != 'true'
+        && steps.rebrand_report.outcome != 'failure'
+      uses: actions/cache/save@v6
+      continue-on-error: true
+      with:
+        path: rebrand-state.json
+        # Run-scoped key: cache entries are immutable, so a fixed key would
+        # freeze the first night's answer forever. The restore step matches
+        # this by prefix and picks the most recent.
+        key: rpc-rebrand-state-${{ needs.resolve-branch.outputs.branch }}-${{ github.run_id }}
 
     - name: Upload Report
       if: always()

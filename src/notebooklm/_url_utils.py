@@ -8,7 +8,7 @@ import re
 from collections.abc import Iterable
 from urllib.parse import parse_qs, unquote, urlparse
 
-from ._env import ENTERPRISE_BASE_HOST, PERSONAL_APP_ALIAS_HOST, PERSONAL_BASE_HOST
+from ._env import ENTERPRISE_BASE_HOST, PERSONAL_APP_HOSTS
 
 # Control characters (C0, DEL, C1) that ``unquote`` can reintroduce into a
 # derived display title — a NUL/newline must never reach a source title.
@@ -28,17 +28,18 @@ _NOTEBOOKLM_MARKETING_HOST = "notebooklm.google"
 # The NotebookLM *app* hosts — the hosts that can legitimately serve a page
 # carrying ``WIZ_global_data``. Landing anywhere else means the request never
 # reached the app, which is a different failure from "the app's page changed".
-# Sourced from ``_env`` so the enterprise host and any future addition stay in
-# one place. (``_env`` imports nothing from this module, so there is no cycle.)
+# Derived from ``_env``'s host-role constants so the post-rebrand alias, the
+# enterprise host, and any future addition stay in one place. (``_env`` imports
+# nothing from this module, so there is no cycle.)
 #
-# This set is deliberately WIDER than ``_env._ALLOWED_BASE_HOSTS``: that one
-# validates where we may *send credentials*, while this one answers the
-# read-only question "did this response come from the app?". The post-rebrand
-# alias ``notebook.google.com`` serves the personal app shell, so omitting it
-# would make a genuine app response report as "never reached the app".
-_NOTEBOOKLM_APP_HOSTS: frozenset[str] = frozenset(
-    {PERSONAL_BASE_HOST, ENTERPRISE_BASE_HOST, PERSONAL_APP_ALIAS_HOST}
-)
+# This enumerates exactly the same hosts as ``_env._ALLOWED_BASE_HOSTS`` today,
+# and is still spelled out separately rather than aliased to it, because the two
+# answer different questions: ``_ALLOWED_BASE_HOSTS`` decides where we may *send
+# credentials*, while this set answers the read-only "did this response come from
+# the app?". Those can legitimately diverge again — an app host we are not
+# willing to send cookies to, or an accepted base URL that never serves the app
+# shell — so neither set should be redefined in terms of the other.
+_NOTEBOOKLM_APP_HOSTS: frozenset[str] = PERSONAL_APP_HOSTS | {ENTERPRISE_BASE_HOST}
 
 # Google's cookie-mismatch interstitial. Reaching it means Google rejected the
 # cookies as not matching the host they were presented to (a cookie *scoping*

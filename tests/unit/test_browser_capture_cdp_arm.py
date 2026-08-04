@@ -169,6 +169,42 @@ def test_cdp_uses_temporary_page_in_existing_context(tmp_path: Path) -> None:
     context.close.assert_not_called()
 
 
+@pytest.mark.requires_playwright
+@pytest.mark.parametrize(
+    ("selected", "landed"),
+    [
+        ("https://notebooklm.google.com", "https://notebook.google.com/"),
+        ("https://notebook.google.com", "https://notebooklm.google.com/"),
+    ],
+)
+def test_cdp_cross_personal_host_landing_is_authenticated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, selected: str, landed: str
+) -> None:
+    """Landing on the *other* personal host is a success, not an off-host miss.
+
+    The CDP arm classifies its landing through ``url_matches_base_host``, so it
+    inherits ``accepted_login_hosts``. Google may redirect between the legacy
+    host and the post-rebrand alias in either direction; treating that as
+    off-host would raise on a perfectly good session.
+    """
+    monkeypatch.setenv("NOTEBOOKLM_BASE_URL", selected)
+    playwright, browser, _context, page = _fake_cdp_browser(
+        landed, cookies=[{"name": "SID", "value": "v", "domain": ".google.com", "path": "/"}]
+    )
+    io = _RaisingCaptureIO()
+
+    result = _run_cdp(_plan(tmp_path), io, playwright, "http://127.0.0.1:9222")
+
+    assert result is not None
+    storage = tmp_path / "storage_state.json"
+    assert storage.exists()
+    assert {c["name"] for c in json.loads(storage.read_text(encoding="utf-8"))["cookies"]} == {
+        "SID"
+    }
+    page.close.assert_called_once()
+    browser.close.assert_called_once()
+
+
 # ---------------------------------------------------------------------------
 # Redirected off-host → loud failure, nothing persisted
 # ---------------------------------------------------------------------------

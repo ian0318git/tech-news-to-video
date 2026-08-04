@@ -35,6 +35,7 @@ import re
 from collections.abc import Sequence
 from urllib.parse import urlparse
 
+from .._env import get_base_host
 from .._url_utils import (
     find_cookie_mismatch_hop,
     is_google_auth_redirect,
@@ -203,6 +204,11 @@ def _unavailable_redirect_message(final_url: str) -> str:
     ``?location=unsupported``), not expired auth or a page-structure change. We
     surface the ``location`` parameter explicitly because :func:`_safe_url` drops
     the query — and that parameter is the actual diagnostic.
+
+    The "verify by opening" step names the **configured** host: the gate is
+    evaluated per request, so the only reproduction that means anything is one
+    against the host this client actually called. A fixed URL sends the user to
+    confirm a different host than the one that failed.
     """
     location = notebooklm_unavailable_location(final_url)
     where = _safe_url(final_url)
@@ -210,9 +216,9 @@ def _unavailable_redirect_message(final_url: str) -> str:
     return (
         f"NotebookLM redirected this request to its region / anti-abuse access gate: "
         f"{target}. This is not a library bug or an expired login. Likely a VPN/proxy "
-        "or datacenter IP, or an IP/timezone/language mismatch. Verify by opening "
-        "https://notebooklm.google.com in a normal browser on the same network; if it "
-        "redirects there too, use a residential connection in a supported region."
+        f"or datacenter IP, or an IP/timezone/language mismatch. Verify by opening "
+        f"https://{get_base_host()} in a normal browser on the same network; if it "
+        f"redirects there too, use a residential connection in a supported region."
     )
 
 

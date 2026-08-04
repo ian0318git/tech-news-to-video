@@ -978,7 +978,7 @@ class SourcesAPI:
             logger=logger,
         )
 
-    async def _cancel_upload_session(self, upload_url: str, base_url: str, auth_route: str) -> None:
+    async def _cancel_upload_session(self, upload_url: str, auth_route: str) -> None:
         """Best-effort POST a Scotty resumable-upload cancel command.
 
         Invoked fire-and-forget (via ``asyncio.create_task``) from
@@ -988,13 +988,13 @@ class SourcesAPI:
 
         Network failures are swallowed — Ctrl-C cleanup is best-effort;
         the worst case is that the session lives until Scotty GCs it.
-        Since the caller schedules this on a detached task, there is no
-        outer await chain that can deliver a cancellation here, so no
-        extra shield is needed at this layer.
+        Since the caller schedules this on a detached task, there is no outer
+        await chain that can deliver a cancellation here, so no extra shield is
+        needed at this layer. No base URL is passed: ``Origin``/``Referer`` are
+        derived from the validated upload URL inside the pipeline.
         """
         await self._uploader.cancel_upload_session(
             upload_url,
-            base_url,
             auth_route,
             logger=logger,
         )

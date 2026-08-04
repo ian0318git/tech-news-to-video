@@ -18,15 +18,27 @@ DEFAULT_BASE_URL = "https://notebooklm.google.com"
 PERSONAL_BASE_HOST = "notebooklm.google.com"
 ENTERPRISE_BASE_HOST = "notebooklm.cloud.google.com"
 
-_ALLOWED_BASE_HOSTS = frozenset({PERSONAL_BASE_HOST, ENTERPRISE_BASE_HOST})
-
 # Alias host the personal app is also served from after Google's "Gemini
-# Notebook" rebrand. It is deliberately NOT in ``_ALLOWED_BASE_HOSTS``: that set
-# validates ``NOTEBOOKLM_BASE_URL`` (what we may *send credentials to*), whereas
-# this constant answers "did a response come from the app?" — a strictly wider,
-# read-only question. ``_auth/browser_capture.url_matches_base_host`` recognises
-# the same alias.
+# Notebook" rebrand. It answers "did a response come from the personal app?" and,
+# since it is part of :data:`PERSONAL_APP_HOSTS` below, it is also selectable via
+# ``NOTEBOOKLM_BASE_URL``. Selecting it is *not* a documented configuration: a
+# live probe (issue #1977) reached ``batchexecute`` on both personal hosts, so the
+# endpoint is dual-served — but this repository's cassettes have never exercised
+# rebrand-host RPC, because the allowlist rejected the host until now. It stays
+# out of ``docs/configuration.md`` while the default is the legacy host, not
+# because it is unproven. It is accepted here so the login/landing and
+# upload-host seams that must cope with both personal hosts can be exercised.
+#
+# Must stay a direct string literal: ``tests/_guardrails/
+# test_app_host_literals_centralized.py`` reads it out of this module by AST.
 PERSONAL_APP_ALIAS_HOST = "notebook.google.com"
+
+# Both hosts the personal app is served from. Built from the two literal-valued
+# constants above -- never derive it from ``PERSONAL_BASE_HOST`` alone, which
+# collapses it to a one-element set and silently un-fixes #2015/#2020/#2038.
+PERSONAL_APP_HOSTS = frozenset({PERSONAL_BASE_HOST, PERSONAL_APP_ALIAS_HOST})
+
+_ALLOWED_BASE_HOSTS = PERSONAL_APP_HOSTS | {ENTERPRISE_BASE_HOST}
 
 
 def get_base_url() -> str:

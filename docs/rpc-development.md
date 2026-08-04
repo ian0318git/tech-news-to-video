@@ -510,6 +510,53 @@ error:
   See the `Extract failing methods for ERROR issue` step in
   `.github/workflows/rpc-health.yml` for the body-assembly logic.
 
+### Rebrand-host lane (`notebook.google.com`)
+
+The same nightly run also probes the post-rebrand host — batchexecute and
+`GenerateFreeFormStreamed` — in a **separate reporting lane**:
+
+- It carries **no exit code**. Its probes never enter the `CheckResult` list, so
+  `compute_exit_code` cannot see them. This is deliberate and load-bearing: the
+  "Non-transient ERROR detected" issue is deduped **by title alone**, so a probe
+  that legitimately fails every night would open one issue and then suppress
+  every later legacy-degradation issue filed under the same title.
+- It reports a **state change** (`batchexecute: ABSENT->PRESENT`), not a
+  recurring error, against the previous run's state (cached between runs; a
+  cache miss falls back to the documented `ABSENT` baseline). A host that never
+  serves RPC therefore files nothing, ever.
+- On a change it opens its own issue, **"Rebrand host RPC availability
+  changed"** (label `automated`), with its own dedup search.
+- `UNKNOWN` (transport failure, 429, 5xx) is never recorded: a flake carries the
+  previous state forward instead of manufacturing a transition.
+- It runs **last** in the check and is paced like the method loop, so its two
+  extra requests cannot push the account into a rate limit that would then be
+  attributed to a legacy probe.
+
+**Recorded decision:** this lane is the first time the project's CI credentials
+are presented to `notebook.google.com`. Both hosts are Google's and both are
+already origins of the same app, so the exposure is the same credential to the
+same operator — but it is a deliberate choice, written down rather than arriving
+as a side effect.
+
+Two flags support it:
+
+```bash
+# Point the WHOLE run at a specific personal app host. Manual investigation
+# only — validated against notebooklm._env.PERSONAL_APP_HOSTS, and the nightly
+# must stay on the default so the legacy signal keeps being collected.
+uv run python scripts/check_rpc_health.py --base-url https://notebook.google.com
+
+# Where the lane reads/writes its previous state (omit: baseline-only, no write).
+uv run python scripts/check_rpc_health.py --rebrand-state-file rebrand-state.json
+```
+
+**Not answered by this lane:** whether the rebrand host serves `/upload/_/`
+(Scotty). `check_rpc_health.py` exercises `ADD_SOURCE_FILE` as an RPC only and
+issues no upload POST anywhere, so the report prints `upload NOT_PROBED` every
+run. Answering it needs a manual authenticated capture (upload-session start
+only, no bytes), scrubbed via `tests/cassette_patterns.py` before it leaves the
+machine.
+
 Routing:
 
 - **Maintainer assignment**: Issues land in the `teng-lin/notebooklm-py`

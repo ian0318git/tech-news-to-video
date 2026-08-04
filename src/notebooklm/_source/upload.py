@@ -15,7 +15,6 @@ import httpx
 
 from .._auth.account import authuser_query, format_authuser_value
 from .._callbacks import maybe_await_callback
-from .._env import get_base_url
 from .._idempotency import _coerce_create_result, _IdempotentCreateResult, idempotent_create
 from .._loop_bound import LoopBoundPrimitive
 from .._runtime.config import (
@@ -77,6 +76,7 @@ from ._upload_decode import (  # noqa: F401
     _source_context_names,
     _transient_error_types_for_upload,
     _unwrap_singleton_envelope,
+    _upload_url_origin,
     _validate_resumable_upload_url,
     _validate_upload_file_supported,
     raise_for_upload_status,
@@ -778,7 +778,6 @@ class SourceUploadPipeline(LoopBoundPrimitive):
             file_size=file_size,
             source_id=source_id,
             content_type=content_type,
-            base_url=get_base_url(),
             upload_url=get_upload_url(),
             authuser_query=self._authuser_query(),
             authuser_header=self._authuser_header(),
@@ -829,14 +828,17 @@ class SourceUploadPipeline(LoopBoundPrimitive):
         close_wired = False
         try:
             upload_url = _validate_resumable_upload_url(upload_url)
-            base_url = get_base_url()
+            # Origin/Referer track the *validated* upload URL, never the configured
+            # base URL: the two personal hosts stand in for each other, and an
+            # Origin naming the other host fails Google's origin-bound auth checks.
+            origin = _upload_url_origin(upload_url)
             auth_route = self._authuser_header()
             headers = {
                 "Accept": "*/*",
                 "Content-Type": "application/x-www-form-urlencoded;charset=utf-8",
                 "x-goog-authuser": auth_route,
-                "Origin": base_url,
-                "Referer": f"{base_url}/",
+                "Origin": origin,
+                "Referer": f"{origin}/",
                 "x-goog-upload-command": "upload, finalize",
                 "x-goog-upload-offset": "0",
             }
@@ -921,7 +923,6 @@ class SourceUploadPipeline(LoopBoundPrimitive):
                         asyncio.create_task(
                             self.cancel_upload_session(
                                 upload_url,
-                                base_url,
                                 auth_route,
                                 logger=logger,
                             )
@@ -947,22 +948,27 @@ class SourceUploadPipeline(LoopBoundPrimitive):
     async def cancel_upload_session(
         self,
         upload_url: str,
-        base_url: str,
         auth_route: str,
         *,
         logger: Any,
     ) -> None:
-        """Best-effort POST a Scotty resumable-upload cancel command."""
-        headers = {
-            "Accept": "*/*",
-            "Content-Type": "application/x-www-form-urlencoded;charset=utf-8",
-            "x-goog-authuser": auth_route,
-            "Origin": base_url,
-            "Referer": f"{base_url}/",
-            "x-goog-upload-command": "cancel",
-        }
+        """Best-effort POST a Scotty resumable-upload cancel command.
+
+        The headers are built *below* the validation call on purpose:
+        ``Origin``/``Referer`` are derived from the validated upload URL, so an
+        untrusted server-named host must never reach an outbound header.
+        """
         try:
             upload_url = _validate_resumable_upload_url(upload_url)
+            origin = _upload_url_origin(upload_url)
+            headers = {
+                "Accept": "*/*",
+                "Content-Type": "application/x-www-form-urlencoded;charset=utf-8",
+                "x-goog-authuser": auth_route,
+                "Origin": origin,
+                "Referer": f"{origin}/",
+                "x-goog-upload-command": "cancel",
+            }
             async with self._client_factory()(
                 timeout=httpx.Timeout(10.0, read=10.0),
                 cookies=self._live_cookies(),

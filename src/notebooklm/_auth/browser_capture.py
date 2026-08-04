@@ -51,7 +51,14 @@ from typing import TYPE_CHECKING, Any, NoReturn, Protocol
 from urllib.parse import urlparse
 
 from .._atomic_io import atomic_write_json
-from ..config import PERSONAL_BASE_HOST, get_base_host, get_base_url
+
+# ``PERSONAL_APP_HOSTS`` is imported from ``_env`` rather than ``config``
+# deliberately: it is not part of ``config.__all__``, and re-exporting it there
+# just to reach it here would add a public export for an internal host fact.
+# Importing ``_env`` directly is the established idiom (``_url_utils`` and
+# friends do the same).
+from .._env import PERSONAL_APP_HOSTS
+from ..config import get_base_host, get_base_url
 from ..exceptions import HeadlessLoginRequiredError
 
 # The storage-state filter is a pure leaf shared by the headed and headless
@@ -64,6 +71,16 @@ from ._browser_cookie_filter import filter_storage_state_cookies_by_domain_polic
 # below because this module has always been its import site for the CLI adapter
 # (``cli/services/playwright_login.py``) and the launch banner.
 from .browser_launch_errors import CHANNEL_BROWSERS, classify_launch_failure
+
+# ``app_host_scope_note`` owns the both-personal-hosts cookie-scope caveat that
+# every "open the app in your browser" instruction needs (it is appended to the
+# binding-related hints in ``cookie_policy.missing_cookies_hint``). It is
+# re-exported here for the same reason as ``log_observed_navigations`` below:
+# ``browser_capture`` is the only ``_auth`` module the CLI-boundary guardrail
+# sanctions as an import site, and the CLI's own cookie-refresh advice
+# (``cli/services/login/cookie_jar.py``) must not grow a second, drifting copy
+# of that caveat.
+from .cookie_policy import app_host_scope_note, build_cookie_domain_allowlist
 
 # DEBUG tracing for the login wait lives in its own leaf (ADR-0008) and is
 # re-exported here because ``browser_capture`` is the only ``_auth`` module the
@@ -235,10 +252,18 @@ def accepted_login_hosts() -> tuple[str, ...]:
     ("waiting for host X") can never drift from the predicate that actually
     ends the wait — the drift that made the ``notebook.google.com`` rebrand
     (#2017 / #2025 and friends) so expensive to triage.
+
+    Selecting *either* personal host accepts *both* of them. Google's login
+    flow may land on either one regardless of which we navigated to, so keying
+    the accept set on the selected host alone would reject a perfectly good
+    landing (and, on the alias, fail every login). Enterprise has no such
+    alias, so it accepts only itself.
     """
     base_host = get_base_host().lower()
-    if base_host == PERSONAL_BASE_HOST:
-        return (base_host, "notebook.google.com")
+    if base_host in PERSONAL_APP_HOSTS:
+        # Selected host first so the DEBUG line names the one we navigated to;
+        # the rest sorted so the message is stable across runs.
+        return (base_host, *sorted(PERSONAL_APP_HOSTS - {base_host}))
     return (base_host,)
 
 
@@ -862,6 +887,9 @@ __all__ = [
     "BrowserCapturePlan",
     "CaptureResult",
     "accepted_login_hosts",
+    # Re-exported from the cookie_policy leaf so the CLI's cookie-refresh advice
+    # shares one copy of the both-hosts scope caveat (see the import comment).
+    "app_host_scope_note",
     # Re-exported from the browser_launch_errors leaf: browser_capture is the
     # only _auth module the CLI-boundary guardrail sanctions, so CLI-side
     # callers (the --master-token bootstrap) must reach it through here.

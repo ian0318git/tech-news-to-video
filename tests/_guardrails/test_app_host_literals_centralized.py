@@ -45,14 +45,12 @@ ENV_MODULE = SRC_ROOT / "_env.py"
 ALIAS_CONSTANT_NAME = "PERSONAL_APP_ALIAS_HOST"
 
 # Pre-existing bare literals, allowlisted so this ratchet lands without
-# cross-editing files another PR owns.
-#
-# * ``_auth/browser_capture.py`` -- ``url_matches_base_host`` has hardcoded the
-#   alias since #2015. PR #2042 owned that file when #2038 landed, so folding it
-#   onto ``PERSONAL_APP_ALIAS_HOST`` is left to whoever touches it next.
-#   ``test_allowlist_entries_are_still_real`` fails once that happens, prompting
-#   deletion of this entry.
-KNOWN_BARE_LITERALS: frozenset[str] = frozenset({"_auth/browser_capture.py"})
+# cross-editing files another PR owns. **Empty, and it should stay that way** --
+# the last entry (``_auth/browser_capture.py``, which had hardcoded the alias in
+# ``url_matches_base_host`` since #2015) was folded onto ``PERSONAL_APP_HOSTS``
+# when ``accepted_login_hosts`` learned to accept both personal hosts.
+# Entries may be deleted, never added.
+KNOWN_BARE_LITERALS: frozenset[str] = frozenset()
 
 
 def _alias_host(env_module: Path = ENV_MODULE) -> str:

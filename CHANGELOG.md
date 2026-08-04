@@ -24,6 +24,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`notebook.google.com` is now an accepted `NOTEBOOKLM_BASE_URL` value.**
+  Google serves the personal app from this host after the "Gemini Notebook"
+  rebrand, and a live probe on 2026-08-04 reached `batchexecute` on **both**
+  personal hosts — the endpoint is dual-served. The base-URL validator therefore
+  accepts either, via a new internal `notebooklm._env.PERSONAL_APP_HOSTS` that
+  gives the two personal hosts one named home; `_url_utils`' app-host set is
+  derived from it instead of repeating the literals. **The default host is
+  unchanged** (`https://notebooklm.google.com`), and the rebrand host is
+  deliberately *not* documented as a supported value in `docs/configuration.md`:
+  it is accepted so that authentication against it is not hard-blocked, but no
+  `batchexecute` request to it has ever been captured in `tests/cassettes/` — a
+  coverage gap on our side, since the validator rejected the host until now
+  ([#1977](https://github.com/teng-lin/notebooklm-py/issues/1977),
+  [#2013](https://github.com/teng-lin/notebooklm-py/issues/2013)).
+
+- **The nightly RPC-health check probes the rebrand host in its own reporting
+  lane.** `scripts/check_rpc_health.py` runs a `batchexecute` and a streamed-chat
+  probe against `notebook.google.com` last in the run, and reports a *state
+  change* (`ABSENT->PRESENT`) under its own issue title rather than a recurring
+  error. The lane carries **no exit code**, deliberately: the existing
+  "Non-transient ERROR detected" issue dedups by title alone, so a rebrand probe
+  that legitimately failed every night would file one issue and then suppress
+  every later legacy-degradation issue. `UNKNOWN` (transport failure, 429, 5xx)
+  carries the previous state forward instead of manufacturing a transition. Two
+  new flags support it: `--base-url` (point a whole manual run at a specific
+  personal app host) and `--rebrand-state-file` (where the lane reads and writes
+  its previous state; omitted means baseline-only, no write)
+  ([#1977](https://github.com/teng-lin/notebooklm-py/issues/1977)).
+
 - **`AuthTokens.cookie_header_for(url)` — a domain-correct `Cookie:` header.**
   Selects cookies per RFC 6265 for a specific URL via the session's
   `cookie_jar`, so a cookie scoped to one host is never sent to another. Use it
@@ -35,6 +64,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([#2054](https://github.com/teng-lin/notebooklm-py/issues/2054)).
 
 ### Fixed
+
+- **Browser login now accepts both personal hosts, whichever one is selected.**
+  `accepted_login_hosts()` keyed its accept set on the legacy host by name, so
+  selecting `notebook.google.com` narrowed the set to that host alone — and
+  because Google's login flow can land on either host regardless of which one we
+  navigated to, a perfectly good landing was rejected and the login wait ran to
+  its timeout. Selecting either personal host now accepts both (the selected one
+  first, so the DEBUG line names the host we navigated to). Enterprise has no
+  such alias and still accepts only itself
+  ([#2013](https://github.com/teng-lin/notebooklm-py/issues/2013)).
+
+- **Resumable-upload URL trust is now host-relative, and `Origin`/`Referer`
+  derive from the validated upload URL.** Google's Scotty frontend picks which
+  personal host it names in the `X-Goog-Upload-URL` response header, so an
+  equality check against the configured host would reject a legitimate upload
+  once either host can be configured; a personal client now accepts either
+  personal host. Any other configured host — enterprise included — stays pinned
+  to **exactly itself**, so an enterprise client still rejects a consumer-host
+  upload URL rather than streaming enterprise file bytes to the consumer service
+  on the say-so of a response header. The upload and cancel requests now send
+  `Origin`/`Referer` derived from the *validated* upload URL rather than the
+  configured base URL: once the two hosts stand in for each other the two can
+  legitimately diverge, and Google's origin-bound auth checks reject a POST to
+  host B carrying `Origin: https://hostA`. The headers are built below the
+  validation call, so a server-named host can never reach an outbound header
+  unvalidated ([#2013](https://github.com/teng-lin/notebooklm-py/issues/2013)).
+
+- **Cookie-scope recovery guidance no longer points at a host the client may not
+  be using.** The stale-cookie advice from browser-cookie account discovery and
+  the region / anti-abuse gate message both hardcoded
+  `https://notebooklm.google.com`. Both now name the **configured** host — the
+  one actually probed — because refreshing cookies against, or reproducing a
+  per-request gate on, a host this client never calls proves nothing. The
+  stale-cookie advice also carries a shared both-personal-hosts scope caveat
+  (`app_host_scope_note`, one copy in `_auth/cookie_policy.py`, re-exported
+  through `_auth/browser_capture.py` for the CLI boundary), which covers the
+  other reading of that failure: the binding cookie exists, but on the sibling
+  personal host, so the probe was rejected for scope rather than staleness
+  ([#2013](https://github.com/teng-lin/notebooklm-py/issues/2013)).
 
 - **The nightly RPC-health probes no longer send one host's cookies to
   another.** All three authenticated probes in `scripts/check_rpc_health.py`
@@ -279,6 +347,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- `CLAUDE.md`: the VCR match tuple was described as `rpcids` plus decoded body
+  shape. It is the full tuple
+  `["method", "scheme", "host", "port", "path", "rpcids", "freq"]`
+  (`tests/vcr_config.py`) — `host` is part of the match, so replay is pinned to
+  the host a cassette was recorded against, which is exactly why rebrand-host
+  coverage cannot be inherited from existing cassettes
+  ([#1977](https://github.com/teng-lin/notebooklm-py/issues/1977)).
+- `docs/adr/0028-gemini-notebook-rename.md`: records the 2026-08-04 probe
+  showing `batchexecute` **dual-served** on both personal hosts, replacing the
+  earlier claim that the rebrand host was unverified, and separates that from
+  this project's own (real) cassette coverage gap
+  ([#1977](https://github.com/teng-lin/notebooklm-py/issues/1977)).
+- `docs/troubleshooting.md`: the base-URL section now agrees with ADR-0028 — the
+  rebrand host is experimental and not the default, rather than an endpoint
+  users should expect not to work
+  ([#1977](https://github.com/teng-lin/notebooklm-py/issues/1977)).
+- `docs/rpc-development.md`: documents the rebrand-host reporting lane — its
+  exit-code exclusion and the dedup reasoning behind it, its two flags, and what
+  it does not answer (whether the rebrand host serves Scotty `/upload/_/`)
+  ([#1977](https://github.com/teng-lin/notebooklm-py/issues/1977)).
 - `docs/troubleshooting.md`: new Windows `spawn UNKNOWN` section (why libuv reports `UNKNOWN`
   rather than `ENOENT`/`EACCES`, why headless does not help, and the ship-`storage_state.json`
   path for locked-down hosts), and a correction to the master-token note — the one-time

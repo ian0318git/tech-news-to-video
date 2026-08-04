@@ -1,7 +1,7 @@
 # Troubleshooting
 
 **Status:** Active
-**Last Updated:** 2026-07-16
+**Last Updated:** 2026-08-04
 
 Common issues, known limitations, and workarounds for `notebooklm-py`.
 
@@ -235,6 +235,26 @@ notebooklm login --browser chrome --storage <path>
 ```
 
 `--browser chrome` drives your installed Google Chrome (with its signed-in profile), which usually detects the account immediately and sidesteps bundled-Chromium issues. `--browser msedge` is the equivalent for organizations that require Microsoft Edge for SSO.
+
+### Configuration Errors
+
+#### `ValueError: NOTEBOOKLM_BASE_URL must use https and one of: ...` lists a host that is not documented
+
+**Cause:** The error message enumerates every host the base-URL validator currently accepts. That list is not the same as the list of *supported* values in [configuration.md](configuration.md) — it now also names the Gemini Notebook rebrand host, `notebook.google.com`.
+
+**Status:** `notebook.google.com` is **experimental, and not the default**. A live probe on 2026-08-04 reached `batchexecute` on **both** personal hosts, so the endpoint is dual-served, not rebrand-host-only or legacy-only. What is missing is coverage on our side: no `batchexecute` request to the rebrand host has ever been captured in `tests/cassettes/` — every recorded request against it is a `GET /` for the app shell — because the base-URL validator rejected the host until recently, so no client we shipped *could* have issued one. That is a gap in this project's testing, not a statement about the service. Dual-serving is also transitional: `scripts/check_rpc_health.py` probes the rebrand host in its own reporting lane so a change is noticed. See [ADR-0028](adr/0028-gemini-notebook-rename.md).
+
+**Solution:** Leave `NOTEBOOKLM_BASE_URL` unset, or set it to a documented value:
+
+```bash
+# Personal (default — no need to set it)
+export NOTEBOOKLM_BASE_URL=https://notebooklm.google.com
+
+# Enterprise
+export NOTEBOOKLM_BASE_URL=https://notebooklm.cloud.google.com
+```
+
+`https://notebook.google.com` is accepted but deliberately left out of the documented values while the default stays on the legacy host: it is untested by this project, so use it as an escape hatch rather than a normal setting. If you do run against it, reporting whether RPC succeeded or failed is genuinely useful — open an issue either way.
 
 ### RPC Errors
 
