@@ -675,6 +675,18 @@ def test_audit_json_includes_stale_allowances_field(script, tmp_path, monkeypatc
     _stub_manifests()
     assert script.main(["--check-stale", "--allowlist", str(allowlist)]) == 1
 
+    # ``--prune`` performs the explicit write and reports the removed entry.
+    _stub_manifests()
+    assert script.main(["--prune", "--allowlist", str(allowlist)]) == 0
+    assert json.loads(allowlist.read_text(encoding="utf-8"))["allowed_breaks"] == [
+        {
+            "code": "removed-export",
+            "object": "notebooklm.GoneExport",
+            "reason": "intentional, pending next release",
+        }
+    ]
+    assert "Pruned stale allowlist entries" in capsys.readouterr().out
+
 
 def test_stale_allowances_does_not_collide_on_same_object_different_codes(script):
     # Two allowances for the SAME object but different codes must be tracked
@@ -692,6 +704,130 @@ def test_stale_allowances_does_not_collide_on_same_object_different_codes(script
     # or last in the comprehension that builds the match map.
     assert script.stale_allowances([brk], [live, stale]) == [stale]
     assert script.stale_allowances([brk], [stale, live]) == [stale]
+
+
+def test_prune_allowlist_preserves_policy_fields_and_removes_exact_entries(tmp_path, script):
+    policy = tmp_path / "policy.json"
+    policy.write_text(
+        json.dumps(
+            {
+                "z_future_policy": {"enabled": True},
+                "schema_version": 1,
+                "extra_public_names": {"notebooklm": ["KeptName"]},
+                "allowed_breaks": [
+                    {
+                        "code": "removed-export",
+                        "object": "notebooklm.Stale",
+                        "reason": "shipped",
+                        "review_url": "https://example.invalid/review",
+                    },
+                    {
+                        "code": "removed-export",
+                        "object": "notebooklm.Live",
+                        "reason": "still intentional",
+                    },
+                    {
+                        "code": "removed-export",
+                        "object": "notebooklm.Stale",
+                        "reason": "different reason; keep",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    stale = [script.Allowance(code="removed-export", object="notebooklm.Stale", reason="shipped")]
+
+    removed = script.prune_allowlist(policy, stale)
+
+    assert removed == stale
+    rewritten = json.loads(policy.read_text(encoding="utf-8"))
+    assert rewritten["z_future_policy"] == {"enabled": True}
+    assert rewritten["extra_public_names"] == {"notebooklm": ["KeptName"]}
+    assert rewritten["allowed_breaks"] == [
+        {
+            "code": "removed-export",
+            "object": "notebooklm.Live",
+            "reason": "still intentional",
+        },
+        {
+            "code": "removed-export",
+            "object": "notebooklm.Stale",
+            "reason": "different reason; keep",
+        },
+    ]
+    assert policy.read_text(encoding="utf-8").endswith("\n")
+    before = policy.stat().st_mtime_ns
+    assert script.prune_allowlist(policy, stale) == []
+    assert policy.stat().st_mtime_ns == before
+
+
+def test_prune_allowlist_is_idempotent_and_pair_aware(tmp_path, script):
+    policy = tmp_path / "policy.json"
+    policy.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "allowed_breaks": [
+                    {
+                        "code": "removed-member",
+                        "object": "notebooklm.client.NotebookLMClient.sources.get",
+                        "reason": "same pair",
+                    },
+                    {
+                        "code": "removed-member",
+                        "object": "notebooklm.NotebookLMClient.sources.get",
+                        "reason": "same pair",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    pair_break = script.ApiBreak(
+        code="removed-member",
+        object="notebooklm.NotebookLMClient.sources.get",
+        detail="still breaking",
+    )
+    stale = script.stale_allowances(
+        [pair_break],
+        script.load_policy(policy)[0],
+    )
+
+    assert stale == []
+    before = policy.stat().st_mtime_ns
+    assert script.prune_allowlist(policy, stale) == []
+    assert policy.stat().st_mtime_ns == before
+
+
+def test_prune_allowlist_reports_malformed_and_rewrite_errors(tmp_path, script, monkeypatch):
+    malformed = tmp_path / "malformed.json"
+    malformed.write_text("{", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="invalid JSON"):
+        script.prune_allowlist(malformed, [])
+
+    policy = tmp_path / "policy.json"
+    policy.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "allowed_breaks": [
+                    {"code": "removed-export", "object": "notebooklm.X", "reason": "old"}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        script.os, "replace", lambda *_args: (_ for _ in ()).throw(OSError("read-only filesystem"))
+    )
+    with pytest.raises(
+        RuntimeError, match="could not atomically rewrite allowlist.*read-only filesystem"
+    ):
+        script.prune_allowlist(
+            policy,
+            [script.Allowance("removed-export", "notebooklm.X", "old")],
+        )
 
 
 def test_check_stale_does_not_print_ok_when_stale_blocks(script, tmp_path, monkeypatch, capsys):

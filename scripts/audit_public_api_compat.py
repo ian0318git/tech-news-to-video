@@ -10,11 +10,14 @@ Usage:
     uv run python scripts/audit_public_api_compat.py --baseline-ref v0.4.1
     uv run python scripts/audit_public_api_compat.py --json
     uv run python scripts/audit_public_api_compat.py --check-stale
+    uv run python scripts/audit_public_api_compat.py --prune
 
 ``--check-stale`` additionally fails when an ``allowed_breaks`` entry matches no
-current break against the baseline (it is already in the baseline). This keeps
-the allowlist from silently accumulating cruft — prune such entries at each
-release boundary (see ``docs/releasing.md`` → prune-allowlist-at-release).
+current break against the baseline (it is already in the baseline). ``--prune``
+explicitly removes those stale entries from the allowlist, preserving all other
+policy fields and atomically rewriting the file only when entries changed.
+Use it at a release boundary (see ``docs/releasing.md`` →
+prune-allowlist-at-release).
 
 Exit codes:
     0  No unapproved compatibility breaks (and, with --check-stale, none stale).
@@ -34,6 +37,7 @@ import sys
 import tarfile
 import tempfile
 import textwrap
+from collections import Counter
 from dataclasses import asdict, dataclass
 from fnmatch import fnmatchcase
 from pathlib import Path
@@ -713,17 +717,26 @@ def compare_manifests(baseline: dict[str, Any], current: dict[str, Any]) -> list
     return sorted(breaks, key=lambda item: (item.code, item.object, item.detail))
 
 
+def _read_policy_payload(path: Path) -> dict[str, Any]:
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise RuntimeError(f"could not read allowlist {path}: {exc}") from exc
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"invalid JSON in {path}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"{path} must contain a JSON object")
+    return payload
+
+
 def load_policy(path: Path | None) -> tuple[list[Allowance], dict[str, list[str]]]:
     if path is None or str(path) == "":
         return [], {}
     if not path.exists():
         raise RuntimeError(f"allowlist file not found: {path}")
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"invalid JSON in {path}: {exc}") from exc
-    if not isinstance(payload, dict):
-        raise RuntimeError(f"{path} must contain a JSON object")
+    payload = _read_policy_payload(path)
     schema_version = payload.get("schema_version", 1)
     if schema_version != 1:
         raise RuntimeError(f"{path}: unsupported schema_version {schema_version!r} (expected 1)")
@@ -755,6 +768,66 @@ def load_policy(path: Path | None) -> tuple[list[Allowance], dict[str, list[str]
             ) from exc
         allowances.append(Allowance(code=code, object=obj, reason=reason))
     return allowances, normalized_extra_names
+
+
+def prune_allowlist(path: Path, stale: list[Allowance]) -> list[Allowance]:
+    """Remove exactly stale entries and atomically rewrite *path*.
+
+    Matching includes the reason and is multiset-aware, so duplicate or
+    similarly-shaped entries cannot cause an unrelated allowance to be removed.
+    A no-op does not touch the file. The raw payload is retained so unknown
+    top-level and per-entry fields survive the deterministic rewrite.
+    """
+    if not path.exists():
+        raise RuntimeError(f"allowlist file not found: {path}")
+    load_policy(path)  # Validate the complete policy, including known fields.
+    payload = _read_policy_payload(path)
+    entries = payload.get("allowed_breaks", [])
+    stale_counts = Counter((item.code, item.object, item.reason) for item in stale)
+    removed: list[Allowance] = []
+    kept: list[dict[str, Any]] = []
+    for entry in entries:
+        key = (str(entry["code"]), str(entry["object"]), str(entry["reason"]))
+        if stale_counts[key]:
+            stale_counts[key] -= 1
+            removed.append(Allowance(*key))
+        else:
+            kept.append(entry)
+
+    if not removed:
+        return []
+
+    payload["allowed_breaks"] = kept
+    serialized = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    temporary_path: Path | None = None
+    try:
+        original_mode = path.stat().st_mode
+        if not original_mode & 0o222:
+            raise RuntimeError(f"allowlist is not writable: {path}")
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            temporary.write(serialized)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.chmod(temporary_path, original_mode)
+        os.replace(temporary_path, path)
+        if hasattr(os, "O_DIRECTORY"):
+            directory_fd = os.open(path.parent, os.O_DIRECTORY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+    except OSError as exc:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+        raise RuntimeError(f"could not atomically rewrite allowlist {path}: {exc}") from exc
+    return removed
 
 
 def partition_allowed(
@@ -896,6 +969,11 @@ def main(argv: list[str] | None = None) -> int:
             "baseline (it is already in the baseline — prune it)."
         ),
     )
+    parser.add_argument(
+        "--prune",
+        action="store_true",
+        help="Remove stale allowlist entries and atomically rewrite the allowlist.",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -914,6 +992,16 @@ def main(argv: list[str] | None = None) -> int:
         breakages = compare_manifests(baseline_manifest, current_manifest)
         unapproved, approved = partition_allowed(breakages, allowances)
         stale = stale_allowances(breakages, allowances)
+        pruned: list[Allowance] = []
+        if args.prune:
+            if allowlist_path is None:
+                raise RuntimeError("--prune requires an allowlist file")
+            if unapproved:
+                raise RuntimeError(
+                    "refusing to prune while unapproved compatibility breaks exist; "
+                    "resolve the audit failure first"
+                )
+            pruned = prune_allowlist(allowlist_path, stale)
     except RuntimeError as exc:
         if args.json:
             print(json.dumps({"error": str(exc)}, sort_keys=True))
@@ -923,7 +1011,7 @@ def main(argv: list[str] | None = None) -> int:
 
     allowlist_display = allowlist_path or DEFAULT_ALLOWLIST
     # ``--check-stale`` promotes stale entries from informational to a gate.
-    stale_blocks = args.check_stale and bool(stale)
+    stale_blocks = args.check_stale and bool(stale) and not args.prune
     failed = bool(unapproved) or stale_blocks
 
     if args.json:
@@ -937,6 +1025,7 @@ def main(argv: list[str] | None = None) -> int:
                     ],
                     "unapproved": [asdict(item) for item in unapproved],
                     "stale_allowances": [asdict(allowance) for allowance in stale],
+                    "pruned_allowances": [asdict(allowance) for allowance in pruned],
                 },
                 indent=2,
                 sort_keys=True,
@@ -983,6 +1072,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if stale_blocks:
         print("\n" + _render_stale(stale, baseline_ref, allowlist_display), file=sys.stderr)
+    if pruned:
+        print(
+            "Pruned stale allowlist entries:\n"
+            + "\n".join(f"  - [{item.code}] {item.object}" for item in pruned)
+        )
 
     return 1 if failed else 0
 
