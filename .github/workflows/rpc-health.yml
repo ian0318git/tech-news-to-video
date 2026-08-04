@@ -495,6 +495,37 @@ jobs:
         content-filepath: health-report.txt
         labels: rpc-breakage, automated
 
+    # Exit code 5 = the pinned frontend build label (``_env.DEFAULT_BL``) trails
+    # the label the app shell serves by more than the freshness window. Chat is
+    # not broken by this — the server does not validate the value today — but the
+    # constant has gone unattended, which is how it reached five months of drift
+    # unnoticed (#2073). Bumping it clears the signal; ordinary week-to-week drift
+    # exits 0 and never reaches this branch.
+    - name: Check for existing stale-build-label issue
+      if: steps.health.outputs.exit_code == '5'
+      id: dup_build_label
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        if ! count=$(gh issue list --repo "$GITHUB_REPOSITORY" \
+          --state open --label automated --label rpc-breakage \
+          --search 'in:title "Pinned frontend build label is stale"' \
+          --json number --jq 'length'); then
+          echo "::warning::Stale-build-label dedup probe failed; allowing issue creation"
+          count=0
+        fi
+        echo "open=${count}" >> "$GITHUB_OUTPUT"
+
+    - name: Create Issue on stale build label
+      if: |
+        steps.health.outputs.exit_code == '5'
+        && steps.dup_build_label.outputs.open == '0'
+      uses: peter-evans/create-issue-from-file@fca9117c27cdc29c6c4db3b86c48e4115a786710  # @ v6.0.0
+      with:
+        title: "Pinned frontend build label is stale — bump DEFAULT_BL"
+        content-filepath: health-report.txt
+        labels: rpc-breakage, automated
+
     # ------------------------------------------------------------------
     # Rebrand-host lane (notebook.google.com) — SEPARATE from everything
     # above. It has no exit code: the script keeps its probes out of

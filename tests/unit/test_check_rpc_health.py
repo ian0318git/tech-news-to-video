@@ -974,13 +974,24 @@ def test_compute_exit_code_cannot_see_the_rebrand_lane() -> None:
     If a future change threads the lane in here, the naive-implementation trap
     is back — one permanently-failing rebrand probe would suppress the legacy
     lane's title-deduped issue forever.
+
+    The exact parameter list is pinned too, so exit-coding ANY new lane stays a
+    deliberate decision. ``build_label_status`` is such a decision: it has its own
+    exit code (5) and its own deduped issue title, so it cannot suppress the
+    legacy lane's the way a rebrand probe would.
     """
     import ast
     import inspect
     import textwrap
 
     params = list(inspect.signature(check_rpc_health.compute_exit_code).parameters)
-    assert params == ["counts", "non_transient_errors", "cohort_status"]
+    assert not any("rebrand" in name for name in params)
+    assert params == [
+        "counts",
+        "non_transient_errors",
+        "cohort_status",
+        "build_label_status",
+    ]
 
     # Body only — the docstring explains the isolation and legitimately says
     # "rebrand"; executable code referencing it would be the regression.
@@ -1030,6 +1041,12 @@ def test_classify_rebrand_status(status_code: int, expected: RebrandProbeStatus 
         "https://accounts.google.com/v3/signin/identifier",
         "/ServiceLogin?passive=1209600",
         "https://accounts.youtube.com/accounts/SetSID",
+        # The app's own sign-in bounce, measured 2026-08-04 on an
+        # unauthenticated fetch. It matches none of the accounts.google.com
+        # forms above, and before the ``login`` path marker it scored ABSENT —
+        # a signed-out night claiming the endpoint was gone (#2073).
+        "https://notebook.google.com/login?continue=https://notebook.google.com/",
+        "/login?continue=https://notebook.google.com/",
     ],
 )
 def test_rebrand_login_redirect_is_unauthenticated(location: str) -> None:
@@ -1483,7 +1500,7 @@ def test_main_threads_the_rebrand_state_into_the_report(
         rebrand_state_path: Path | None = None,
         rebrand_previous_state_path: Path | None = None,
         rebrand_run_id: str | None = None,
-    ) -> tuple[list[CheckResult], CohortStatus, dict[str, Any]]:
+    ) -> tuple[list[CheckResult], CohortStatus, dict[str, Any], Any]:
         captured["base_url_source"] = base_url_source
         captured["rebrand_state_path"] = rebrand_state_path
         captured["rebrand_previous_state_path"] = rebrand_previous_state_path
@@ -1493,7 +1510,12 @@ def test_main_threads_the_rebrand_state_into_the_report(
             [_probe(check_rpc_health.REBRAND_BATCHEXECUTE, RebrandProbeStatus.PRESENT)],
             load_rebrand_state(None),
         )
-        return [_result("ok", CheckStatus.OK)], CohortStatus.GATED, state
+        return (
+            [_result("ok", CheckStatus.OK)],
+            CohortStatus.GATED,
+            state,
+            check_rpc_health.classify_build_label(check_rpc_health.DEFAULT_BL, ""),
+        )
 
     monkeypatch.setattr(check_rpc_health, "run_health_check", _fake_run)
     # ``main`` applies ``--base-url`` to the real process environment; let
@@ -1529,3 +1551,298 @@ def test_main_threads_the_rebrand_state_into_the_report(
     assert captured["rebrand_previous_state_path"] == previous_file
     assert captured["rebrand_run_id"] == "12345"
     assert "STATE CHANGE: batchexecute: ABSENT->PRESENT" in out
+
+
+# ---------------------------------------------------------------------------
+# Build-label lane (``bl`` / ``_env.DEFAULT_BL``)
+#
+# ``bl`` is a pinned constant with no other guard: cassettes replay whatever was
+# recorded, so the offline suite passes no matter how old the pin gets, and the
+# live streaming endpoint accepts arbitrary labels (measured 2026-08-04 — the
+# pinned label, the served label, and a fabricated 1970 one all returned complete
+# cited answers). #2073 found it five months / 154 label-days behind. These tests
+# pin the lane's two jobs: read the served label honestly, and alarm only once the
+# pin has actually been left unattended.
+# ---------------------------------------------------------------------------
+
+BuildLabelStatus = check_rpc_health.BuildLabelStatus
+classify_build_label = check_rpc_health.classify_build_label
+fetch_app_shell = check_rpc_health.fetch_app_shell
+DEFAULT_BL = check_rpc_health.DEFAULT_BL
+
+SHELL_HTML = '<!doctype html><script>var x="{label}";</script>'
+
+
+def _label(days_after_pin: int) -> str:
+    """Return a well-formed label ``days_after_pin`` days after the pinned one."""
+    from datetime import timedelta
+
+    from notebooklm._env import build_label_date
+
+    pinned = build_label_date(DEFAULT_BL)
+    assert pinned is not None
+    stamp = (pinned + timedelta(days=days_after_pin)).strftime("%Y%m%d")
+    return f"boq_labs-tailwind-frontend_{stamp}.01_p0"
+
+
+class _ShellClient:
+    """Minimal httpx-like client replaying a scripted sequence of GET responses."""
+
+    def __init__(self, *responses: httpx.Response, raises: Exception | None = None):
+        self._responses = list(responses)
+        self._raises = raises
+        self.urls: list[str] = []
+
+    async def get(self, url: str) -> httpx.Response:
+        self.urls.append(url)
+        if self._raises is not None:
+            raise self._raises
+        response = self._responses.pop(0)
+        # httpx responses need a request to report a URL; give them this one.
+        response.request = httpx.Request("GET", url)
+        return response
+
+
+def _response(status: int, *, text: str = "", location: str | None = None) -> httpx.Response:
+    headers = {"location": location} if location is not None else {}
+    return httpx.Response(status, text=text, headers=headers)
+
+
+@pytest.mark.asyncio
+async def test_fetch_app_shell_returns_a_direct_200() -> None:
+    client = _ShellClient(_response(200, text=SHELL_HTML.format(label=DEFAULT_BL)))
+    html, detail = await fetch_app_shell(client, "https://notebook.google.com/")
+    assert html is not None and DEFAULT_BL in html
+    assert detail == ""
+
+
+@pytest.mark.asyncio
+async def test_fetch_app_shell_follows_the_rebrand_hop() -> None:
+    """The measured shape: the legacy host 302s to the alias host's root."""
+    client = _ShellClient(
+        _response(302, location="https://notebook.google.com/"),
+        _response(200, text=SHELL_HTML.format(label=DEFAULT_BL)),
+    )
+    html, _ = await fetch_app_shell(client, "https://notebooklm.google.com/")
+    assert html is not None
+    assert client.urls == ["https://notebooklm.google.com/", "https://notebook.google.com/"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_app_shell_stops_at_the_sign_in_bounce() -> None:
+    """A signed-out run draws no conclusion — and does not follow the bounce."""
+    client = _ShellClient(
+        _response(302, location="https://notebook.google.com/login?continue=https://x/")
+    )
+    html, detail = await fetch_app_shell(client, "https://notebook.google.com/")
+    assert html is None
+    assert "sign-in" in detail
+    assert len(client.urls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "location",
+    [
+        "https://example.com/",  # off-host: never follow the jar there
+        "https://notebook.google.com/app/notebook",  # app host, but not the shell
+        # Right host, right path, cleartext: following it would put the jar on
+        # the wire unencrypted for every cookie not marked Secure.
+        "http://notebook.google.com/",
+    ],
+)
+async def test_fetch_app_shell_refuses_a_hop_off_the_app_root(location: str) -> None:
+    client = _ShellClient(_response(302, location=location))
+    html, detail = await fetch_app_shell(client, "https://notebook.google.com/")
+    assert html is None
+    assert "not the app shell" in detail
+    assert len(client.urls) == 1
+
+
+@pytest.mark.asyncio
+async def test_fetch_app_shell_gives_up_on_a_redirect_loop() -> None:
+    loop = [_response(302, location="https://notebook.google.com/") for _ in range(4)]
+    client = _ShellClient(*loop)
+    html, detail = await fetch_app_shell(client, "https://notebook.google.com/")
+    assert html is None
+    assert "redirects" in detail
+
+
+@pytest.mark.asyncio
+async def test_fetch_app_shell_reports_a_transport_error() -> None:
+    client = _ShellClient(raises=httpx.ConnectError("connection refused"))
+    html, detail = await fetch_app_shell(client, "https://notebook.google.com/")
+    assert html is None
+    assert "connection refused" in detail
+
+
+@pytest.mark.asyncio
+async def test_fetch_app_shell_reports_a_server_error() -> None:
+    client = _ShellClient(_response(503))
+    html, detail = await fetch_app_shell(client, "https://notebook.google.com/")
+    assert html is None
+    assert "503" in detail
+
+
+def test_classify_build_label_current_when_the_pin_matches() -> None:
+    probe = classify_build_label(DEFAULT_BL, "")
+    assert probe.status is BuildLabelStatus.CURRENT
+    assert probe.days_behind == 0
+
+
+def test_classify_build_label_drifted_inside_the_window() -> None:
+    """Ordinary week-to-week drift is a PASS, not an alarm."""
+    probe = classify_build_label(_label(7), "")
+    assert probe.status is BuildLabelStatus.DRIFTED
+    assert probe.days_behind == 7
+
+
+def test_classify_build_label_stale_past_the_window() -> None:
+    days = check_rpc_health.BUILD_LABEL_STALE_AFTER_DAYS + 1
+    probe = classify_build_label(_label(days), "")
+    assert probe.status is BuildLabelStatus.STALE
+    assert probe.days_behind == days
+    assert str(days) in probe.detail
+
+
+def test_classify_build_label_boundary_day_is_not_yet_stale() -> None:
+    """Exactly at the window is still inside it — STALE means *past* the limit."""
+    probe = classify_build_label(_label(check_rpc_health.BUILD_LABEL_STALE_AFTER_DAYS), "")
+    assert probe.status is BuildLabelStatus.DRIFTED
+
+
+def test_classify_build_label_pin_ahead_is_not_stale() -> None:
+    """A shell older than the pin is an odd cohort, never a staleness alarm."""
+    probe = classify_build_label(_label(-200), "")
+    assert probe.status is BuildLabelStatus.DRIFTED
+    assert "AHEAD" in probe.detail
+
+
+def test_classify_build_label_unknown_without_an_observation() -> None:
+    probe = classify_build_label(None, "HTTP 302 redirect to sign-in (not signed in)")
+    assert probe.status is BuildLabelStatus.UNKNOWN
+    assert probe.served is None
+    assert "sign-in" in probe.detail
+
+
+def test_classify_build_label_unknown_when_the_served_label_is_undatable() -> None:
+    """A reformatted label is 'no conclusion', never a fabricated staleness."""
+    probe = classify_build_label("boq_labs-tailwind-frontend_YYYYMMDD.02_p0", "")
+    assert probe.status is BuildLabelStatus.UNKNOWN
+
+
+@pytest.mark.asyncio
+async def test_check_build_label_reads_the_live_shell() -> None:
+    served = _label(3)
+    client = _ShellClient(_response(200, text=SHELL_HTML.format(label=served)))
+    probe = await check_rpc_health.check_build_label(client)
+    assert probe.served == served
+    assert probe.status is BuildLabelStatus.DRIFTED
+
+
+@pytest.mark.asyncio
+async def test_check_build_label_never_raises() -> None:
+    """The lowest-severity lane must not be able to skip the one that follows it.
+
+    ``check_build_label`` runs immediately before the rebrand-host lane, so an
+    escaping exception would cost that night's rebrand observation. Anything
+    unexpected degrades to UNKNOWN, which alarms nothing.
+    """
+    client = _ShellClient(raises=RuntimeError("something nobody predicted"))
+    probe = await check_rpc_health.check_build_label(client)
+    assert probe.status is BuildLabelStatus.UNKNOWN
+    assert "something nobody predicted" in probe.detail
+
+
+@pytest.mark.asyncio
+async def test_check_build_label_is_unknown_on_a_shell_without_a_label() -> None:
+    client = _ShellClient(_response(200, text="<html>maintenance</html>"))
+    probe = await check_rpc_health.check_build_label(client)
+    assert probe.status is BuildLabelStatus.UNKNOWN
+    assert probe.served is None
+
+
+def test_compute_exit_code_stale_build_label_is_five() -> None:
+    """STALE draws exit 5 — below every live-breakage code, above OK."""
+    clean = Counter({CheckStatus.OK: 3})
+    assert (
+        check_rpc_health.compute_exit_code(clean, [], CohortStatus.GATED, BuildLabelStatus.STALE)
+        == 5
+    )
+    for benign in (BuildLabelStatus.CURRENT, BuildLabelStatus.DRIFTED, BuildLabelStatus.UNKNOWN):
+        assert check_rpc_health.compute_exit_code(clean, [], CohortStatus.GATED, benign) == 0
+    # Every live-breakage signal outranks a stale pin: it must never mask one.
+    mismatch = Counter({CheckStatus.MISMATCH: 1})
+    assert (
+        check_rpc_health.compute_exit_code(mismatch, [], CohortStatus.GATED, BuildLabelStatus.STALE)
+        == 1
+    )
+    real_error = [_result("e", CheckStatus.ERROR, error="Parse error: boom")]
+    assert (
+        check_rpc_health.compute_exit_code(
+            Counter(), real_error, CohortStatus.GATED, BuildLabelStatus.STALE
+        )
+        == 3
+    )
+    assert (
+        check_rpc_health.compute_exit_code(clean, [], CohortStatus.MIGRATED, BuildLabelStatus.STALE)
+        == 4
+    )
+
+
+def test_compute_exit_code_defaults_to_no_build_label_opinion() -> None:
+    """Callers that pass no verdict cannot be alarmed by one."""
+    assert check_rpc_health.compute_exit_code(Counter({CheckStatus.OK: 1}), []) == 0
+
+
+def test_print_summary_reports_a_stale_build_label(capsys: pytest.CaptureFixture[str]) -> None:
+    stale = classify_build_label(_label(check_rpc_health.BUILD_LABEL_STALE_AFTER_DAYS + 30), "")
+    rc = print_summary([_result("ok", CheckStatus.OK)], CohortStatus.GATED, None, stale)
+    out = capsys.readouterr().out
+    assert rc == 5
+    assert "BUILDLBL: STALE" in out
+    assert "RESULT: STALE BUILD LABEL" in out
+    # The report must name the file to edit, not just the fact of drift.
+    assert "src/notebooklm/_env.py" in out
+
+
+def test_print_summary_drift_inside_the_window_still_passes(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    drifted = classify_build_label(_label(10), "")
+    rc = print_summary([_result("ok", CheckStatus.OK)], CohortStatus.GATED, None, drifted)
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "BUILDLBL: DRIFTED" in out
+    assert "RESULT: PASS" in out
+
+
+def test_print_summary_without_a_build_label_verdict_is_silent(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    rc = print_summary([_result("ok", CheckStatus.OK)], CohortStatus.GATED)
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "BUILDLBL" not in out
+
+
+def test_format_build_label_lane_flags_an_active_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An operator override must not be mistaken for what ships to users."""
+    monkeypatch.setenv("NOTEBOOKLM_BL", "boq_labs-tailwind-frontend_20990101.01_p0")
+    lines = check_rpc_health.format_build_label_lane(classify_build_label(DEFAULT_BL, ""))
+    joined = "\n".join(lines)
+    assert "NOTEBOOKLM_BL=" in joined
+    assert "committed pin" in joined
+
+
+def test_format_build_label_lane_says_what_to_do_when_stale(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("NOTEBOOKLM_BL", raising=False)
+    stale = classify_build_label(_label(check_rpc_health.BUILD_LABEL_STALE_AFTER_DAYS + 1), "")
+    joined = "\n".join(check_rpc_health.format_build_label_lane(stale))
+    assert "ACTION" in joined
+    assert "DEFAULT_BL" in joined
+    assert "NOTEBOOKLM_BL=" not in joined

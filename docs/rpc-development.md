@@ -509,6 +509,75 @@ error:
   extracted from the report, so triage can start without re-running the check.
   See the `Extract failing methods for ERROR issue` step in
   `.github/workflows/rpc-health.yml` for the body-assembly logic.
+- **Stale build label** issues (exit code 5): labeled `rpc-breakage, automated`.
+  See the build-label lane below.
+
+### Build-label lane (`bl` / `_env.DEFAULT_BL`)
+
+`bl` is the frontend build label sent on the chat streaming endpoint. It is a
+pinned constant, and pinned constants nobody re-verifies are this project's #1
+breakage class — but unlike a wrong RPC ID, which fails loudly and immediately, a
+stale `bl` is accepted silently. Cassettes replay whatever was recorded, so the
+entire offline suite passes no matter how old the pin gets. It reached five
+months (154 label-days) of drift before anyone looked
+([#2073](https://github.com/teng-lin/notebooklm-py/issues/2073)).
+
+Each nightly run fetches the app shell, extracts the label Google actually
+serves, and scores the pin against it:
+
+| Verdict | Meaning | Exit |
+| --- | --- | --- |
+| `CURRENT` | the pin is exactly what is served | 0 |
+| `DRIFTED` | pin differs but is within `_env.BUILD_LABEL_STALE_AFTER_DAYS` (90) | 0 |
+| `STALE` | pin trails the served label by more than that window | 5 |
+| `UNKNOWN` | no label could be read (signed out, transport failure, unrecognized shell) | 0 |
+
+- **`DRIFTED` is the steady state.** Google ships a new build roughly weekly and
+  the pin is not expected to chase every one; a tighter window would alarm
+  continuously and teach everyone to ignore the lane.
+- **The verdict compares label dates, never the wall clock**, so it depends only
+  on what was served — a delayed or replayed run cannot age into an alarm.
+- **Exit 5 sits below every live-breakage code** (mismatch, auth, non-transient
+  error, cohort flip). A stale pin is maintenance, and it must never mask an
+  outage.
+- **Redirects are followed by hand**, at most two hops, and only to an `https`
+  personal app host at the site root — the lane never carries the session jar
+  somewhere it did not intend to go, and never onto cleartext. The default host
+  serves the shell directly; the legacy host 302s to it, so only a run pointed at
+  the rollback host takes a hop at all, and anything past the second reports
+  `more than 2 redirects`. The sign-in bounce (`/login?continue=…`) ends the walk
+  with `UNKNOWN`: "this run was not signed in" is not evidence about the build
+  label.
+- An active `NOTEBOOKLM_BL` override does not change the verdict — the lane always
+  scores the committed `DEFAULT_BL`, since that is what ships to users — but the
+  report says the override was in effect.
+
+**To clear a `STALE` verdict:** take the served label from the report (or run the
+probe below) and bump `DEFAULT_BL` in `src/notebooklm/_env.py`.
+
+```python
+import asyncio, httpx
+from notebooklm._auth.cookies import _build_httpx_cookies_from_storage_strict
+from notebooklm._env import DEFAULT_BL, extract_build_label, get_base_url
+
+async def main():
+    # The strict loader is deliberate: build_httpx_cookies_from_storage triggers a
+    # PSIDTS RotateCookies round-trip and a disk write, so it is not safe here.
+    jar = _build_httpx_cookies_from_storage_strict(None)
+    async with httpx.AsyncClient(cookies=jar, follow_redirects=True, timeout=60.0) as c:
+        r = await c.get(f"{get_base_url()}/")
+    print("pinned:", DEFAULT_BL)
+    print("served:", extract_build_label(r.text))
+
+asyncio.run(main())
+```
+
+**Known and deliberately not acted on:** the server does not validate this value.
+Measured live on 2026-08-04, the streaming endpoint returned a complete, cited
+answer for the pinned label, the served label, and a fabricated
+`…_19700101.00_p0` alike. So the lane is not guarding a live dependency today —
+it exists so the pin cannot rot unwatched again, and so that the day chat does
+break on it, the report already says how far behind it had drifted.
 
 ### Rebrand-host lane (`notebook.google.com`)
 

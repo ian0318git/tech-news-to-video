@@ -45,6 +45,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The pinned frontend build label is current again, and can no longer rot
+  unwatched.** `_env.DEFAULT_BL` — the `bl` value sent on the chat streaming
+  endpoint — had been pinned to `boq_labs-tailwind-frontend_20260301.03_p0` since
+  the day it was introduced, while Google was serving `…_20260802.02_p0`: 154
+  label-days of drift that nothing in the repo could have noticed, because
+  cassettes replay the recorded value and the offline suite passes regardless.
+  The constant is bumped to the served label (re-captured live from the app shell,
+  identical on both personal hosts), and the nightly canary gains a **build-label
+  lane** that fetches the shell, extracts the served label, and compares. Ordinary
+  week-to-week drift passes; only a pin more than `BUILD_LABEL_STALE_AFTER_DAYS`
+  (90) behind exits `5` and files a deduped "Pinned frontend build label is stale"
+  issue, which clears itself on the next bump. The verdict compares label *dates*,
+  never the wall clock, so a delayed run cannot age into an alarm, and exit 5
+  ranks below every live-breakage code so a stale pin can never mask an outage.
+  Live A/B on the streaming endpoint (2026-08-04) found the server does **not**
+  validate this value — the pinned label, the served label, and a fabricated
+  `…_19700101.00_p0` each returned a complete, cited answer — so this is hygiene
+  against a silent trap, not a fix for a live failure
+  ([#2073](https://github.com/teng-lin/notebooklm-py/issues/2073)).
+
+- **A signed-out nightly run no longer reports the rebrand host's endpoints as
+  absent.** `is_login_redirect` recognized `accounts.google.com/ServiceLogin` and
+  friends but not the app's own bounce, `notebook.google.com/login?continue=…`,
+  which is what an unauthenticated request actually receives. That redirect
+  scored `ABSENT` — "the endpoint is gone" — on a lane whose stated invariant
+  ([#2062](https://github.com/teng-lin/notebooklm-py/issues/2062)) is that a
+  signed-out run must draw no conclusion and must not overwrite recorded state.
+  The `login` path marker (which subsumes the old `servicelogin` entry) closes it
+  ([#2073](https://github.com/teng-lin/notebooklm-py/issues/2073)).
+
 - **RPC errors now name the host, not just the method.** Google serves the
   personal app from two hosts — `notebooklm.google.com` and, since the Gemini
   Notebook rebrand, `notebook.google.com` (ADR-0028) — and
