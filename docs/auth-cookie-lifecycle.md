@@ -636,8 +636,41 @@ reclaimed on GC.
 When a profile has the persistent `__Secure-1PSID` but no transient
 `__Secure-1PSIDTS` (a common cold-start snapshot), `_recover_psidts_inline`
 (`_auth/psidts_recovery.py`) makes a preflight `RotateCookies` POST during client
-startup to mint the missing cookie before the first RPC. It fires only when
-`__Secure-1PSID` is present and `__Secure-1PSIDTS` is missing, honors
+startup to mint the missing cookie before the first RPC. It fires only when `SID`
+is present, a secondary binding is intact (`OSID`, or `APISID` + `SAPISID`), and
+no live `__Secure-1PSIDTS` would be **sent to** `accounts.google.com` — that is,
+the cookie is absent, expired, or scoped to a domain that does not route to the
+rotate URL. That last condition is RFC 6265 selection against the URL the
+decision is about, not a domain-priority ranking: a `__Secure-1PSIDTS` scoped to
+`.notebooklm.google.com` (or, post-rebrand, `.notebook.google.com`) never reaches
+`accounts.google.com`, while a host-scoped one on `accounts.google.com` does
+(issue #2057).
+
+The separate "did the heal land?" check (`_psidts_is_live`) is deliberately
+domain-blind instead, because it must predict the retrying preflight rather than
+the request jar. **Do not merge the two predicates.** Their differences are
+intentional, and each one has a failure mode behind it:
+
+| | should we fire? (`_psidts_routes_to_rotate`) | did it land? (`_psidts_is_live`) |
+|---|---|---|
+| domain | RFC 6265 routing to the rotate URL | blind — matches the preflight |
+| duplicate `(name, domain, path)` | any expired twin disqualifies the identity, mirroring the jar's one-cookie-per-identity replacement | ignored |
+| malformed `expires` | row cannot be sent, so it does not count → fire | row is on disk and the preflight will see it → counts as present |
+| known-expired row | does not route | does not count (issue #1273) |
+| empty `value` | skipped | skipped |
+
+The duplicate rule is the sharp edge. Applying it to the heal check turns a
+working session into a permanent failure loop: `save_cookies_to_storage`
+CAS-matches the *first* stored row for an identity, so a stale same-identity
+twin survives the save, and the heal would report failure on every load while
+the preflight keeps passing. That twin is issue #1523's data shape — #1523 fixed
+the producer, and nothing on the load/save path removes an existing one.
+
+Note also that `_psidts_is_live` models `extract_cookies_from_storage`
+specifically; the sibling loader `_build_httpx_cookies_from_storage_strict`
+converts every row and can still reject a state it accepts.
+
+Recovery honors
 `NOTEBOOKLM_DISABLE_KEEPALIVE_POKE=1`, and uses a cross-process flock
 (`psidts_recovery.lock`) so concurrent cold-start processes don't fan out identical
 recovery calls. This is what lets the L4 re-mint (which produces `SID` +

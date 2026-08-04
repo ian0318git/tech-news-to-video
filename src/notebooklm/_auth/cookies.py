@@ -11,6 +11,7 @@ import http.cookiejar
 import json
 import logging
 import os
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, TypeAlias
 
@@ -84,11 +85,13 @@ def flatten_cookie_map(cookies: CookieInput | None) -> FlatCookieMap:
     Duplicate-name resolution mirrors :func:`extract_cookies_from_storage`:
     domains are ranked by :func:`_auth_domain_priority` (``.google.com`` >
     ``.notebooklm.google.com`` > ``notebooklm.google.com`` > regional > other).
-    Named tiers are strictly distinct, so the cross-tier case from #375 (e.g.
-    ``OSID`` on ``myaccount.google.com`` (tier 0) vs ``notebooklm.google.com``
-    (tier 2)) resolves the same way regardless of input order. Within a single
-    tier, first occurrence in iteration order wins — matching
-    :func:`extract_cookies_from_storage`'s within-tier semantics.
+    The cross-tier case from #375 (e.g. ``OSID`` on ``myaccount.google.com``
+    (tier 0) vs ``notebooklm.google.com`` (tier 2)) resolves the same way
+    regardless of input order. But tiers are **not** all distinct — several
+    domains share tier 3, tier 2, and tier 0 — so for a name duplicated *within*
+    one tier the winner is the first occurrence in iteration order and depends
+    on input ordering (issue #2057). Within-tier semantics match
+    :func:`extract_cookies_from_storage`.
 
     Path is intentionally collapsed here (#369): the legacy ``Cookie:`` header
     that consumes the flat shape carries only ``name=value`` pairs, with no slot
@@ -180,9 +183,13 @@ def extract_cookies_from_storage(storage_state: dict[str, Any]) -> dict[str, str
         5. Other allowlisted domains (e.g. .googleusercontent.com)
 
         Within a single priority tier, the first occurrence in the list wins;
-        later duplicates at the same tier are ignored. Tiers are distinct so the
-        outcome is deterministic regardless of storage_state ordering. See PR #34
-        for the bug this fixes.
+        later duplicates at the same tier are ignored. Tiers are **not** all
+        distinct — several domains share tier 3, tier 2, and tier 0 (see
+        :func:`notebooklm._auth.cookie_policy._auth_domain_priority`) — so for a
+        name duplicated *within* one tier the outcome depends on storage_state
+        ordering. Across distinct tiers it is deterministic. See PR #34 for the
+        bug this fixes, and issue #2057 for why this ranking must not be used to
+        decide whether a cookie would be sent to a particular URL.
 
     Args:
         storage_state: Parsed JSON from Playwright's storage state file.
@@ -354,7 +361,10 @@ def load_httpx_cookies(path: Path | None = None) -> httpx.Cookies:
         value = entry.get("value", "")
 
         if _is_allowed_cookie_domain(domain) and name and value:
-            cookies.jar.set_cookie(_storage_entry_to_cookie(entry))
+            cookie = _safe_to_cookie(entry)
+            if cookie is None:
+                continue
+            cookies.jar.set_cookie(cookie)
             cookie_names.add(name)
 
     _validate_required_cookies(cookie_names, context=" for downloads")
@@ -448,9 +458,12 @@ def _build_httpx_cookies_from_storage_strict(path: Path | None) -> httpx.Cookies
         key = (name, domain, entry.get("path") or "/")
         if key in seen_keys:
             continue
+        cookie = _safe_to_cookie(entry)
+        if cookie is None:
+            continue
         seen_keys.add(key)
         seen_names.add(name)
-        cookies.jar.set_cookie(_storage_entry_to_cookie(entry))
+        cookies.jar.set_cookie(cookie)
 
     _validate_required_cookies(seen_names)
     return cookies
@@ -546,6 +559,44 @@ def _storage_entry_to_cookie(entry: dict[str, Any]) -> http.cookiejar.Cookie:
         comment_url=None,
         rest=rest,
     )
+
+
+def _safe_to_cookie(
+    entry: dict[str, Any],
+    to_cookie: Callable[[dict[str, Any]], http.cookiejar.Cookie] | None = None,
+) -> http.cookiejar.Cookie | None:
+    """Convert one storage/rookiepy row, returning ``None`` instead of raising.
+
+    ``http.cookiejar.Cookie.__init__`` coerces the expiry eagerly with
+    ``int(float(expires))``, so a row whose ``expires`` is ``""``, ``"never"``,
+    ``nan`` (``ValueError``), ``inf`` (``OverflowError``), or a list/dict
+    (``TypeError``) blows up at *construction*. Cookie rows reach us from Chrome
+    via rookiepy or from a hand-editable JSON file, so their shape is not ours to
+    guarantee, and one unusable row must not take a whole profile down.
+
+    A row we cannot convert is a row we could never have sent, so dropping it
+    leaves the loaders' own validation to speak: the caller gets the actionable
+    "Missing required cookies … Run 'notebooklm login'" when the dropped row
+    mattered, instead of a raw ``could not convert string to float`` surfacing
+    from deep inside the cookie machinery — which, on the recovery paths, was
+    raised from *inside* an ``except ValueError:`` handler and replaced the
+    diagnostic entirely (issue #2057).
+
+    ``to_cookie`` defaults to :func:`_storage_entry_to_cookie`; the recovery
+    module passes :func:`~notebooklm._auth.psidts_recovery._rookiepy_entry_to_cookie`
+    for snake_case rookiepy rows.
+    """
+    converter = to_cookie or _storage_entry_to_cookie
+    try:
+        return converter(entry)
+    except (ValueError, TypeError, OverflowError) as exc:
+        logger.debug(
+            "Skipping unusable cookie row %r on %r: %s",
+            entry.get("name"),
+            entry.get("domain"),
+            exc,
+        )
+        return None
 
 
 def _cookie_key_variants(key: CookieKey) -> set[CookieKey]:
