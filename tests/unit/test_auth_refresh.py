@@ -45,7 +45,7 @@ class TestFetchTokens:
         </html>
         """
         httpx_mock.add_response(
-            url="https://notebooklm.google.com/",
+            url="https://notebook.google.com/",
             content=html.encode(),
         )
 
@@ -61,7 +61,7 @@ class TestFetchTokens:
     ):
         """Successful fetch without refresh does not rewrite caller cookies."""
         html = '"SNlM0e":"csrf_ok" "FdrFJe":"sess_ok"'
-        httpx_mock.add_response(url="https://notebooklm.google.com/", content=html.encode())
+        httpx_mock.add_response(url="https://notebook.google.com/", content=html.encode())
 
         cookies = {("SID", ".google.com"): "test_sid", ("APP_COOKIE", "example.com"): "keep"}
         original = cookies.copy()
@@ -76,7 +76,7 @@ class TestFetchTokens:
     async def test_fetch_tokens_redirect_to_login(self, httpx_mock: HTTPXMock):
         """Test raises error when redirected to login page."""
         httpx_mock.add_response(
-            url="https://notebooklm.google.com/",
+            url="https://notebook.google.com/",
             status_code=302,
             headers={"Location": "https://accounts.google.com/signin"},
         )
@@ -103,7 +103,7 @@ class TestFetchTokens:
         down into the classifier, not merely accepted as a parameter.
         """
         httpx_mock.add_response(
-            url="https://notebooklm.google.com/",
+            url="https://notebook.google.com/",
             status_code=302,
             headers={"Location": "https://accounts.google.com/CookieMismatch"},
         )
@@ -137,7 +137,7 @@ class TestFetchTokens:
         there and got the order wrong; both paths now share one classifier.
         """
         httpx_mock.add_response(
-            url="https://notebooklm.google.com/",
+            url="https://notebook.google.com/",
             status_code=302,
             headers={"Location": "https://accounts.google.com/CookieMismatch"},
         )
@@ -187,7 +187,7 @@ class TestFetchTokens:
         rather than what the test asserts.
         """
         httpx_mock.add_response(
-            url="https://notebooklm.google.com/",
+            url="https://notebook.google.com/",
             status_code=302,
             headers={"Location": "https://accounts.google.com/ServiceLogin"},
         )
@@ -274,7 +274,7 @@ class TestFetchTokens:
         """Redirected accounts.google.com requests receive matching domain cookies."""
         html = '"SNlM0e":"csrf" "FdrFJe":"sess"'
         httpx_mock.add_response(
-            url="https://notebooklm.google.com/",
+            url="https://notebook.google.com/",
             status_code=302,
             headers={"Location": "https://accounts.google.com/start"},
         )
@@ -289,9 +289,9 @@ class TestFetchTokens:
         httpx_mock.add_response(
             url="https://accounts.google.com/continue",
             status_code=302,
-            headers={"Location": "https://notebooklm.google.com/"},
+            headers={"Location": "https://notebook.google.com/"},
         )
-        httpx_mock.add_response(url="https://notebooklm.google.com/", content=html.encode())
+        httpx_mock.add_response(url="https://notebook.google.com/", content=html.encode())
 
         cookies = {
             ("SID", ".google.com"): "sid_value",
@@ -347,7 +347,7 @@ class TestFetchTokens:
 
         html = '"SNlM0e":"csrf" "FdrFJe":"sess"'
         httpx_mock.add_response(
-            url="https://notebooklm.google.com/",
+            url="https://notebook.google.com/",
             status_code=302,
             headers={"Location": "https://accounts.google.com/start"},
         )
@@ -355,11 +355,11 @@ class TestFetchTokens:
             url="https://accounts.google.com/start",
             status_code=302,
             headers={
-                "Location": "https://notebooklm.google.com/",
+                "Location": "https://notebook.google.com/",
                 "Set-Cookie": "ACCOUNT_REFRESH=fresh; Domain=accounts.google.com; Path=/",
             },
         )
-        httpx_mock.add_response(url="https://notebooklm.google.com/", content=html.encode())
+        httpx_mock.add_response(url="https://notebook.google.com/", content=html.encode())
 
         await fetch_tokens_with_domains(storage_file)
 
@@ -482,7 +482,7 @@ class TestFetchTokensPassive:
         """Happy path: returns the tokens from the homepage GET."""
         storage_file = self._storage_with_sid(tmp_path)
         html = '"SNlM0e":"csrf_passive" "FdrFJe":"sess_passive"'
-        httpx_mock.add_response(url="https://notebooklm.google.com/", content=html.encode())
+        httpx_mock.add_response(url="https://notebook.google.com/", content=html.encode())
 
         csrf, session_id = await fetch_tokens_passive(storage_file)
 
@@ -494,7 +494,7 @@ class TestFetchTokensPassive:
         """The layer-1 rotation poke must never fire on the passive path."""
         storage_file = self._storage_with_sid(tmp_path)
         html = '"SNlM0e":"csrf" "FdrFJe":"sess"'
-        httpx_mock.add_response(url="https://notebooklm.google.com/", content=html.encode())
+        httpx_mock.add_response(url="https://notebook.google.com/", content=html.encode())
 
         poke_calls = 0
 
@@ -520,7 +520,7 @@ class TestFetchTokensPassive:
         # Redirect through accounts.google.com with a Set-Cookie rotation, just
         # like the active path's persistence test — but passive must drop it.
         httpx_mock.add_response(
-            url="https://notebooklm.google.com/",
+            url="https://notebook.google.com/",
             status_code=302,
             headers={"Location": "https://accounts.google.com/start"},
         )
@@ -528,11 +528,11 @@ class TestFetchTokensPassive:
             url="https://accounts.google.com/start",
             status_code=302,
             headers={
-                "Location": "https://notebooklm.google.com/",
+                "Location": "https://notebook.google.com/",
                 "Set-Cookie": "__Secure-1PSIDTS=rotated; Domain=.google.com; Path=/",
             },
         )
-        httpx_mock.add_response(url="https://notebooklm.google.com/", content=html.encode())
+        httpx_mock.add_response(url="https://notebook.google.com/", content=html.encode())
 
         await fetch_tokens_passive(storage_file)
 
@@ -598,7 +598,7 @@ class TestFetchTokensPassive:
 
         # Homepage redirects to sign-in → auth is expired.
         httpx_mock.add_response(
-            url="https://notebooklm.google.com/",
+            url="https://notebook.google.com/",
             status_code=302,
             headers={"Location": "https://accounts.google.com/signin"},
         )
@@ -633,7 +633,7 @@ class TestFetchTokensAutoRefresh:
     async def test_no_refresh_when_env_unset(self, httpx_mock: HTTPXMock):
         """Auth error propagates unchanged when NOTEBOOKLM_REFRESH_CMD is not set."""
         httpx_mock.add_response(
-            url="https://notebooklm.google.com/",
+            url="https://notebook.google.com/",
             status_code=302,
             headers={"Location": "https://accounts.google.com/signin"},
         )
@@ -700,7 +700,7 @@ class TestFetchTokensAutoRefresh:
 
         # First HTTP call: auth redirect
         httpx_mock.add_response(
-            url="https://notebooklm.google.com/",
+            url="https://notebook.google.com/",
             status_code=302,
             headers={"Location": "https://accounts.google.com/signin"},
         )
@@ -710,7 +710,7 @@ class TestFetchTokensAutoRefresh:
         )
         # Second HTTP call (after refresh): success
         html = '"SNlM0e":"csrf_ok" "FdrFJe":"sess_ok"'
-        httpx_mock.add_response(url="https://notebooklm.google.com/", content=html.encode())
+        httpx_mock.add_response(url="https://notebook.google.com/", content=html.encode())
 
         cookies = {"SID": "stale", "__Secure-1PSIDTS": "test_1psidts"}
         csrf, session_id = await fetch_tokens(cookies)
@@ -768,7 +768,7 @@ class TestFetchTokensAutoRefresh:
         monkeypatch.setenv("NOTEBOOKLM_REFRESH_CMD", self._python_refresh_cmd(refresh_script))
 
         httpx_mock.add_response(
-            url="https://notebooklm.google.com/",
+            url="https://notebook.google.com/",
             status_code=302,
             headers={"Location": "https://accounts.google.com/signin"},
         )
@@ -777,7 +777,7 @@ class TestFetchTokensAutoRefresh:
             content=b"<html>Login</html>",
         )
         html = '"SNlM0e":"csrf_ok" "FdrFJe":"sess_ok"'
-        httpx_mock.add_response(url="https://notebooklm.google.com/", content=html.encode())
+        httpx_mock.add_response(url="https://notebook.google.com/", content=html.encode())
 
         cookies = {"SID": "stale", "__Secure-1PSIDTS": "test_1psidts"}
         csrf, session_id = await fetch_tokens(cookies, storage_file)
@@ -830,7 +830,7 @@ class TestFetchTokensAutoRefresh:
         monkeypatch.setenv("NOTEBOOKLM_REFRESH_CMD", self._python_refresh_cmd(refresh_script))
 
         httpx_mock.add_response(
-            url="https://notebooklm.google.com/",
+            url="https://notebook.google.com/",
             status_code=302,
             headers={"Location": "https://accounts.google.com/signin"},
         )
@@ -839,7 +839,7 @@ class TestFetchTokensAutoRefresh:
             content=b"<html>Login</html>",
         )
         html = '"SNlM0e":"csrf_ok" "FdrFJe":"sess_ok"'
-        httpx_mock.add_response(url="https://notebooklm.google.com/", content=html.encode())
+        httpx_mock.add_response(url="https://notebook.google.com/", content=html.encode())
 
         tokens = await AuthTokens.from_storage(profile="work")
 
@@ -892,7 +892,7 @@ class TestFetchTokensAutoRefresh:
         monkeypatch.setenv("NOTEBOOKLM_REFRESH_CMD", self._python_refresh_cmd(refresh_script))
 
         httpx_mock.add_response(
-            url="https://notebooklm.google.com/",
+            url="https://notebook.google.com/",
             status_code=302,
             headers={"Location": "https://accounts.google.com/signin"},
         )
@@ -901,7 +901,7 @@ class TestFetchTokensAutoRefresh:
             content=b"<html>Login</html>",
         )
         html = '"SNlM0e":"csrf_ok" "FdrFJe":"sess_ok"'
-        httpx_mock.add_response(url="https://notebooklm.google.com/", content=html.encode())
+        httpx_mock.add_response(url="https://notebook.google.com/", content=html.encode())
 
         cookies = {"SID": "stale", "__Secure-1PSIDTS": "test_1psidts"}
         csrf, session_id = await fetch_tokens(cookies, profile="work")
@@ -935,7 +935,7 @@ class TestFetchTokensAutoRefresh:
         )
 
         html = '"SNlM0e":"csrf_ok" "FdrFJe":"sess_ok"'
-        httpx_mock.add_response(url="https://notebooklm.google.com/", content=html.encode())
+        httpx_mock.add_response(url="https://notebook.google.com/", content=html.encode())
 
         csrf, session_id = await fetch_tokens_with_domains(profile="work")
 
@@ -973,7 +973,7 @@ class TestFetchTokensAutoRefresh:
         # Both attempts hit the same redirect
         for _ in range(2):
             httpx_mock.add_response(
-                url="https://notebooklm.google.com/",
+                url="https://notebook.google.com/",
                 status_code=302,
                 headers={"Location": "https://accounts.google.com/signin"},
             )
@@ -998,7 +998,7 @@ class TestFetchTokensAutoRefresh:
         monkeypatch.setenv("NOTEBOOKLM_REFRESH_CMD", self._python_refresh_cmd(refresh_script))
 
         httpx_mock.add_response(
-            url="https://notebooklm.google.com/",
+            url="https://notebook.google.com/",
             status_code=302,
             headers={"Location": "https://accounts.google.com/signin"},
         )

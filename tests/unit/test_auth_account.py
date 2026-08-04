@@ -65,11 +65,11 @@ class TestEnumerateAccounts:
         """One signed-in account: authuser=0 returns it, authuser=1 falls back to it."""
         default_html = _wiz_html_with_email("alice@example.com")
         httpx_mock.add_response(
-            url="https://notebooklm.google.com/?authuser=0", content=default_html.encode()
+            url="https://notebook.google.com/?authuser=0", content=default_html.encode()
         )
         # Silent fallback: authuser=1 returns the same email; loop must stop.
         httpx_mock.add_response(
-            url="https://notebooklm.google.com/?authuser=1", content=default_html.encode()
+            url="https://notebook.google.com/?authuser=1", content=default_html.encode()
         )
 
         jar = httpx.Cookies()
@@ -82,20 +82,20 @@ class TestEnumerateAccounts:
     async def test_multiple_accounts_stops_on_silent_fallback(self, httpx_mock: HTTPXMock):
         """Three real accounts; authuser=3 silently returns account 0's email."""
         httpx_mock.add_response(
-            url="https://notebooklm.google.com/?authuser=0",
+            url="https://notebook.google.com/?authuser=0",
             content=_wiz_html_with_email("alice@example.com").encode(),
         )
         httpx_mock.add_response(
-            url="https://notebooklm.google.com/?authuser=1",
+            url="https://notebook.google.com/?authuser=1",
             content=_wiz_html_with_email("bob@gmail.com").encode(),
         )
         httpx_mock.add_response(
-            url="https://notebooklm.google.com/?authuser=2",
+            url="https://notebook.google.com/?authuser=2",
             content=_wiz_html_with_email("carol@workspace.com").encode(),
         )
         # Silent fallback at index 3: matches default email → enumeration stops.
         httpx_mock.add_response(
-            url="https://notebooklm.google.com/?authuser=3",
+            url="https://notebook.google.com/?authuser=3",
             content=_wiz_html_with_email("alice@example.com").encode(),
         )
 
@@ -113,7 +113,7 @@ class TestEnumerateAccounts:
     async def test_raises_when_authuser_zero_unauthenticated(self, httpx_mock: HTTPXMock):
         """Bare cookies → authuser=0 redirects to login → ValueError."""
         httpx_mock.add_response(
-            url="https://notebooklm.google.com/?authuser=0",
+            url="https://notebook.google.com/?authuser=0",
             status_code=302,
             headers={"Location": "https://accounts.google.com/signin"},
         )
@@ -129,11 +129,11 @@ class TestEnumerateAccounts:
     async def test_stops_when_subsequent_index_unparseable(self, httpx_mock: HTTPXMock):
         """authuser=N>0 with no parseable email → end-of-list, not error."""
         httpx_mock.add_response(
-            url="https://notebooklm.google.com/?authuser=0",
+            url="https://notebook.google.com/?authuser=0",
             content=_wiz_html_with_email("alice@example.com").encode(),
         )
         httpx_mock.add_response(
-            url="https://notebooklm.google.com/?authuser=1", content=b"<html>nothing</html>"
+            url="https://notebook.google.com/?authuser=1", content=b"<html>nothing</html>"
         )
 
         jar = httpx.Cookies()
@@ -149,7 +149,7 @@ class TestEnumerateAccounts:
         # Each index has a unique email so the silent-fallback check never trips.
         for n in range(0, 3):
             httpx_mock.add_response(
-                url=f"https://notebooklm.google.com/?authuser={n}",
+                url=f"https://notebook.google.com/?authuser={n}",
                 content=_wiz_html_with_email(f"user{n}@example.com").encode(),
             )
 
@@ -302,7 +302,7 @@ class TestAuthuserPlumbing:
         )
 
         httpx_mock.add_response(
-            url="https://notebooklm.google.com/?authuser=bob%40example.com",
+            url="https://notebook.google.com/?authuser=bob%40example.com",
             content=b'"SNlM0e":"csrf_env" "FdrFJe":"sess_env"',
         )
 
@@ -340,7 +340,7 @@ class TestAuthuserPlumbing:
         # Token fetch must use the stable email route, not the reorder-prone
         # integer index.
         httpx_mock.add_response(
-            url="https://notebooklm.google.com/?authuser=bob%40example.com",
+            url="https://notebook.google.com/?authuser=bob%40example.com",
             content=b'"SNlM0e":"csrf_v2" "FdrFJe":"sess_v2"',
         )
 
@@ -371,7 +371,7 @@ class TestAuthuserPlumbing:
             )
         )
         httpx_mock.add_response(
-            url="https://notebooklm.google.com/?authuser=2",
+            url="https://notebook.google.com/?authuser=2",
             content=b'"SNlM0e":"csrf_v2" "FdrFJe":"sess_v2"',
         )
 
@@ -402,7 +402,7 @@ class TestAuthuserPlumbing:
         )
         write_account_metadata(storage, authuser=2, email="bob@example.com")
         httpx_mock.add_response(
-            url="https://notebooklm.google.com/?authuser=0",
+            url="https://notebook.google.com/?authuser=0",
             content=b'"SNlM0e":"csrf_v2" "FdrFJe":"sess_v2"',
         )
 

@@ -50,7 +50,7 @@ def _stub_homepage(httpx_mock: HTTPXMock) -> None:
     """Stub the notebooklm homepage GET used to seed the CSRF/session tokens."""
     html = '"SNlM0e":"dual_csrf" "FdrFJe":"dual_session"'
     httpx_mock.add_response(
-        url="https://notebooklm.google.com/",
+        url="https://notebook.google.com/",
         content=html.encode(),
     )
 

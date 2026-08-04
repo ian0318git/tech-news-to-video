@@ -6,7 +6,12 @@ import logging
 from collections.abc import Mapping
 from typing import Any
 
-from notebooklm._env import PERSONAL_APP_ALIAS_HOST, PERSONAL_APP_HOSTS, get_base_host
+from notebooklm._env import (
+    PERSONAL_APP_HOSTS,
+    PERSONAL_BASE_HOST,
+    PERSONAL_LEGACY_HOST,
+    get_base_host,
+)
 
 logger = logging.getLogger("notebooklm.auth")
 
@@ -220,21 +225,20 @@ def app_host_scope_note() -> str:
     2. Select the host that actually holds the cookies via
        ``NOTEBOOKLM_BASE_URL``.
 
-    Recovery 2 carries a caveat, but only in one direction. The sibling host is
-    computed *relative to the configured one*, so it is the rebrand host
-    (:data:`notebooklm._env.PERSONAL_APP_ALIAS_HOST`) for a default-host user and
-    the long-established default for a rebrand-host user. Attaching the caveat
-    unconditionally therefore warned rebrand-host users off the legacy host —
-    exactly backwards, and it discourages the one fallback whose behavior this
-    project has exercised end to end.
+    Recovery 2 used to carry a caveat marking the rebrand host "experimental —
+    not the documented default", asymmetrically so it could never land on the
+    legacy host and warn users off the one fallback this project had exercised
+    end to end.
 
-    What the caveat may and may not claim: a live probe (issue #1977) reached
-    ``batchexecute`` on the rebrand host — a 400 on a deliberately malformed
-    payload proves the endpoint is there. So the host is *not* "unverified to
-    serve the API". It is simply experimental here: not the documented default,
-    and not covered by this repository's cassettes. The note says that and no
-    more — overclaiming in either direction sends users into a different failure,
-    which is the bug this note exists to avoid.
+    **#2067 retired that caveat rather than inverting it.** The flip made the
+    rebrand host the documented default and moved the cassettes onto it, so
+    every clause of the old wording became false for it. Re-pointing the same
+    words at the legacy host would have been false in the other direction: that
+    host is long-exercised, still served, and is now the documented rollback
+    lever (ADR-0028, as amended). Neither host is experimental today, so the
+    note recommends the sibling without an editorial. Overclaiming in either
+    direction sends users into a different failure, which is the bug this note
+    exists to avoid.
 
     Returns:
         The note as plain text (no trailing newline), or ``""`` when the
@@ -246,14 +250,6 @@ def app_host_scope_note() -> str:
     if base_host not in PERSONAL_APP_HOSTS or not siblings:
         return ""
     other_host = siblings[0]
-    # Asymmetric by design — see the "only in one direction" paragraph above.
-    # Never inline the alias literal here: the centralization guardrail AST-walks
-    # f-string parts too, so the host must arrive via the constant.
-    caveat = (
-        " (that host is experimental — not the documented default)"
-        if other_host == PERSONAL_APP_ALIAS_HOST
-        else ""
-    )
     return (
         f"Heads-up: Google serves the personal app from both {base_host} and "
         f"{other_host} and redirects between them, but the OSID binding is "
@@ -264,7 +260,7 @@ def app_host_scope_note() -> str:
         f"account-wide binding APISID+SAPISID+LSID, none of which are "
         f"host-scoped, so both hosts accept it), or select the host that has "
         f"the cookies with "
-        f"NOTEBOOKLM_BASE_URL=https://{other_host}{caveat}."
+        f"NOTEBOOKLM_BASE_URL=https://{other_host}."
     )
 
 
@@ -397,16 +393,16 @@ REQUIRED_COOKIE_DOMAINS: frozenset[str] = frozenset(
         ".google.com",
         "google.com",  # Host-only Domain=google.com cookies (rare but possible)
         # Playwright storage_state may preserve the leading dot for NotebookLM cookies.
-        ".notebooklm.google.com",
-        "notebooklm.google.com",
+        f".{PERSONAL_LEGACY_HOST}",
+        PERSONAL_LEGACY_HOST,
         # Gemini Notebook rebrand (July 2026, issue #2013): Google now also serves
         # the app from ``notebook.google.com`` and sets the per-product binding
         # cookies (``OSID`` / ``__Secure-OSID``) on this host. Both dotted and
         # non-dotted variants are listed (same defensive pattern as
         # ``notebooklm.google.com`` above) so http.cookiejar normalization does
         # not drop them at extraction / load time.
-        f".{PERSONAL_APP_ALIAS_HOST}",
-        PERSONAL_APP_ALIAS_HOST,
+        f".{PERSONAL_BASE_HOST}",
+        PERSONAL_BASE_HOST,
         ".notebooklm.cloud.google.com",
         "notebooklm.cloud.google.com",
         ".googleusercontent.com",
@@ -704,22 +700,23 @@ def _auth_domain_priority(domain: str) -> int:
     """
     if domain == ".google.com":
         return 4
-    if domain == ".notebooklm.google.com":
+    if domain == f".{PERSONAL_LEGACY_HOST}":
         return 3
-    if domain == "notebooklm.google.com":
+    if domain == PERSONAL_LEGACY_HOST:
         return 2
-    # Gemini Notebook rebrand host (issue #2013). The dotted variant sits at the
-    # same tier as ``.notebooklm.google.com`` and the bare variant at the same
-    # tier as ``notebooklm.google.com`` -- deliberately, so neither host is
-    # ranked below the other now that Google mints host-scoped cookies on both.
+    # The other personal app host (issue #2013), which #2067 made the default.
+    # The dotted variant sits at the same tier as the legacy host's dotted
+    # variant and the bare at the same tier as its bare -- deliberately, so
+    # neither host is ranked below the other now that Google mints host-scoped
+    # cookies on both.
     #
-    # It does NOT mean the canonical app host wins when both carry a name:
-    # 3 == 3 and 2 == 2, so those pairs tie and the winner falls to
-    # ``storage_state`` iteration order. This comment claimed the opposite until
-    # #2054; the docstring above now describes the real tier structure.
-    if domain == f".{PERSONAL_APP_ALIAS_HOST}":
+    # It does NOT mean the default host wins when both carry a name: 3 == 3 and
+    # 2 == 2, so those pairs tie and the winner falls to ``storage_state``
+    # iteration order. This comment claimed the opposite until #2054; the
+    # docstring above describes the real tier structure.
+    if domain == f".{PERSONAL_BASE_HOST}":
         return 3
-    if domain == PERSONAL_APP_ALIAS_HOST:
+    if domain == PERSONAL_BASE_HOST:
         return 2
     if domain == ".notebooklm.cloud.google.com":
         return 3

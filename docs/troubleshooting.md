@@ -204,13 +204,13 @@ Or re-run `notebooklm login` if session cookies are also expired. If the failure
 
 #### "NotebookLM redirected this request to its region / anti-abuse access gate"
 
-**Cause:** The request to `notebooklm.google.com` was redirected to **`notebooklm.google/?location=unsupported`** — Google's region / anti-abuse risk-control gate (the marketing/landing page, which has no CSRF token). This is **not** a library bug, expired login, or page-structure change, and **re-running `notebooklm login` will not fix it** (the cookies are fine). It is driven by the *access environment*, not just the account's country, and fires even for accounts in supported regions when Google sees:
+**Cause:** The request to the personal app host — `notebook.google.com` by default since #2067, or whichever host `NOTEBOOKLM_BASE_URL` selects — was redirected to **`notebooklm.google/?location=unsupported`** — Google's region / anti-abuse risk-control gate (the marketing/landing page, which has no CSRF token). This is **not** a library bug, expired login, or page-structure change, and **re-running `notebooklm login` will not fix it** (the cookies are fine). It is driven by the *access environment*, not just the account's country, and fires even for accounts in supported regions when Google sees:
 
 - a **VPN / proxy / datacenter / shared IP** (especially previously-abused ones),
 - an **IP ↔ timezone ↔ browser-language mismatch**, or
 - a **non-browser / automated access pattern** (a raw HTTP client without a real browser fingerprint).
 
-**Confirm:** open `https://notebooklm.google.com` in a normal browser, signed in to the same account, on the same network. If it also redirects to `notebooklm.google/?location=unsupported`, the gate is environmental.
+**Confirm:** open the same host the client is using (`https://notebook.google.com` unless you set `NOTEBOOKLM_BASE_URL`) in a normal browser, signed in to the same account, on the same network. If it also redirects to `notebooklm.google/?location=unsupported`, the gate is environmental. Test the host that actually failed — the two personal hosts are gated by the same risk-control system, but diagnosing against the host you are not using is how a working setup gets misread as broken.
 
 **Solution:** access from a **residential connection in a supported region**, keep your system **timezone/language consistent** with the IP's country, and avoid shared/datacenter VPN exit IPs. When the trigger is the **non-browser fingerprint** (a raw HTTP client) rather than the IP, the opt-in browser-TLS-impersonation transport can help: set `NOTEBOOKLM_TRANSPORT=curl_cffi` (requires the `curl_cffi` package) so requests carry a real browser's TLS fingerprint. (See issue [#1630](https://github.com/teng-lin/notebooklm-py/issues/1630).)
 
@@ -242,19 +242,24 @@ notebooklm login --browser chrome --storage <path>
 
 **Cause:** The error message enumerates every host the base-URL validator currently accepts. That list is not the same as the list of *supported* values in [configuration.md](configuration.md) — it now also names the Gemini Notebook rebrand host, `notebook.google.com`.
 
-**Status:** `notebook.google.com` is **experimental, and not the default**. A live probe on 2026-08-04 reached `batchexecute` on **both** personal hosts, so the endpoint is dual-served, not rebrand-host-only or legacy-only. What is missing is coverage on our side: no `batchexecute` request to the rebrand host has ever been captured in `tests/cassettes/` — every recorded request against it is a `GET /` for the app shell — because the base-URL validator rejected the host until recently, so no client we shipped *could* have issued one. That is a gap in this project's testing, not a statement about the service. Dual-serving is also transitional: `scripts/check_rpc_health.py` probes the rebrand host in its own reporting lane so a change is noticed. See [ADR-0028](adr/0028-gemini-notebook-rename.md).
+**Status:** `notebook.google.com` is **the default** since #2067. A live probe on 2026-08-04 reached `batchexecute` on **both** personal hosts, so the endpoint is dual-served, not rebrand-host-only or legacy-only. The cassettes in `tests/cassettes/` now record requests against the rebrand host. The pre-rebrand host `notebooklm.google.com` remains a valid, still-served value and is the documented rollback lever; switching back is normally just the variable, with the caveats described below. See [ADR-0028](adr/0028-gemini-notebook-rename.md).
 
 **Solution:** Leave `NOTEBOOKLM_BASE_URL` unset, or set it to a documented value:
 
 ```bash
 # Personal (default — no need to set it)
+export NOTEBOOKLM_BASE_URL=https://notebook.google.com
+
+# Personal, pre-rebrand host (still served; rollback lever)
 export NOTEBOOKLM_BASE_URL=https://notebooklm.google.com
 
 # Enterprise
 export NOTEBOOKLM_BASE_URL=https://notebooklm.cloud.google.com
 ```
 
-`https://notebook.google.com` is accepted but deliberately left out of the documented values while the default stays on the legacy host: it is untested by this project, so use it as an escape hatch rather than a normal setting. If you do run against it, reporting whether RPC succeeded or failed is genuinely useful — open an issue either way.
+Both personal hosts are documented values since #2067. `https://notebook.google.com` is the default and is what this project's cassettes now exercise; `https://notebooklm.google.com` remains served and is the supported rollback lever.
+
+Switching between them is normally just the variable. The host-scoped `OSID` does not survive the switch — it was minted on the host you left and is never sent to the other one — but it is not the only binding path: `APISID` + `SAPISID` **together with bare `LSID`** also satisfies the check, and a profile captured by `notebooklm login` normally has all three. Note the `LSID` conjunct is required; `APISID` + `SAPISID` on their own fail (see the ablation table on `_has_valid_secondary_binding`, issue #1977). If auth does fail after switching, the profile was leaning on `OSID` and is missing one of those three; recover with `notebooklm login --fresh`. Use `--fresh` rather than a plain `notebooklm login`, which can report "Already logged in" and re-mint nothing, since the login accept-set matches either personal host.
 
 ### RPC Errors
 
@@ -876,7 +881,7 @@ import httpx
 
 # Test basic connectivity
 async with httpx.AsyncClient() as client:
-    r = await client.get("https://notebooklm.google.com")
+    r = await client.get("https://notebook.google.com")
     print(r.status_code)  # Should be 200 or 302
 ```
 

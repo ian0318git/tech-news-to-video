@@ -5,9 +5,9 @@ import pytest
 from notebooklm._env import (
     _ALLOWED_BASE_HOSTS,
     ENTERPRISE_BASE_HOST,
-    PERSONAL_APP_ALIAS_HOST,
     PERSONAL_APP_HOSTS,
     PERSONAL_BASE_HOST,
+    PERSONAL_LEGACY_HOST,
     get_base_host,
     get_base_url,
 )
@@ -23,8 +23,8 @@ from tests._helpers.client_factory import build_client_shell_for_tests
 def test_default_base_url_is_personal(monkeypatch):
     monkeypatch.delenv("NOTEBOOKLM_BASE_URL", raising=False)
 
-    assert get_base_url() == "https://notebooklm.google.com"
-    assert get_base_host() == "notebooklm.google.com"
+    assert get_base_url() == "https://notebook.google.com"
+    assert get_base_host() == "notebook.google.com"
 
 
 def test_enterprise_base_url_via_env(monkeypatch):
@@ -40,10 +40,10 @@ def test_rebrand_alias_base_url_via_env(monkeypatch):
     Without a selectable rebrand host the login-landing and upload-host seams
     that must cope with *either* personal host cannot be exercised at all.
     """
-    monkeypatch.setenv("NOTEBOOKLM_BASE_URL", f"https://{PERSONAL_APP_ALIAS_HOST}/")
+    monkeypatch.setenv("NOTEBOOKLM_BASE_URL", f"https://{PERSONAL_LEGACY_HOST}/")
 
-    assert get_base_url() == f"https://{PERSONAL_APP_ALIAS_HOST}"
-    assert get_base_host() == PERSONAL_APP_ALIAS_HOST
+    assert get_base_url() == f"https://{PERSONAL_LEGACY_HOST}"
+    assert get_base_host() == PERSONAL_LEGACY_HOST
 
 
 def test_personal_app_hosts_holds_both_personal_hosts():
@@ -53,7 +53,7 @@ def test_personal_app_hosts_holds_both_personal_hosts():
     single element and silently reverts #2015/#2020/#2038, whose whole point is
     that the app answers on two hosts at once.
     """
-    assert {PERSONAL_BASE_HOST, PERSONAL_APP_ALIAS_HOST} == PERSONAL_APP_HOSTS
+    assert {PERSONAL_BASE_HOST, PERSONAL_LEGACY_HOST} == PERSONAL_APP_HOSTS
     assert len(PERSONAL_APP_HOSTS) == 2
     assert ENTERPRISE_BASE_HOST not in PERSONAL_APP_HOSTS
 
@@ -72,7 +72,7 @@ def test_base_url_normalizes_mixed_case_and_whitespace(monkeypatch):
 def test_empty_base_url_env_falls_back_to_default(monkeypatch):
     monkeypatch.setenv("NOTEBOOKLM_BASE_URL", "")
 
-    assert get_base_url() == "https://notebooklm.google.com"
+    assert get_base_url() == "https://notebook.google.com"
 
 
 @pytest.mark.parametrize(

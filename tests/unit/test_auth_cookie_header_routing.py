@@ -20,8 +20,13 @@ import pytest
 from notebooklm._auth.cookies import extract_cookies_from_storage
 from notebooklm._auth.tokens import AuthTokens
 
-APP_HOST = "notebooklm.google.com"
-ALIAS_HOST = "notebook.google.com"
+# Named by ROLE as of #2067, and kept as literals on purpose: these tests
+# assert concrete cookie routing, so deriving them from the constants under
+# test would make them tautological. The previous names (APP_HOST for the
+# legacy host, ALIAS_HOST for what is now the default) inverted after the flip
+# — exactly the confusion that produced this branch's host-role bugs.
+LEGACY_HOST = "notebooklm.google.com"
+DEFAULT_HOST = "notebook.google.com"
 SIGN_IN_HOST = "accounts.google.com"
 
 
@@ -50,8 +55,8 @@ def collided_auth() -> AuthTokens:
         cookies={
             ("SID", ".google.com", "/"): "v-sid",
             ("__Secure-1PSIDTS", ".google.com", "/"): "v-psidts",
-            ("OSID", APP_HOST, "/"): "osid-app",
-            ("OSID", ALIAS_HOST, "/"): "osid-alias",
+            ("OSID", LEGACY_HOST, "/"): "osid-app",
+            ("OSID", DEFAULT_HOST, "/"): "osid-alias",
             ("OSID", SIGN_IN_HOST, "/"): "osid-signin",
             ("LSID", SIGN_IN_HOST, "/"): "v-lsid",
         },
@@ -62,7 +67,7 @@ def collided_auth() -> AuthTokens:
 
 @pytest.mark.parametrize(
     ("host", "expected_osid"),
-    [(APP_HOST, "osid-app"), (ALIAS_HOST, "osid-alias"), (SIGN_IN_HOST, "osid-signin")],
+    [(LEGACY_HOST, "osid-app"), (DEFAULT_HOST, "osid-alias"), (SIGN_IN_HOST, "osid-signin")],
 )
 def test_each_host_receives_its_own_binding_cookie(
     collided_auth: AuthTokens, host: str, expected_osid: str
@@ -75,8 +80,8 @@ def test_each_host_receives_its_own_binding_cookie(
 @pytest.mark.parametrize(
     ("host", "forbidden"),
     [
-        (APP_HOST, {("OSID", "osid-alias"), ("OSID", "osid-signin"), ("LSID", "v-lsid")}),
-        (ALIAS_HOST, {("OSID", "osid-app"), ("OSID", "osid-signin"), ("LSID", "v-lsid")}),
+        (LEGACY_HOST, {("OSID", "osid-alias"), ("OSID", "osid-signin"), ("LSID", "v-lsid")}),
+        (DEFAULT_HOST, {("OSID", "osid-app"), ("OSID", "osid-signin"), ("LSID", "v-lsid")}),
         (SIGN_IN_HOST, {("OSID", "osid-app"), ("OSID", "osid-alias")}),
     ],
 )
@@ -100,7 +105,7 @@ def test_domain_wide_cookies_reach_every_host(collided_auth: AuthTokens) -> None
     Without this, an implementation that sent nothing at all would satisfy every
     absence assertion above.
     """
-    for host in (APP_HOST, ALIAS_HOST, SIGN_IN_HOST):
+    for host in (LEGACY_HOST, DEFAULT_HOST, SIGN_IN_HOST):
         pairs = _cookie_pairs(collided_auth.cookie_header_for(f"https://{host}/x"))
         assert ("SID", "v-sid") in pairs
         assert ("__Secure-1PSIDTS", "v-psidts") in pairs
@@ -132,7 +137,7 @@ def test_non_https_url_is_rejected(collided_auth: AuthTokens) -> None:
     every outcome is wrong for auth. Rejecting the scheme is the contract.
     """
     with pytest.raises(ValueError, match="https"):
-        collided_auth.cookie_header_for(f"http://{APP_HOST}/x")
+        collided_auth.cookie_header_for(f"http://{LEGACY_HOST}/x")
 
 
 #: Tier-1 cookies every storage fixture needs, or the loader rejects it outright.
@@ -155,8 +160,8 @@ def test_same_tier_resolution_is_order_dependent() -> None:
     the time and the first green re-run would be believed.
     """
     entries = [
-        {"name": "OSID", "value": "from-legacy", "domain": APP_HOST, "path": "/"},
-        {"name": "OSID", "value": "from-alias", "domain": ALIAS_HOST, "path": "/"},
+        {"name": "OSID", "value": "from-legacy", "domain": LEGACY_HOST, "path": "/"},
+        {"name": "OSID", "value": "from-alias", "domain": DEFAULT_HOST, "path": "/"},
     ]
     forward = extract_cookies_from_storage(_storage(entries))
     reverse = extract_cookies_from_storage(_storage(list(reversed(entries))))
@@ -175,7 +180,7 @@ def test_cross_tier_resolution_is_order_independent() -> None:
     """
     entries = [
         {"name": "OSID", "value": "from-wide", "domain": ".google.com", "path": "/"},
-        {"name": "OSID", "value": "from-host", "domain": APP_HOST, "path": "/"},
+        {"name": "OSID", "value": "from-host", "domain": LEGACY_HOST, "path": "/"},
     ]
     forward = extract_cookies_from_storage(_storage(entries))
     reverse = extract_cookies_from_storage(_storage(list(reversed(entries))))
@@ -198,7 +203,7 @@ def test_flat_construction_degrades_to_broadcast() -> None:
         csrf_token="csrf",
         session_id="session",
     )
-    app = _cookie_pairs(flat.cookie_header_for(f"https://{APP_HOST}/x"))
+    app = _cookie_pairs(flat.cookie_header_for(f"https://{LEGACY_HOST}/x"))
     sign_in = _cookie_pairs(flat.cookie_header_for(f"https://{SIGN_IN_HOST}/x"))
 
     assert app == sign_in, "a domain-less jar broadcasts; it cannot select per host"
@@ -207,7 +212,7 @@ def test_flat_construction_degrades_to_broadcast() -> None:
 
 @pytest.mark.parametrize(
     ("bad_url", "match"),
-    [("http://" + APP_HOST + "/x", "https"), ("https:/typo", "host"), ("https://", "host")],
+    [("http://" + LEGACY_HOST + "/x", "https"), ("https:/typo", "host"), ("https://", "host")],
 )
 def test_malformed_urls_raise_rather_than_returning_empty(
     collided_auth: AuthTokens, bad_url: str, match: str
@@ -233,4 +238,4 @@ def test_missing_jar_raises_rather_than_returning_empty() -> None:
     )
     auth.cookie_jar = None
     with pytest.raises(ValueError, match="cookie jar"):
-        auth.cookie_header_for(f"https://{APP_HOST}/x")
+        auth.cookie_header_for(f"https://{LEGACY_HOST}/x")

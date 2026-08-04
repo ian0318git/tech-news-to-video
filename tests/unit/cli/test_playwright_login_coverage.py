@@ -28,6 +28,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import notebooklm.auth as auth_module
+from notebooklm._env import get_base_host
 from notebooklm.cli.playwright_login_io import make_login_io
 from notebooklm.cli.services import playwright_login
 from notebooklm.cli.services.playwright_login import (
@@ -629,7 +630,7 @@ def test_run_playwright_login_capture_html_error_is_swallowed(tmp_path) -> None:
     browser_dir = tmp_path / "profile"
     mock_context = MagicMock()
     mock_page = MagicMock()
-    mock_page.url = "https://notebooklm.google.com/"
+    mock_page.url = f"https://{get_base_host()}/"
     mock_page.content.side_effect = PlaywrightError("cannot read content")
     mock_context.pages = [mock_page]
     mock_context.storage_state.return_value = {"cookies": [], "origins": []}
@@ -680,7 +681,7 @@ def test_run_playwright_login_cookie_forcing_inner_recovery_reraises(tmp_path) -
     browser_dir = tmp_path / "profile"
     mock_context = MagicMock()
     mock_page_stale = MagicMock()
-    mock_page_stale.url = "https://notebooklm.google.com/"
+    mock_page_stale.url = f"https://{get_base_host()}/"
     goto_count = 0
 
     def stale_goto(url, **kwargs):
@@ -694,7 +695,7 @@ def test_run_playwright_login_cookie_forcing_inner_recovery_reraises(tmp_path) -
 
     mock_page_stale.goto.side_effect = stale_goto
     mock_page_recovered = MagicMock()
-    mock_page_recovered.url = "https://notebooklm.google.com/"
+    mock_page_recovered.url = f"https://{get_base_host()}/"
     # The recovered page's goto raises a NON-target-closed, NON-navigation
     # PlaywrightError, which must propagate.
     mock_page_recovered.goto.side_effect = PlaywrightError("net::ERR_SOMETHING_ELSE while loading")

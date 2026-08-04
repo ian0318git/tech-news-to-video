@@ -35,11 +35,41 @@ Two things follow, and they are easy to conflate:
   rejected the host, so no client we ship *could* have issued one.
 - **Dual-serving is a transitional state, not a guarantee.** It is the thing to
   monitor, which is why `scripts/check_rpc_health.py` probes the rebrand host in
-  its own reporting lane. The signal that would justify moving the default is
-  the legacy host *ceasing* to serve RPC, not the rebrand host starting to.
+  its own reporting lane.
 
-The rebrand host is therefore an accepted base URL, deliberately left
-undocumented as a supported value while the default stays on the legacy host.
+> **Amended (#2067): the trigger for moving the default has changed.**
+>
+> This ADR originally set the criterion as *"the legacy host ceasing to serve
+> RPC, not the rebrand host starting to"* — i.e. move when the old host breaks.
+> That is now superseded, for one reason: **it makes the migration an incident
+> rather than a change.** The signal arrives *as* users start failing, the fix
+> ships days later, and the window in which the move is invisible — the window
+> we are in right now, with both hosts serving — has closed by the time we act.
+>
+> Waiting also buys less safety than it appears to. The evidence that the flip
+> is survivable does not depend on legacy degrading: the app shell has already
+> migrated (the legacy host is a 302), so a session's CSRF/session pair is
+> *already* minted by `notebook.google.com` today and accepted by legacy
+> `batchexecute` — visible in twelve recorded interactions in
+> `tests/cassettes/collection_*.yaml`. Flipping makes the origin coherent; it
+> does not introduce a new dependency. Pre-cutover profiles were measured
+> against both hosts (#2067) and reached the rebrand host successfully
+> *without* their legacy-scoped `OSID`, because the accounts-scoped `LSID`
+> family is what actually gates the session.
+>
+> The revised criterion: **move while both hosts serve, keep the legacy host
+> selectable via `NOTEBOOKLM_BASE_URL`, and treat the probe lane as a
+> rollback-availability monitor** — a `PRESENT → ABSENT` transition on the
+> legacy host now means "rollback has expired", which is the thing worth
+> alarming on.
+>
+> What has *not* changed: dual-serving is still transitional and still the
+> thing to monitor. This amendment moves the default; it does not claim the
+> rebrand host is guaranteed.
+
+Both hosts are accepted base URLs. The default is `notebook.google.com`
+(#2067); the legacy host remains selectable via `NOTEBOOKLM_BASE_URL` and is
+documented as the rollback lever.
 
 Separately, the project's discoverable identity (PyPI listing, repo name, docs)
 now points at a retired brand. New users will search for

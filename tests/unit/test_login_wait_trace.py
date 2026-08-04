@@ -100,7 +100,7 @@ def test_accepted_hosts_drive_the_predicate(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 @pytest.mark.parametrize(
-    "selected", ["https://notebooklm.google.com", "https://notebook.google.com"]
+    "selected", ["https://notebook.google.com", "https://notebooklm.google.com"]
 )
 def test_either_personal_host_accepts_both(monkeypatch: pytest.MonkeyPatch, selected: str) -> None:
     """Pinning *either* personal host must still accept the other one.
@@ -134,8 +134,8 @@ def test_enterprise_host_has_no_personal_alias(monkeypatch: pytest.MonkeyPatch) 
 @pytest.mark.parametrize(
     ("url", "expected"),
     [
-        ("https://notebooklm.google.com/", True),
         ("https://notebook.google.com/", True),
+        ("https://notebooklm.google.com/", True),
         # Case-insensitive: the predicate lowercases the parsed hostname.
         ("https://NoteBookLM.Google.COM/", True),
         ("https://NOTEBOOK.GOOGLE.COM/x", True),
@@ -169,7 +169,7 @@ def test_predicate_semantics_unchanged_by_the_helper_extraction(
         ("https://notebook.google.com/notebook/abc123", "https://notebook.google.com/"),
         # Query and fragment dropped.
         ("https://accounts.google.com/signin?continue=SECRET", "https://accounts.google.com/"),
-        ("https://notebooklm.google.com/#access_token=SECRET", "https://notebooklm.google.com/"),
+        ("https://notebook.google.com/#access_token=SECRET", "https://notebook.google.com/"),
         # Userinfo dropped — rebuilt from hostname, never netloc.
         ("https://SECRET@notebooklm.google.com/", "https://notebooklm.google.com/"),
         # A non-standard port is operator signal and survives.
@@ -334,7 +334,7 @@ def test_a_raising_main_frame_read_never_pre_empts_the_wait(
         # Query string: the login continue-URL carries session material.
         ("https://accounts.google.com/signin?continue=SECRET_CONTINUE", "SECRET_CONTINUE"),
         # Fragment: OAuth implicit-flow access tokens.
-        ("https://notebooklm.google.com/#access_token=SECRET_TOKEN", "SECRET_TOKEN"),
+        ("https://notebook.google.com/#access_token=SECRET_TOKEN", "SECRET_TOKEN"),
         # Userinfo: ``https://TOKEN@host/`` shapes.
         ("https://SECRET_USERINFO@notebooklm.google.com/", "SECRET_USERINFO"),
         # Path — but only on Google's OAuth hosts, where it is a grant code.
@@ -559,7 +559,7 @@ def test_interactive_wait_logs_accepted_hosts_and_navigations(
     # The starting URL keeps its host and loses everything else, including the
     # ``continue=`` secret.
     assert accept_lines == [
-        "Login wait: accepting any of notebooklm.google.com, notebook.google.com "
+        "Login wait: accepting any of notebook.google.com, notebooklm.google.com "
         "(currently on https://accounts.google.com/); timeout 300s"
     ]
     assert not any("SECRET_CONTINUE" in m for m in messages)

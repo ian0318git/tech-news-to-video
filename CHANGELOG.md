@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The default base host is now `notebook.google.com`.** Google rebranded
+  NotebookLM to Gemini Notebook and serves the personal app from both
+  `notebooklm.google.com` and `notebook.google.com`; `batchexecute` is
+  dual-served on both (ADR-0028). The client now defaults to the rebrand host
+  instead of waiting for the legacy one to fail, which would have converted a
+  migration into an incident
+  ([#2067](https://github.com/teng-lin/notebooklm-py/issues/2067)).
+
+  **What changes for you:**
+
+  - **Share URLs.** `share_url`, `get_share_url()` and artifact deep-links now
+    read `https://notebook.google.com/notebook/<id>`. Previously-issued links
+    keep working — Google serves and redirects between both hosts — but any
+    test or snapshot pinning the old string needs updating.
+  - **`config.DEFAULT_BASE_URL` and `config.PERSONAL_BASE_HOST` change value.**
+    Both remain public and keep their names and types, so the API-compat gate
+    sees no break; the *values* moved. Code comparing against them is fine;
+    code comparing against a hardcoded `"notebooklm.google.com"` is not.
+  - **Rolling back is normally just the env var.** Set
+    `NOTEBOOKLM_BASE_URL=https://notebooklm.google.com` to return to the
+    pre-rebrand host — it is still served and is the documented rollback lever.
+    Existing profiles usually keep working across the switch. The host-scoped
+    `OSID` does not survive it, but it is not the only binding path: `APISID` +
+    `SAPISID` together with bare `LSID` also satisfies the check, and a profile
+    captured by `notebooklm login` normally carries all three. The `LSID`
+    conjunct is required — `APISID` + `SAPISID` alone fail (#1977).
+
+    If authentication *does* fail after switching, the profile was relying on
+    the host-scoped `OSID`, which was minted on the host you just left and is
+    never sent to the other one. Recover with `notebooklm login --fresh`. Use
+    `--fresh` specifically: a plain `notebooklm login` can report "Already
+    logged in" and re-mint nothing, because the login accept-set matches either
+    personal host.
+
 ### Fixed
 
 - **RPC errors now name the host, not just the method.** Google serves the
@@ -17,7 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   indistinguishable from "this account cannot see that notebook", so the one
   recovery lever available was one the user could not tell they needed. Every
   HTTP-status message now reads `… calling LIST_NOTEBOOKS on
-  notebooklm.google.com: …` — 4xx (including the 401/403 fallback), 5xx, and
+  notebook.google.com: …` — 4xx (including the 401/403 fallback), 5xx, and
   429 on both the mapper and the retry-exhausted transport path, which is the
   one a real 429 actually reaches. The host is read from the request that
   failed rather than re-read from `NOTEBOOKLM_BASE_URL`, so a re-point while an

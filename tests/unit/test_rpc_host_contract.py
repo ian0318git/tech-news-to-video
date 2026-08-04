@@ -1,6 +1,6 @@
 """Host contract for the RPC path (#2067 precursor).
 
-Google serves the personal app from two hosts — ``notebooklm.google.com`` and,
+Google serves the personal app from two hosts — ``notebook.google.com`` and,
 since the Gemini Notebook rebrand, ``notebook.google.com`` (ADR-0028) — and
 ``NOTEBOOKLM_BASE_URL`` selects between them. Two properties of the RPC path
 are load-bearing when that selection changes and neither was asserted:
@@ -48,7 +48,7 @@ from notebooklm.rpc import (
 )
 from tests._helpers.client_factory import build_client_shell_for_tests
 
-DEFAULT_HOST = "https://notebooklm.google.com"
+DEFAULT_HOST = "https://notebook.google.com"
 
 REQUEST_HOST = "rpc.example.test"
 

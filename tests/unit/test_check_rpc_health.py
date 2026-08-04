@@ -963,9 +963,9 @@ def _probe(capability: str, status: RebrandProbeStatus) -> RebrandProbe:
 
 def test_rebrand_probe_targets_the_alias_host() -> None:
     """The lane always asks about the rebrand host, whatever the run selected."""
-    from notebooklm._env import PERSONAL_APP_ALIAS_HOST
+    from notebooklm._env import PERSONAL_BASE_HOST
 
-    assert check_rpc_health.rebrand_probe_host() == PERSONAL_APP_ALIAS_HOST
+    assert check_rpc_health.rebrand_probe_host() == PERSONAL_BASE_HOST
 
 
 def test_compute_exit_code_cannot_see_the_rebrand_lane() -> None:

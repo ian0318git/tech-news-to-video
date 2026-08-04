@@ -451,7 +451,7 @@ class TestRefreshAuthOnBoundSessionIsNoOp:
 
         # Bound-session homepage GET: no Set-Cookie header, so no rotation.
         httpx_mock.add_response(
-            url="https://notebooklm.google.com/",
+            url="https://notebook.google.com/",
             content=(
                 b"<html><script>window.WIZ_global_data="
                 b'{"SNlM0e":"new_csrf","FdrFJe":"new_sid"};</script></html>'
@@ -572,7 +572,7 @@ class TestSnapshotRefreshedAfterSave:
         # Two homepage responses — refresh_auth is called twice.
         for _ in range(2):
             httpx_mock.add_response(
-                url="https://notebooklm.google.com/",
+                url="https://notebook.google.com/",
                 content=(
                     b"<html><script>window.WIZ_global_data="
                     b'{"SNlM0e":"csrf","FdrFJe":"sid"};</script></html>'

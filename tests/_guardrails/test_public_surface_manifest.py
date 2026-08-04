@@ -720,7 +720,7 @@ def test_config_shim_exposes_documented_names(monkeypatch):
     from notebooklm import config
 
     assert config.get_base_url() == config.DEFAULT_BASE_URL
-    assert config.DEFAULT_BASE_URL == "https://notebooklm.google.com"
+    assert config.DEFAULT_BASE_URL == "https://notebook.google.com"
 
 
 def test_urls_shim_exposes_documented_names():
