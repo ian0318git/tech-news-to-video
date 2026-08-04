@@ -70,12 +70,46 @@ def test_doctor_reports_clean_profile_layout(runner, isolated_notebooklm_home):
         "status": "pass",
         "detail": "valid (default_profile: default)",
     }
+    # Windows passes with an ACL-explaining detail rather than warning about
+    # POSIX bits ``paths._ensure_dir`` deliberately never sets (#2046).
+    assert data["checks"]["profile_dir"]["status"] == "pass"
+    assert str(profile_dir) in data["checks"]["profile_dir"]["detail"]
+    assert "permissions:" not in data["checks"]["profile_dir"]["detail"]
     if sys.platform == "win32":
-        assert data["checks"]["profile_dir"]["status"] == "warn"
-        assert str(profile_dir) in data["checks"]["profile_dir"]["detail"]
-        assert "permissions:" in data["checks"]["profile_dir"]["detail"]
+        assert "ACL" in data["checks"]["profile_dir"]["detail"]
     else:
-        assert data["checks"]["profile_dir"] == {"status": "pass", "detail": str(profile_dir)}
+        assert data["checks"]["profile_dir"]["detail"] == str(profile_dir)
+
+
+def test_doctor_json_renders_the_windows_profile_dir_detail(
+    runner, isolated_notebooklm_home, monkeypatch
+):
+    """The Windows ``--json`` envelope, exercised on every runner (#2046).
+
+    The sibling assertions above can only describe Windows behaviour when the
+    tests happen to run on Windows — which is precisely why the original defect
+    reached a release. Faking ``sys.platform`` (read at call time by
+    ``_app.doctor._is_windows``) puts the Windows row in front of the Linux and
+    macOS jobs too.
+    """
+    home = isolated_notebooklm_home
+    profile_dir = home / "profiles" / "default"
+    profile_dir.mkdir(parents=True)
+    if sys.platform != "win32":
+        # The wide mode a Windows-created directory reports, which the old
+        # unconditional check turned into a permanent, unfixable warn.
+        profile_dir.chmod(0o777)
+    _write_json(profile_dir / "storage_state.json", _storage([]))
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    data = _invoke_json(runner, [], exit_code=1)
+
+    assert data["checks"]["profile_dir"]["status"] == "pass"
+    detail = data["checks"]["profile_dir"]["detail"]
+    assert str(profile_dir) in detail
+    assert "ACL" in detail
+    assert "permissions:" not in detail
+    assert "0o700" not in detail
 
 
 def test_doctor_explicit_storage_drives_path_info_and_auth(runner, isolated_notebooklm_home):
@@ -251,9 +285,11 @@ def test_doctor_fix_creates_missing_profile_dir(runner, isolated_notebooklm_home
     data = json.loads(result.output)
     profile_dir = home / "profiles" / "default"
     assert profile_dir.is_dir()
+    assert data["checks"]["profile_dir"]["status"] == "pass"
+    assert str(profile_dir) in data["checks"]["profile_dir"]["detail"]
     if sys.platform != "win32":
         assert profile_dir.stat().st_mode & 0o777 == 0o700
-    assert data["checks"]["profile_dir"] == {"status": "pass", "detail": str(profile_dir)}
+        assert data["checks"]["profile_dir"]["detail"] == str(profile_dir)
     assert data["checks"]["auth"]["status"] == "fail"
     assert data["fixes_applied"] == [f"Created profile directory: {profile_dir}"]
 

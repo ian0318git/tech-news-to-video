@@ -60,6 +60,14 @@ from ..exceptions import HeadlessLoginRequiredError
 from .browser_launch_errors import CHANNEL_BROWSERS, classify_launch_failure
 from .cookie_policy import build_cookie_domain_allowlist
 
+# DEBUG tracing for the login wait lives in its own leaf (ADR-0008) and is
+# re-exported here because ``browser_capture`` is the only ``_auth`` module the
+# CLI-boundary guardrail sanctions as an import site. Both helpers are
+# credential-safe: every URL they log is reduced to scheme + host, dropping the
+# path, query, fragment, and userinfo — any of which can carry auth material
+# mid-SSO, including on a third-party identity provider.
+from .login_wait_trace import log_observed_navigations, safe_page_url
+
 if TYPE_CHECKING:
     from playwright.sync_api import BrowserContext, Page
 
@@ -345,13 +353,24 @@ def is_navigation_interrupted_error(error: str | Exception) -> bool:
     return any(marker in error_str for marker in _NAVIGATION_INTERRUPTED_MARKERS)
 
 
+def accepted_login_hosts() -> tuple[str, ...]:
+    """Return the lowercased hostnames :func:`url_matches_base_host` accepts.
+
+    Single source of truth for the accept set so the login-wait DEBUG line
+    ("waiting for host X") can never drift from the predicate that actually
+    ends the wait — the drift that made the ``notebook.google.com`` rebrand
+    (#2017 / #2025 and friends) so expensive to triage.
+    """
+    base_host = get_base_host().lower()
+    if base_host == PERSONAL_BASE_HOST:
+        return (base_host, "notebook.google.com")
+    return (base_host,)
+
+
 def url_matches_base_host(url: str) -> bool:
     """Return True when ``url`` is on the configured NotebookLM host or personal-app alias."""
     current_host = (urlparse(url).hostname or "").lower()
-    base_host = get_base_host().lower()
-    return current_host == base_host or (
-        base_host == PERSONAL_BASE_HOST and current_host == "notebook.google.com"
-    )
+    return current_host in accepted_login_hosts()
 
 
 def connection_error_help() -> str:
@@ -619,6 +638,18 @@ def run_browser_capture(
                 io.emit("1. Complete the Google login in the browser window")
                 io.emit("2. Authentication will be saved automatically once login is detected\n")
                 io.emit("[dim]Waiting for login (up to 5 minutes)...[/dim]")
+                # Name the accept set and the starting point BEFORE blocking:
+                # with these two lines plus the per-navigation trace below, a
+                # ``-vv`` paste from a stuck login is self-diagnosing (#2046).
+                # Explicitly level-gated: ``logger.debug``'s %-args are built
+                # eagerly, and this diagnostic must do NO work when logging is
+                # off — the wait has to stay byte-for-byte what it was.
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(
+                        "Login wait: accepting any of %s (currently on %s); timeout 300s",
+                        ", ".join(accepted_login_hosts()),
+                        safe_page_url(page),
+                    )
                 try:
                     # wait_until="commit", not the default "load": the SPA never
                     # fires "load", so a load-gated wait hangs the full 5 min even
@@ -627,8 +658,13 @@ def run_browser_capture(
                     # host. Cookies are read later at storage_state() (after the
                     # cookie-forcing round-trips), so resolving early is safe;
                     # page.content() at capture time is best-effort/None-tolerant.
-                    page.wait_for_url(url_matches_base_host, wait_until="commit", timeout=300_000)
+                    with log_observed_navigations(page):
+                        page.wait_for_url(
+                            url_matches_base_host, wait_until="commit", timeout=300_000
+                        )
                 except PlaywrightTimeout:
+                    if logger.isEnabledFor(logging.DEBUG):
+                        logger.debug("Login wait: timed out after 300s on %s", safe_page_url(page))
                     io.emit(
                         "[red]Login not detected within 5 minutes.[/red]\n"
                         "Try again with: notebooklm login\n"
@@ -914,6 +950,7 @@ __all__ = [
     "BrowserCaptureIO",
     "BrowserCapturePlan",
     "CaptureResult",
+    "accepted_login_hosts",
     # Re-exported from the browser_launch_errors leaf: browser_capture is the
     # only _auth module the CLI-boundary guardrail sanctions, so CLI-side
     # callers (the --master-token bootstrap) must reach it through here.
@@ -922,9 +959,11 @@ __all__ = [
     "ensure_playwright_available",
     "filter_storage_state_cookies_by_domain_policy",
     "is_navigation_interrupted_error",
+    "log_observed_navigations",
     "recover_page",
     "run_browser_capture",
     "run_cdp_capture",
+    "safe_page_url",
     "sync_playwright_context",
     "url_matches_base_host",
     "windows_playwright_event_loop",

@@ -9,6 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`doctor` no longer warns Windows users about permissions the client
+  deliberately never sets.** `notebooklm doctor` compared the profile
+  directory's POSIX mode against `0o700` on every platform, but the writer
+  (`paths._ensure_dir`) intentionally skips `mode=` / `chmod` on Windows —
+  pre-3.13 CPython ignores `mode=` in `mkdir()`, and 3.13+ turns it into ACLs
+  restrictive enough to block other same-user processes — so the directory is
+  left inheriting the parent's ACLs. Every Windows install therefore reported a
+  permanent `profile_dir` warn (`permissions: 0o777, expected: 0o700`)
+  describing the exact state the client creates on purpose, and `--fix` could
+  not clear it because `mkdir(mode=…)` / `chmod` do not move those bits on
+  Windows either. The check is now platform-aware: on Windows it passes with a
+  detail naming inherited NTFS ACLs (evaluated and not applicable, not silently
+  hidden), a missing directory is still a hard `fail`, and `--fix` no longer
+  claims a permission change it cannot make
+  ([#2046](https://github.com/teng-lin/notebooklm-py/issues/2046)).
+
+  POSIX reporting is unchanged, with one deliberate exception: `doctor --fix`
+  used to hard-code the `profile_dir` row to `pass` after a successful
+  migration, which reported a green permissions row for a directory that could
+  still be world-readable. It now re-runs the check, so a wide-mode directory is
+  actually repaired (and reported) instead of being silently greenlit.
+- **`notebooklm -vv login` now explains the five-minute wait instead of going
+  silent.** The interactive login wait emitted no DEBUG output at all, so a
+  login that never landed was indistinguishable from a user who walked away —
+  the reason the `notebook.google.com` rebrand needed manual triage across
+  #2017 / #2022 / #2023 / #2025 / #2028 / #2030 / #2032. `-vv` now logs the
+  host(s) that would end the wait plus the starting URL before blocking, one
+  line per main-frame navigation observed during it, and the final URL on
+  timeout. Every logged URL is reduced to scheme + host — path, query,
+  fragment, and userinfo are all dropped, so a federated SSO redirect cannot
+  put a one-time assertion into output users paste into public bug reports —
+  and the tracing attaches no listener at all unless DEBUG is enabled, so
+  behaviour with logging off is unchanged
+  ([#2046](https://github.com/teng-lin/notebooklm-py/issues/2046)).
 - **Audio overviews now download as `.m4a`, not `.mp3`.** The Audio Overview
   bytes have always been AAC in an ISO-BMFF/MP4 container — the artifact
   metadata itself advertises them as `audio/mp4` — so the `.mp3` name was a
