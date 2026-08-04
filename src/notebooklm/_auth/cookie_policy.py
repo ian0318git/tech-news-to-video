@@ -559,12 +559,15 @@ def _auth_domain_priority(domain: str) -> int:
         return 3
     if domain == "notebooklm.google.com":
         return 2
-    # Gemini Notebook rebrand host (issue #2013): same tier as the legacy
-    # ``notebooklm.google.com`` host so a same-name cookie set on either is
-    # resolved deterministically. The dotted variant outranks the bare host
-    # (mirroring the notebooklm.google.com tier split), and both sit below
-    # ``.notebooklm.google.com`` so a cookie on the canonical app host still
-    # wins when both hosts carry it.
+    # Gemini Notebook rebrand host (issue #2013). The dotted variant sits at the
+    # same tier as ``.notebooklm.google.com`` and the bare variant at the same
+    # tier as ``notebooklm.google.com`` -- deliberately, so neither host is
+    # ranked below the other now that Google mints host-scoped cookies on both.
+    #
+    # It does NOT mean the canonical app host wins when both carry a name:
+    # 3 == 3 and 2 == 2, so those pairs tie and the winner falls to
+    # ``storage_state`` iteration order. This comment claimed the opposite until
+    # #2054; the docstring above now describes the real tier structure.
     if domain == f".{PERSONAL_APP_ALIAS_HOST}":
         return 3
     if domain == PERSONAL_APP_ALIAS_HOST:

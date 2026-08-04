@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Corrected the last cookie-domain tier claim that still said the ranking is
+  decisive.** #2057 rewrote the `_auth_domain_priority` docstring and its two
+  consumers, but the tier comment added by
+  [#2020](https://github.com/teng-lin/notebooklm-py/pull/2020) still said the
+  canonical app host "still wins when both hosts carry" a cookie name. It does
+  not: `.notebooklm.google.com` and `.notebook.google.com` are both tier 3, and
+  their bare variants both tier 2, so those pairs tie and the winner falls to
+  `storage_state` iteration order. Also renames `test_priority_strict_ordering`
+  — which asserted "no ties between named tiers" over a sample holding exactly
+  one domain per tier, and so passed while four tiers were shared — and adds a
+  test pinning the real tie structure. Comments and tests only; no behaviour
+  change ([#2054](https://github.com/teng-lin/notebooklm-py/issues/2054)).
+
 ### Added
 
 - **`AuthTokens.cookie_header_for(url)` — a domain-correct `Cookie:` header.**

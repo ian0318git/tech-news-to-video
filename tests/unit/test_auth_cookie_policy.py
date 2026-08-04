@@ -365,8 +365,15 @@ class TestAuthDomainPriority:
 
         assert _auth_domain_priority(domain) == expected
 
-    def test_priority_strict_ordering(self):
-        """Higher tiers strictly outrank lower tiers — no ties between named tiers."""
+    def test_priority_ordering_within_this_sample(self):
+        """These five domains descend strictly — but that is a fact about the sample.
+
+        It holds exactly one domain per tier, so of course no two tie. Read as
+        the general "no ties between named tiers" guarantee its old name
+        claimed, it would be false: tiers 3, 2 and 0 are each shared by several
+        domains (see ``test_named_tiers_are_shared_not_unique``). Renamed in
+        #2054 to say what it can actually check.
+        """
         from notebooklm.auth import _auth_domain_priority
 
         priorities = [
@@ -388,8 +395,16 @@ class TestAuthDomainPriority:
         Google now sets the per-product binding cookies (``OSID``,
         ``__Secure-OSID``) on ``notebook.google.com`` in addition to
         ``notebooklm.google.com``. The dotted and bare variants must mirror
-        the legacy host's tier split (3 / 2) so neither host silently
-        starves the other at load time.
+        the legacy host's tier split (3 / 2) so neither host is ranked below
+        the other at load time.
+
+        Note what the equality does **not** buy: because the tiers are equal
+        rather than ordered, a name carried by both hosts with different values
+        — the ordinary post-rebrand state for ``OSID`` — resolves by
+        ``storage_state`` iteration order, not by host. This docstring described
+        the equality as preventing starvation until #2054; measurement showed
+        the tie is itself the ambiguity, and #2057 removed the ranking from the
+        PSIDTS gate rather than re-ordering these tiers.
         """
         from notebooklm.auth import _auth_domain_priority
 
@@ -398,6 +413,36 @@ class TestAuthDomainPriority:
         )
         assert _auth_domain_priority("notebook.google.com") == _auth_domain_priority(
             "notebooklm.google.com"
+        )
+
+    def test_named_tiers_are_shared_not_unique(self):
+        """Several *named* domains share a tier, so ranking cannot disambiguate them.
+
+        Pinned because three docstrings and a comment claimed the opposite until
+        #2054/#2057, and code was written trusting them. If a future change ever
+        makes the tiers a total order this fails — which is the moment to ask
+        whether the remaining callers still need a global winner, not to update
+        the expected numbers.
+        """
+        from notebooklm.auth import _auth_domain_priority
+
+        assert (
+            _auth_domain_priority(".notebooklm.google.com")
+            == _auth_domain_priority(".notebook.google.com")
+            == _auth_domain_priority(".notebooklm.cloud.google.com")
+        )
+        assert (
+            _auth_domain_priority("notebooklm.google.com")
+            == _auth_domain_priority("notebook.google.com")
+            == _auth_domain_priority("notebooklm.cloud.google.com")
+        )
+        # Tier 0 is a catch-all holding the sign-in host that the PSIDTS
+        # rotation POST targets -- ranked below hosts it never reaches, which
+        # is why #2057 replaced that gate's ranking with RFC 6265 routing.
+        assert (
+            _auth_domain_priority("accounts.google.com")
+            == _auth_domain_priority("myaccount.google.com")
+            == _auth_domain_priority("drive.google.com")
         )
 
 
