@@ -759,8 +759,12 @@ class NotebooksAPI:
             no longer enters its block.
         """
         logger.debug("Deleting notebook: %s", notebook_id)
-        # DELETE_NOTEBOOK is the live ``DeleteProjects`` (batch-capable: the
-        # leading slot is a list of ids); we delete a single notebook per call.
+        # DELETE_NOTEBOOK is the live ``DeleteProjects``. Despite the plural
+        # name, it is single-id here: the leading slot takes exactly one id.
+        # Live-probed batch variants — [[id1,id2,id3],[2]], [ids,[2,2,2]],
+        # [[[id],[2]]…], [[[id1],[id2],[id3]],[2]] — all return rpc_code=3
+        # (invalid argument). Delete one notebook per call. (Contrast
+        # DELETE_SOURCE / ADD_SOURCE / DELETE_NOTE, which ARE batch-capable.)
         params = [[notebook_id], [2]]
         await self._rpc.rpc_call(RPCMethod.DELETE_NOTEBOOK, params)
 
