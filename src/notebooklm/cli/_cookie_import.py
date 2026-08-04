@@ -118,13 +118,20 @@ def _nonempty_cookie_names(filtered_state: dict[str, Any]) -> set[str]:
 def _has_usable_secondary_binding(filtered_state: dict[str, Any]) -> bool:
     """Whether ``filtered_state`` carries a non-empty secondary auth binding.
 
-    Mirrors the name-level check in ``_auth.cookie_policy`` (``OSID``, or both
-    ``APISID`` and ``SAPISID``) but at the **value** level — that check counts a
-    present-but-empty cookie as satisfying the binding, which import-cookies must
-    not accept as a usable login.
+    Restates the canonical rule from ``_auth.cookie_policy`` at the **value**
+    level: that check counts a present-but-empty cookie as satisfying the
+    binding, which import-cookies must not accept as a usable login.
+
+    This is a deliberate copy, not an oversight. ``cli/`` may not import
+    ``_private`` names out of public modules (``tests/_guardrails/
+    test_cli_boundary.py``), and promoting an auth-policy predicate to the
+    public surface is a bigger decision than this needs. The copy drifted once
+    already — it kept the pre-``LSID`` rule when the canonical one gained its
+    conjunct (#1977) — so ``test_cli_binding_rule_matches_cookie_policy`` pins
+    the two together and fails if they diverge again.
     """
     nonempty = _nonempty_cookie_names(filtered_state)
-    return "OSID" in nonempty or {"APISID", "SAPISID"} <= nonempty
+    return "OSID" in nonempty or {"APISID", "SAPISID", "LSID"} <= nonempty
 
 
 def _backup_existing_storage(storage_path: Path) -> Path | None:
@@ -190,12 +197,16 @@ def _import_cookie_json(
     # are present-but-empty can pass required-cookie validation yet be unusable.
     # Reject that specific false-"ok". Like the login flow (which only warns), we
     # stay silent when no secondary-binding cookie is present at all.
-    secondary_present = {"OSID", "APISID", "SAPISID"} & set(cookie_names)
+    # ``LSID`` is in the set: without it an LSID-only import has an empty
+    # ``secondary_present``, skips the check entirely, and persists a state the
+    # canonical rule rejects. It also belongs in the ``Present:`` diagnostic.
+    secondary_present = {"OSID", "APISID", "SAPISID", "LSID"} & set(cookie_names)
     if secondary_present and not _has_usable_secondary_binding(filtered_state):
         raise click.ClickException(  # cli-input-validation: import-cookies secondary-binding validation
-            "Secondary-binding cookies are present but have empty values "
-            "(need a non-empty OSID, or non-empty APISID and SAPISID): "
-            + ", ".join(sorted(secondary_present))
+            "Secondary-binding cookies are present but do not form a usable "
+            "binding — either their values are empty or the set is incomplete "
+            "(need a non-empty OSID, or all of APISID, SAPISID and LSID). "
+            "Present: " + ", ".join(sorted(secondary_present))
         )
 
     storage_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)

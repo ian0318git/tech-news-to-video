@@ -60,7 +60,7 @@ from . import storage as _auth_storage
 # Tests must patch these aliases at this module's path, not at the
 # canonical owner's path, because aliases are import-time bound.
 # ----------------------------------------------------------------------------
-_has_valid_secondary_binding = _cookie_policy._has_valid_secondary_binding
+_has_rotatable_secondary_binding = _cookie_policy._has_rotatable_secondary_binding
 _is_allowed_auth_domain = _cookie_policy._is_allowed_auth_domain
 _rotation_lock_path = _keepalive._rotation_lock_path
 _file_lock_try_exclusive = _keepalive._file_lock_try_exclusive
@@ -142,7 +142,7 @@ def _recovery_cookie_names(entries: list[dict[str, Any]]) -> set[str]:
     """Return the cookie NAMES present on an allowed auth domain.
 
     Feeds the two name-presence preconditions — ``SID`` present, and
-    :func:`_has_valid_secondary_binding` — which are deliberately domain-blind
+    :func:`_has_rotatable_secondary_binding` — which are deliberately domain-blind
     and expiry-blind, because that is exactly what the preflight they front
     (:func:`notebooklm._auth.cookie_policy._validate_required_cookies`) checks.
 
@@ -447,7 +447,10 @@ def _recover_psidts_inline(path: Path | str | None) -> bool:
        :func:`_psidts_routes_to_rotate`).
     3. Secondary binding intact (``OSID``, or ``APISID + SAPISID``). Google
        rejects ``RotateCookies`` requests that lack these — see
-       :func:`notebooklm._auth.cookie_policy._has_valid_secondary_binding`.
+       :func:`notebooklm._auth.cookie_policy._has_rotatable_secondary_binding`
+       (rotation eligibility — deliberately weaker than the strict
+       :func:`~notebooklm._auth.cookie_policy._has_valid_secondary_binding`
+       session-validity rule).
     4. Cross-process rotation flock available
        (:func:`notebooklm._auth.keepalive._file_lock_try_exclusive` against
        :func:`notebooklm._auth.keepalive._rotation_lock_path`). Mirrors
@@ -496,7 +499,7 @@ def _recover_psidts_inline(path: Path | str | None) -> bool:
         return False
     if _psidts_routes_to_rotate(cookie_entries, to_cookie=_storage_entry_to_cookie):
         return False
-    if not _has_valid_secondary_binding(cookie_names):
+    if not _has_rotatable_secondary_binding(cookie_names):
         logger.debug(
             "PSIDTS recovery skipped: secondary binding incomplete "
             "(need OSID, or both APISID and SAPISID)"
@@ -553,7 +556,7 @@ def _recover_psidts_inline(path: Path | str | None) -> bool:
         if "SID" not in fresh_names:
             logger.debug("PSIDTS recovery skipped: SID missing after flock acquisition")
             return False
-        if not _has_valid_secondary_binding(fresh_names):
+        if not _has_rotatable_secondary_binding(fresh_names):
             logger.debug(
                 "PSIDTS recovery skipped: secondary binding incomplete after flock acquisition"
             )
@@ -817,7 +820,7 @@ def recover_psidts_in_memory(rookiepy_cookies: list[dict[str, Any]]) -> bool:
         return False
     if _psidts_routes_to_rotate(rookiepy_cookies, to_cookie=_rookiepy_entry_to_cookie):
         return False
-    if not _has_valid_secondary_binding(cookie_names):
+    if not _has_rotatable_secondary_binding(cookie_names):
         logger.debug(
             "In-memory PSIDTS recovery skipped: secondary binding incomplete "
             "(need OSID, or both APISID and SAPISID)"
@@ -875,8 +878,15 @@ def recover_psidts_in_memory(rookiepy_cookies: list[dict[str, Any]]) -> bool:
         path = entry.get("path")
         index_by_identity[(name, domain, (path if isinstance(path, str) else "") or "/")] = pos
 
+    # ``LSID`` rides along: when ``OSID`` is absent the fallback binding needs
+    # all three of ``APISID``, ``SAPISID`` and ``LSID`` (#1977) — ``LSID`` is one
+    # of the three, not half of a pair. This path allows the POST on ``APISID``+``SAPISID``
+    # alone — so a rotation that *supplies* the missing ``LSID`` is exactly the
+    # case worth keeping. Dropping it here would discard the cookie that makes
+    # the set usable. The file-backed ``_attempt_rotation`` already persists the
+    # whole rotated jar and so never had this gap.
     for cookie in rotated_cookies:
-        if cookie.name not in {_PSIDTS_COOKIE, "__Secure-3PSIDTS"}:
+        if cookie.name not in {_PSIDTS_COOKIE, "__Secure-3PSIDTS", "LSID"}:
             continue
         if not cookie.value or not cookie.domain:
             continue

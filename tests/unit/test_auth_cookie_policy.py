@@ -12,6 +12,7 @@ from typing import Any
 import httpx
 import pytest
 
+from notebooklm._auth.cookie_policy import _has_valid_secondary_binding
 from notebooklm._auth.cookies import load_httpx_cookies
 from notebooklm._auth.storage import save_cookies_to_storage, snapshot_cookie_jar
 from notebooklm.auth import (
@@ -1453,3 +1454,60 @@ class TestAllowedCookieDomains:
 # =============================================================================
 # REGIONAL GOOGLE DOMAIN TESTS (Issue #20 fix)
 # =============================================================================
+
+
+class TestSecondaryBindingRequiresLsidWithoutOsid:
+    """The XSSI branch also needs bare ``LSID`` (#1977).
+
+    Three-way ablation on two unrelated live accounts, 2026-08-04. The original
+    pair-wise ablation only varied ``OSID`` and the ``APISID``/``SAPISID`` pair;
+    those two are ``.google.com``-scoped so they survived every domain filter,
+    which left the XSSI branch never tested without them and hid the ``LSID``
+    dependency.
+    """
+
+    def test_osid_alone_is_sufficient(self) -> None:
+        """Row 1: verified with every accounts.google.com cookie stripped."""
+        assert _has_valid_secondary_binding({"OSID"})
+
+    def test_osid_wins_without_lsid(self) -> None:
+        """``LSID`` is required only when ``OSID`` is absent, never alongside it."""
+        assert _has_valid_secondary_binding({"OSID", "APISID", "SAPISID"})
+
+    def test_xssi_pair_with_lsid_is_sufficient(self) -> None:
+        assert _has_valid_secondary_binding({"APISID", "SAPISID", "LSID"})
+
+    def test_xssi_pair_without_lsid_is_rejected(self) -> None:
+        """The row this predicate used to get wrong: reported valid, failed live."""
+        assert not _has_valid_secondary_binding({"APISID", "SAPISID"})
+
+    def test_host_prefixed_lsid_does_not_substitute(self) -> None:
+        """``__Host-1PLSID``/``__Host-3PLSID`` are not interchangeable with bare ``LSID``."""
+        assert not _has_valid_secondary_binding(
+            {"APISID", "SAPISID", "__Host-1PLSID", "__Host-3PLSID"}
+        )
+
+    def test_lsid_alone_is_not_sufficient(self) -> None:
+        """Without ``OSID`` *or* the XSSI pair, ``LSID`` on its own does not bind."""
+        assert not _has_valid_secondary_binding({"LSID"})
+
+
+class TestBindingDiagnosticsNameLsid:
+    """Every strict-binding diagnostic must name ``LSID`` (#1977 review).
+
+    The predicate and the messages drifted apart once already: the rule gained
+    its ``LSID`` conjunct while the hints still told users ``APISID``+``SAPISID``
+    was enough, which is advice that walks them back into the same failure.
+    """
+
+    def test_missing_binding_hint_names_lsid(self) -> None:
+        from notebooklm._auth.cookie_policy import missing_cookies_hint
+
+        hint = missing_cookies_hint({"SID", "__Secure-1PSIDTS"}, browser_label="chrome")
+        assert "LSID" in hint
+
+    def test_missing_binding_and_psidts_hint_names_lsid(self) -> None:
+        from notebooklm._auth.cookie_policy import missing_cookies_hint
+
+        hint = missing_cookies_hint({"SID"}, browser_label="chrome")
+        assert "LSID" in hint

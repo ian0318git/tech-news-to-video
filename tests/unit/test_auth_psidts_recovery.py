@@ -1237,6 +1237,33 @@ class TestInMemoryRecovery:
     """
 
     @pytest.mark.no_default_keepalive_mock
+    def test_rotation_keeps_a_returned_lsid(self, httpx_mock: HTTPXMock):
+        """A rotated ``LSID`` must survive the write-back (#1977 review).
+
+        This path allows the POST on ``APISID``+``SAPISID`` alone, so a rotation
+        that *supplies* the missing ``LSID`` is exactly the case worth keeping —
+        without it the set still has no valid secondary binding and the recovery
+        accomplished nothing. The write-back previously kept only the two PSIDTS
+        names and dropped it silently.
+        """
+        response = _make_psidts_response()
+        response["headers"] = list(response["headers"]) + [
+            (
+                "Set-Cookie",
+                "LSID=fresh_lsid_value; Domain=accounts.google.com; "
+                "Path=/; Secure; HttpOnly; SameSite=Lax",
+            )
+        ]
+        httpx_mock.add_response(url=_ROTATE_URL_RE, **response)
+
+        cookies = _rookiepy_recoverable()
+        assert psidts_recovery.recover_psidts_in_memory(cookies) is True
+
+        lsid = [c for c in cookies if c["name"] == "LSID"]
+        assert lsid, "a rotated LSID must be written back into the in-memory list"
+        assert lsid[0]["value"] == "fresh_lsid_value"
+
+    @pytest.mark.no_default_keepalive_mock
     def test_recovers_psidts_and_mutates_list_in_place(self, httpx_mock: HTTPXMock):
         cookies = _rookiepy_recoverable()
         httpx_mock.add_response(url=_ROTATE_URL_RE, **_make_psidts_response())
@@ -1540,7 +1567,9 @@ class TestMissingCookiesHint:
     def test_missing_psidts_with_binding_suggests_rotation_or_visit(self):
         from notebooklm._auth.cookie_policy import missing_cookies_hint
 
-        hint = missing_cookies_hint({"SID", "APISID", "SAPISID"}, browser_label="firefox")
+        # LSID completes the binding (#1977); without it this set has no valid
+        # secondary binding at all and takes the other branch.
+        hint = missing_cookies_hint({"SID", "APISID", "SAPISID", "LSID"}, browser_label="firefox")
         assert "__Secure-1PSIDTS" in hint
         assert "RotateCookies recovery" in hint
         assert "firefox" in hint

@@ -37,6 +37,9 @@ def _valid_cookie_export(extra_cookies=None):
         },
         {"name": "APISID", "value": "fixture-apisid", "domain": ".google.com", "path": "/"},
         {"name": "SAPISID", "value": "fixture-sapisid", "domain": ".google.com", "path": "/"},
+        # LSID completes the secondary binding: APISID+SAPISID alone is not a
+        # usable set without OSID (#1977).
+        {"name": "LSID", "value": "fixture-lsid", "domain": "accounts.google.com", "path": "/"},
     ]
     if extra_cookies:
         cookies.extend(extra_cookies)
@@ -73,7 +76,7 @@ class TestAuthImportCookiesCommand:
         assert "imported" in result.output
         stored = json.loads(storage_path.read_text(encoding="utf-8"))
         stored_names = {cookie["name"] for cookie in stored["cookies"]}
-        assert {"SID", "__Secure-1PSIDTS", "APISID", "SAPISID"} <= stored_names
+        assert {"SID", "__Secure-1PSIDTS", "APISID", "SAPISID", "LSID"} <= stored_names
         assert "UNRELATED" not in stored_names
 
     def test_import_cookies_accepts_playwright_storage_state_from_stdin(self, runner, tmp_path):
@@ -89,7 +92,8 @@ class TestAuthImportCookiesCommand:
         assert result.exit_code == 0, result.output
         output = json.loads(result.output)
         assert output["success"] is True
-        assert output["cookie_count"] == 4
+        # 5, not 4: the shared fixture gained LSID to form a usable binding (#1977).
+        assert output["cookie_count"] == 5
         assert json.loads(storage_path.read_text(encoding="utf-8"))["cookies"]
 
     def test_import_cookies_drops_origins_from_playwright_storage_state(self, runner, tmp_path):
@@ -331,6 +335,48 @@ class TestAuthImportCookiesCommand:
         secure_cookie = next(c for c in stored["cookies"] if c["name"] == "__Secure-1PSIDTS")
         assert secure_cookie["secure"] is True
 
+    def test_import_cookies_rejects_lsid_only_binding(self, runner, tmp_path):
+        """An ``LSID``-only set must be rejected, not silently persisted.
+
+        Guards the *call site*, not the predicate. ``secondary_present`` decides
+        whether ``_has_usable_secondary_binding`` is consulted at all, so while
+        ``LSID`` was missing from that set an ``LSID``-only import produced an
+        empty ``secondary_present``, skipped the guard entirely, and wrote a
+        state the canonical rule rejects.
+
+        ``test_cli_binding_rule_matches_cookie_policy`` cannot catch this: it
+        pins the two predicates to each other but never exercises the gate that
+        chooses whether to call one.
+        """
+        input_path = tmp_path / "cookies.json"
+        storage_path = tmp_path / "storage_state.json"
+        cookies = [
+            {"name": "SID", "value": "fixture-sid", "domain": ".google.com", "path": "/"},
+            {
+                "name": "__Secure-1PSIDTS",
+                "value": "fixture-psidts",
+                "domain": ".google.com",
+                "path": "/",
+            },
+            # No OSID and no APISID/SAPISID: LSID alone is not a binding.
+            {
+                "name": "LSID",
+                "value": "fixture-lsid",
+                "domain": "accounts.google.com",
+                "path": "/",
+            },
+        ]
+        input_path.write_text(json.dumps(cookies), encoding="utf-8")
+
+        result = runner.invoke(
+            cli, ["--storage", str(storage_path), "auth", "import-cookies", str(input_path)]
+        )
+
+        assert result.exit_code != 0
+        assert "do not form a usable binding" in result.output
+        assert "LSID" in result.output
+        assert not storage_path.exists()
+
     def test_import_cookies_rejects_present_but_empty_secondary_binding(self, runner, tmp_path):
         input_path = tmp_path / "cookies.json"
         storage_path = tmp_path / "storage_state.json"
@@ -355,7 +401,8 @@ class TestAuthImportCookiesCommand:
         )
 
         assert result.exit_code != 0
-        assert "present but have empty values" in result.output
+        assert "do not form a usable binding" in result.output
+        assert "their values are empty" in result.output
         assert "OSID" in result.output
         assert not storage_path.exists()
 
@@ -2420,3 +2467,33 @@ class TestAuthInspect:
         assert data["accounts"][0]["email"] == "alice@example.com"
         assert "authuser" not in data["accounts"][0]
         assert data["accounts"][0]["is_default"] is True
+
+
+def test_cli_binding_rule_matches_cookie_policy() -> None:
+    """``cli/_cookie_import`` must not drift from the canonical binding rule.
+
+    The CLI keeps its own copy because ``tests/_guardrails/test_cli_boundary.py``
+    forbids importing ``_private`` names out of public modules. That copy already
+    drifted once: it kept ``OSID or APISID+SAPISID`` after the canonical rule
+    gained its ``LSID`` conjunct (#1977), so ``import-cookies`` would have
+    accepted a set the client cannot authenticate with.
+
+    Exhaustive over the four cookies the rule mentions, so a change to either
+    side that the other does not mirror fails here rather than in the field.
+    """
+    from itertools import combinations
+
+    from notebooklm._auth.cookie_policy import _has_valid_secondary_binding
+    from notebooklm.cli._cookie_import import _has_usable_secondary_binding
+
+    names = ("OSID", "APISID", "SAPISID", "LSID")
+    for r in range(len(names) + 1):
+        for combo in combinations(names, r):
+            state = {
+                "cookies": [
+                    {"name": n, "value": "v", "domain": ".google.com", "path": "/"} for n in combo
+                ]
+            }
+            assert _has_usable_secondary_binding(state) == _has_valid_secondary_binding(
+                set(combo)
+            ), f"CLI and cookie_policy disagree for {combo!r}"

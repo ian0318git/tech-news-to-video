@@ -43,6 +43,11 @@ _MASTER_APP = "com.google.android.apps.chromecast.app"
 _MASTER_SIG = "24bb24c05e47e0aefa68a58a766179d9b613a600"
 _OAUTHLOGIN_SERVICE = "oauth2:https://www.google.com/accounts/OAuthLogin"
 
+# Aligned with ``_has_rotatable_secondary_binding``, NOT the strict
+# ``_has_valid_secondary_binding``: this set feeds ``_recover_psidts_inline``, so
+# it answers "is a rotation worth attempting", which is the permissive question.
+# It is therefore *not* stale relative to the ``LSID`` conjunct added in #1977 —
+# do not "fix" it by adding LSID here.
 # MergeSession requires SID + a secondary binding (APISID+SAPISID or OSID) so the
 # client's _recover_psidts_inline can mint __Secure-1PSIDTS on first load.
 _REQUIRED_MINTED_COOKIES = {"SID", "APISID", "SAPISID"}

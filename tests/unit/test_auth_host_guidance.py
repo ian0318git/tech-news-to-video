@@ -31,7 +31,9 @@ from notebooklm._env import ENTERPRISE_BASE_HOST, PERSONAL_APP_ALIAS_HOST, PERSO
 
 # Cookie sets that steer ``missing_cookies_hint`` into each branch.
 _BINDING_MISSING = {"SID", "__Secure-1PSIDTS"}
-_PSIDTS_MISSING = {"SID", "APISID", "SAPISID"}
+# LSID included so the secondary binding is *complete* (#1977) and this set
+# reaches the psidts-only branch rather than the "no binding either" one.
+_PSIDTS_MISSING = {"SID", "APISID", "SAPISID", "LSID"}
 _EVERYTHING_MISSING = {"SID"}
 
 

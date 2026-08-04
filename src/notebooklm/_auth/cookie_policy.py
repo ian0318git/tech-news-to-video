@@ -73,15 +73,75 @@ _SECONDARY_BINDING_WARNED = False
 def _has_valid_secondary_binding(cookie_names: set[str]) -> bool:
     """Tier 2 acceptance check (see ``MINIMUM_REQUIRED_COOKIES``).
 
-    Pair-wise ablation against a live Google session reveals that the
-    NotebookLM homepage GET requires *at least one* of two redundant
-    secondary-binding paths in addition to Tier 1:
+    The homepage GET requires *at least one* of two secondary-binding paths in
+    addition to Tier 1:
 
     - ``OSID`` (recent-sign-in binding), OR
-    - both ``APISID`` AND ``SAPISID`` (legacy XSSI binding pair).
+    - ``APISID`` AND ``SAPISID`` (legacy XSSI pair) **AND** bare ``LSID``.
 
-    Without either, Google 302s to ``accounts.google.com/v3/signin`` even when
-    ``SID`` and ``__Secure-1PSIDTS`` are present and otherwise valid.
+    Without one of those, Google 302s to ``accounts.google.com/v3/signin`` even
+    when ``SID`` and ``__Secure-1PSIDTS`` are present and otherwise valid.
+
+    The ``LSID`` conjunct is the correction. The original pair-wise ablation
+    only varied ``OSID`` and the XSSI pair; because ``APISID``/``SAPISID`` are
+    ``.google.com``-scoped they survived every domain filter, so the XSSI branch
+    was never tested *without* them and the ``LSID`` dependency stayed hidden.
+    A three-way ablation, replicated on two unrelated accounts (2026-08-04,
+    issue #1977), gives:
+
+    ==========  =====================  ============  ========
+    ``OSID``    ``APISID``+``SAPISID``  bare ``LSID``  result
+    ==========  =====================  ============  ========
+    present     --                     --            works
+    present     present                --            works
+    --          present                present       works
+    --          present                --            **fails**
+    --          --                     present       fails
+    ==========  =====================  ============  ========
+
+    Row 4 is what this function used to get wrong. Two consequences worth
+    keeping straight:
+
+    * ``OSID`` alone is sufficient — a profile with **no** ``LSID`` anywhere
+      authenticates (row 1, verified with every ``accounts.google.com`` cookie
+      stripped). ``LSID`` is required *only* when ``OSID`` is absent.
+    * ``__Host-1PLSID`` / ``__Host-3PLSID`` do **not** substitute for bare
+      ``LSID``; row 4 retains them and still fails.
+
+    Deliberately domain-blind, and that is not the #2054 mistake. ``LSID`` is
+    ``accounts.google.com``-scoped and never routes to the app host, while
+    ``OSID`` is app-host-scoped — the binding spans hosts because the auth flow
+    does (app-host GET, redirect through accounts, back). A check restricted to
+    what routes to the *target* URL would reject working profiles. Host-aware,
+    were it ever needed, would mean "``OSID`` routable to the app host, or the
+    XSSI pair routable there plus ``LSID`` present for the accounts hop" — not a
+    single routed header.
+    """
+    if "OSID" in cookie_names:
+        return True
+    return {"APISID", "SAPISID", "LSID"} <= cookie_names
+
+
+def _has_rotatable_secondary_binding(cookie_names: set[str]) -> bool:
+    """Whether a ``RotateCookies`` attempt is worth making — deliberately weaker.
+
+    This is **not** :func:`_has_valid_secondary_binding` and must not be
+    collapsed into it. That one answers "will the homepage GET succeed with
+    these cookies *as they stand*". This one answers "is this set intact enough
+    that rotating ``__Secure-1PSIDTS`` could plausibly produce a working
+    session" — a precondition for attempting recovery, not for succeeding.
+
+    The difference is the ``LSID`` conjunct. Rotation POSTs to
+    ``accounts.google.com``; whether that hop can itself re-establish the
+    accounts-side session (and so supply the missing ``LSID``) has not been
+    ablated. Requiring the *post*-recovery condition before *attempting*
+    recovery would gate off the rotation that might satisfy it — checking the
+    destination as a precondition for the journey. That is the failure shape of
+    #2061, where an over-strict heal check never converged.
+
+    So this keeps the pre-#1977 rule until someone ablates the rotation hop. Its
+    cost when wrong is one wasted POST; the strict version's cost when wrong is
+    a recoverable session left unrecovered.
     """
     if "OSID" in cookie_names:
         return True
@@ -127,8 +187,9 @@ def _validate_required_cookies(
         if not _SECONDARY_BINDING_WARNED:
             _SECONDARY_BINDING_WARNED = True
             logger.warning(
-                "Cookie set lacks a secondary binding (need OSID, or both APISID "
-                "and SAPISID). Google may reject auth on the next call. %s",
+                "Cookie set lacks a secondary binding (need OSID, or all three of "
+                "APISID, SAPISID and LSID). Google may reject auth on the next "
+                "call. %s",
                 _EXTRACTION_HINT,
             )
 
@@ -152,8 +213,9 @@ def app_host_scope_note() -> str:
     Both recoveries are real, and ordered deliberately:
 
     1. Re-run ``notebooklm login`` and complete the sign-in. That re-mints the
-       account-wide ``.google.com`` cookies, and ``APISID`` + ``SAPISID`` (which
-       live on ``.google.com``) satisfy the binding on *either* host — see
+       account-wide cookies. ``APISID`` + ``SAPISID`` live on ``.google.com``
+       and ``LSID`` on ``accounts.google.com``, so none of them are host-scoped
+       and together they satisfy the binding on *either* host — see
        :func:`_has_valid_secondary_binding`.
     2. Select the host that actually holds the cookies via
        ``NOTEBOOKLM_BASE_URL``.
@@ -199,8 +261,9 @@ def app_host_scope_note() -> str:
         f"which is the host this client is configured to use.\n"
         f"If the binding is still missing afterwards it landed on {other_host}: "
         f"re-run 'notebooklm login' and complete the sign-in (that re-mints the "
-        f"account-wide .google.com binding APISID+SAPISID, which both hosts "
-        f"accept), or select the host that has the cookies with "
+        f"account-wide binding APISID+SAPISID+LSID, none of which are "
+        f"host-scoped, so both hosts accept it), or select the host that has "
+        f"the cookies with "
         f"NOTEBOOKLM_BASE_URL=https://{other_host}{caveat}."
     )
 
@@ -268,7 +331,7 @@ def missing_cookies_hint(
     if psidts_missing and not has_secondary:
         return _with_scope_note(
             f"Your {browser_phrase} session is signed in to Google but is missing "
-            f"the cookies NotebookLM needs (OSID or APISID+SAPISID, plus "
+            f"the cookies NotebookLM needs (OSID, or APISID+SAPISID+LSID, plus "
             f"__Secure-1PSIDTS).\n"
             f"Open https://{get_base_host()} in {browser_phrase} (sign in if "
             f"prompted), reload the page, then re-run this command."
@@ -288,7 +351,7 @@ def missing_cookies_hint(
     if not has_secondary:
         return _with_scope_note(
             f"Your {browser_phrase} cookies are missing the NotebookLM binding "
-            f"(OSID, or APISID+SAPISID).\n"
+            f"(OSID, or all of APISID, SAPISID and LSID).\n"
             f"Open https://{get_base_host()} in {browser_phrase} (sign in if "
             f"prompted), reload the page, then re-run this command."
         )
