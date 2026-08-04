@@ -30,6 +30,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   migration, which reported a green permissions row for a directory that could
   still be world-readable. It now re-runs the check, so a wide-mode directory is
   actually repaired (and reported) instead of being silently greenlit.
+
+- Cookie extraction now requests `notebook.google.com` (the Gemini Notebook rebrand
+  host) and the runtime loader ranks its per-product binding cookies
+  (`OSID` / `__Secure-OSID`) at the same priority tier as the legacy
+  `notebooklm.google.com` host. Before this fix, `notebooklm login --browser-cookies`
+  never asked the browser for `notebook.google.com` cookies, and a user whose browser
+  only populated `OSID` on the rebrand host could fail the Tier-2 secondary-binding
+  check ([#2020](https://github.com/teng-lin/notebooklm-py/pull/2020)).
 - **`notebooklm -vv login` now explains the five-minute wait instead of going
   silent.** The interactive login wait emitted no DEBUG output at all, so a
   login that never landed was indistinguishable from a user who walked away —
