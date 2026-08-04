@@ -608,11 +608,12 @@ class NotebooksAPI:
                 )
             return None
 
-        return await idempotent_create(
+        result = await idempotent_create(
             _create,
             _probe,
             label=f"notebooks.create[{title!r}]",
         )
+        return result.value
 
     async def _raise_quota_error_if_detected(self, error: RPCError) -> None:
         """Convert CREATE_NOTEBOOK invalid-argument failures into quota errors."""
