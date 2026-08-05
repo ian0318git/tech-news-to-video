@@ -180,10 +180,10 @@ jobs:
     # forever. Restore-only + a run-scoped save key, because cache entries are
     # immutable: a fixed key would pin the first night's answer permanently.
     #
-    # A cache miss is harmless by construction: ``load_rebrand_state`` falls
-    # back to the documented ABSENT baseline, so the worst case is that a
-    # genuine PRESENT is announced twice — never a false alarm out of the
-    # steady state.
+    # On a cache miss, ``load_rebrand_state`` falls back to the checkout's
+    # last-acknowledged status for each capability. A transition acknowledged
+    # in that checked-in baseline is not replayed merely because the cache
+    # disappeared; a contrary live observation is still reported as new.
     - name: Restore rebrand-host lane state
       uses: actions/cache/restore@v6
       continue-on-error: true
@@ -220,9 +220,9 @@ jobs:
       # cannot change ``exit_code`` here — see the "Rebrand host" steps below
       # for its own, separately-deduped issues.
       #
-      # No ``--base-url``: the nightly MUST stay on the default host, otherwise
-      # the legacy signal (the only named trigger for a future default flip)
-      # stops being collected. The flag exists for manual investigation.
+      # No ``--base-url``: the nightly stays on the default host so the main,
+      # exit-coded signal exercises the host users receive. The flag exists for
+      # manual investigation.
       continue-on-error: true
       shell: bash
       env:
@@ -539,15 +539,14 @@ jobs:
     # Rebrand-host lane (notebook.google.com) — SEPARATE from everything
     # above. It has no exit code: the script keeps its probes out of
     # ``compute_exit_code`` entirely. That separation is the whole point.
-    # The legacy "Non-transient ERROR detected" issue is deduped by TITLE
+    # The main "Non-transient ERROR detected" issue is deduped by TITLE
     # ALONE, so a rebrand probe reported through it would open one issue on
-    # the first failing night and then suppress every legacy-degradation
+    # the first failing night and then suppress every main-lane degradation
     # issue after it — disabling the very gate this lane feeds.
     #
     # This lane therefore has: its own titles, its own PER-CAPABILITY dedup
-    # keys, and a state-change trigger (ABSENT -> PRESENT) rather than a
-    # recurring error. A rebrand host that never serves RPC files nothing,
-    # ever.
+    # keys, and a state-change trigger (for example, PRESENT -> ABSENT) rather
+    # than a recurring error. An unchanged capability files nothing.
     #
     # Step order matters: detect -> report -> save. The cached state is the
     # baseline the NEXT run compares against, so it may only be advanced once
@@ -643,8 +642,8 @@ jobs:
             echo "**Commit:** ${GITHUB_SHA}"
             echo ""
             echo "This is the rebrand-host lane of the nightly RPC health check. It"
-            echo "carries NO exit code and is independent of the legacy-host signal;"
-            echo "the legacy lane's issues are unaffected by anything reported here."
+            echo "carries NO exit code and is independent of the exit-coded main signal;"
+            echo "the main lane's issues are unaffected by anything reported here."
             echo ""
             grep '^REBRAND' health-report.txt || echo "(no rebrand lane output)"
             echo ""
@@ -656,8 +655,9 @@ jobs:
             echo "manual authenticated capture (upload-session start only, no bytes),"
             echo "scrubbed via \`tests/cassette_patterns.py\` before it leaves the machine."
             echo ""
-            echo "A PRESENT verdict here is evidence the host serves that endpoint from"
-            echo "these credentials — it is NOT on its own a reason to change any default."
+            echo "A PRESENT verdict is evidence the host served the endpoint from these"
+            echo "credentials. ABSENT means a non-auth, non-transient response did not"
+            echo "demonstrate it. Neither verdict alone is a reason to change any default."
           } > rebrand-issue-body.md
           if ! existing=$(TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" \
             --state open --label automated \

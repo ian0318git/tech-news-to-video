@@ -115,6 +115,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `auth inspect` likewise keeps probing before validating, so a network outage
   is still reported as a network outage rather than as a bad cookie set.
 
+- **Authentication docs now match the executable secondary-binding rule.** The
+  `APISID`/`SAPISID` path also requires bare `LSID` when `OSID` is absent;
+  `__Host-1PLSID` and `__Host-3PLSID` do not substitute for it. A documentation
+  guard now checks the published predicate against runtime across every cookie
+  subset and pins the Tier 1 cookie set
+  ([#2074](https://github.com/teng-lin/notebooklm-py/issues/2074)).
+
+- **The rebrand-host health lane now acknowledges the availability transitions
+  it already reported.** The authenticated nightly run at commit `36221e0`
+  reached `notebook.google.com` with HTTP 200 for both `LIST_NOTEBOOKS`
+  (`batchexecute`, with `wXbhsf` echoed) and a parsed
+  `GenerateFreeFormStreamed` response. Its checked-in fallback still said both
+  capabilities were `ABSENT`, so losing the run-to-run cache could re-file the
+  already handled transitions. The fallback now records the last acknowledged
+  status per capability (`PRESENT` for both observations); a later contrary
+  observation remains a reportable transition. This changes only advisory
+  reporting state: the lane still carries no exit code, makes no default-host
+  decision, and continues to report upload as `NOT_PROBED` because the workflow
+  issues no `/upload/_/` POST
+  ([#2077](https://github.com/teng-lin/notebooklm-py/issues/2077),
+  [#2078](https://github.com/teng-lin/notebooklm-py/issues/2078)).
+
 - **The pinned frontend build label is current again, and can no longer rot
   unwatched.** `_env.DEFAULT_BL` — the `bl` value sent on the chat streaming
   endpoint — had been pinned to `boq_labs-tailwind-frontend_20260301.03_p0` since
@@ -218,7 +240,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   error. The lane carries **no exit code**, deliberately: the existing
   "Non-transient ERROR detected" issue dedups by title alone, so a rebrand probe
   that legitimately failed every night would file one issue and then suppress
-  every later legacy-degradation issue. `UNKNOWN` (transport failure, 429, 5xx)
+  every later main-lane degradation issue. `UNKNOWN` (transport failure, 429, 5xx)
   carries the previous state forward instead of manufacturing a transition. Two
   new flags support it: `--base-url` (point a whole manual run at a specific
   personal app host) and `--rebrand-state-file` (where the lane reads and writes

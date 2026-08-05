@@ -946,7 +946,7 @@ def test_print_summary_gated_is_pass(capsys: pytest.CaptureFixture[str]) -> None
 # rebrand probe must never reach ``compute_exit_code``. The workflow files ONE
 # non-transient-ERROR issue deduped by title alone, so a rebrand probe folded
 # into that lane would open an issue on the first failing night and then
-# suppress every legacy-degradation issue after it — disabling the gate the
+# suppress every main-lane degradation issue after it — disabling the gate the
 # lane exists to feed. These tests pin that isolation, the state-change
 # semantics, and the deliberately-unanswered upload sub-question.
 # ---------------------------------------------------------------------------
@@ -972,13 +972,13 @@ def test_compute_exit_code_cannot_see_the_rebrand_lane() -> None:
     """Structural guard: no rebrand input may reach the exit-code computation.
 
     If a future change threads the lane in here, the naive-implementation trap
-    is back — one permanently-failing rebrand probe would suppress the legacy
+    is back — one permanently-failing rebrand probe would suppress the main
     lane's title-deduped issue forever.
 
     The exact parameter list is pinned too, so exit-coding ANY new lane stays a
     deliberate decision. ``build_label_status`` is such a decision: it has its own
     exit code (5) and its own deduped issue title, so it cannot suppress the
-    legacy lane's the way a rebrand probe would.
+    main lane's issue the way a rebrand probe would.
     """
     import ast
     import inspect
@@ -1225,11 +1225,20 @@ async def test_probe_rebrand_host_returns_all_three_capabilities(
 # --- state / transition semantics -------------------------------------------
 
 
+def test_rebrand_acknowledged_baseline_epoch() -> None:
+    """The #2077/#2078 evidence and cache epoch must advance together."""
+    assert check_rpc_health.REBRAND_STATE_VERSION == 2
+    assert {
+        check_rpc_health.REBRAND_BATCHEXECUTE: RebrandProbeStatus.PRESENT.value,
+        check_rpc_health.REBRAND_CHAT: RebrandProbeStatus.PRESENT.value,
+    } == check_rpc_health.REBRAND_BASELINE_STATE
+
+
 def test_rebrand_steady_state_reports_no_change() -> None:
-    """ABSENT on the documented ABSENT baseline is not news — and files nothing."""
+    """Acknowledged PRESENT observations are steady state and file nothing."""
     probes = [
-        _probe(check_rpc_health.REBRAND_BATCHEXECUTE, RebrandProbeStatus.ABSENT),
-        _probe(check_rpc_health.REBRAND_CHAT, RebrandProbeStatus.ABSENT),
+        _probe(check_rpc_health.REBRAND_BATCHEXECUTE, RebrandProbeStatus.PRESENT),
+        _probe(check_rpc_health.REBRAND_CHAT, RebrandProbeStatus.PRESENT),
         check_rpc_health.rebrand_upload_probe(),
     ]
     state = build_rebrand_state("notebook.google.com", probes, load_rebrand_state(None))
@@ -1239,7 +1248,8 @@ def test_rebrand_steady_state_reports_no_change() -> None:
 
 def test_rebrand_absent_to_present_is_a_state_change() -> None:
     probes = [_probe(check_rpc_health.REBRAND_BATCHEXECUTE, RebrandProbeStatus.PRESENT)]
-    state = build_rebrand_state("notebook.google.com", probes, load_rebrand_state(None))
+    previous = {check_rpc_health.REBRAND_BATCHEXECUTE: RebrandProbeStatus.ABSENT.value}
+    state = build_rebrand_state("notebook.google.com", probes, previous)
     assert state["changed"] is True
     assert state["transitions"] == [
         {
@@ -1249,6 +1259,23 @@ def test_rebrand_absent_to_present_is_a_state_change() -> None:
             "detail": "detail",
         }
     ]
+
+
+def test_rebrand_present_to_absent_is_a_state_change() -> None:
+    probes = [_probe(check_rpc_health.REBRAND_BATCHEXECUTE, RebrandProbeStatus.ABSENT)]
+    state = build_rebrand_state("notebook.google.com", probes, load_rebrand_state(None))
+    assert state["changed"] is True
+    assert state["transitions"] == [
+        {
+            "capability": check_rpc_health.REBRAND_BATCHEXECUTE,
+            "from": "PRESENT",
+            "to": "ABSENT",
+            "detail": "detail",
+        }
+    ]
+    assert "STATE CHANGE: batchexecute: PRESENT->ABSENT" in "\n".join(
+        check_rpc_health.format_rebrand_lane(state, probes)
+    )
 
 
 def test_rebrand_present_stays_quiet_on_the_next_run() -> None:
@@ -1326,10 +1353,35 @@ def test_rebrand_state_records_the_run_that_wrote_it() -> None:
 
 def test_rebrand_state_round_trips(tmp_path: Path) -> None:
     path = tmp_path / "nested" / "rebrand-state.json"
-    probes = [_probe(check_rpc_health.REBRAND_CHAT, RebrandProbeStatus.PRESENT)]
+    probes = [_probe(check_rpc_health.REBRAND_CHAT, RebrandProbeStatus.ABSENT)]
     state = build_rebrand_state("notebook.google.com", probes, load_rebrand_state(path))
     check_rpc_health.write_rebrand_state(path, state)
-    assert load_rebrand_state(path)[check_rpc_health.REBRAND_CHAT] == "PRESENT"
+    assert load_rebrand_state(path)[check_rpc_health.REBRAND_CHAT] == "ABSENT"
+
+
+@pytest.mark.parametrize("invalid_status", ["PRESNT", ["PRESENT"], {"value": "PRESENT"}])
+def test_rebrand_state_ignores_unknown_capabilities_and_invalid_statuses(
+    tmp_path: Path, invalid_status: object
+) -> None:
+    path = tmp_path / "rebrand-state.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": check_rpc_health.REBRAND_STATE_VERSION,
+                "state": {
+                    check_rpc_health.REBRAND_BATCHEXECUTE: invalid_status,
+                    check_rpc_health.REBRAND_CHAT: "ABSENT",
+                    "future-capability": "ABSENT",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert load_rebrand_state(path) == {
+        check_rpc_health.REBRAND_BATCHEXECUTE: "PRESENT",
+        check_rpc_health.REBRAND_CHAT: "ABSENT",
+    }
 
 
 @pytest.mark.parametrize(
@@ -1337,16 +1389,20 @@ def test_rebrand_state_round_trips(tmp_path: Path) -> None:
     [
         "not json at all",
         json.dumps({"version": 999, "state": {"batchexecute": "PRESENT"}}),
-        json.dumps({"version": 1, "state": "not-a-mapping"}),
+        # The prior baseline epoch must not replay its now-acknowledged ABSENT
+        # values if an older cache entry is restored after #2077/#2078.
+        json.dumps({"version": 1, "state": {"batchexecute": "ABSENT", "chat": "ABSENT"}}),
+        json.dumps(
+            {
+                "version": check_rpc_health.REBRAND_STATE_VERSION,
+                "state": "not-a-mapping",
+            }
+        ),
         json.dumps(["not", "a", "mapping"]),
     ],
 )
 def test_rebrand_unusable_state_file_degrades_to_baseline(tmp_path: Path, content: str) -> None:
-    """A lost/corrupt state file can only re-announce a real PRESENT.
-
-    It can never manufacture an alarm out of the steady state, because the
-    fallback baseline is exactly what the steady state observes.
-    """
+    """A lost/corrupt cache falls back to acknowledged repository evidence."""
     path = tmp_path / "rebrand-state.json"
     path.write_text(content, encoding="utf-8")
     assert load_rebrand_state(path) == check_rpc_health.REBRAND_BASELINE_STATE
@@ -1364,7 +1420,8 @@ def test_format_rebrand_lane_lines() -> None:
         _probe(check_rpc_health.REBRAND_BATCHEXECUTE, RebrandProbeStatus.PRESENT),
         check_rpc_health.rebrand_upload_probe(),
     ]
-    state = build_rebrand_state("notebook.google.com", probes, load_rebrand_state(None))
+    previous = {check_rpc_health.REBRAND_BATCHEXECUTE: RebrandProbeStatus.ABSENT.value}
+    state = build_rebrand_state("notebook.google.com", probes, previous)
     lines = check_rpc_health.format_rebrand_lane(state, probes)
     joined = "\n".join(lines)
     assert "STATE CHANGE: batchexecute: ABSENT->PRESENT" in joined
@@ -1385,7 +1442,7 @@ def test_format_rebrand_lane_flags_an_auth_failure_as_inconclusive() -> None:
 
 
 def test_format_rebrand_lane_says_so_when_nothing_changed() -> None:
-    probes = [_probe(check_rpc_health.REBRAND_BATCHEXECUTE, RebrandProbeStatus.ABSENT)]
+    probes = [_probe(check_rpc_health.REBRAND_BATCHEXECUTE, RebrandProbeStatus.PRESENT)]
     state = build_rebrand_state("notebook.google.com", probes, load_rebrand_state(None))
     joined = "\n".join(check_rpc_health.format_rebrand_lane(state, probes))
     assert "STATE CHANGE" not in joined
@@ -1508,7 +1565,7 @@ def test_main_threads_the_rebrand_state_into_the_report(
         state = build_rebrand_state(
             "notebook.google.com",
             [_probe(check_rpc_health.REBRAND_BATCHEXECUTE, RebrandProbeStatus.PRESENT)],
-            load_rebrand_state(None),
+            {check_rpc_health.REBRAND_BATCHEXECUTE: RebrandProbeStatus.ABSENT.value},
         )
         return (
             [_result("ok", CheckStatus.OK)],

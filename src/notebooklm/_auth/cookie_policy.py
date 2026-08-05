@@ -55,8 +55,8 @@ def cookie_names_from_storage(storage_state: Mapping[str, Any]) -> set[str]:
 #   recoverable via the RotateCookies POST when other auth cookies are intact.
 #   When neither path is viable the homepage GET 302s to login.
 #
-# See ``docs/auth-cookie-lifecycle.md`` §3.5 for the ablation methodology and the full
-# 16-pair failure table backing this set.
+# See ``docs/auth-cookie-lifecycle.md`` §3.3 for the singleton/pair-wise Tier 1
+# evidence and the corrected three-way secondary-binding table.
 MINIMUM_REQUIRED_COOKIES = {"SID", "__Secure-1PSIDTS"}
 
 

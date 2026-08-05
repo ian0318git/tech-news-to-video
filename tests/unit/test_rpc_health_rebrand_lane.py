@@ -4,13 +4,11 @@ The nightly health workflow files its "Non-transient ERROR detected" issue with
 a dedup probe that searches **by title alone**. So an issue-filing lane that can
 fail every night is not merely noisy — after its first issue opens, the dedup
 check suppresses every subsequent issue sharing that title, including the
-legacy-degradation issue that is the only named trigger for revisiting the
-default backend host.
+main health-check degradation issue.
 
-The rebrand-host probe (``notebook.google.com``) is exactly such a lane: nothing
-in this repository has ever observed that host serving batchexecute, so it may
-legitimately report "absent" forever. It therefore gets its own titles, a dedup
-key PER CAPABILITY, and a *state-change* trigger rather than a recurring error.
+The rebrand-host probe (``notebook.google.com``) therefore gets its own titles,
+a dedup key PER CAPABILITY, and a *state-change* trigger rather than a recurring
+error. It can report either direction without changing the main lane's exit code.
 
 The same reasoning applies one level down (#2062): the lane's state file is the
 next run's baseline, so anything it records must have been genuinely observed
@@ -40,9 +38,9 @@ pytestmark = pytest.mark.repo_lint
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "rpc-health.yml"
 
-# The legacy lane's title. The rebrand lane must never reuse it, nor any string
+# The main lane's title. The rebrand lane must never reuse it, nor any string
 # that would collide with its ``in:title "..."`` dedup search.
-LEGACY_ERROR_TITLE = "RPC Health Check: Non-transient ERROR detected"
+MAIN_ERROR_TITLE = "RPC Health Check: Non-transient ERROR detected"
 REBRAND_TITLE = "Rebrand host RPC availability changed"
 
 DETECT_STEP = "Detect rebrand-host state change"
@@ -111,9 +109,8 @@ def test_previous_and_current_state_live_in_separate_files() -> None:
 def test_nightly_never_forces_a_base_url() -> None:
     """The scheduled run must stay on the default host.
 
-    ``--base-url`` exists for manual investigation. Pointing the nightly at the
-    rebrand host would stop collecting the legacy signal, which is the only
-    named trigger for revisiting the default.
+    ``--base-url`` exists for manual investigation. The scheduled main signal
+    must exercise whichever host the shipped configuration selects by default.
     """
     assert "--base-url" not in _step("Run RPC Health Check")["run"]
 
@@ -121,7 +118,7 @@ def test_nightly_never_forces_a_base_url() -> None:
 def test_rebrand_issue_title_is_distinct_from_every_other_lane() -> None:
     """The rebrand lane files through ``gh``, never through a shared title."""
     titles = [step["with"]["title"] for step in _issue_steps()]
-    assert LEGACY_ERROR_TITLE in titles
+    assert MAIN_ERROR_TITLE in titles
     assert len(titles) == len(set(titles)), f"duplicate issue titles share a dedup key: {titles}"
     # No pinned-action lane may claim the rebrand title: that lane's titles are
     # built per capability inside the report step.
@@ -131,7 +128,7 @@ def test_rebrand_issue_title_is_distinct_from_every_other_lane() -> None:
 def test_rebrand_dedup_probe_searches_its_own_title() -> None:
     run = _step(REPORT_STEP)["run"]
     assert f'in:title "{REBRAND_TITLE}"' in run
-    assert LEGACY_ERROR_TITLE not in run
+    assert MAIN_ERROR_TITLE not in run
 
 
 def test_rebrand_dedup_key_is_per_capability() -> None:
@@ -168,7 +165,7 @@ def test_baseline_is_saved_after_reporting_and_only_on_success() -> None:
     assert "steps.rebrand_report.outcome != 'failure'" in condition
 
 
-def test_legacy_issue_lanes_are_untouched_by_the_rebrand_lane() -> None:
+def test_main_issue_lanes_are_untouched_by_the_rebrand_lane() -> None:
     """Every health-script lane still keys off ``steps.health.outputs.exit_code``.
 
     The bundle-drift lane is a different script (``steps.bundle``) and keeps its
@@ -177,7 +174,7 @@ def test_legacy_issue_lanes_are_untouched_by_the_rebrand_lane() -> None:
     expected = {
         "RPC ID Mismatch Detected": "1",
         "RPC Health Check: Authentication Failure": "2",
-        LEGACY_ERROR_TITLE: "3",
+        MAIN_ERROR_TITLE: "3",
         "Studio customization cohort flipped — re-capture VideoStyle codes": "4",
     }
     seen = set()
@@ -297,7 +294,7 @@ def _gh_calls(workdir: Path) -> list[list[str]]:
 
 def _state_doc(run_id: str | None, transitions: list[dict[str, str]]) -> dict[str, Any]:
     return {
-        "version": 1,
+        "version": 2,
         "host": "notebook.google.com",
         "run_id": run_id,
         "state": {"batchexecute": "PRESENT", "chat": "PRESENT"},

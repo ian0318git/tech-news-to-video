@@ -38,11 +38,11 @@ Rebrand-host lane (``notebook.google.com``):
     A SEPARATE reporting lane answers "does the post-rebrand host serve RPC?".
     It NEVER contributes to the exit codes above and never lands in the
     ``CheckResult`` list — see :func:`probe_rebrand_host`. That separation is
-    load-bearing: the legacy lane's non-transient-ERROR issue is deduped by
+    load-bearing: the main lane's non-transient-ERROR issue is deduped by
     title alone, so a rebrand probe folded into it would open one issue on the
-    first failing night and then SUPPRESS every legacy-degradation issue after
-    it. The lane reports a *state change* (``ABSENT -> PRESENT``) against the
-    previous run's recorded state, under its own issue title.
+    first failing night and then SUPPRESS every main-lane degradation issue after
+    it. The lane reports a *state change* (for example, ``PRESENT -> ABSENT``)
+    against the previous run's recorded state, under its own issue title.
 
     The lane answers two of the three migration sub-questions — batchexecute and
     ``GenerateFreeFormStreamed``. The third, ``/upload/_/`` (Scotty), is NOT
@@ -63,7 +63,7 @@ Usage:
     python scripts/check_rpc_health.py          # Quick mode (skip destructive)
     python scripts/check_rpc_health.py --full   # Full mode (create temp notebook)
     # Point the WHOLE run at the rebrand host (manual investigation only — the
-    # nightly must stay on the default host so the legacy signal is preserved):
+    # nightly stays on the default host so the main signal exercises that host):
     python scripts/check_rpc_health.py --base-url https://notebook.google.com
 """
 
@@ -1138,19 +1138,22 @@ REBRAND_BATCHEXECUTE = "batchexecute"
 REBRAND_CHAT = "chat"
 REBRAND_UPLOAD = "upload"
 
-# What the repository already knows, used as the previous state on the very
-# first run (or whenever the state file is missing/unreadable). The cassette
-# corpus contains 12 recorded requests to the rebrand host, all ``GET /`` — zero
-# batchexecute, zero streamed chat. So ABSENT is the documented baseline, and an
-# ABSENT observation on the first run is "as expected", not news.
+# The last availability evidence acknowledged in the repository, used as the
+# previous state on the first run (or whenever the cached state is unavailable).
+# Keep each capability independent: the authenticated nightly probe at 36221e0
+# observed LIST_NOTEBOOKS over batchexecute (#2077) and parsed a streamed-chat
+# response (#2078) on the rebrand host. The entries remain independent so later
+# evidence can advance one capability without changing the other.
 REBRAND_BASELINE_STATE: dict[str, str] = {
-    REBRAND_BATCHEXECUTE: RebrandProbeStatus.ABSENT.value,
-    REBRAND_CHAT: RebrandProbeStatus.ABSENT.value,
+    REBRAND_BATCHEXECUTE: RebrandProbeStatus.PRESENT.value,
+    REBRAND_CHAT: RebrandProbeStatus.PRESENT.value,
 }
 
-# Bumped only if the state file's shape changes; a mismatch is treated as "no
-# usable previous state" and falls back to REBRAND_BASELINE_STATE.
-REBRAND_STATE_VERSION = 1
+# Bumped when the file shape changes or the checked-in evidence baseline
+# advances. A mismatch is treated as "no usable previous state" and falls back
+# to REBRAND_BASELINE_STATE; version 2 prevents a pre-#2077/#2078 cached ABSENT
+# document from overriding the newly acknowledged PRESENT observations.
+REBRAND_STATE_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -1315,7 +1318,7 @@ async def probe_rebrand_batchexecute(
         # ``RPCError`` is what the decoder raises for a body it cannot read as
         # batchexecute at all (the HTML app shell hits exactly this). In THIS
         # lane that is the answer — "the host served something else" — not the
-        # drift signal it would be on the legacy lane.
+        # parse/drift signal it would be on the exit-coded main lane.
         return RebrandProbe(
             REBRAND_BATCHEXECUTE,
             RebrandProbeStatus.ABSENT,
@@ -1430,17 +1433,15 @@ async def probe_rebrand_host(
 
     Deliberately returns ``RebrandProbe`` objects, NOT ``CheckResult`` objects:
     nothing here may reach ``partition_errors`` / ``compute_exit_code``, because
-    the legacy lane's issue is deduped by title alone and a permanently-failing
+    the main lane's issue is deduped by title alone and a permanently-failing
     rebrand probe folded into it would suppress every subsequent
-    legacy-degradation issue.
+    main-lane degradation issue.
 
     Runs LAST in the check, and paced like the method loop, so it cannot push
-    the account into a rate limit that would then be attributed to a legacy
-    probe. Recorded decision: this is the first time this project's CI
-    credentials are presented to the rebrand host. Both hosts are Google's and
-    both are already the app's own origins, so the exposure is the same
-    credential to the same operator — but it is a deliberate choice, not a side
-    effect.
+    the account into a rate limit that would then be attributed to a main-lane
+    probe. When this lane was introduced, it deliberately presented the
+    project's CI credentials to the rebrand host for the first time; both hosts
+    are Google's and are origins of the same app.
     """
     target = host or rebrand_probe_host()
     await asyncio.sleep(CALL_DELAY)
@@ -1451,13 +1452,13 @@ async def probe_rebrand_host(
 
 
 def load_rebrand_state(path: Path | None) -> dict[str, str]:
-    """Return the previously recorded rebrand state, or the documented baseline.
+    """Return the previously recorded state or checked-in acknowledged baseline.
 
     Any problem — no path, no file, unreadable, wrong schema version — degrades
-    to :data:`REBRAND_BASELINE_STATE`. That degradation is safe by construction:
-    the baseline is ABSENT, so a lost state file can only ever *re-announce* a
-    PRESENT that is genuinely news; it can never manufacture a spurious alarm
-    out of the steady state.
+    to :data:`REBRAND_BASELINE_STATE`. That checked-in fallback records the last
+    acknowledged observation per capability. A missing cache therefore does not
+    replay a transition acknowledged by this checkout, while a contrary live
+    observation is still reported as a new transition.
     """
     if path is None or not path.exists():
         return dict(REBRAND_BASELINE_STATE)
@@ -1471,8 +1472,10 @@ def load_rebrand_state(path: Path | None) -> dict[str, str]:
     if not isinstance(recorded, dict):
         return dict(REBRAND_BASELINE_STATE)
     merged = dict(REBRAND_BASELINE_STATE)
-    for key, value in recorded.items():
-        if isinstance(key, str) and isinstance(value, str):
+    recorded_statuses = {status.value for status in RECORDED_REBRAND_STATUSES}
+    for key in REBRAND_BASELINE_STATE:
+        value = recorded.get(key)
+        if isinstance(value, str) and value in recorded_statuses:
             merged[key] = value
     return merged
 
@@ -2048,8 +2051,8 @@ async def run_health_check(
     reads the last run's from (defaulting to the same file, which is what a
     local invocation wants). CI keeps them apart so the file the workflow reads
     back can only be one this run wrote — see the "Detect rebrand-host state
-    change" step. ``None`` compares against the documented baseline and persists
-    nothing. ``rebrand_run_id`` stamps the written document; see
+    change" step. ``None`` compares against the checked-in acknowledged baseline
+    and persists nothing. ``rebrand_run_id`` stamps the written document; see
     :func:`build_rebrand_state`.
     """
     notebook_id = os.environ.get("NOTEBOOKLM_READ_ONLY_NOTEBOOK_ID") or os.environ.get(
@@ -2151,7 +2154,7 @@ async def run_health_check(
 
             # Rebrand-host lane. Runs LAST and in its own bucket: its probes
             # never join ``results``, so they cannot reach ``partition_errors``
-            # / ``compute_exit_code`` and cannot poison the legacy lane's
+            # / ``compute_exit_code`` and cannot poison the main lane's
             # title-deduped issue.
             rebrand_probes = await probe_rebrand_host(client, auth, notebook_id)
             rebrand_state = build_rebrand_state(
@@ -2263,7 +2266,7 @@ def compute_exit_code(
     exit code of its own and contributes to none of the above: the workflow's
     non-transient-ERROR issue is deduped by title alone, so a rebrand probe that
     failed every night would open one issue and then suppress every subsequent
-    legacy-degradation issue — disabling the gate the lane exists to feed.
+    main-lane degradation issue.
     """
     if counts[CheckStatus.MISMATCH] > 0:
         return 1
@@ -2462,8 +2465,8 @@ def main() -> int:
         help=(
             "Point the whole run at a specific personal app host "
             f"({', '.join(sorted(PERSONAL_APP_HOSTS))}). Manual investigation only — "
-            "the nightly run must stay on the default host so the legacy signal "
-            "is preserved. Overrides NOTEBOOKLM_BASE_URL."
+            "the nightly run stays on the default host so the main signal exercises "
+            "that host. Overrides NOTEBOOKLM_BASE_URL."
         ),
     )
     parser.add_argument(
@@ -2473,8 +2476,8 @@ def main() -> int:
         help=(
             "Path the rebrand-host lane writes this run's state to (and, unless "
             "--rebrand-previous-state-file is given, also reads the previous "
-            "run's state from). Omitted: compare against the documented ABSENT "
-            "baseline and persist nothing."
+            "run's state from). Omitted: compare against the checked-in "
+            "last-acknowledged baseline and persist nothing."
         ),
     )
     parser.add_argument(

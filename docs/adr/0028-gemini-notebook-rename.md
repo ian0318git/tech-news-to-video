@@ -25,14 +25,25 @@ POST https://notebook.google.com/_/LabsTailwindUi/data/batchexecute   -> 400 (en
 `batchexecute` is **dual-served**. The RPC backend has not moved out from under
 us, which is why most sessions still work against the legacy default.
 
+The nightly health check later strengthened the rebrand-host evidence from an
+endpoint-level 400 to an authenticated application response: at commit
+`36221e0`, `LIST_NOTEBOOKS` returned HTTP 200 and echoed its `wXbhsf` RPC ID
+(#2077). This records availability for that credential cohort; it is not, by
+itself, a default-host policy decision.
+
+The same authenticated nightly probe confirmed the rebrand host's
+`GenerateFreeFormStreamed` chat endpoint too: HTTP 200 with a parsed stream on
+2026-08-04 (#2078). This does not answer whether `/upload/_/` (Scotty) is served
+there; the health check issues no upload POST, so that remains unprobed.
+
 Two things follow, and they are easy to conflate:
 
-- **Our own coverage has never exercised rebrand-host RPC.** Every request
-  recorded against `notebook.google.com` in `tests/cassettes/` is a `GET /`
-  returning the app shell (12 such, all in `collection_*`); no `batchexecute`
-  POST to that host has been captured. That is a gap in our testing, not a
-  statement about the service — until this change the base-URL allowlist
-  rejected the host, so no client we ship *could* have issued one.
+- **Before the default flip, recorded integration coverage had never exercised
+  rebrand-host RPC.** Every request then recorded against `notebook.google.com`
+  in `tests/cassettes/` was a `GET /` returning the app shell (12 such, all in
+  `collection_*`); no `batchexecute` POST to that host had been captured. That
+  was a gap in our testing, not a statement about the service — before the
+  allowlist change no client we shipped *could* have issued one.
 - **Dual-serving is a transitional state, not a guarantee.** It is the thing to
   monitor, which is why `scripts/check_rpc_health.py` probes the rebrand host in
   its own reporting lane.
