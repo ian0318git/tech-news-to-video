@@ -36,7 +36,6 @@ import http.cookiejar
 import json
 import logging
 import math
-import os
 from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 from typing import Any
@@ -48,6 +47,7 @@ from . import cookie_semantics as _cookie_semantics
 from . import cookies as _auth_cookies
 from . import keepalive as _keepalive
 from . import storage as _auth_storage
+from .paths import resolve_auth_json_env
 
 # ----------------------------------------------------------------------------
 # Cross-module helpers (module-scope aliases)
@@ -433,18 +433,19 @@ def _resolve_recovery_path(path: Path | str | None) -> Path | None:
       so ``load_auth_from_storage()`` with no args still triggers recovery
       on the default profile file (issue #865 critical-path coverage).
 
-    The env-var test is *presence*, matching ``_load_storage_state``
-    (``"NOTEBOOKLM_AUTH_JSON" in os.environ``), not truthiness. They used to
-    disagree, and an empty-string value fell through the crack: the loader took
-    its env branch and raised "set but empty" without ever inspecting a cookie,
-    while this resolver saw a falsy value and handed back the **default profile
-    file**. Recovery then fired a ``RotateCookies`` POST and persisted rotated
-    cookies to a profile the caller had deliberately bypassed. Found while
-    analysing which callers can reach the gate for issue #2057.
+    The env-var test is *presence*, matching ``_load_storage_state`` (both now
+    share :func:`notebooklm._auth.paths.resolve_auth_json_env`), not truthiness.
+    They used to disagree, and an empty-string value fell through the crack: the
+    loader took its env branch and raised "set but empty" without ever
+    inspecting a cookie, while this resolver saw a falsy value and handed back
+    the **default profile file**. Recovery then fired a ``RotateCookies`` POST
+    and persisted rotated cookies to a profile the caller had deliberately
+    bypassed. Found while analysing which callers can reach the gate for issue
+    #2057.
     """
     if path is not None:
         return Path(path)
-    if "NOTEBOOKLM_AUTH_JSON" in os.environ:
+    if resolve_auth_json_env() is not None:
         return None
     from ..paths import get_storage_path
 

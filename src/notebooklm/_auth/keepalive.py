@@ -17,6 +17,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import random
 import threading
 import time
 import weakref
@@ -118,6 +119,11 @@ _LAST_POKE_ATTEMPT_MONOTONIC: dict[Path | None, float] = {}
 # Rotation sentinel path lives in ``notebooklm._auth.paths``; aliased here for
 # white-box callers that reach ``notebooklm.auth._rotation_lock_path``.
 _rotation_lock_path = _auth_paths._rotation_lock_path
+# Canonicalization helper shared with the refresh flock derivation ([refresh-5]):
+# the poke lock registry and the rotation throttle map key on the CANONICAL
+# storage path so relative / symlinked / ``~`` representations of one file
+# collapse to a single dedupe slot.
+canonical_storage_key = _auth_paths.canonical_storage_key
 
 # Cross-process file-lock primitives live in ``_auth.storage``. Aliased into
 # this module's namespace so the keepalive bodies resolve them locally; tests
@@ -133,16 +139,17 @@ def _get_poke_lock(storage_path: Path | None) -> asyncio.Lock:
     to the current loop. The dict mutation runs under the sync state lock so
     concurrent threads with their own loops don't tear the registry.
     """
+    key = canonical_storage_key(storage_path)
     loop = asyncio.get_running_loop()
     with _POKE_STATE_LOCK:
         per_loop = _POKE_LOCKS_BY_LOOP.get(loop)
         if per_loop is None:
             per_loop = {}
             _POKE_LOCKS_BY_LOOP[loop] = per_loop
-        lock = per_loop.get(storage_path)
+        lock = per_loop.get(key)
         if lock is None:
             lock = asyncio.Lock()
-            per_loop[storage_path] = lock
+            per_loop[key] = lock
         return lock
 
 
@@ -156,12 +163,13 @@ def _try_claim_rotation(storage_path: Path | None) -> bool:
     ``_rotate_cookies`` callers (layer-2 keepalive loops, etc.) — neither
     of which holds the per-loop async lock used by layer-1 ``_poke_session``.
     """
+    key = canonical_storage_key(storage_path)
     with _POKE_STATE_LOCK:
-        last = _LAST_POKE_ATTEMPT_MONOTONIC.get(storage_path, 0.0)
+        last = _LAST_POKE_ATTEMPT_MONOTONIC.get(key, 0.0)
         now = time.monotonic()
         if last > 0 and (now - last) < _KEEPALIVE_RATE_LIMIT_SECONDS:
             return False
-        _LAST_POKE_ATTEMPT_MONOTONIC[storage_path] = now
+        _LAST_POKE_ATTEMPT_MONOTONIC[key] = now
         return True
 
 
@@ -181,6 +189,40 @@ def _file_lock_try_exclusive(lock_path: Path) -> Iterator[bool]:
         # "held" → True (proceed, we own it); "unavailable" → True (fail open);
         # "contended" → False (someone else is rotating, skip).
         yield state != "contended"
+
+
+async def _wait_for_refresh_holder(lock_path: Path) -> bool:
+    """Bounded async wait for another PROCESS's refresh flock to release.
+
+    The refresh-cmd flock is held by the winning process across its
+    ``_run_refresh_cmd`` subprocess. A loser that fails the non-blocking acquire
+    must not reload immediately: the winner has not yet written the fresh
+    cookies, so an immediate reload re-reads the STALE file and the loser fails
+    even though a refresh is moments away. Poll the flock with jittered async
+    backoff (``asyncio.sleep`` keeps the event loop live) until it frees —
+    meaning the winner finished writing — then let the caller reload.
+
+    Reuses the shared bounded-acquire tuning (``storage`` deadline/initial/max
+    delay). Returns ``True`` when the holder released (or the lock infra is
+    unworkable → fail open) within the deadline, ``False`` on timeout (the caller
+    falls back to a best-effort stale reload). No subprocess runs, no epoch bump.
+    """
+    deadline = time.monotonic() + _auth_storage._LOCK_ACQUIRE_DEADLINE_SECONDS
+    delay = _auth_storage._LOCK_ACQUIRE_INITIAL_DELAY_SECONDS
+    while True:
+        with _file_lock_try_exclusive(lock_path) as acquired:
+            if acquired:
+                # Holder released (or the lock is unworkable → fail open): the
+                # freshly-written file is now the best we can reload.
+                return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            logger.debug("refresh flock still held at the bounded deadline; reloading best-effort")
+            return False
+        # Jittered exponential backoff, async so the event loop is not frozen.
+        sleep_for = min(delay + random.uniform(0.0, delay), remaining)
+        await asyncio.sleep(sleep_for)
+        delay = min(delay * 2, _auth_storage._LOCK_ACQUIRE_MAX_DELAY_SECONDS)
 
 
 def _is_recently_rotated(storage_path: Path | None) -> bool:

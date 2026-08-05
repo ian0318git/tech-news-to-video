@@ -11,11 +11,11 @@ preserve explicit caller intent vs. resolved-from-storage defaults.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any
 
 from .account import get_account_email_for_storage, get_authuser_for_storage
+from .paths import resolve_auth_json_env
 
 
 def _resolve_token_route_kwargs(
@@ -26,7 +26,7 @@ def _resolve_token_route_kwargs(
 ) -> dict[str, Any]:
     """Resolve token-fetch routing while preserving explicit caller intent."""
     explicit_authuser = authuser is not None
-    env_auth_present = storage_path is None and "NOTEBOOKLM_AUTH_JSON" in os.environ
+    env_auth_present = storage_path is None and resolve_auth_json_env() is not None
     env_authuser = 0
     env_account_email: str | None = None
     if env_auth_present and authuser is None:

@@ -96,36 +96,57 @@ class TestNeutralBuilderMatchesCliBuilder:
 
 
 class TestWriteTimeFilterParity:
-    """Both persist paths run the SAME write-time domain filter.
+    """All login/import persist paths route through ONE writer that binds ONE filter.
 
-    The Playwright capture arms filter ``context.storage_state()`` through
-    ``filter_storage_state_cookies_by_domain_policy`` before the atomic
-    write. The rookiepy/Firefox writers (``cookie_writes._write_extracted_cookies``
-    and ``refresh._login_with_browser_cookies``) must apply the identical
-    filter — otherwise the two login paths produce different on-disk state
-    (Firefox suffix-matches ``.google.com``, so both writers must apply the
-    same compatibility-first trusted-root policy).
+    Before b-PR3 each rookiepy/Firefox writer imported its own module-level
+    ``filter_storage_state_cookies_by_domain_policy`` binding and the pin asserted
+    those bindings were identical. Since b-PR3 the write-time filter + the
+    post-filter required-cookie revalidation are hoisted into
+    ``storage_writer.replace_from_login``; the three CLI writers
+    (``cookie_writes._write_extracted_cookies``,
+    ``refresh._login_with_browser_cookies``, ``_cookie_import._import_cookie_json``)
+    all call that ONE function via the ``notebooklm.auth`` facade. On-disk parity
+    with the Playwright capture arms now follows from **writer-routing identity**
+    (one writer, one filter) rather than from each module binding the same filter.
     """
 
-    def test_rookiepy_writers_bind_the_playwright_filter(self):
-        """Identity pin: all three modules reference one filter function."""
+    def test_all_login_paths_route_through_one_writer(self):
+        """Routing identity: every login/import writer calls the SAME
+        ``replace_from_login`` (the single auth-facade export)."""
+        import notebooklm.auth as auth_module
+        from notebooklm._auth import storage_writer
+        from notebooklm.cli import _cookie_import
         from notebooklm.cli.services.login import cookie_writes, refresh
+
+        canonical = storage_writer.replace_from_login
+        assert auth_module.replace_from_login is canonical
+        assert cookie_writes.replace_from_login is canonical
+        assert _cookie_import.replace_from_login is canonical
+        # The refresh driver reaches it through its injectable deps seam.
+        assert refresh.default_refresh_deps().replace_from_login is canonical
+
+    def test_writer_binds_the_playwright_filter(self):
+        """Identity pin: the filter the writer applies IS the neutral filter the
+        Playwright capture arms use (one filter, bound in one place now)."""
+        from notebooklm._auth import _browser_cookie_filter
         from notebooklm.cli.services.playwright_login import (
             filter_storage_state_cookies_by_domain_policy as playwright_filter,
         )
 
-        assert cookie_writes.filter_storage_state_cookies_by_domain_policy is playwright_filter
-        assert refresh.filter_storage_state_cookies_by_domain_policy is playwright_filter
+        assert (
+            playwright_filter
+            is _browser_cookie_filter.filter_storage_state_cookies_by_domain_policy
+        )
 
     @pytest.mark.parametrize("include_domains", [None, {"mail"}, {"all"}])
-    def test_writers_accept_and_reject_the_same_domain_set(self, include_domains):
-        """Behavioral pin: per-domain accept/reject decisions are identical.
+    def test_writer_persists_same_domain_set_as_playwright_filter(self, tmp_path, include_domains):
+        """Behavioral pin: the on-disk cookie set ``replace_from_login`` persists
+        equals what the Playwright write-time filter keeps, cookie-for-cookie.
 
-        Sweeps required, regional-ccTLD, sibling-product, and lookalike
-        domains through the filter binding each writer module uses and
-        asserts they agree cookie-for-cookie.
+        Because all three CLI writers call this one function, proving parity for
+        the writer proves it for every login/import path.
         """
-        from notebooklm.cli.services.login import cookie_writes, refresh
+        from notebooklm.auth import replace_from_login
         from notebooklm.cli.services.playwright_login import (
             filter_storage_state_cookies_by_domain_policy as playwright_filter,
         )
@@ -146,23 +167,29 @@ class TestWriteTimeFilterParity:
             "evil-google.com",
             ".not-youtube.com",
         ]
-        state = {
-            "cookies": [
+        # Required cookies on an allowlisted domain so the writer's post-filter
+        # required-cookie revalidation does not short-circuit before the write.
+        cookies = [
+            {"name": "SID", "value": "v", "domain": ".google.com", "path": "/"},
+            {"name": "__Secure-1PSIDTS", "value": "v", "domain": ".google.com", "path": "/"},
+            *(
                 {"name": f"C{i}", "value": "v", "domain": d, "path": "/"}
                 for i, d in enumerate(probe_domains)
-            ],
-            "origins": [],
+            ),
+        ]
+        state = {"cookies": cookies, "origins": []}
+
+        storage_path = tmp_path / "storage_state.json"
+        outcome = replace_from_login(storage_path, dict(state), include_domains=include_domains)
+        assert outcome.ok
+        persisted = {
+            (c["name"], c["domain"]) for c in json.loads(storage_path.read_text())["cookies"]
         }
-
-        def _kept(filter_fn):
-            out = filter_fn(state, include_domains=include_domains)
-            return {(c["name"], c["domain"]) for c in out["cookies"]}
-
-        playwright_kept = _kept(playwright_filter)
-        assert _kept(cookie_writes.filter_storage_state_cookies_by_domain_policy) == (
-            playwright_kept
-        )
-        assert _kept(refresh.filter_storage_state_cookies_by_domain_policy) == playwright_kept
+        playwright_kept = {
+            (c["name"], c["domain"])
+            for c in playwright_filter(dict(state), include_domains=include_domains)["cookies"]
+        }
+        assert persisted == playwright_kept
 
 
 class TestRequiredVsOptional:

@@ -258,10 +258,19 @@ def _drive_login(
         if patch_repair:
             stack.enter_context(patch.object(_pl, "repair_playwright_account_metadata"))
         # The synthetic ``_STORAGE`` path is never created on disk; stub the
-        # atomic write so the success paths don't touch the filesystem. The
-        # persist step moved into the neutral browser-capture core, so its
-        # ``atomic_write_json`` binding now lives on ``_bc``.
-        stack.enter_context(patch.object(_bc, "atomic_write_json"))
+        # persist so the success paths don't touch the filesystem. The persist
+        # step moved into the neutral browser-capture core and now routes through
+        # ``storage_writer.replace_from_remint`` (b-PR2); stub that, returning an
+        # OK outcome so the lock-unavailable fail-closed branch is not taken.
+        from notebooklm._auth import storage_writer as _sw
+
+        stack.enter_context(
+            patch.object(
+                _sw,
+                "replace_from_remint",
+                return_value=_sw.WriteOutcome(_sw.WriteStatus.OK),
+            )
+        )
         mock_context = MagicMock()
         page = MagicMock()
         page.url = page_url

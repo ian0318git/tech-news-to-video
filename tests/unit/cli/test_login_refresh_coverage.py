@@ -24,8 +24,8 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-import notebooklm.auth as auth_module
 import notebooklm.cli.playwright_login_io as playwright_login_io_module
+from notebooklm._auth.storage_writer import LoginWriteOutcome, LoginWriteStatus
 from notebooklm.cli.services.login import refresh
 from notebooklm.cli.services.login.outcomes import BrowserCookieOutcome
 
@@ -256,57 +256,35 @@ def test_login_with_cookies_validation_error_exits(tmp_path, capsys) -> None:
 
 def test_login_with_cookies_save_oserror_exits(tmp_path) -> None:
     """An OSError while writing storage exits 1."""
-    deps = _login_base_deps(atomic_write_json=MagicMock(side_effect=OSError("disk full")))
+    deps = _login_base_deps(replace_from_login=MagicMock(side_effect=OSError("disk full")))
     with pytest.raises(SystemExit) as exc_info:
         refresh._login_with_browser_cookies(tmp_path / "out" / "storage.json", "chrome", deps=deps)
     assert exc_info.value.code == 1
 
 
-def test_login_with_cookies_write_metadata_oserror_warns(tmp_path, capsys) -> None:
-    """A write_account_metadata OSError warns but does not exit."""
-    deps = _login_base_deps(atomic_write_json=MagicMock())
-    with (
-        patch.object(
-            auth_module,
-            "write_account_metadata",
-            side_effect=OSError("metadata write fail"),
-        ),
-        patch.object(playwright_login_io_module, "run_async"),
-    ):
-        refresh._login_with_browser_cookies(
-            tmp_path / "storage.json",
-            "chrome",
-            authuser=1,
-            email="x@example.com",
-            deps=deps,
+def test_login_with_cookies_lock_unavailable_exits(tmp_path) -> None:
+    """A fail-closed ``lock_unavailable`` writer outcome exits 1 (nothing saved).
+
+    Since b-PR3 the account metadata is embedded in the same atomic write, so a
+    lock failure is a whole-write failure — no separate best-effort metadata step
+    survives it."""
+    deps = _login_base_deps(
+        replace_from_login=MagicMock(
+            return_value=LoginWriteOutcome(LoginWriteStatus.LOCK_UNAVAILABLE)
         )
-    out = capsys.readouterr().out
-    assert "account metadata write failed" in out
-
-
-def test_login_with_cookies_clear_metadata_oserror_logged(tmp_path, caplog) -> None:
-    """A clear_account_metadata OSError on a default login is logged."""
-    import logging
-
-    deps = _login_base_deps(atomic_write_json=MagicMock())
-    with (
-        patch.object(auth_module, "clear_account_metadata", side_effect=OSError("clear fail")),
-        patch.object(playwright_login_io_module, "run_async"),
-        caplog.at_level(logging.WARNING, logger=REFRESH),
-    ):
-        refresh._login_with_browser_cookies(tmp_path / "storage.json", "chrome", deps=deps)
-    assert any(
-        "Failed to clear stale account metadata" in rec.getMessage() for rec in caplog.records
     )
+    with pytest.raises(SystemExit) as exc_info:
+        refresh._login_with_browser_cookies(tmp_path / "storage.json", "chrome", deps=deps)
+    assert exc_info.value.code == 1
 
 
 def test_login_with_cookies_account_line_printed(tmp_path, capsys) -> None:
-    """When an email is provided the Account: line is printed."""
-    deps = _login_base_deps(atomic_write_json=MagicMock())
-    with (
-        patch.object(auth_module, "write_account_metadata"),
-        patch.object(playwright_login_io_module, "run_async"),
-    ):
+    """When an email is provided the Account: line is printed.
+
+    The account binding is now embedded in the writer's single atomic write
+    (``AccountRecord``); the real writer runs here."""
+    deps = _login_base_deps()
+    with patch.object(playwright_login_io_module, "run_async"):
         refresh._login_with_browser_cookies(
             tmp_path / "storage.json",
             "chrome",
@@ -320,14 +298,11 @@ def test_login_with_cookies_account_line_printed(tmp_path, capsys) -> None:
 
 def test_login_with_cookies_verify_valueerror_warns(tmp_path, capsys) -> None:
     """A ValueError from verification warns but does not exit."""
-    deps = _login_base_deps(atomic_write_json=MagicMock())
-    with (
-        patch.object(auth_module, "clear_account_metadata"),
-        patch.object(
-            playwright_login_io_module,
-            "run_async",
-            side_effect=ValueError("invalid cookies"),
-        ),
+    deps = _login_base_deps()
+    with patch.object(
+        playwright_login_io_module,
+        "run_async",
+        side_effect=ValueError("invalid cookies"),
     ):
         refresh._login_with_browser_cookies(tmp_path / "storage.json", "chrome", deps=deps)
     out = capsys.readouterr().out
@@ -336,14 +311,11 @@ def test_login_with_cookies_verify_valueerror_warns(tmp_path, capsys) -> None:
 
 def test_login_with_cookies_verify_network_error_warns(tmp_path, capsys) -> None:
     """A network RequestError warns but does not exit."""
-    deps = _login_base_deps(atomic_write_json=MagicMock())
-    with (
-        patch.object(auth_module, "clear_account_metadata"),
-        patch.object(
-            playwright_login_io_module,
-            "run_async",
-            side_effect=httpx.RequestError("connect failed"),
-        ),
+    deps = _login_base_deps()
+    with patch.object(
+        playwright_login_io_module,
+        "run_async",
+        side_effect=httpx.RequestError("connect failed"),
     ):
         refresh._login_with_browser_cookies(tmp_path / "storage.json", "chrome", deps=deps)
     out = capsys.readouterr().out
@@ -352,14 +324,11 @@ def test_login_with_cookies_verify_network_error_warns(tmp_path, capsys) -> None
 
 def test_login_with_cookies_verify_unexpected_error_warns(tmp_path, capsys) -> None:
     """An unexpected error warns but does not exit."""
-    deps = _login_base_deps(atomic_write_json=MagicMock())
-    with (
-        patch.object(auth_module, "clear_account_metadata"),
-        patch.object(
-            playwright_login_io_module,
-            "run_async",
-            side_effect=RuntimeError("boom"),
-        ),
+    deps = _login_base_deps()
+    with patch.object(
+        playwright_login_io_module,
+        "run_async",
+        side_effect=RuntimeError("boom"),
     ):
         refresh._login_with_browser_cookies(tmp_path / "storage.json", "chrome", deps=deps)
     out = capsys.readouterr().out
@@ -414,10 +383,7 @@ def _login_and_read_storage(tmp_path, jar: list[dict] | None = None, **login_kwa
         sync_server_language_to_config=MagicMock(),
         fetch_tokens_with_domains=MagicMock(return_value=None),
     )
-    with (
-        patch.object(auth_module, "clear_account_metadata"),
-        patch.object(playwright_login_io_module, "run_async"),
-    ):
+    with patch.object(playwright_login_io_module, "run_async"):
         refresh._login_with_browser_cookies(storage_path, "chrome", deps=deps, **login_kwargs)
     return json.loads(storage_path.read_text())
 
@@ -494,7 +460,6 @@ def test_login_with_cookies_required_only_on_sibling_domain_exits(tmp_path, caps
         fetch_tokens_with_domains=MagicMock(return_value=None),
     )
     with (
-        patch.object(auth_module, "clear_account_metadata"),
         patch.object(playwright_login_io_module, "run_async"),
         pytest.raises(SystemExit) as exc_info,
     ):

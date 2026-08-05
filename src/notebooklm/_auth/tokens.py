@@ -65,7 +65,18 @@ class AuthTokens:
     account_email: str | None = None
 
     def __post_init__(self) -> None:
-        """Normalize legacy flat cookie mappings into domain-keyed mappings."""
+        """Normalize legacy flat cookie mappings into domain-keyed mappings.
+
+        .. warning::
+           Constructing ``AuthTokens(...)`` directly with a ``storage_path`` but
+           no ``cookie_jar`` reaches ``build_cookie_jar`` →
+           ``build_httpx_cookies_from_storage``, which performs a SYNCHRONOUS
+           inline ``__Secure-1PSIDTS`` recovery POST + disk write. ``__post_init__``
+           is sync and cannot offload, so doing this on a running event loop
+           reintroduces the HIGH#2 freeze. Prefer :meth:`from_storage` (which
+           offloads the loader via ``asyncio.to_thread``); pass a pre-built
+           ``cookie_jar`` when you must construct ``AuthTokens`` on the loop.
+        """
         self.cookies = _auth_cookies.normalize_cookie_map(self.cookies)
         if self.cookie_jar is None:
             self.cookie_jar = _auth_cookies.build_cookie_jar(
@@ -279,7 +290,13 @@ class AuthTokens:
         # extract_cookies_with_domains -> build_cookie_jar pipeline only carried
         # (name, domain) -> value and dropped the same attributes the load
         # paths in #365 fixed.
-        jar = _auth_cookies.build_httpx_cookies_from_storage(path)
+        #
+        # ``build_httpx_cookies_from_storage`` is the public wrapper: a blocking
+        # file read plus, on an unroutable ``__Secure-1PSIDTS``, a synchronous
+        # ``RotateCookies`` POST + fsync'd disk write. Offload it to a worker
+        # thread (mirroring recovery.py's ``asyncio.to_thread`` pattern) so the
+        # inline recovery cannot freeze the event loop from this async path.
+        jar = await asyncio.to_thread(_auth_cookies.build_httpx_cookies_from_storage, path)
         # Snapshot before token fetch can rotate cookies; the snapshot/delta
         # merge in save_cookies_to_storage will then write only what this
         # process actually rotated, preserving sibling-process state.
@@ -395,16 +412,8 @@ def load_auth_from_storage(path: Path | None = None) -> dict[str, str]:
         # export NOTEBOOKLM_AUTH_JSON='{"cookies":[...]}'
         cookies = load_auth_from_storage()
     """
-    storage_state = _auth_cookies._load_storage_state(path)
     try:
-        cookies = _auth_cookies.extract_cookies_from_storage(storage_state)
-        entries = _auth_cookies._sanitized_auth_entries(storage_state)
-        _auth_cookies._validate_routable_entries(
-            entries,
-            to_cookie=_auth_cookies._storage_entry_to_cookie,
-            require_routable=True,
-        )
-        return cookies
+        return _load_auth_cookies_pure(path, require_routable=True)
     except _auth_cookies.RequiredCookieValidationError:
         # Inline ``__Secure-1PSIDTS`` recovery (issue #865). Playwright login
         # can land a ``storage_state.json`` that carries SID + secondary
@@ -419,6 +428,12 @@ def load_auth_from_storage(path: Path | None = None) -> dict[str, str]:
         # itself (default file when ``path is None`` and env-var unset), so
         # we pass ``path`` through verbatim — including ``None`` for the
         # default-profile case.
+        #
+        # The recovery invocation lives HERE, in the public wrapper body — the
+        # network-free :func:`_load_auth_cookies_pure` never triggers it (issue
+        # #2061 / event-loop-blocking fix). Sync callers (CLI) keep this inline
+        # recovery; an async caller must offload the wrapper via
+        # ``asyncio.to_thread``.
         if not _auth_psidts_recovery._recover_psidts_inline(path):
             # Recovery declined, so the routing half of the preflight has no
             # heal to trigger and must not harden into a failure this call
@@ -426,9 +441,36 @@ def load_auth_from_storage(path: Path | None = None) -> dict[str, str]:
             # cookie is genuinely absent, and otherwise returns exactly what
             # this function returned before #2061. See
             # ``_build_httpx_cookies_from_storage_state`` for the rule.
-            return _auth_cookies.extract_cookies_from_storage(storage_state)
-        storage_state = _auth_cookies._load_storage_state(path)
-        return _auth_cookies.extract_cookies_from_storage(storage_state)
+            return _load_auth_cookies_pure(path, require_routable=False)
+        return _load_auth_cookies_pure(path, require_routable=False)
+
+
+def _load_auth_cookies_pure(
+    path: Path | None = None, *, require_routable: bool = True
+) -> dict[str, str]:
+    """PURE flat-cookie loader: file I/O + validation ONLY — never any network.
+
+    Network-free half of :func:`load_auth_from_storage`: reads the storage
+    state, extracts the flat ``name -> value`` map, and runs the required-cookie
+    + RFC 6265 routing preflight. On failure it raises
+    :class:`~notebooklm._auth.cookie_policy.RequiredCookieValidationError` with a
+    closed-enum ``reason`` and STOPS — it never fires the inline
+    ``RotateCookies`` recovery POST. Composing recovery on top of the typed
+    reason is the wrapper's job (mirrors
+    :func:`notebooklm._auth.cookies._load_cookies_pure`).
+
+    ``require_routable`` toggles the RFC 6265 routing preflight; pass it ``True``
+    only where a recovery attempt follows.
+    """
+    storage_state = _auth_cookies._load_storage_state(path)
+    cookies = _auth_cookies.extract_cookies_from_storage(storage_state)
+    entries = _auth_cookies._sanitized_auth_entries(storage_state)
+    _auth_cookies._validate_routable_entries(
+        entries,
+        to_cookie=_auth_cookies._storage_entry_to_cookie,
+        require_routable=require_routable,
+    )
+    return cookies
 
 
 __all__ = ["AuthTokens", "load_auth_from_storage"]

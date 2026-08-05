@@ -75,9 +75,11 @@ ALLOWLISTED_CEILINGS: dict[str, int] = {
     # the classes cannot move to sibling files without forking that home. Bumped
     # 1512 -> 1524 for ``MissingDependencyError`` (the new DEPENDENCY category's
     # public exception; #1959), then 1524 -> 1577 for ``CollectionError`` +
-    # ``CollectionNotFoundError`` (the Collections domain; #2006) — both
-    # irreducible additions to this home.
-    "exceptions.py": 1577,
+    # ``CollectionNotFoundError`` (the Collections domain; #2006), then
+    # 1577 -> 1599 for ``LockUnavailableError`` (the canonical-storage-writer
+    # fail-closed lock exception; ADR-0029 — replaces ``filelock.Timeout`` and
+    # must be public so callers catch it) — all irreducible additions to this home.
+    "exceptions.py": 1599,
     # ``mcp/tools/sources.py`` was allowlisted at 1020 (over the 1000-line budget after
     # #1871's shared source-policy wiring + the await_upload era). #1890 folded
     # source_add_and_wait + source_upload_bytes BACK into source_add — removing the two

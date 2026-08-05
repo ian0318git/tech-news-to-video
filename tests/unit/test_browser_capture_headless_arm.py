@@ -167,6 +167,47 @@ def test_headless_authenticated_landing_persists_storage(tmp_path: Path) -> None
     assert result is not None
 
 
+@pytest.mark.requires_playwright
+def test_headless_remint_preserves_account_namespace(tmp_path: Path) -> None:
+    """[capture-1] regression: the unattended headless-launch arm re-mints
+    against our OWN profile and must CARRY the pre-existing account namespace
+    forward (carry_account=True). Pre-b-PR2 the bare atomic_write_json re-mint
+    dropped it — this test fails on that code."""
+    storage = tmp_path / "storage_state.json"
+    profile = tmp_path / "browser_profile"
+    profile.mkdir()
+    # Seed an existing profile with a bound account namespace.
+    storage.write_text(
+        json.dumps(
+            {
+                "cookies": [{"name": "OLD", "value": "x", "domain": ".google.com"}],
+                "origins": [],
+                "notebooklm": {"version": 1, "account": {"authuser": 2, "email": "keep@x.com"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    cookies = [
+        {"name": "SID", "value": "v", "domain": ".google.com", "path": "/"},
+        {"name": "APISID", "value": "a", "domain": ".google.com", "path": "/"},
+        {"name": "SAPISID", "value": "s", "domain": ".google.com", "path": "/"},
+        {"name": "__Secure-1PSIDTS", "value": "ts", "domain": ".google.com", "path": "/"},
+    ]
+    playwright, _context, _page = _fake_playwright_landing(_landed_on_app(), cookies=cookies)
+
+    _run_headless(
+        BrowserCapturePlan(browser="chromium", browser_profile=profile, storage_path=storage),
+        _RaisingCaptureIO(),
+        playwright,
+    )
+
+    data = json.loads(storage.read_text(encoding="utf-8"))
+    names = {c["name"] for c in data["cookies"]}
+    assert "SID" in names and "OLD" not in names  # cookies replaced
+    # The account binding survived the unattended re-mint.
+    assert data["notebooklm"] == {"version": 1, "account": {"authuser": 2, "email": "keep@x.com"}}
+
+
 # ---------------------------------------------------------------------------
 # Redirected to login → loud failure, no hang
 # ---------------------------------------------------------------------------

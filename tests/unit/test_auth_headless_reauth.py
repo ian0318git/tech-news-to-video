@@ -15,6 +15,7 @@ Playwright / network is needed; ``playwright`` stays lazily imported.
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -336,9 +337,11 @@ def test_concurrent_explicit_attempts_coalesce_to_one_browser(tmp_path: Path, mo
 
     The explicit ``refresh_auth(allow_headless=True)`` entry bypasses the
     mid-RPC coordinator's single-flight, so the per-storage-path drive lock +
-    freshness skip in ``attempt_headless_reauth`` is what prevents redundant
-    browsers. The leader writes the storage file (advancing its mtime); waiting
-    followers observe the fresh file and coalesce.
+    outcome coalescing in ``attempt_headless_reauth`` is what prevents redundant
+    browsers. The leader drives one real capture and publishes its typed
+    SUCCESS; the followers, which snapshotted the drive-sequence before blocking
+    and see it advance during their wait, coalesce onto that SUCCESS outcome
+    (not on the storage file's mtime).
     """
     import threading
     import time
@@ -380,6 +383,158 @@ def test_concurrent_explicit_attempts_coalesce_to_one_browser(tmp_path: Path, mo
     assert drives["count"] == 1
     assert len(results) == 6
     assert all(r.status is HeadlessReauthStatus.SUCCESS for r in results)
+
+
+class _ContentionSignalLock:
+    """A drive-lock stand-in that fires an event the moment it must block.
+
+    Wraps a real ``threading.Lock`` and exposes a ``contended`` event set on the
+    first ``acquire`` that cannot take the lock immediately — i.e. the moment a
+    follower is about to block behind the leader. That lets a test gate the
+    "an unrelated writer advances the file WHILE the follower waits" step
+    deterministically, without sleeps, and guarantees the follower has already
+    taken its pre-wait drive-sequence snapshot (the snapshot happens right
+    before ``with record.drive_lock`` in ``_drive_capture_coalesced``).
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.contended = threading.Event()
+
+    def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+        if self._lock.acquire(blocking=False):
+            return True
+        # Held by someone else — this acquirer is about to block.
+        self.contended.set()
+        if timeout is None or timeout < 0:
+            return self._lock.acquire(blocking)
+        return self._lock.acquire(blocking, timeout)
+
+    def release(self) -> None:
+        self._lock.release()
+
+    def __enter__(self) -> _ContentionSignalLock:
+        self.acquire()
+        return self
+
+    def __exit__(self, *_exc: object) -> bool:
+        self.release()
+        return False
+
+
+def test_follower_does_not_report_false_success_when_leader_failed(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Leader re-mint FAILS + an unrelated write advances the file → follower FAILED.
+
+    This is the [capture-3] regression. The old coalescing keyed on the storage
+    file's mtime: a follower that observed the mtime advance while it waited
+    reported SUCCESS — even if the leader's re-mint actually FAILED and the
+    advance came from an *unrelated* writer (keepalive / PSIDTS rotation). The
+    new coalescing keys on the leader's TYPED outcome stamped with a
+    drive-sequence, so the unrelated mtime bump is ignored and the follower
+    surfaces the leader's real FAILED result.
+
+    Deterministic ordering (no sleeps): the leader parks inside its capture
+    holding the drive lock; the follower blocks on that lock (firing
+    ``contended`` right after it takes its pre-wait sequence snapshot); the test
+    then advances the file mtime and only then lets the leader's drive fail.
+    On the pre-c-PR3 mtime code the follower would read SUCCESS here; on the
+    outcome-based code it reads FAILED.
+    """
+    import os
+
+    storage = tmp_path / "storage_state.json"
+    storage.write_text("{}", encoding="utf-8")  # pre-existing file (mtime t0)
+    profile = _make_profile(tmp_path)
+
+    # Inject a shared drive record whose lock signals contention, so both the
+    # leader and the follower coalesce through the same sequence + outcome.
+    record = hr._DriveRecord(
+        drive_lock=_ContentionSignalLock(),  # type: ignore[arg-type]
+        _state_lock=threading.Lock(),
+    )
+    monkeypatch.setattr(hr, "_get_drive_record", lambda _p, *, source: record)
+    monkeypatch.setitem(__import__("sys").modules, "playwright", _DummyModule())
+    monkeypatch.setitem(__import__("sys").modules, "playwright.sync_api", _DummyModule())
+
+    leader_in_capture = threading.Event()
+    leader_may_finish = threading.Event()
+
+    def _leader_capture(plan, io, *, headless, interactive):
+        leader_in_capture.set()
+        assert leader_may_finish.wait(timeout=5)
+        # The leader's re-mint FAILS: the profile's Google session is dead.
+        raise HeadlessLoginRequiredError("profile session is dead")
+
+    monkeypatch.setattr(hr, "run_browser_capture", _leader_capture)
+
+    results: dict[str, HeadlessReauthResult] = {}
+
+    def _run(tag: str) -> None:
+        results[tag] = attempt_headless_reauth(
+            storage_path=storage, allow_headless=True, browser_profile=profile, env={}
+        )
+
+    leader = threading.Thread(target=_run, args=("leader",))
+    leader.start()
+    assert leader_in_capture.wait(timeout=5)  # leader holds the drive lock
+
+    follower = threading.Thread(target=_run, args=("follower",))
+    follower.start()
+    # Follower has snapshotted its sequence (pre=0) and is now blocked on the lock.
+    assert record.drive_lock.contended.wait(timeout=5)  # type: ignore[attr-defined]
+
+    # An UNRELATED writer advances the storage file's mtime while the follower
+    # waits — the exact trigger that false-positived the old mtime heuristic.
+    st = storage.stat()
+    storage.write_text('{"cookies": [{"name": "x"}], "origins": []}', encoding="utf-8")
+    os.utime(storage, (st.st_atime + 10, st.st_mtime + 10))
+
+    leader_may_finish.set()  # leader's drive now fails → publishes FAILED
+    leader.join(timeout=5)
+    follower.join(timeout=5)
+
+    assert results["leader"].status is HeadlessReauthStatus.FAILED
+    # The crux: the follower must NOT infer SUCCESS from the advanced mtime.
+    assert results["follower"].status is HeadlessReauthStatus.FAILED
+    assert results["follower"].succeeded is False
+
+
+def test_stale_outcome_from_previous_cycle_is_not_coalesced(tmp_path: Path, monkeypatch) -> None:
+    """A solo follower after a past drive treats the old outcome as 'no outcome'.
+
+    A caller that arrives when NO drive is active during its wait must not
+    coalesce onto the outcome of a *previous* drive cycle (whose cookies may
+    have re-died since) — it drives its own browser. This pins the
+    strictly-newer-sequence discipline (``completed > pre``, not ``>=``).
+    """
+    storage = tmp_path / "storage_state.json"
+    profile = _make_profile(tmp_path)
+    monkeypatch.setitem(__import__("sys").modules, "playwright", _DummyModule())
+    monkeypatch.setitem(__import__("sys").modules, "playwright.sync_api", _DummyModule())
+
+    drives = {"count": 0}
+
+    def _capture(plan, io, *, headless, interactive):
+        drives["count"] += 1
+        plan.storage_path.write_text('{"cookies": [], "origins": []}', encoding="utf-8")
+
+    monkeypatch.setattr(hr, "run_browser_capture", _capture)
+
+    # First (completed) drive cycle publishes a SUCCESS outcome at sequence 1.
+    first = attempt_headless_reauth(
+        storage_path=storage, allow_headless=True, browser_profile=profile, env={}
+    )
+    assert first.status is HeadlessReauthStatus.SUCCESS
+    assert drives["count"] == 1
+
+    # A later, solo caller must NOT coalesce onto that stale outcome; it drives.
+    second = attempt_headless_reauth(
+        storage_path=storage, allow_headless=True, browser_profile=profile, env={}
+    )
+    assert second.status is HeadlessReauthStatus.SUCCESS
+    assert drives["count"] == 2  # drove its own browser, did not coalesce
 
 
 class _DummyModule:

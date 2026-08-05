@@ -17,7 +17,6 @@ from filelock import FileLock
 from .._atomic_io import atomic_write_json
 from .._env import get_base_url
 from .._url_utils import is_google_auth_redirect
-from .paths import _storage_state_lock_path
 
 logger = logging.getLogger("notebooklm.auth")
 
@@ -393,29 +392,15 @@ def write_account_metadata(storage_path: Path, *, authuser: int, email: str | No
             profile (0 for the default account).
         email: Optional account email to record alongside the index.
     """
-    account_payload: dict[str, Any] = {"authuser": authuser}
-    if email:
-        account_payload["email"] = email
+    # The in-band ``storage_state.json`` write is delegated to the canonical
+    # storage writer (which owns the atomic write, the unified storage lock, and
+    # the parent-dir/file permission contract). This function stays here as the
+    # ``notebooklm.auth``-exported facade symbol; it keeps its raise-on-lock-
+    # failure semantics (the writer raises ``LockUnavailableError`` — the
+    # documented replacement for the former ``filelock.Timeout``).
+    from . import storage_writer  # local import: avoid the account<->writer cycle
 
-    # Acquire a sibling-lock so concurrent callers serialize correctly during
-    # the migration window. ``filelock`` reuses the lock file across
-    # invocations; the file is zero-byte and cheap to leave on disk. The lock
-    # path comes from ``_storage_state_lock_path`` so every ``storage_state.json``
-    # mutator (cookie saves in ``_auth/storage.py``, account-metadata writes
-    # here) serializes on the *same* file — otherwise they race on different
-    # flock files and lose updates.
-    lock_path = _storage_state_lock_path(storage_path)
-    storage_path.parent.mkdir(parents=True, exist_ok=True)
-    with FileLock(str(lock_path), timeout=10.0):
-        # Read-modify-write under the lock to avoid losing concurrent updates.
-        data = _load_storage_state_for_write(storage_path)
-        namespace = data.get(_STORAGE_NAMESPACE_KEY)
-        if not isinstance(namespace, dict):
-            namespace = {}
-        namespace["version"] = _STORAGE_NAMESPACE_VERSION
-        namespace[_ACCOUNT_CONTEXT_KEY] = account_payload
-        data[_STORAGE_NAMESPACE_KEY] = namespace
-        atomic_write_json(storage_path, data)
+    storage_writer.update_account_metadata(storage_path, authuser=authuser, email=email)
 
     # Best-effort: drop the legacy account key from sibling context.json so
     # the next reader doesn't see the same data in two places.
@@ -462,34 +447,11 @@ def clear_account_metadata(storage_path: Path | None) -> None:
 def _clear_in_band_account(storage_path: Path) -> None:
     """Remove the ``notebooklm.account`` key from ``storage_state.json``.
 
-    No-op if the file is missing, unreadable, or doesn't carry an in-band
-    record. When the only remaining key inside the namespace is ``version``,
-    drop the namespace block entirely so the file stays compact.
+    Delegates the in-band ``storage_state.json`` mutation to the canonical
+    storage writer (best-effort: it swallows lock unavailability and read/parse
+    errors, matching the pre-refactor semantics). No-op if the file is missing,
+    unreadable, or doesn't carry an in-band record.
     """
-    if not storage_path.exists():
-        return
-    # Same canonical lock file as ``write_account_metadata`` and
-    # ``save_cookies_to_storage`` so every ``storage_state.json`` mutator
-    # serializes on one flock file.
-    lock_path = _storage_state_lock_path(storage_path)
-    storage_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        with FileLock(str(lock_path), timeout=10.0):
-            try:
-                data = json.loads(storage_path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError) as e:
-                logger.debug("in-band account clear skipped at %s: %s", storage_path, e)
-                return
-            if not isinstance(data, dict):
-                return
-            namespace = data.get(_STORAGE_NAMESPACE_KEY)
-            if not isinstance(namespace, dict) or _ACCOUNT_CONTEXT_KEY not in namespace:
-                return
-            del namespace[_ACCOUNT_CONTEXT_KEY]
-            if set(namespace.keys()) <= {"version"}:
-                del data[_STORAGE_NAMESPACE_KEY]
-            else:
-                data[_STORAGE_NAMESPACE_KEY] = namespace
-            atomic_write_json(storage_path, data)
-    except OSError as e:
-        logger.debug("in-band account clear failed at %s: %s", storage_path, e)
+    from . import storage_writer  # local import: avoid the account<->writer cycle
+
+    storage_writer.clear_in_band_account(storage_path)

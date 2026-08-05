@@ -5,12 +5,15 @@ from __future__ import annotations
 import asyncio
 import logging
 import weakref
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, Any
 
 import httpx
+
+from . import single_flight as _single_flight
+from .paths import canonical_storage_key
 
 if TYPE_CHECKING:
     from .extraction import _LoginRedirectError
@@ -27,45 +30,32 @@ class ColdRecoveryResult:
     snapshot: CookieSnapshot
 
 
+# Cross-loop coalescing of both the cold ladder and the L4 master-token re-mint
+# now flows through ``notebooklm._auth.single_flight`` (c-PR2). The old per-loop
+# in-flight task registries (``_COLD_INFLIGHT_BY_LOOP`` /
+# ``_MASTER_INFLIGHT_BY_LOOP``) and the hand-rolled ``_await_shared_task``
+# settle loop were deleted in the same PR.
+#
+# The two structures that remain here are CONSUMER-SIDE policy, deliberately NOT
+# promoted to the cross-loop core (plan §c.1):
+#   * ``_COLD_LOCKS_BY_LOOP`` — a per-loop asyncio.Lock serializing the ladder
+#     across rung policies on one loop.
+#   * ``_COLD_SUCCESS_GENERATIONS`` — the per-loop revalidate-on-bump epoch: a
+#     fresh loop that already succeeded revalidates against the network before
+#     re-running the full ladder. Promoting this to cross-loop would change the
+#     fresh-loop-runs-full-ladder behavior, so it stays per-loop here.
 _COLD_LOCKS_BY_LOOP: weakref.WeakKeyDictionary[
     asyncio.AbstractEventLoop, dict[Path, asyncio.Lock]
-] = weakref.WeakKeyDictionary()
-_COLD_INFLIGHT_BY_LOOP: weakref.WeakKeyDictionary[
-    asyncio.AbstractEventLoop,
-    dict[tuple[Path, bool], asyncio.Task[ColdRecoveryResult]],
 ] = weakref.WeakKeyDictionary()
 _COLD_SUCCESS_GENERATIONS: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[Path, int]] = (
     weakref.WeakKeyDictionary()
 )
-_MASTER_INFLIGHT_BY_LOOP: weakref.WeakKeyDictionary[
-    asyncio.AbstractEventLoop,
-    dict[Path, asyncio.Task[httpx.Cookies | None]],
-] = weakref.WeakKeyDictionary()
-
-_SharedResult = TypeVar("_SharedResult")
 
 
 def _cold_path_lock(path: Path) -> asyncio.Lock:
     loop = asyncio.get_running_loop()
     per_loop = _COLD_LOCKS_BY_LOOP.setdefault(loop, {})
     return per_loop.setdefault(path, asyncio.Lock())
-
-
-async def _await_shared_task(task: asyncio.Task[_SharedResult]) -> _SharedResult:
-    """Shield a shared recovery task and settle it before propagating cancellation."""
-    try:
-        return await asyncio.shield(task)
-    except asyncio.CancelledError:
-        while not task.done():
-            try:
-                await asyncio.shield(task)
-            except asyncio.CancelledError:
-                continue
-            except BaseException:  # noqa: BLE001 - settle before propagating cancellation
-                break
-        if task.done() and not task.cancelled():
-            task.exception()
-        raise
 
 
 async def _run_cold_recovery(
@@ -124,30 +114,33 @@ async def coalesced_cold_recovery(
     validate: Callable[[httpx.Cookies], Awaitable[None]],
     initial_error: _LoginRedirectError,
 ) -> ColdRecoveryResult:
-    """Share one complete same-loop cold ladder for equivalent callers."""
-    canonical_path = storage_path.expanduser().resolve()
-    key = (canonical_path, allow_headless)
-    loop = asyncio.get_running_loop()
-    registry = _COLD_INFLIGHT_BY_LOOP.setdefault(loop, {})
-    task = registry.get(key)
-    if task is None or task.done():
-        task = asyncio.create_task(
-            _run_cold_recovery(
-                storage_path=canonical_path,
-                allow_headless=allow_headless,
-                validate=validate,
-                initial_error=initial_error,
-            )
+    """Share one complete cold ladder across all loops for equivalent callers."""
+    canonical_path = canonical_storage_key(storage_path)
+    assert canonical_path is not None  # storage_path is a real path here
+    # Keyed per (canonical path, rung policy) — the shape the old
+    # ``_COLD_INFLIGHT_BY_LOOP`` registry used, now process-global.
+    flight_key = (str(canonical_path), ("cold", allow_headless))
+
+    def _factory() -> Coroutine[Any, Any, ColdRecoveryResult]:
+        return _run_cold_recovery(
+            storage_path=canonical_path,
+            allow_headless=allow_headless,
+            validate=validate,
+            initial_error=initial_error,
         )
-        registry[key] = task
 
-        def settle(done: asyncio.Task[ColdRecoveryResult]) -> None:
-            if registry.get(key) is done:
-                registry.pop(key, None)
+    _is_leader, flight = _single_flight.claim(flight_key, _factory)
+    shared = await _single_flight.await_flight(flight)
+    # Per-call COPIES (CodeRabbit #1): the flight result is shared verbatim across
+    # every follower on every loop. Downstream mutates BOTH halves — the jar
+    # becomes a caller's live jar (rotated in place) and
+    # ``save_cookies_to_storage(original_snapshot=...)`` mutates the snapshot dict —
+    # so hand each caller its own jar container and snapshot copy to prevent
+    # cross-loop corruption. ``CookieSnapshot`` values are immutable NamedTuples,
+    # so a shallow ``dict`` copy fully isolates the mapping.
+    from .cookies import _clone_cookie_jar
 
-        task.add_done_callback(settle)
-
-    return await _await_shared_task(task)
+    return ColdRecoveryResult(_clone_cookie_jar(shared.cookie_jar), dict(shared.snapshot))
 
 
 async def try_headless_reauth(
@@ -221,39 +214,35 @@ async def _run_master_token_reauth(
 
 
 async def try_master_token_reauth(*, storage_path: Path | None, cookie_jar: httpx.Cookies) -> bool:
-    """Share one L4 re-mint across overlapping cold and live same-loop callers."""
+    """Share one L4 re-mint across overlapping cold and live callers, any loop."""
     if storage_path is None:
         return False
 
-    canonical_path = storage_path.expanduser().resolve()
+    canonical_path = canonical_storage_key(storage_path)
+    assert canonical_path is not None  # narrowed non-None above
     master_token_path = canonical_path.parent / "master_token.json"
     if not master_token_path.exists():
         return False
 
-    loop = asyncio.get_running_loop()
-    registry = _MASTER_INFLIGHT_BY_LOOP.setdefault(loop, {})
-    task = registry.get(canonical_path)
-    if task is None or task.done():
-        task = asyncio.create_task(
-            _run_master_token_reauth(
-                storage_path=canonical_path,
-                master_token_path=master_token_path,
-            )
+    flight_key = (str(canonical_path), "master-token")
+
+    def _factory() -> Coroutine[Any, Any, httpx.Cookies | None]:
+        return _run_master_token_reauth(
+            storage_path=canonical_path,
+            master_token_path=master_token_path,
         )
-        registry[canonical_path] = task
 
-        def settle(done: asyncio.Task[httpx.Cookies | None]) -> None:
-            if registry.get(canonical_path) is done:
-                registry.pop(canonical_path, None)
-
-        task.add_done_callback(settle)
-
-    fresh_jar = await _await_shared_task(task)
+    _is_leader, flight = _single_flight.claim(flight_key, _factory)
+    fresh_jar = await _single_flight.await_flight(flight)
     if fresh_jar is None:
         return False
 
-    from .cookies import _replace_cookie_jar
+    from .cookies import _clone_cookie_jar, _replace_cookie_jar
 
-    _replace_cookie_jar(cookie_jar, fresh_jar)
+    # Repopulate this caller's jar from a COPY of the shared result (CodeRabbit
+    # #1): the single-flight jar is handed to every follower on every loop, so
+    # cloning before we read it keeps concurrent followers isolated from one
+    # another's jar mutation.
+    _replace_cookie_jar(cookie_jar, _clone_cookie_jar(fresh_jar))
     logger.info("Master-token re-mint succeeded; reloaded fresh cookies for retry.")
     return True

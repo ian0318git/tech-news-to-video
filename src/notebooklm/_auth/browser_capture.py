@@ -50,8 +50,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn, Protocol
 from urllib.parse import urlparse
 
-from .._atomic_io import atomic_write_json
-
 # ``PERSONAL_APP_HOSTS`` is imported from ``_env`` rather than ``config``
 # deliberately: it is not part of ``config.__all__``, and re-exporting it there
 # just to reach it here would add a public export for an internal host fact.
@@ -659,11 +657,30 @@ def run_browser_capture(
                 dict(playwright_state), include_domains=include_domains
             )
             filtered_state, heal_error = _heal_captured_state(filtered_state)
+            # Persist through the canonical writer under the storage lock (fixes
+            # [capture-2], the lockless re-mint write). The unattended
+            # headless-launch arm re-mints against OUR OWN profile, so it carries
+            # the existing account namespace forward (carry_account=True — fixes
+            # [capture-1]); the interactive arm may have signed into a different
+            # account, so it drops the stale binding (carry_account=False) and
+            # the CLI adapter's repair re-establishes it. The writer re-applies
+            # the same domain filter internally (idempotent with the call above).
             # Persist unconditionally. A failed heal must never discard the
             # sign-in the user just completed — the cookies are still the best
             # material available, and the disk-based cold-start recovery retries
             # from them on the next command.
-            atomic_write_json(storage_path, filtered_state)
+            from . import storage_writer  # noqa: PLC0415 (avoid import cycle)
+
+            outcome = storage_writer.replace_from_remint(
+                storage_path,
+                filtered_state,
+                carry_account=headless,
+                include_domains=include_domains,
+            )
+            if outcome.lock_unavailable:
+                raise storage_writer.LockUnavailableError(
+                    f"browser capture: storage lock unavailable at {storage_path}"
+                )
             if heal_error is not None:
                 logger.warning(
                     "Saved the captured session, but it has no usable "
@@ -868,11 +885,35 @@ def run_cdp_capture(
                 dict(playwright_state), include_domains=include_domains
             )
             filtered_state, heal_error = _heal_captured_state(filtered_state)
+            # Persist through the canonical writer under the storage lock (fixes
+            # [capture-2]). CDP attaches to the operator's DAILY Chrome, whose
+            # account set may not match our stored binding — carrying it blindly
+            # could misroute. Per the plan's CDP caveat, we take the no-resolve
+            # fallback (carry_account=False): drop the stale binding to the
+            # authuser=0 default rather than risk a wrong-account route. NOTE:
+            # downstream account-metadata repair runs only on the CLI ``auth
+            # refresh`` path (refresh_stored_session -> repair_after_refresh);
+            # the library / mid-RPC CDP re-mint arm performs NO repair, so it
+            # deliberately lands on authuser=0 here — behaviourally identical to
+            # the pre-refactor whole-file overwrite (no regression). Full
+            # stored-email re-resolution against the captured jar would be a
+            # caller-side network lookup OUTSIDE this lock.
             # Persist unconditionally. A failed heal must never discard the
             # sign-in the user just completed — the cookies are still the best
             # material available, and the disk-based cold-start recovery retries
             # from them on the next command.
-            atomic_write_json(storage_path, filtered_state)
+            from . import storage_writer  # noqa: PLC0415 (avoid import cycle)
+
+            outcome = storage_writer.replace_from_remint(
+                storage_path,
+                filtered_state,
+                carry_account=False,
+                include_domains=include_domains,
+            )
+            if outcome.lock_unavailable:
+                raise storage_writer.LockUnavailableError(
+                    f"CDP capture: storage lock unavailable at {storage_path}"
+                )
             if heal_error is not None:
                 logger.warning(
                     "Saved the captured session, but it has no usable "

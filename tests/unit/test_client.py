@@ -424,6 +424,125 @@ class TestRefreshAuth:
             with pytest.raises(ValueError, match="Failed to extract session ID"):
                 await client.refresh_auth()
 
+    @pytest.mark.asyncio
+    async def test_refresh_auth_wider_policy_reruns_with_l3_on_join_failure(
+        self, mock_auth, monkeypatch
+    ):
+        """A wider-policy caller joining a failed base flight re-runs with L3.
+
+        c-PR4 join-then-rerun (caller-side): ``refresh_auth(allow_headless=True)``
+        first JOINS the coordinator's single-flight (which runs the base-policy
+        ``allow_headless=False`` callback). If that base flight FAILS it must NOT
+        silently lose its L3 rung — it re-runs its own flight with the full
+        ``allow_headless=True`` policy.
+        """
+        client = NotebookLMClient(mock_auth)
+        calls: list[bool] = []
+
+        async def fake_session(*, allow_headless, auth, **_kwargs):
+            calls.append(allow_headless)
+            if not allow_headless:
+                # Base-policy flight cannot recover dead cookies.
+                raise ValueError("Authentication expired. Run 'notebooklm login'.")
+            return auth
+
+        import notebooklm.client as client_mod
+
+        monkeypatch.setattr(client_mod, "refresh_auth_session", fake_session)
+
+        async with client:
+            result = await client.refresh_auth(allow_headless=True)
+
+        # Joined the base flight (False, failed) then re-ran with the L3 rung (True).
+        assert calls == [False, True]
+        assert result is client._auth
+
+    @pytest.mark.asyncio
+    async def test_refresh_auth_wider_policy_returns_when_base_flight_succeeds(
+        self, mock_auth, monkeypatch
+    ):
+        """When the joined base flight succeeds, the wider caller does NOT re-run."""
+        client = NotebookLMClient(mock_auth)
+        calls: list[bool] = []
+
+        async def fake_session(*, allow_headless, auth, **_kwargs):
+            calls.append(allow_headless)
+            return auth
+
+        import notebooklm.client as client_mod
+
+        monkeypatch.setattr(client_mod, "refresh_auth_session", fake_session)
+
+        async with client:
+            result = await client.refresh_auth(allow_headless=True)
+
+        # Base flight (False) succeeded → no L3 re-run.
+        assert calls == [False]
+        assert result is client._auth
+
+    @pytest.mark.asyncio
+    async def test_refresh_auth_wider_policy_propagates_incidental_runtimeerror(
+        self, mock_auth, monkeypatch
+    ):
+        """An incidental (non-auth) RuntimeError from the joined base flight
+        PROPAGATES rather than triggering a second headless-capable refresh.
+
+        Finding #4: the base flight's only L3-remediable failure is a ValueError
+        (dead-cookie 302 / token extraction). refresh-cmd swallows its own
+        RuntimeError internally, so a RuntimeError reaching the join is incidental
+        (e.g. "Client not initialized" from ``get_http_client``). Re-running with
+        the headless rung for that would be wrong — it must surface instead.
+        """
+        client = NotebookLMClient(mock_auth)
+        calls: list[bool] = []
+
+        async def fake_session(*, allow_headless, auth, **_kwargs):
+            calls.append(allow_headless)
+            if not allow_headless:
+                raise RuntimeError("Client not initialized. Use 'async with' context.")
+            return auth
+
+        import notebooklm.client as client_mod
+
+        monkeypatch.setattr(client_mod, "refresh_auth_session", fake_session)
+
+        async with client:
+            with pytest.raises(RuntimeError, match="Client not initialized"):
+                await client.refresh_auth(allow_headless=True)
+
+        # Only the base flight ran; no headless (True) re-run was attempted.
+        assert calls == [False]
+
+    @pytest.mark.asyncio
+    async def test_refresh_auth_base_policy_does_not_route_through_coordinator(
+        self, mock_auth, monkeypatch
+    ):
+        """Default ``refresh_auth()`` performs the base refresh directly (no recursion).
+
+        The base branch is BOTH the coordinator's single-flight callback body and
+        what a default call performs, so it must call ``refresh_auth_session``
+        directly rather than re-entering ``await_refresh`` (which would recurse
+        through the callback).
+        """
+        client = NotebookLMClient(mock_auth)
+        calls: list[bool] = []
+
+        async def fake_session(*, allow_headless, auth, **_kwargs):
+            calls.append(allow_headless)
+            return auth
+
+        import notebooklm.client as client_mod
+
+        monkeypatch.setattr(client_mod, "refresh_auth_session", fake_session)
+        # If the default path routed through the coordinator, await_refresh would
+        # invoke the callback (refresh_auth) and we'd see a nested call; assert it
+        # runs exactly once with the base policy.
+        async with client:
+            result = await client.refresh_auth()
+
+        assert calls == [False]
+        assert result is client._auth
+
 
 # =============================================================================
 # AUTH PROPERTY TESTS

@@ -144,18 +144,18 @@ ALLOWLIST: tuple[_AllowlistEntry, ...] = (
         "Module-global per-running-loop lock registry (keyed by "
         "asyncio.get_running_loop()); structurally immune to cross-loop reuse.",
     ),
-    _AllowlistEntry(
-        "src/notebooklm/_auth/refresh.py",
-        None,
-        "Module-global per-running-loop lock registry (keyed by "
-        "asyncio.get_running_loop()); structurally immune to cross-loop reuse.",
-    ),
+    # ``refresh.py`` no longer constructs an ``asyncio.Lock`` (c-PR2): its
+    # cross-loop coalescing moved to ``_auth/single_flight.py``, which uses a
+    # ``threading.Lock`` + ``concurrent.futures.Future`` bridge (neither is a
+    # loop-bound asyncio primitive), so there is nothing left to allowlist here.
     _AllowlistEntry(
         "src/notebooklm/_auth/recovery.py",
         None,
-        "Module-global per-running-loop lock and in-flight task registries "
-        "(weakly keyed by asyncio.get_running_loop()); structurally immune "
-        "to cross-loop reuse.",
+        "Module-global per-running-loop lock registry (``_COLD_LOCKS_BY_LOOP``, "
+        "weakly keyed by asyncio.get_running_loop()); structurally immune to "
+        "cross-loop reuse. The in-flight task coalescing moved to "
+        "single_flight.py in c-PR2, but the per-loop revalidate lock remains "
+        "here as consumer-side policy.",
     ),
 )
 

@@ -7,8 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Mid-session `NOTEBOOKLM_REFRESH_CMD` (opt-in for one release).** The external
+  refresh command (the L2.5 rung of the unified recovery ladder) previously fired
+  only at cold start; it can now also run **mid-session** — e.g. inside a
+  long-lived server that has been running past cookie expiry — when you set
+  `NOTEBOOKLM_REFRESH_CMD_MIDSESSION=1` (literal `1`). It is **off by default for
+  one release** so operators whose commands assume cold-start-only invocation are
+  not surprised, then flips to default-on a later release. Because promoting the
+  rung into long-lived servers widens exposure of whatever the command prints,
+  the default DEBUG log line now records only the command basename, exit code,
+  and byte counts; set `NOTEBOOKLM_REFRESH_CMD_LOG_OUTPUT=1` to route the
+  command's captured `stdout`/`stderr` into the redacting DEBUG logger. The
+  refresh subprocess environment also now scrubs **all** first-party secret vars
+  (`NOTEBOOKLM_AUTH_JSON`, `NOTEBOOKLM_SERVER_TOKEN`,
+  `NOTEBOOKLM_SERVER_TOKEN_FILE`, `NOTEBOOKLM_MCP_TOKEN`,
+  `NOTEBOOKLM_MCP_OAUTH_PASSWORD`, `NOTEBOOKLM_MCP_OAUTH_STATE_PATH`), not just
+  `NOTEBOOKLM_AUTH_JSON`. See the new
+  [ADR-0030](docs/adr/0030-one-recovery-ladder.md) ("one recovery ladder") and
+  `docs/configuration.md`.
+
 ### Changed
 
+- **`NOTEBOOKLM_AUTH_JSON` is now read through a single helper.** The env var was
+  checked at ~7 auth-layer call sites that had drifted on
+  presence-vs-truthiness (the #2057 / #2083 class of bug, where a *set-but-empty*
+  value fell through to a profile file at some sites and raised at others). All
+  auth-layer reads now route through `notebooklm._auth.paths.resolve_auth_json_env`:
+  an **unset** variable falls through to profile-file auth, and a **set** value —
+  even empty — selects inline env auth (never a silent fall-through to a file),
+  with the one payload-parsing consumer (`_load_storage_state`) raising the
+  "set but empty" configuration error. Behaviour is preserved (the tokens.py
+  truthiness outlier had already been corrected in #2083); this consolidation
+  makes the contract un-driftable. See [ADR-0030](docs/adr/0030-one-recovery-ladder.md).
+  The `notebooklm.auth` browser-cookie filter's dropped-cookie / malformed-row
+  warnings now also log to the documented `notebooklm.auth` logger rather than a
+  private child logger.
+
+- **`notebooklm.io.atomic_write_json` now rejects `storage_state.json` paths.**
+  As the final step of routing every `storage_state.json` mutation through the
+  single canonical `_auth.storage_writer` (ADR-0029), the public
+  `atomic_write_json` helper now raises `ValueError` when handed a
+  `storage_state.json` path — the same guard `atomic_update_json` has enforced
+  since #1215. A bare atomic write skips the canonical dotted
+  `.storage_state.json.lock` sentinel and would re-open the lost-update race, so
+  it is refused; cookie/account writers must go through the dedicated
+  `notebooklm._auth.storage_writer` intents. Callers writing other JSON files
+  (`context.json`, `config.json`, OAuth tokens, …) are unaffected. The canonical
+  writer uses a module-private bypass internally. This is a documented
+  public-surface change (precedent #1215).
+- The CLI `login --browser-cookies`, `auth refresh --browser-cookies`, and
+  `auth import-cookies` writers now persist through the canonical
+  `storage_writer.replace_from_login` (write-time domain filter, post-filter
+  required-cookie revalidation, in-band account metadata, and — for import — the
+  `.bak` backup all happen under one storage lock). Additive `notebooklm.auth`
+  re-exports (`replace_from_login`, `LoginWriteOutcome`, `AccountRecord`,
+  `KEEP_ACCOUNT`, `CLEAR_ACCOUNT`, `drop_legacy_account_key`) expose the writer to
+  the CLI boundary. Behaviour is preserved; the failure surface
+  (`COOKIE_VALIDATION_FAILED` on dropped required cookies, exit 1, nothing
+  written) is unchanged.
 - **CLI, MCP, and REST downloads now derive from one artifact-format registry.**
   `_app.download_specs` owns each type's client binding and each representation's
   extension/MIME pair; adapter registries, MCP schema enums, and the MIME lookup

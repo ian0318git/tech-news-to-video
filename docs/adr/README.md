@@ -63,6 +63,8 @@ The ADR Index table utilizes five eras of Status notation to reflect the lifecyc
 | [0026](0026-mcp-studio-surface.md) | MCP Studio surface — notes + artifacts unified | Accepted |
 | [0027](0027-mcp-app-upload-widget.md) | In-app MCP-App upload widget (opt-in) | Accepted (experimental / opt-in) |
 | [0028](0028-gemini-notebook-rename.md) | Renaming the package for Google's "Gemini Notebook" rebrand | Proposed — v3, single-release 0.9.0 flip |
+| [0029](0029-canonical-storage-writer.md) | Single canonical `storage_state.json` writer | Accepted (rolling out) |
+| [0030](0030-one-recovery-ladder.md) | One recovery ladder (single-flight core + off-loop loaders) | Accepted (rolling out) |
 
 ADR-0007 ships alongside its enforcement substrate: the concrete fixtures (`tests/_fixtures/`) and meta-lint (`tests/_guardrails/test_no_forbidden_monkeypatches.py`) are added in the same PR (`arch-d1-fixtures-scaffolding`) so the record is grounded in working code rather than an empty placeholder.
 

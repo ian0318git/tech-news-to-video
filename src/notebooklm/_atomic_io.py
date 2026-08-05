@@ -199,8 +199,17 @@ def replace_file_atomically(temp_path: Path, path: Path) -> None:
             delay = min(delay * 2, _WINDOWS_REPLACE_MAX_DELAY_SECONDS)
 
 
-def atomic_write_json(path: Path, data: Any, *, mode: int = 0o600) -> None:
-    """Write ``data`` as JSON to ``path`` atomically and durably.
+def _atomic_write_json_unchecked(path: Path, data: Any, *, mode: int = 0o600) -> None:
+    """Atomic + durable JSON write **without** the storage-state path guard.
+
+    Module-private **bypass** used only by the canonical storage writer
+    (:mod:`notebooklm._auth.storage_writer`), which legitimately writes
+    ``storage_state.json`` under the canonical dotted lock. Every other caller
+    must use the public :func:`atomic_write_json`, which rejects
+    ``storage_state.json`` paths (see that function and :func:`atomic_update_json`
+    for the lost-update rationale, #1215). The boundary is enforced by
+    ``tests/_guardrails/test_storage_writer_boundary.py`` (an equality-asserted
+    allowlist of this private symbol's importers == ``{storage_writer.py}``).
 
     Steps:
 
@@ -284,6 +293,53 @@ def atomic_write_json(path: Path, data: Any, *, mode: int = 0o600) -> None:
             except Exception as cleanup_err:
                 logger.debug("Failed to clean up temp file %s: %s", temp_path, cleanup_err)
         raise
+
+
+def atomic_write_json(path: Path, data: Any, *, mode: int = 0o600) -> None:
+    """Write ``data`` as JSON to ``path`` atomically and durably.
+
+    Thin public wrapper over :func:`_atomic_write_json_unchecked` that first
+    **rejects** ``storage_state.json`` paths, mirroring the guard
+    :func:`atomic_update_json` has carried since #1215. Every ``storage_state.json``
+    mutation must serialize on the canonical dotted ``.storage_state.json.lock``
+    sentinel (``_auth.paths._storage_state_lock_path``); a bare atomic write skips
+    that lock and re-opens the lost-update race, so it is refused here. Cookie /
+    account writers use the dedicated locked writers in
+    :mod:`notebooklm._auth.storage_writer` (the sole sanctioned user of the
+    private bypass) instead.
+
+    Raises:
+        ValueError: If ``path`` names ``storage_state.json`` (case-insensitive) —
+            route it through :mod:`notebooklm._auth.storage_writer`.
+
+    All other behaviour (atomicity, ``0o600`` default mode, fsync durability,
+    temp cleanup, Windows replace retries) is delegated unchanged — see
+    :func:`_atomic_write_json_unchecked` for the full step list.
+    """
+    # Case-insensitive match: on macOS (APFS/HFS+) and Windows (NTFS) a casing
+    # variant resolves to the same file, so ``==`` alone would let it slip past.
+    #
+    # LEXICAL guard only: this compares the basename (casefolded), mirroring
+    # ``atomic_update_json``'s #1215 precedent below. It is deliberately NOT a
+    # resolved-path check, so a symlink whose OWN basename differs (e.g.
+    # ``cookies.json`` -> ``storage_state.json``) slips past this string test. That
+    # is acceptable because this rejection is a fast fail-loud tripwire for the
+    # common misuse, not the real boundary: the AST guardrail
+    # (``tests/_guardrails/test_storage_writer_boundary.py``) plus the canonical
+    # dotted storage lock are what actually enforce single-writer serialization.
+    # We do not resolve() here (an extra stat + symlink walk on every write) for a
+    # bypass shape that the import-boundary guardrail already flags at its source.
+    if path.name.casefold() == _STORAGE_STATE_FILENAME:
+        raise ValueError(
+            f"atomic_write_json must not be called with a {path.name!r} "
+            f"({_STORAGE_STATE_FILENAME!r}) path: a bare atomic write skips the "
+            "canonical dotted '.storage_state.json.lock' sentinel "
+            "(_storage_state_lock_path, #1215) and would re-introduce a "
+            "lost-update race. Use the dedicated notebooklm._auth.storage_writer "
+            "intents (replace_from_login / replace_from_remint / persist_minted_jar "
+            "/ merge_cookie_delta / update_account_metadata) instead."
+        )
+    _atomic_write_json_unchecked(path, data, mode=mode)
 
 
 def atomic_update_json(

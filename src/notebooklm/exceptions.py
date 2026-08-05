@@ -76,6 +76,7 @@ __all__ = [
     "ValidationError",
     "ConfigurationError",
     "MissingDependencyError",
+    "LockUnavailableError",
     # Headless re-auth (layer-3 auth recovery)
     "HeadlessReauthError",
     "HeadlessLoginRequiredError",
@@ -260,6 +261,27 @@ class MissingDependencyError(ConfigurationError):
     :func:`notebooklm._app.errors.classify` routes it to the more specific
     ``DEPENDENCY`` category so adapters surface an *install the extra* hint rather
     than the auth/storage one (#1959).
+    """
+
+
+class LockUnavailableError(NotebookLMError, TimeoutError):
+    """The canonical ``storage_state.json`` lock could not be acquired.
+
+    Raised by the fail-closed storage writers (account-metadata and master-token
+    persistence in :mod:`notebooklm._auth.storage_writer`) when the unified
+    storage-sentinel lock stays unavailable for the whole bounded acquire window
+    (default 90 s) — either sustained contention or an infrastructure failure
+    (read-only directory, NFS without flock support, fd exhaustion). See
+    ADR-0029.
+
+    It mixes in the built-in :class:`TimeoutError` (itself an :class:`OSError`),
+    exactly mirroring the ``filelock.Timeout`` MRO it replaces, so existing
+    ``except OSError`` / ``except TimeoutError`` arms around those writers keep
+    catching a lock failure unchanged (the 10 s→90 s bound and the type change
+    are the only observable differences). It is also a :class:`NotebookLMError`,
+    so it is catchable via the library umbrella and
+    :func:`notebooklm._app.errors.classify` folds it into the ``LIBRARY``
+    category (rendered as ``NOTEBOOKLM_ERROR`` by the CLI/MCP/server adapters).
     """
 
 

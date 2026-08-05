@@ -177,6 +177,8 @@ remains an unconditional forced re-mint.
 | `NOTEBOOKLM_RPC_OVERRIDES` | JSON object mapping `RPCMethod` enum names to RPC ID strings (community self-patch when Google rotates a method ID; e.g. `{"LIST_NOTEBOOKS":"AbC123"}`) | - |
 | `NOTEBOOKLM_REFRESH_CMD` | Optional command (argv list, or shell string with `_USE_SHELL=1`) invoked when auth refresh is required. Must exit `0` after writing a refreshed `storage_state.json`; the parent reloads from disk | - |
 | `NOTEBOOKLM_REFRESH_CMD_USE_SHELL` | Opt the `NOTEBOOKLM_REFRESH_CMD` subprocess back into `shell=True` execution. Default `shell=False` (argv list) — set to the literal `1` (only `"1"` is honored — not `true`/`yes`/`on`) when the refresh command requires shell metacharacters | `0` |
+| `NOTEBOOKLM_REFRESH_CMD_MIDSESSION` | Opt in (literal `1`) to running `NOTEBOOKLM_REFRESH_CMD` **mid-session** (the L2.5 rung), not only at cold start. Off by default for one release so operators whose commands assume cold-start-only invocation are not surprised inside long-lived servers; flips to default-on a later release ([ADR-0030](adr/0030-one-recovery-ladder.md)) | `0` |
+| `NOTEBOOKLM_REFRESH_CMD_LOG_OUTPUT` | Opt in (literal `1`) to routing the refresh command's captured `stdout`/`stderr` to the redacting **DEBUG** logger. Off by default — the default DEBUG line carries only basename + exit code + byte counts, so promoting the rung into long-lived servers does not widen exposure of whatever the command prints | `0` |
 | `NOTEBOOKLM_REFRESH_PROFILE` | Child-process hint set for `NOTEBOOKLM_REFRESH_CMD`; names the resolved profile being refreshed | resolved profile |
 | `NOTEBOOKLM_REFRESH_STORAGE_PATH` | Child-process hint set for `NOTEBOOKLM_REFRESH_CMD`; path to the `storage_state.json` file the command must rewrite | resolved storage path |
 | `NOTEBOOKLM_DISABLE_KEEPALIVE_POKE` | Disable the proactive `accounts.google.com/RotateCookies` poke that refreshes `__Secure-1PSIDTS` ahead of expiry | `0` |
@@ -244,6 +246,8 @@ be audited from one location.
 | `NOTEBOOKLM_DEBUG` | When `1`, RPC error messages include the **full** untruncated response body instead of the default 80-char preview. Verbose; intended for deep debugging only. | Process env on each error formatting call. | `exceptions._truncate_response_preview` |
 | `NOTEBOOKLM_REFRESH_CMD` | Optional command invoked when auth refresh is required. Must exit `0` after writing a refreshed `storage_state.json`; the parent reloads cookies from disk. Stdout/stderr are not parsed (only surfaced in the non-zero-exit error message). Parsing honors `NOTEBOOKLM_REFRESH_CMD_USE_SHELL`. | Process env on each refresh subprocess spawn. | `auth` refresh-spawn helper (constant `NOTEBOOKLM_REFRESH_CMD_ENV` in `notebooklm.auth`) |
 | `NOTEBOOKLM_REFRESH_CMD_USE_SHELL` | Opt the optional `NOTEBOOKLM_REFRESH_CMD` subprocess back into `shell=True`. Default `shell=False` parses the command with `shlex.split` and invokes it as an argv list (safer; resists shell-injection footguns when the env var is sourced from CI configs or container env files). | Process env on each refresh subprocess spawn. | `auth` refresh-spawn helper (constant `NOTEBOOKLM_REFRESH_CMD_USE_SHELL_ENV` in `notebooklm.auth`) |
+| `NOTEBOOKLM_REFRESH_CMD_MIDSESSION` | Opt in (literal `1`) to firing `NOTEBOOKLM_REFRESH_CMD` mid-session (the L2.5 rung of the unified ladder), not just at cold start. Default off **for one release** — the rung was cold-start-only before, and enabling it inside a long-lived server changes when the operator's command runs; flips to default-on a later release. See [ADR-0030](adr/0030-one-recovery-ladder.md). | Read on the mid-session recovery path. | `auth._run_refresh_cmd` (constant `NOTEBOOKLM_REFRESH_CMD_MIDSESSION_ENV` in `notebooklm.auth`) |
+| `NOTEBOOKLM_REFRESH_CMD_LOG_OUTPUT` | Opt in (literal `1`) to routing the refresh command's captured `stdout`/`stderr` into the redacting DEBUG logger. Default off: because the mid-session promotion widens exposure of whatever the command prints inside long-lived servers, the default DEBUG line carries only basename + exit code + byte counts. | Process env / logging path on each refresh subprocess spawn. | `auth._run_refresh_cmd` (constant `NOTEBOOKLM_REFRESH_CMD_LOG_OUTPUT_ENV` in `notebooklm.auth`) |
 | `NOTEBOOKLM_REFRESH_PROFILE` | Child env var injected into `NOTEBOOKLM_REFRESH_CMD`; names the resolved NotebookLM profile that is being refreshed. Refresh scripts may read it, but setting it in the parent shell does not select the profile. | Set by `auth` refresh-spawn helper from the resolved profile. | `auth._run_refresh_cmd` |
 | `NOTEBOOKLM_REFRESH_STORAGE_PATH` | Child env var injected into `NOTEBOOKLM_REFRESH_CMD`; points to the `storage_state.json` file the command must rewrite before exiting `0`. Refresh scripts may read it, but setting it in the parent shell does not select storage. | Set by `auth` refresh-spawn helper from the explicit storage path or profile-aware storage path. | `auth._run_refresh_cmd` |
 | `NOTEBOOKLM_DISABLE_KEEPALIVE_POKE` | When `1`, disable the proactive `accounts.google.com/RotateCookies` poke that refreshes `__Secure-1PSIDTS` ahead of expiry. Useful when running behind a proxy that rejects the extra request, or in offline test fixtures. | Process env on every keepalive check. | `auth` keepalive guards (constant `NOTEBOOKLM_DISABLE_KEEPALIVE_POKE_ENV` in `notebooklm.auth`) |
@@ -361,6 +365,21 @@ profile name.
 
 See also `NOTEBOOKLM_REFRESH_CMD_USE_SHELL` to opt back into `shell=True`
 parsing.
+
+By default the command fires only at **active cold start** — client construction
+/ `AuthTokens.from_storage`, which run the recovery ladder when the stored
+cookies are dead. **Passive readiness probes do NOT invoke it**: `auth check
+--test --passive` (and other passive token fetches) use the strict, no-recovery
+loader and never enter the refresh path, so a passive check reports expiry
+without spawning the command. Set `NOTEBOOKLM_REFRESH_CMD_MIDSESSION=1` to also
+fire it **mid-session** (the L2.5 rung of the unified recovery ladder), e.g.
+inside a long-lived server that has been running past cookie expiry. This is **opt-in for
+one release** and flips to default-on afterward; enable it only once you have
+confirmed your command is safe to invoke while the client is live. When you need
+to see what the command printed, set `NOTEBOOKLM_REFRESH_CMD_LOG_OUTPUT=1` to
+route its captured `stdout`/`stderr` into the redacting DEBUG logger — the
+default DEBUG line records only the command basename, exit code, and byte
+counts. See [ADR-0030](adr/0030-one-recovery-ladder.md) for the ladder design.
 
 ### NOTEBOOKLM_HL
 

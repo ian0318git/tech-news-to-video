@@ -757,6 +757,24 @@ class NotebookLMClient:
                 credential (a live Google session). L3 is local-unattended-only
                 and must NOT be the auth path for a remote / hosted MCP server.
 
+        Coordinator single-flight + join-then-rerun (caller-side):
+
+            The base-policy refresh (``allow_headless=False``) is BOTH the
+            coordinator's single-flight callback (the mid-RPC 401 path runs it
+            via :meth:`AuthRefreshCoordinator.await_refresh`) and what a default
+            ``refresh_auth()`` performs directly — so the callback path never
+            re-routes into the coordinator and there is no recursion.
+
+            A wider-policy caller (``allow_headless=True``) instead JOINS
+            whatever base-policy flight the coordinator has in progress (or
+            starts one) via ``await_refresh``. If that shared flight SUCCEEDS
+            the tokens are already re-minted and it returns. If it FAILS, the
+            base flight lacked the L3 rung, so this caller RE-RUNS its own
+            refresh with the full rung policy (``allow_headless=True``) — it
+            never silently loses its L3 rung to a narrower flight it joined.
+            The coordinator's internals (its single unkeyed task slot) are not
+            modified; the join-then-rerun is entirely caller-side.
+
         Returns:
             Updated AuthTokens.
 
@@ -765,14 +783,37 @@ class NotebookLMClient:
                 changed), or if cookies are dead and L3 is unavailable / also
                 fails (the persisted profile's Google session is expired too).
         """
-        return await refresh_auth_session(
-            auth=self._auth,
-            kernel=self._collaborators.kernel,
-            auth_coord=self._collaborators.auth_coord,
-            lifecycle=self._collaborators.lifecycle,
-            cookie_persistence=self._collaborators.cookie_persistence,
-            allow_headless=allow_headless,
-        )
+        coord = self._collaborators.auth_coord
+        if not allow_headless or not coord.has_refresh_callback:
+            # Base policy — also the coordinator's single-flight callback body,
+            # so this branch must NOT re-enter await_refresh (that would recurse
+            # through the callback). No coordinator wired ⇒ same direct path.
+            return await refresh_auth_session(
+                auth=self._auth,
+                kernel=self._collaborators.kernel,
+                auth_coord=coord,
+                lifecycle=self._collaborators.lifecycle,
+                cookie_persistence=self._collaborators.cookie_persistence,
+                allow_headless=allow_headless,
+            )
+        # Wider policy: join the in-flight base refresh (join-then-rerun).
+        try:
+            await coord.await_refresh()
+        except ValueError:
+            # Narrow by design: the L3-remediable base-flight failure surfaces as
+            # ValueError (dead-cookie 302 / token extraction). refresh-cmd swallows
+            # its RuntimeError internally (returns bool), so a RuntimeError here is
+            # incidental (e.g. "Client not initialized") and must propagate, not
+            # trigger a second headless refresh; transport 5xx propagates too.
+            return await refresh_auth_session(
+                auth=self._auth,
+                kernel=self._collaborators.kernel,
+                auth_coord=coord,
+                lifecycle=self._collaborators.lifecycle,
+                cookie_persistence=self._collaborators.cookie_persistence,
+                allow_headless=True,
+            )
+        return self._auth
 
     def get_account_authuser(self) -> int:
         """Return the ``authuser`` index of the signed-in account (0 = default).

@@ -15,7 +15,12 @@ from typing import Any
 from . import cookie_semantics as _cookie_semantics
 from .cookie_policy import _is_trusted_google_cookie_domain, build_cookie_domain_allowlist
 
-logger = logging.getLogger(__name__)
+# The documented auth logger (core-F10), not ``__name__``: this module's
+# dropped-cookie / malformed-row warnings must reach the same
+# ``notebooklm.auth`` namespace users already configure for auth diagnostics
+# (ADR-0016), rather than the private ``notebooklm._auth._browser_cookie_filter``
+# child that no operator subscribes to.
+logger = logging.getLogger("notebooklm.auth")
 
 
 def _safe_cookie_shape(cookie: dict[str, Any]) -> str:

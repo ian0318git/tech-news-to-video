@@ -26,7 +26,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import secrets
 import threading
 from collections.abc import Iterator
@@ -241,35 +240,16 @@ def persist_minted_jar(path: Path, jar: httpx.Cookies, *, email: str | None) -> 
     preserving existing CLI context (notebook_id/conversation_id) and refreshing
     the account namespace. Serialized on the shared storage lock so it never
     tears against a running keepalive. Old cookies are *replaced*, not merged —
-    a re-mint is a brand-new session."""
-    from filelock import FileLock  # noqa: PLC0415 (transitive dep)
+    a re-mint is a brand-new session.
 
-    from .paths import _storage_state_lock_path  # noqa: PLC0415 (avoid import cycle)
+    Delegates the storage-state write to the canonical
+    :func:`notebooklm._auth.storage_writer.persist_minted_jar`, which routes the
+    write through ``_atomic_io`` (fsync durability + temp cleanup, closing
+    [storage-F5]) under the unified bounded storage lock. This function stays as
+    the ``notebooklm.auth``-exported facade symbol."""
+    from . import storage_writer  # noqa: PLC0415 (avoid import cycle)
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with FileLock(str(_storage_state_lock_path(path)), timeout=10.0):
-        data: dict[str, Any] = {}
-        if path.exists():
-            try:
-                loaded = json.loads(path.read_text(encoding="utf-8"))
-                data = loaded if isinstance(loaded, dict) else {}
-            except json.JSONDecodeError:
-                data = {}
-        data["cookies"] = storage_state_from_jar(jar)["cookies"]
-        data.setdefault("origins", [])
-        ns_raw = data.get("notebooklm")
-        ns: dict[str, Any] = ns_raw if isinstance(ns_raw, dict) else {}
-        ns["version"] = 1
-        ns["account"] = {"authuser": 0, **({"email": email} if email else {})}
-        data["notebooklm"] = ns
-        # 0600: the jar holds live session cookies (SID/SAPISID/__Secure-1PSID…).
-        # Hidden .{name}.tmp matches write_master_token so neither leaves a
-        # visible *.tmp artifact mid-write.
-        tmp = path.with_name(f".{path.name}.tmp")
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f)
-        tmp.replace(path)
+    storage_writer.persist_minted_jar(path, jar, email=email)
 
 
 # --- master_token.json persistence (mode 0600, beside storage_state.json) ---
@@ -293,18 +273,15 @@ def read_master_token(path: Path) -> dict[str, Any] | None:
 
 
 def write_master_token(path: Path, *, email: str, master_token: str, android_id: str) -> None:
-    """Persist a master-token record at mode 0600 (full-account credential)."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "version": _MASTER_TOKEN_VERSION,
-        "email": email,
-        "android_id": android_id,
-        "master_token": master_token,
-    }
-    # Create the temp at 0600 from the start (don't widen-then-chmod) — this is a
-    # full-account credential. umask cannot widen 0600 (it has no group/other bits).
-    tmp = path.parent / f".{path.name}.tmp"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump(payload, f)
-    tmp.replace(path)
+    """Persist a master-token record at mode 0600 (full-account credential).
+
+    Delegates to :func:`notebooklm._auth.storage_writer.write_master_token`,
+    which routes the write through ``_atomic_io`` (atomic + fsync-durable + temp
+    cleanup) under a bounded sibling lock — closing the lockless-write half of
+    [storage-F5]. This function stays as the ``notebooklm.auth``-exported facade
+    symbol."""
+    from . import storage_writer  # noqa: PLC0415 (avoid import cycle)
+
+    storage_writer.write_master_token(
+        path, email=email, master_token=master_token, android_id=android_id
+    )

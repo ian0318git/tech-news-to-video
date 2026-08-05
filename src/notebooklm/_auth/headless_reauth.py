@@ -104,6 +104,76 @@ NOTEBOOKLM_HEADLESS_REAUTH_ENV = "NOTEBOOKLM_HEADLESS_REAUTH"
 # precedence over this env var.
 NOTEBOOKLM_HEADLESS_REAUTH_CDP_URL_ENV = "NOTEBOOKLM_HEADLESS_REAUTH_CDP_URL"
 
+
+@dataclass
+class _DriveRecord:
+    """Per-storage-path single-flight state for the headless browser drive.
+
+    The in-process coalescing primitive for one ``storage_state.json``. It
+    bundles the drive lock that serializes browser drives with the typed
+    outcome of the most recent COMPLETED drive, stamped with a monotonic
+    drive-sequence number (``completed``). Followers coalesce on that typed
+    outcome — never on file mtime — so a sibling write that merely touches the
+    storage file can never be mistaken for a successful re-mint.
+
+    The structure is deliberately self-contained (its own state lock, its own
+    sequence) so a later shared single-flight core can reuse it wholesale.
+
+    Attributes:
+        drive_lock: Serializes browser drives against this storage file; the
+            leader holds it across the whole capture, followers block on it.
+        _state_lock: Guards ``_completed`` / ``_last_outcome`` so a follower's
+            pre-wait :meth:`snapshot_completed` (taken WITHOUT the drive lock)
+            races safely against the leader's :meth:`publish` (under the drive
+            lock).
+        _completed: Monotonic count of drives that finished and published an
+            outcome on this path. Bumped only by :meth:`publish`.
+        _last_outcome: The typed result of the most recent completed drive, or
+            ``None`` before any drive has completed.
+    """
+
+    drive_lock: threading.Lock
+    _state_lock: threading.Lock
+    _completed: int = 0
+    _last_outcome: HeadlessReauthResult | None = None
+
+    def snapshot_completed(self) -> int:
+        """Return the completed-drive count for a pre-wait freshness snapshot.
+
+        A follower calls this BEFORE blocking on :attr:`drive_lock`, then
+        passes the value to :meth:`fresh_outcome_since` after acquiring the
+        lock — accepting an outcome only from a drive that completed during its
+        wait.
+        """
+        with self._state_lock:
+            return self._completed
+
+    def publish(self, outcome: HeadlessReauthResult) -> int:
+        """Record a completed drive's typed outcome and bump the sequence.
+
+        Called by the leader while holding :attr:`drive_lock`. Returns the new
+        (post-bump) completed-drive count.
+        """
+        with self._state_lock:
+            self._completed += 1
+            self._last_outcome = outcome
+            return self._completed
+
+    def fresh_outcome_since(self, pre_completed: int) -> HeadlessReauthResult | None:
+        """Return the leader's outcome only if a drive completed during the wait.
+
+        Given the caller's pre-wait :meth:`snapshot_completed` value, return the
+        most recent typed outcome iff the completed-drive count has advanced
+        past it (a strictly-newer drive finished while the caller waited).
+        Otherwise return ``None`` — a stale outcome from a previous drive cycle
+        reads as "no outcome", so the caller drives its own browser.
+        """
+        with self._state_lock:
+            if self._completed > pre_completed and self._last_outcome is not None:
+                return self._last_outcome
+            return None
+
+
 # Per-storage-path single-flight for the (blocking, sync) browser drive.
 #
 # The mid-RPC cascade already coalesces through
@@ -112,12 +182,30 @@ NOTEBOOKLM_HEADLESS_REAUTH_CDP_URL_ENV = "NOTEBOOKLM_HEADLESS_REAUTH_CDP_URL"
 # coordinator, and several clients (or processes-within-a-process) can target
 # the same profile. This registry guarantees that, within ONE process, at most
 # ONE browser drives a given ``storage_state.json`` at a time: concurrent
-# callers serialize on a per-resolved-path ``threading.Lock``, and a follower
-# that sees the storage file freshly rewritten by the leader while it waited
-# SKIPS its own browser (coalesces) instead of launching a redundant one.
+# callers serialize on a per-resolved-path drive lock, and a follower coalesces
+# onto the LEADER'S TYPED OUTCOME — but ONLY an outcome from a drive that
+# completed *during its own wait* — instead of launching a redundant browser.
 #
-# ``_DRIVE_REGISTRY_LOCK`` makes the get-or-create of a per-path lock atomic
-# across the worker threads ``asyncio.to_thread`` may use. This is a
+# **Coalescing keys on the leader's outcome, never on file mtime.** An earlier
+# design skipped the follower's browser when it observed the storage file's
+# mtime advance while it waited. That was a false-SUCCESS hazard: an *unrelated*
+# writer (a keepalive / PSIDTS rotation) advancing the same file's mtime made a
+# follower report SUCCESS even when the leader's re-mint actually FAILED — the
+# user then hit a confusing downstream auth error instead of the honest "Run
+# 'notebooklm login'" path. Followers now accept only the leader's *typed*
+# :class:`HeadlessReauthResult`, stamped with a monotonic drive-sequence
+# number, and only when that sequence advanced during the wait.
+#
+# **Snapshot-before-wait (the in-process analogue of the #816 rule).** A
+# follower snapshots the completed-drive count BEFORE blocking on the drive
+# lock and accepts an outcome only from a *strictly-newer* completed drive. A
+# stale outcome from a PREVIOUS drive cycle (cookies may have re-died since)
+# reads as "no outcome", so the follower drives its own browser. A follower
+# that cannot observe a fresh leader outcome (crashed leader, stale record)
+# also drives its own — a redundant browser is SAFE, a false SUCCESS is NOT.
+#
+# ``_DRIVE_REGISTRY_LOCK`` makes the get-or-create of a per-path drive record
+# atomic across the worker threads ``asyncio.to_thread`` may use. This is a
 # best-effort, single-process guard; cross-process coordination (two CLI
 # invocations) is out of scope here — they each own their own browser, the same
 # way the interactive ``notebooklm login`` flow does.
@@ -129,7 +217,7 @@ NOTEBOOKLM_HEADLESS_REAUTH_CDP_URL_ENV = "NOTEBOOKLM_HEADLESS_REAUTH_CDP_URL"
 # ``_LAST_POKE_ATTEMPT_MONOTONIC`` elsewhere in the auth layer; a long-running
 # process does not accumulate entries from RPC traffic, only from new profiles.
 _DRIVE_REGISTRY_LOCK = threading.Lock()
-_DRIVE_LOCKS_BY_PATH: dict[str, threading.Lock] = {}
+_DRIVE_RECORDS_BY_PATH: dict[str, _DriveRecord] = {}
 
 
 def headless_reauth_env_enabled(env: dict[str, str] | None = None) -> bool:
@@ -577,31 +665,37 @@ def attempt_headless_reauth(
     )
 
     # Per-storage-path single-flight: within this process, at most one browser
-    # drives a given storage file at a time, and a follower that finds the file
-    # freshly rewritten while it waited coalesces (skips its own browser). This
-    # covers the explicit ``refresh_auth(allow_headless=True)`` entry and
-    # multi-client callers, which do NOT pass through the mid-RPC coordinator's
-    # single-flight.
+    # drives a given storage file at a time, and a follower coalesces onto the
+    # leader's TYPED outcome (only one produced by a drive that completed during
+    # its wait) instead of launching a redundant browser. This covers the
+    # explicit ``refresh_auth(allow_headless=True)`` entry and multi-client
+    # callers, which do NOT pass through the mid-RPC coordinator's single-flight.
     return _drive_capture_coalesced(plan)
 
 
-def _get_drive_lock(storage_path: Path) -> threading.Lock:
-    """Return the per-resolved-storage-path single-flight lock for the browser drive."""
-    key = str(storage_path.expanduser().resolve())
+def _get_drive_record(storage_path: Path, *, source: str) -> _DriveRecord:
+    """Return the per-(resolved-storage-path, source) single-flight drive record.
+
+    Get-or-create is atomic under :data:`_DRIVE_REGISTRY_LOCK` so the worker
+    threads ``asyncio.to_thread`` may use all share one :class:`_DriveRecord`
+    (and therefore one drive lock and one drive-sequence) per storage file.
+
+    The key includes ``source`` (``"profile"`` vs ``"cdp"``) as well as the path
+    (CodeRabbit #4). The two credential sources re-mint into the SAME
+    ``storage_state.json``, but they are DIFFERENT sessions: a follower must not
+    coalesce onto the OTHER source's FAILED outcome (e.g. treat its own live CDP
+    attach as failed because the dedicated profile's session was dead, or vice
+    versa). Sharing the OUTCOME across sources was the bug; a shared lock would
+    merely serialize them, which is not required and not what we do — each source
+    gets its own record, lock, and drive-sequence.
+    """
+    key = f"{storage_path.expanduser().resolve()}\x00{source}"
     with _DRIVE_REGISTRY_LOCK:
-        lock = _DRIVE_LOCKS_BY_PATH.get(key)
-        if lock is None:
-            lock = threading.Lock()
-            _DRIVE_LOCKS_BY_PATH[key] = lock
-        return lock
-
-
-def _storage_mtime(storage_path: Path) -> float | None:
-    """Best-effort mtime of the storage file, or ``None`` when absent/unreadable."""
-    try:
-        return storage_path.stat().st_mtime
-    except OSError:
-        return None
+        record = _DRIVE_RECORDS_BY_PATH.get(key)
+        if record is None:
+            record = _DriveRecord(drive_lock=threading.Lock(), _state_lock=threading.Lock())
+            _DRIVE_RECORDS_BY_PATH[key] = record
+        return record
 
 
 def _drive_capture_coalesced(
@@ -609,35 +703,47 @@ def _drive_capture_coalesced(
     *,
     cdp_url: str | None = None,
 ) -> HeadlessReauthResult:
-    """Drive the headless capture under the per-path single-flight + freshness skip.
+    """Drive the headless capture under the per-path single-flight + outcome coalescing.
 
-    Captures the storage mtime BEFORE acquiring the lock. After acquiring it, a
-    follower whose storage file was rewritten by the leader while it waited
-    (mtime advanced) skips its own browser and reports SUCCESS — so N concurrent
-    callers spawn at most ONE browser per storage file. The leader (and any
-    follower whose wait did not yield a fresh file) drives the real capture.
+    Snapshots the completed-drive count BEFORE blocking on the drive lock
+    (:meth:`_DriveRecord.snapshot_completed`). After acquiring the lock, a
+    follower coalesces onto the leader's TYPED outcome only if a drive completed
+    during its wait (:meth:`_DriveRecord.fresh_outcome_since` returns
+    non-``None``) — so N genuine concurrent callers spawn at most ONE browser
+    per storage file, and every follower reports exactly what the leader's drive
+    produced (SUCCESS *or* FAILED), never a mtime-inferred false SUCCESS.
 
-    Both credential sources (dedicated profile and ``cdp_url`` attach) coalesce
-    on the SAME per-storage-path lock, since both re-mint into the same
-    ``storage_state.json``.
+    A follower that observes no fresh outcome — a crashed leader, or only a
+    stale outcome from a previous drive cycle whose cookies may have re-died —
+    drives its own browser. Redundant is safe; false SUCCESS is not.
+
+    The two credential sources (dedicated profile and ``cdp_url`` attach) use
+    SEPARATE per-(path, source) records (CodeRabbit #4): both re-mint into the
+    same ``storage_state.json``, but a follower must coalesce only onto an outcome
+    from its OWN source — never accept the other source's FAILED result (a dead
+    profile must not fail a live CDP attach, nor vice versa).
     """
-    storage_path = plan.storage_path
-    pre_mtime = _storage_mtime(storage_path)
-    lock = _get_drive_lock(storage_path)
-    with lock:
-        post_mtime = _storage_mtime(storage_path)
-        if post_mtime is not None and (pre_mtime is None or post_mtime > pre_mtime):
-            # A sibling leader re-minted while we waited; coalesce on its result.
+    source = "cdp" if cdp_url is not None else "profile"
+    record = _get_drive_record(plan.storage_path, source=source)
+    # Snapshot BEFORE blocking on the drive lock: we accept an outcome only from
+    # a drive that finishes DURING this wait (strictly-newer sequence).
+    pre_completed = record.snapshot_completed()
+    with record.drive_lock:
+        fresh = record.fresh_outcome_since(pre_completed)
+        if fresh is not None:
+            # A sibling leader's drive completed while we waited; coalesce onto
+            # its TYPED outcome (its status, whether SUCCESS or FAILED), not an
+            # mtime heuristic. Skips a redundant browser without ever inferring
+            # success from an unrelated file write.
             logger.info(
-                "Layer-3 headless re-auth coalesced onto a concurrent re-mint "
-                "(storage already refreshed); skipping a redundant browser."
+                "Layer-3 headless re-auth coalesced onto a concurrent drive's "
+                "outcome (%s); skipping a redundant browser.",
+                fresh.status.value,
             )
-            return HeadlessReauthResult(
-                HeadlessReauthStatus.SUCCESS,
-                "coalesced onto a concurrent headless re-mint",
-                storage_path=storage_path,
-            )
-        return _drive_capture(plan, cdp_url=cdp_url)
+            return fresh
+        result = _drive_capture(plan, cdp_url=cdp_url)
+        record.publish(result)
+        return result
 
 
 def _drive_capture(

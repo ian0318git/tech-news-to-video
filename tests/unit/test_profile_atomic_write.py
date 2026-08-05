@@ -340,98 +340,67 @@ def test_write_preserves_cookies_and_origins(tmp_path: Path) -> None:
     assert payload["origins"] == origins
 
 
-def _capture_account_lock_path(monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
-    """Record the ``storage_state.json`` lock path account.py passes to ``FileLock``.
-
-    The captured contextmanager is a no-op so the surrounding read-modify-write
-    still completes against the real file. ``write_account_metadata`` also calls
-    ``_drop_legacy_account_key``, which locks the sibling ``context.json.lock``;
-    that path is filtered out so it can't clobber the value we assert on. Paths
-    are canonicalized (``.expanduser().resolve()``) because they back
-    cross-process locking, where distinct spellings of the same file must
-    compare equal.
-    """
-    import contextlib
-
-    from notebooklm._auth import account as account_mod
-
-    seen: dict[str, Path] = {}
-
-    @contextlib.contextmanager
-    def _fake_filelock(path: str, *args: Any, **kwargs: Any):  # type: ignore[no-untyped-def]
-        resolved = Path(path).expanduser().resolve()
-        if "storage_state.json" in resolved.name:
-            seen["path"] = resolved
-        yield
-
-    monkeypatch.setattr(account_mod, "FileLock", _fake_filelock)
-    return seen
-
-
-def _capture_storage_lock_path(monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
-    """Record the lock path storage.py passes to ``_file_lock_exclusive``.
-
-    Paths are canonicalized to match ``_capture_account_lock_path`` so the two
-    captures compare equal even if their spellings differ.
-    """
-    import contextlib
-
-    from notebooklm._auth import storage as storage_mod
-
-    seen: dict[str, Path] = {}
-
-    @contextlib.contextmanager
-    def _fake_exclusive(lock_path: Path):  # type: ignore[no-untyped-def]
-        seen["path"] = Path(lock_path).expanduser().resolve()
-        yield
-
-    monkeypatch.setattr(storage_mod, "_file_lock_exclusive", _fake_exclusive)
-    return seen
-
-
 def test_storage_state_mutators_share_one_lock_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """All ``storage_state.json`` mutators must serialize on the SAME flock file.
 
-    Tier-0 data-loss regression: ``save_cookies_to_storage`` (storage.py) used
-    the dotted ``.storage_state.json.lock`` sibling while ``account.py``'s
-    metadata writers used the non-dotted ``storage_state.json.lock`` — a
-    DIFFERENT file. Cookie-save and account-metadata writes therefore locked on
-    distinct files and could lose updates under concurrency. Assert both paths
-    derive an identical lock filename for the same ``storage_state.json``.
+    Tier-0 data-loss regression: cookie saves and account-metadata writes once
+    used DIFFERENT lock files and could lose updates under concurrency. After
+    the storage-writer refactor every mutator serializes on the project-internal
+    ``storage._file_lock`` primitive (cookie saves via ``_file_lock_exclusive``,
+    account/clear via the storage writer's bounded acquire). This test captures
+    the lock path each mutator passes to that ONE primitive and asserts they all
+    derive the identical dotted ``.storage_state.json.lock`` sibling. The sibling
+    ``context.json.lock`` (still ``filelock``, taken by
+    ``_drop_legacy_account_key``) uses a different mechanism and is not captured
+    here.
     """
+    import contextlib
+
     import httpx
 
+    from notebooklm._auth import storage as storage_mod
     from notebooklm._auth.storage import save_cookies_to_storage
 
     storage_path = tmp_path / "storage_state.json"
     _write_storage_state(storage_path, {"cookies": [], "origins": []})
 
-    # account.py: write_account_metadata
-    account_seen = _capture_account_lock_path(monkeypatch)
-    write_account_metadata(storage_path, authuser=1, email="alice@example.com")
-    account_write_lock = account_seen["path"]
+    seen: list[Path] = []
+    real_file_lock = storage_mod._file_lock
 
-    # account.py: _clear_in_band_account (via clear_account_metadata)
-    account_seen.clear()
-    clear_account_metadata(storage_path)
-    account_clear_lock = account_seen["path"]
+    @contextlib.contextmanager
+    def capturing_file_lock(lock_path: Path, *, blocking: bool, log_prefix: str):  # type: ignore[no-untyped-def]
+        seen.append(Path(lock_path).expanduser().resolve())
+        with real_file_lock(lock_path, blocking=blocking, log_prefix=log_prefix) as state:
+            yield state
 
-    # storage.py: save_cookies_to_storage (the canonical cookie-save writer)
-    storage_seen = _capture_storage_lock_path(monkeypatch)
-    save_cookies_to_storage(
-        httpx.Cookies(),
-        path=storage_path,
-        original_snapshot={},
-    )
-    storage_cookie_lock = storage_seen["path"]
+    monkeypatch.setattr(storage_mod, "_file_lock", capturing_file_lock)
 
     # Canonical name is the dotted, hidden sibling (storage.py contract).
-    # Resolve to match the canonicalized captures above.
     expected = storage_path.with_name(f".{storage_path.name}.lock").expanduser().resolve()
-    assert storage_cookie_lock == expected
-    assert account_write_lock == expected
-    assert account_clear_lock == expected
-    # And, transitively, all three agree on the exact same file on disk.
-    assert account_write_lock == account_clear_lock == storage_cookie_lock
+
+    def _locks_taken_by(mutator) -> set[Path]:  # type: ignore[no-untyped-def]
+        seen.clear()
+        mutator()
+        return set(seen)
+
+    # Assert PER MUTATOR that it took the storage lock — so "a mutator takes no
+    # lock" (an empty capture) is caught, not masked by another mutator's lock.
+    account_write_locks = _locks_taken_by(
+        lambda: write_account_metadata(storage_path, authuser=1, email="alice@example.com")
+    )
+    account_clear_locks = _locks_taken_by(lambda: clear_account_metadata(storage_path))
+    cookie_save_locks = _locks_taken_by(
+        lambda: save_cookies_to_storage(httpx.Cookies(), path=storage_path, original_snapshot={})
+    )
+
+    assert account_write_locks == {expected}, (
+        f"write_account_metadata must take exactly the shared lock; got {account_write_locks}"
+    )
+    assert account_clear_locks == {expected}, (
+        f"clear_account_metadata must take exactly the shared lock; got {account_clear_locks}"
+    )
+    assert cookie_save_locks == {expected}, (
+        f"save_cookies_to_storage must take exactly the shared lock; got {cookie_save_locks}"
+    )

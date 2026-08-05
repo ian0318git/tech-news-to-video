@@ -424,24 +424,28 @@ class TestDropLegacyTocTouRecheck:
 
 
 class TestClearInBandLockFailure:
-    """Best-effort OSError handling in ``_clear_in_band_account`` (line 491-492)."""
+    """Best-effort lock-unavailable handling in ``_clear_in_band_account``.
 
-    def test_oserror_from_lock_is_swallowed(self, tmp_path, monkeypatch):
+    The in-band clear now delegates to ``storage_writer.clear_in_band_account``,
+    which serializes on the unified ``storage._file_lock`` primitive. When the
+    lock is unavailable the clear stays best-effort (swallows, never raises) and
+    leaves the file untouched — the legacy reader still resolves the record.
+    """
+
+    def test_lock_unavailable_is_swallowed(self, tmp_path, monkeypatch):
+        import contextlib
+
+        from notebooklm._auth import storage as _auth_storage
+
         storage = tmp_path / "storage_state.json"
         write_account_metadata(storage, authuser=1)
 
-        class _BoomLock:
-            def __init__(self, *args, **kwargs):
-                pass
+        @contextlib.contextmanager
+        def unavailable_lock(lock_path, *, blocking, log_prefix):
+            yield "unavailable"
 
-            def __enter__(self):
-                raise OSError("lock unavailable")
-
-            def __exit__(self, *exc):
-                return False
-
-        monkeypatch.setattr(_auth_account, "FileLock", _BoomLock)
-        # Should swallow the OSError and not raise.
+        monkeypatch.setattr(_auth_storage, "_file_lock", unavailable_lock)
+        # Should swallow the lock-unavailable outcome and not raise.
         _clear_in_band_account(storage)
-        # File untouched because the lock failed before any write.
+        # File untouched because the lock was unavailable before any write.
         assert "notebooklm" in json.loads(storage.read_text(encoding="utf-8"))

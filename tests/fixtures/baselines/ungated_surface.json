@@ -141,6 +141,7 @@
     "ValidationError",
     "ConfigurationError",
     "MissingDependencyError",
+    "LockUnavailableError",
     "HeadlessReauthError",
     "HeadlessLoginRequiredError",
     "NetworkError",

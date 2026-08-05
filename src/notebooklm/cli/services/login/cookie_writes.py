@@ -23,28 +23,25 @@ to query the cookie-domain policy themselves.
 from __future__ import annotations
 
 import logging
-import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import httpx
 
-# Module-object import for ``auth.MINIMUM_REQUIRED_COOKIES`` — the same
-# access pattern ``cli/_cookie_import.py`` uses; the constant is public in
-# behavior but deliberately not part of ``auth.__all__``.
-from .... import auth as _auth_public
-
-# ``browser_capture`` is the one sanctioned ``_auth`` import for the CLI
-# adapter (see tests/_guardrails/test_cli_boundary.py); it re-exports the
-# write-time domain filter from its ``_browser_cookie_filter`` leaf.
-from ...._auth.browser_capture import filter_storage_state_cookies_by_domain_policy
+# The write-time domain filter, the post-filter required-cookie revalidation,
+# and the atomic storage-state write all live in the canonical storage writer
+# now (refactor (b), b-PR3); the CLI reaches it through the public ``auth``
+# facade — ``cli/`` may not import private ``_auth.*`` modules
+# (tests/_guardrails/test_cli_boundary.py).
 from ....auth import (
+    AccountRecord,
     cookie_names_from_storage,
+    drop_legacy_account_key,
     fetch_tokens_with_domains,
     missing_cookies_hint,
+    replace_from_login,
     validate_with_recovery,
 )
-from ....io import atomic_write_json
 from .outcomes import (
     BrowserCookieOutcome,
     CookieValidationFailure,
@@ -226,57 +223,18 @@ def _write_extracted_cookies(
             ),
         )
 
-    # Write-time blast-radius gate — parity with the Playwright capture path.
-    # The rookiepy/Firefox extractors suffix-match dot-prefixed domains
-    # (rookiepy semantics), so requesting ``.google.com`` also returns
-    # sibling-product cookies (mail/docs/myaccount), and the runtime
-    # converter above is deliberately permissive over the REQUIRED ∪
-    # OPTIONAL union. Filter AFTER ``validate_with_recovery`` (recovery must
-    # see the full jar) and BEFORE the atomic write so only policy-allowed +
-    # opted-in domains reach ``storage_state.json``.
-    pre_filter_count = len(storage_state.get("cookies", []))
-    storage_state = filter_storage_state_cookies_by_domain_policy(
-        storage_state, include_domains=include_domains
-    )
-    dropped = pre_filter_count - len(storage_state["cookies"])
-    if dropped:
-        # Count-only breadcrumb — never cookie names or values.
-        logger.debug(
-            "Dropped %d cookie(s) outside the write-time cookie-domain policy for %s",
-            dropped,
-            storage_path,
-        )
-
-    # Re-run the Tier-1 required-cookie check on the FILTERED state (same
-    # post-filter revalidation the import-cookies path performs). The
-    # validation above is name-based over the permissive converter output,
-    # so a required cookie whose only copy sits on a non-allowlisted domain
-    # (the converter suffix-accepts ``*.google.com``) passes validation and
-    # is then dropped here — without this recheck we would atomically write
-    # unusable auth and exit 0 (the post-write verification probe is
-    # deliberately nonfatal).
-    filtered_names = cookie_names_from_storage(storage_state)
-    missing_required = sorted(_auth_public.MINIMUM_REQUIRED_COOKIES.difference(filtered_names))
-    if missing_required:
-        hint = missing_cookies_hint(filtered_names)
-        return CookieValidationFailure(
-            code="COOKIE_VALIDATION_FAILED",
-            message=(
-                "[red]Required authentication cookies were dropped by the "
-                "write-time cookie-domain policy.[/red]\n"
-                f"Missing after domain filtering: {', '.join(missing_required)} "
-                "(the only copies were scoped to non-allowlisted domains).\n\n"
-                f"{hint}"
-            ),
-        )
-
+    # The write-time domain filter, the post-filter required-cookie
+    # revalidation (#2086), the account-metadata embed, and the atomic write
+    # all happen inside the canonical storage writer, under the storage lock.
+    # ``validate_with_recovery`` above still runs FIRST (recovery must see the
+    # full jar); the writer then filters + revalidates on the filtered state.
     try:
-        storage_path.parent.mkdir(parents=True, exist_ok=True)
-        # Atomic write with chmod 0o600 — avoids non-atomic + world-readable
-        # window from plain write_text + post-hoc chmod.
-        atomic_write_json(storage_path, storage_state)
-        if sys.platform != "win32":
-            storage_path.parent.chmod(0o700)
+        outcome = replace_from_login(
+            storage_path,
+            storage_state,
+            include_domains=include_domains,
+            account=AccountRecord(authuser=authuser, email=email),
+        )
     except OSError as e:
         # G6: redact the bound exception in the log line (use the type
         # name) so subprocess stderr / payload data captured in ``e`` is
@@ -287,19 +245,35 @@ def _write_extracted_cookies(
             message=(f"[red]Failed to save authentication to {storage_path}.[/red]\nDetails: {e}"),
         )
 
-    from ....auth import write_account_metadata
-
-    try:
-        write_account_metadata(storage_path, authuser=authuser, email=email)
-    except OSError as e:
-        # Non-fatal: cookies are already written. Log the redacted type,
-        # but preserve the previous user-facing warning text.
-        logger.warning("Failed to save account metadata for %s: %s", storage_path, type(e).__name__)
-        _emit_warning(
-            io,
-            f"[yellow]Warning: cookies saved but account metadata write failed.[/yellow]\n"
-            f"Details: {e}",
+    if outcome.required_cookies_dropped:
+        # A required cookie's only copy sat on a non-allowlisted domain and was
+        # dropped by the write-time filter; the writer wrote nothing. Same
+        # contract as #2086 (COOKIE_VALIDATION_FAILED, io.fail(1), not-exists).
+        hint = missing_cookies_hint(set(outcome.present_names))
+        return CookieValidationFailure(
+            code="COOKIE_VALIDATION_FAILED",
+            message=(
+                "[red]Required authentication cookies were dropped by the "
+                "write-time cookie-domain policy.[/red]\n"
+                f"Missing after domain filtering: {', '.join(outcome.missing_required)} "
+                "(the only copies were scoped to non-allowlisted domains).\n\n"
+                f"{hint}"
+            ),
         )
+    if outcome.lock_unavailable:
+        logger.error("Failed to save authentication to %s: storage lock unavailable", storage_path)
+        return CookieValidationFailure(
+            code="STORAGE_WRITE_FAILED",
+            message=(
+                f"[red]Failed to save authentication to {storage_path}.[/red]\n"
+                "Details: storage lock unavailable (another process may hold it)."
+            ),
+        )
+
+    # The writer embedded the in-band account binding atomically; drop the
+    # legacy sibling ``context.json[account]`` key so a reader never sees the
+    # same routing data in two places (best-effort migration, own lock).
+    drop_legacy_account_key(storage_path)
 
     # Success-path confirmation print is the caller's job. We log a
     # debug breadcrumb so operators can correlate the write without

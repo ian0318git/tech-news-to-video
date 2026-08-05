@@ -20,6 +20,7 @@ from notebooklm.paths import (
     get_profile_dir,
     get_storage_path,
     list_profiles,
+    profile_from_storage_path,
     resolve_profile,
     set_active_profile,
 )
@@ -520,3 +521,29 @@ class TestGetPathInfo:
 
             assert info["home_source"] == "NOTEBOOKLM_HOME"
             assert str(custom_path.resolve()) in info["home_dir"]
+
+
+class TestProfileFromStoragePath:
+    """Reverse resolver: a storage path under profiles/<name>/ yields <name>."""
+
+    def test_none_returns_none(self):
+        assert profile_from_storage_path(None) is None
+
+    def test_profile_path_yields_profile_name(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("NOTEBOOKLM_HOME", str(tmp_path))
+        storage = get_storage_path(profile="work")
+        assert storage.parent.name == "work"  # profiles/work/storage_state.json
+        assert profile_from_storage_path(storage) == "work"
+
+    def test_default_profile_path_yields_default(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("NOTEBOOKLM_HOME", str(tmp_path))
+        storage = tmp_path / "profiles" / "default" / "storage_state.json"
+        storage.parent.mkdir(parents=True)
+        storage.write_text("{}", encoding="utf-8")
+        assert profile_from_storage_path(storage) == "default"
+
+    def test_arbitrary_path_yields_none(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("NOTEBOOKLM_HOME", str(tmp_path))
+        # An explicit --storage path OUTSIDE the profiles root carries no profile.
+        arbitrary = tmp_path / "elsewhere" / "storage_state.json"
+        assert profile_from_storage_path(arbitrary) is None

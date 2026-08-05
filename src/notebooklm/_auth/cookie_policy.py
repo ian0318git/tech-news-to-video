@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
+import threading
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Literal
 
 from notebooklm._env import (
     PERSONAL_APP_HOSTS,
@@ -15,9 +16,32 @@ from notebooklm._env import (
 
 logger = logging.getLogger("notebooklm.auth")
 
+# Closed enum of reasons a pure loader may reject a cookie set. Kept small and
+# stable so wrapper recovery composition can branch on ``exc.reason`` instead of
+# scraping the human-readable message:
+#
+# * ``"missing_cookie"`` — a Tier-1 required cookie (``SID`` / ``__Secure-1PSIDTS``)
+#   is absent by name. No RotateCookies POST can conjure a session that never
+#   had these; recovery declines and the error stands.
+# * ``"psidts_unroutable"`` — ``__Secure-1PSIDTS`` is present by name but would
+#   not be sent to the ``RotateCookies`` URL (absent from the rotate host,
+#   expired, or scoped to a domain that never reaches ``accounts.google.com``).
+#   This is the one condition the inline recovery POST exists to heal (#2061).
+RequiredCookieReason = Literal["missing_cookie", "psidts_unroutable"]
+
 
 class RequiredCookieValidationError(ValueError):
-    """Typed required-cookie/preflight failure used by recovery wrappers."""
+    """Typed required-cookie/preflight failure used by recovery wrappers.
+
+    ``reason`` carries a :data:`RequiredCookieReason` closed-enum tag so the
+    public recovery wrappers can compose on a stable signal rather than the
+    diagnostic message text. It is ``None`` only for errors raised outside the
+    two known validation sites.
+    """
+
+    def __init__(self, *args: object, reason: RequiredCookieReason | None = None) -> None:
+        super().__init__(*args)
+        self.reason: RequiredCookieReason | None = reason
 
 
 def cookie_names_from_storage(storage_state: Mapping[str, Any]) -> set[str]:
@@ -88,6 +112,11 @@ _EXTRACTION_HINT = (
 # memoizes return values, not the side-effect of ``logger.warning``;
 # ``LoggerAdapter`` only rewrites records, it does not filter duplicates.
 _SECONDARY_BINDING_WARNED = False
+# The log-once flag is now read-modify-written from worker threads (the pure
+# loaders run under ``asyncio.to_thread``), so guard it with a sync lock — same
+# pattern as keepalive's ``_POKE_STATE_LOCK`` — or the unlocked check-then-set
+# races and logs the warning 2-3x under concurrent loads.
+_SECONDARY_BINDING_WARN_LOCK = threading.Lock()
 
 
 def _has_valid_secondary_binding(cookie_names: set[str]) -> bool:
@@ -200,12 +229,14 @@ def _validate_required_cookies(
         if extra_diagnostics:
             parts.extend(extra_diagnostics)
         parts.append(_EXTRACTION_HINT)
-        raise RequiredCookieValidationError("\n".join(parts))
+        raise RequiredCookieValidationError("\n".join(parts), reason="missing_cookie")
 
     if not _has_valid_secondary_binding(cookie_names):
         global _SECONDARY_BINDING_WARNED
-        if not _SECONDARY_BINDING_WARNED:
+        with _SECONDARY_BINDING_WARN_LOCK:
+            should_warn = not _SECONDARY_BINDING_WARNED
             _SECONDARY_BINDING_WARNED = True
+        if should_warn:
             logger.warning(
                 "Cookie set lacks a secondary binding (need OSID, or all three of "
                 "APISID, SAPISID and LSID). Google may reject auth on the next "

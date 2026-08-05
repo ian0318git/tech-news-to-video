@@ -308,6 +308,35 @@ def get_storage_path(profile: str | None = None) -> Path:
     return _legacy_fallback(profile_path, "storage_state.json", resolved)
 
 
+def profile_from_storage_path(storage_path: Path | None) -> str | None:
+    """Best-effort reverse of :func:`get_storage_path`: the profile owning a file.
+
+    Returns ``<name>`` for a storage path shaped like
+    ``<home>/profiles/<name>/storage_state.json``; otherwise ``None`` — an
+    explicit ``--storage <arbitrary path>`` or the legacy home-root file carries
+    no profile name, and callers fall back to path-based routing (the storage
+    path itself still identifies the file).
+
+    Used so a mid-session ``NOTEBOOKLM_REFRESH_CMD`` refreshes the SAME profile
+    the client was built for (e.g. ``from_storage(profile="work")``) rather than
+    the process-wide default, which would refresh the wrong profile while the
+    parent reloads the work path.
+    """
+    if storage_path is None:
+        return None
+    try:
+        resolved = Path(storage_path).resolve()
+        profiles_root = (get_home_dir() / "profiles").resolve()
+    except OSError:
+        return None
+    if not resolved.is_relative_to(profiles_root):
+        return None
+    rel = resolved.relative_to(profiles_root)
+    if not rel.parts:
+        return None
+    return rel.parts[0]
+
+
 def get_master_token_path(profile: str | None = None) -> Path:
     """Get the master_token.json path for a profile (headless master-token auth).
 

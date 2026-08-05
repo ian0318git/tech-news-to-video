@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 
-import notebooklm.auth as auth_module
+from notebooklm._auth.storage_writer import LoginWriteOutcome, LoginWriteStatus
 from notebooklm.cli.services.login import cookie_writes
 from notebooklm.cli.services.login.outcomes import CookieValidationFailure
 from tests._fixtures.login_io import RecordingLoginIO, make_recording_io
@@ -177,7 +177,7 @@ class TestWriteExtractedCookies:
             patch.object(
                 cookie_writes, "validate_with_recovery", return_value=(_ok_storage(), None)
             ),
-            patch.object(cookie_writes, "atomic_write_json", side_effect=OSError("disk full")),
+            patch.object(cookie_writes, "replace_from_login", side_effect=OSError("disk full")),
         ):
             out = cookie_writes._write_extracted_cookies(
                 make_recording_io(),
@@ -191,28 +191,31 @@ class TestWriteExtractedCookies:
         assert out.code == "STORAGE_WRITE_FAILED"
         assert "disk full" in out.message
 
-    def test_metadata_write_failure_is_nonfatal(self, tmp_path):
+    def test_lock_unavailable_returns_outcome(self, tmp_path):
+        """A fail-closed ``lock_unavailable`` writer outcome surfaces as a
+        STORAGE_WRITE_FAILED failure (nothing written)."""
         storage_path = tmp_path / "storage_state.json"
-        io = make_recording_io(run_async=MagicMock())
         with (
             patch.object(
                 cookie_writes, "validate_with_recovery", return_value=(_ok_storage(), None)
             ),
-            patch.object(cookie_writes, "atomic_write_json"),
-            patch.object(cookie_writes, "fetch_tokens_with_domains", MagicMock()),
-            patch.object(auth_module, "write_account_metadata", side_effect=OSError("ro fs")),
+            patch.object(
+                cookie_writes,
+                "replace_from_login",
+                return_value=LoginWriteOutcome(LoginWriteStatus.LOCK_UNAVAILABLE),
+            ),
         ):
             out = cookie_writes._write_extracted_cookies(
-                io,
+                make_recording_io(),
                 [{"name": "SID"}],
                 storage_path=storage_path,
                 profile=None,
                 authuser=0,
                 email="a@gmail.com",
             )
-        # Cookies were written; metadata failure only warns.
-        assert out is None
-        assert any("metadata write failed" in message for message in io.emitted)
+        assert isinstance(out, CookieValidationFailure)
+        assert out.code == "STORAGE_WRITE_FAILED"
+        assert "lock unavailable" in out.message
 
     def test_verification_value_error_warns(self, tmp_path):
         storage_path = tmp_path / "storage_state.json"
@@ -221,9 +224,7 @@ class TestWriteExtractedCookies:
             patch.object(
                 cookie_writes, "validate_with_recovery", return_value=(_ok_storage(), None)
             ),
-            patch.object(cookie_writes, "atomic_write_json"),
             patch.object(cookie_writes, "fetch_tokens_with_domains", MagicMock()),
-            patch.object(auth_module, "write_account_metadata"),
         ):
             out = cookie_writes._write_extracted_cookies(
                 io,
@@ -243,9 +244,7 @@ class TestWriteExtractedCookies:
             patch.object(
                 cookie_writes, "validate_with_recovery", return_value=(_ok_storage(), None)
             ),
-            patch.object(cookie_writes, "atomic_write_json"),
             patch.object(cookie_writes, "fetch_tokens_with_domains", MagicMock()),
-            patch.object(auth_module, "write_account_metadata"),
         ):
             out = cookie_writes._write_extracted_cookies(
                 io,
@@ -265,9 +264,7 @@ class TestWriteExtractedCookies:
             patch.object(
                 cookie_writes, "validate_with_recovery", return_value=(_ok_storage(), None)
             ),
-            patch.object(cookie_writes, "atomic_write_json"),
             patch.object(cookie_writes, "fetch_tokens_with_domains", MagicMock()),
-            patch.object(auth_module, "write_account_metadata"),
         ):
             out = cookie_writes._write_extracted_cookies(
                 io,
@@ -279,6 +276,10 @@ class TestWriteExtractedCookies:
             )
         assert out is None
         assert io.emitted == []
+        # The real writer landed the state (account embedded in the same write).
+        stored = json.loads(storage_path.read_text())
+        assert {c["name"] for c in stored["cookies"]} == {"SID", "__Secure-1PSIDTS"}
+        assert stored["notebooklm"]["account"] == {"authuser": 0, "email": "a@gmail.com"}
 
 
 # ---------------------------------------------------------------------------
@@ -334,10 +335,7 @@ class TestWriteExtractedCookiesDomainFilter:
         """Run the real validate → filter → write pipeline; return the persisted state."""
         storage_path = tmp_path / "storage_state.json"
         io = make_recording_io(run_async=MagicMock())
-        with (
-            patch.object(cookie_writes, "fetch_tokens_with_domains", MagicMock()),
-            patch.object(auth_module, "write_account_metadata"),
-        ):
+        with patch.object(cookie_writes, "fetch_tokens_with_domains", MagicMock()):
             out = cookie_writes._write_extracted_cookies(
                 io,
                 raw,
@@ -457,10 +455,7 @@ class TestWriteExtractedCookiesDomainFilter:
             _rookiepy_cookie(".youtube.com", "SID"),
             _rookiepy_cookie(".google.com", "__Secure-1PSIDTS"),
         ]
-        with (
-            patch.object(cookie_writes, "fetch_tokens_with_domains", MagicMock()),
-            patch.object(auth_module, "write_account_metadata"),
-        ):
+        with patch.object(cookie_writes, "fetch_tokens_with_domains", MagicMock()):
             out = cookie_writes._write_extracted_cookies(
                 io,
                 raw,

@@ -58,7 +58,28 @@ from ._auth.master_token import (  # noqa: F401
     read_master_token,
     write_master_token,
 )
+
+# Canonical login/import storage writer (refactor (b), b-PR3). Re-exported here
+# as the public boundary the CLI login/import writers consume — ``cli/`` may not
+# import private ``_auth.*`` modules (tests/_guardrails/test_cli_boundary.py), so
+# the three CLI writers reach ``replace_from_login`` (and its ``account`` sentinel
+# / value-free outcome) ONLY through this facade, exactly like
+# ``save_cookies_to_storage`` / ``write_account_metadata`` / ``persist_minted_jar``.
+from ._auth.storage_writer import (  # noqa: F401
+    CLEAR_ACCOUNT,
+    KEEP_ACCOUNT,
+    AccountRecord,
+    LoginWriteOutcome,
+    replace_from_login,
+)
 from ._auth.tokens import AuthTokens
+
+# Public re-export: the fail-closed storage writers (persist_minted_jar /
+# write_account_metadata, reached via this facade) raise LockUnavailableError on
+# a bounded-lock timeout. Canonical home is notebooklm.exceptions; re-exported
+# here so CLI/facade callers can catch it without importing exceptions directly
+# (it is also an OSError via TimeoutError — see ADR-0029).
+from .exceptions import LockUnavailableError  # noqa: F401
 from .paths import get_storage_path  # noqa: F401  # kept as a module-level compat alias
 
 logger = logging.getLogger(__name__)
@@ -135,12 +156,15 @@ _is_allowed_cookie_domain = _cookie_policy._is_allowed_cookie_domain
 # without being added here.
 __all__ = [
     "Account",
+    "AccountRecord",
     "AuthTokens",
     "build_cookie_jar",
     "build_httpx_cookies_from_storage",
+    "CLEAR_ACCOUNT",
     "clear_account_metadata",
     "convert_rookiepy_cookies_to_storage_state",
     "cookie_names_from_storage",
+    "drop_legacy_account_key",
     "enumerate_accounts",
     "exchange_master_token",
     "extract_cookies_from_storage",
@@ -152,6 +176,9 @@ __all__ = [
     "get_account_email_for_storage",
     "get_authuser_for_storage",
     "GOOGLE_REGIONAL_CCTLDS",
+    "KEEP_ACCOUNT",
+    "LockUnavailableError",
+    "LoginWriteOutcome",
     "MasterTokenError",
     "mint_cookies",
     "missing_cookies_hint",
@@ -161,6 +188,7 @@ __all__ = [
     "read_account_metadata",
     "read_account_metadata_from_storage_state",
     "read_master_token",
+    "replace_from_login",
     "REQUIRED_COOKIE_DOMAINS",
     "validate_with_recovery",
     "write_account_metadata",
@@ -223,6 +251,15 @@ format_authuser_value = _auth_account.format_authuser_value
 authuser_query = _auth_account.authuser_query
 write_account_metadata = _auth_account.write_account_metadata
 clear_account_metadata = _auth_account.clear_account_metadata
+# The sibling ``context.json`` legacy-account cleanup. ``replace_from_login`` now
+# embeds/clears the in-band ``notebooklm.account`` record in the same atomic
+# storage-state write, but the legacy sibling ``context.json[account]`` key lives
+# in a DIFFERENT file under a DIFFERENT lock and is deliberately NOT relocated
+# into the storage writer (plan §b.1). The CLI login writers call this facade
+# helper after a successful write so a default-account (cleared) login can't keep
+# routing to a stale legacy account, matching the pre-refactor
+# ``write_account_metadata`` / ``clear_account_metadata`` migration side effect.
+drop_legacy_account_key = _auth_account._drop_legacy_account_key
 
 
 async def enumerate_accounts(
@@ -249,6 +286,10 @@ load_auth_from_storage = _auth_tokens.load_auth_from_storage
 # ``notebooklm.auth``.
 NOTEBOOKLM_REFRESH_CMD_ENV = _auth_paths.NOTEBOOKLM_REFRESH_CMD_ENV
 NOTEBOOKLM_REFRESH_CMD_USE_SHELL_ENV = _auth_paths.NOTEBOOKLM_REFRESH_CMD_USE_SHELL_ENV
+# Mid-session refresh-cmd rung opt-in + captured-output opt-in (c-PR4). Kept
+# importable via the facade like the other refresh env-var names.
+NOTEBOOKLM_REFRESH_CMD_MIDSESSION_ENV = _auth_paths.NOTEBOOKLM_REFRESH_CMD_MIDSESSION_ENV
+NOTEBOOKLM_REFRESH_CMD_LOG_OUTPUT_ENV = _auth_paths.NOTEBOOKLM_REFRESH_CMD_LOG_OUTPUT_ENV
 _REFRESH_ATTEMPTED_ENV = _auth_paths._REFRESH_ATTEMPTED_ENV
 
 
@@ -323,15 +364,19 @@ _rotation_lock_path = _auth_paths._rotation_lock_path
 # patch the canonical home directly (``_auth.refresh.X``) — production
 # code no longer mirrors writes (``_AuthFacadeModule`` retired per ADR-0003).
 _REFRESH_ATTEMPTED_CONTEXT = _auth_refresh._REFRESH_ATTEMPTED_CONTEXT
-_REFRESH_STATE_LOCK = _auth_refresh._REFRESH_STATE_LOCK
-_REFRESH_LOCKS_BY_LOOP = _auth_refresh._REFRESH_LOCKS_BY_LOOP
-_REFRESH_GENERATIONS = _auth_refresh._REFRESH_GENERATIONS
-_REFRESH_INFLIGHT_BY_LOOP = _auth_refresh._REFRESH_INFLIGHT_BY_LOOP
-_REFRESH_INFLIGHT_TASKS = _auth_refresh._REFRESH_INFLIGHT_TASKS
+# The cross-loop coalescing machinery (per-loop future maps + the
+# ``_REFRESH_GENERATIONS`` counter + ``_get_refresh_lock`` /
+# ``_get_inflight_registry`` / ``_REFRESH_STATE_LOCK`` / ``_REFRESH_INFLIGHT_*``)
+# was replaced by ``notebooklm._auth.single_flight`` in c-PR2; the five
+# underscore-private facade test-bindings that mirrored it are removed (they
+# were never part of the supported facade surface). Tests substitute the new
+# behaviour by patching ``_auth.single_flight`` / ``_auth.refresh`` directly.
 _AUTH_ERROR_SIGNALS = _auth_refresh._AUTH_ERROR_SIGNALS
-_get_inflight_registry = _auth_refresh._get_inflight_registry
 _coalesced_run_refresh_cmd = _auth_refresh._coalesced_run_refresh_cmd
-_get_refresh_lock = _auth_refresh._get_refresh_lock
+# L2.5 mid-session refresh-cmd rung adapter (c-PR4). Consumed by
+# ``_auth.session.refresh_auth_session``; exposed here for white-box tests.
+try_refresh_cmd_reauth = _auth_refresh.try_refresh_cmd_reauth
+_midsession_refresh_cmd_enabled = _auth_refresh._midsession_refresh_cmd_enabled
 _should_try_refresh = _auth_refresh._should_try_refresh
 _split_refresh_cmd = _auth_refresh._split_refresh_cmd
 _run_refresh_cmd = _auth_refresh._run_refresh_cmd

@@ -66,6 +66,7 @@ _DOCUMENTED_PUBLIC_IMPORTS = {
     "notebooklm.auth": [
         "AuthTokens",
         "convert_rookiepy_cookies_to_storage_state",
+        "LockUnavailableError",
         "OPTIONAL_COOKIE_DOMAINS",
         "OPTIONAL_COOKIE_DOMAINS_BY_LABEL",
         "REQUIRED_COOKIE_DOMAINS",
@@ -897,6 +898,9 @@ def test_auth_paths_facade_delegates_to_private_module() -> None:
     # importable via the facade.
     assert auth.NOTEBOOKLM_REFRESH_CMD_ENV == paths.NOTEBOOKLM_REFRESH_CMD_ENV
     assert auth.NOTEBOOKLM_REFRESH_CMD_USE_SHELL_ENV == paths.NOTEBOOKLM_REFRESH_CMD_USE_SHELL_ENV
+    # Mid-session rung + captured-output opt-in env names (c-PR4).
+    assert auth.NOTEBOOKLM_REFRESH_CMD_MIDSESSION_ENV == paths.NOTEBOOKLM_REFRESH_CMD_MIDSESSION_ENV
+    assert auth.NOTEBOOKLM_REFRESH_CMD_LOG_OUTPUT_ENV == paths.NOTEBOOKLM_REFRESH_CMD_LOG_OUTPUT_ENV
     assert auth.NOTEBOOKLM_DISABLE_KEEPALIVE_POKE_ENV == paths.NOTEBOOKLM_DISABLE_KEEPALIVE_POKE_ENV
     # White-box affordances.
     assert auth._REFRESH_ATTEMPTED_ENV == paths._REFRESH_ATTEMPTED_ENV

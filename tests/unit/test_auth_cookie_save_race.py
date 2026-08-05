@@ -1814,7 +1814,9 @@ class TestRefreshCmdSnapshotCapturedBeforeRetryFetch:
         )
 
         monkeypatch.setenv(auth_mod.NOTEBOOKLM_REFRESH_CMD_ENV, "dummy-refresh")
-        auth_mod._REFRESH_GENERATIONS.clear()
+        # c-PR2: the refresh success epoch relocated from ``_REFRESH_GENERATIONS``
+        # into the single_flight core; reset it for hermetic setup.
+        _auth_refresh._single_flight._reset_for_tests()
 
         async def fake_run_refresh_cmd(storage_path, profile):
             _write_storage(

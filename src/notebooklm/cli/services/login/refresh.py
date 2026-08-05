@@ -18,7 +18,6 @@ Top of the leaf-ward DAG: imports from :mod:`.browser_accounts`,
 from __future__ import annotations
 
 import logging
-import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,24 +25,23 @@ from typing import Any, NoReturn
 
 import httpx
 
-# Module-object import for ``auth.MINIMUM_REQUIRED_COOKIES`` — the same
-# access pattern ``cli/_cookie_import.py`` uses; the constant is public in
-# behavior but deliberately not part of ``auth.__all__``.
-from .... import auth as _auth_public
-
-# ``browser_capture`` is the one sanctioned ``_auth`` import for the CLI
-# adapter (see tests/_guardrails/test_cli_boundary.py); it re-exports the
-# write-time domain filter from its ``_browser_cookie_filter`` leaf.
-from ...._auth.browser_capture import filter_storage_state_cookies_by_domain_policy
+# The write-time domain filter, the post-filter required-cookie revalidation
+# (#2086), the account-metadata embed, and the atomic storage-state write all
+# live in the canonical storage writer now (refactor (b), b-PR3); the CLI reaches
+# it through the public ``auth`` facade — ``cli/`` may not import private
+# ``_auth.*`` modules (tests/_guardrails/test_cli_boundary.py).
 from ....auth import (
+    CLEAR_ACCOUNT,
+    AccountRecord,
     cookie_names_from_storage,
+    drop_legacy_account_key,
     fetch_tokens_with_domains,
     missing_cookies_hint,
     read_account_metadata,
+    replace_from_login,
     validate_with_recovery,
 )
 from ....client import NotebookLMClient
-from ....io import atomic_write_json
 from ....paths import get_storage_path
 from ...language_cmd import set_language
 from .browser_accounts import _enumerate_browser_accounts, _read_browser_cookies
@@ -429,86 +427,58 @@ def _login_with_browser_cookies(
         )
         io.fail(1)
 
-    # Write-time blast-radius gate — parity with the Playwright capture path.
-    # The rookiepy/Firefox extractors suffix-match dot-prefixed domains
-    # (rookiepy semantics), so requesting ``.google.com`` also returns
-    # sibling-product cookies (mail/docs/myaccount), and the runtime
-    # converter above is deliberately permissive over the REQUIRED ∪
-    # OPTIONAL union. Filter AFTER ``validate_with_recovery`` (recovery must
-    # see the full jar) and BEFORE the atomic write so only policy-allowed +
-    # opted-in domains reach ``storage_state.json``.
-    pre_filter_count = len(storage_state.get("cookies", []))
-    storage_state = filter_storage_state_cookies_by_domain_policy(
-        storage_state, include_domains=include_domains
+    # The write-time domain filter, the post-filter required-cookie
+    # revalidation (#2086), the account-metadata embed, and the atomic write all
+    # happen inside the canonical storage writer, under the storage lock.
+    # ``validate_with_recovery`` above still runs FIRST (recovery must see the
+    # full jar). Even on a default-account login (authuser=0, no email) the
+    # account binding is CLEARED in the same write so refreshed cookies cannot
+    # keep routing to an older account.
+    account = (
+        AccountRecord(authuser=authuser, email=email) if (authuser or email) else CLEAR_ACCOUNT
     )
-    dropped = pre_filter_count - len(storage_state["cookies"])
-    if dropped:
-        # Count-only breadcrumb — never cookie names or values.
-        logger.debug(
-            "Dropped %d cookie(s) outside the write-time cookie-domain policy for %s",
-            dropped,
+    try:
+        outcome = deps.replace_from_login(
             storage_path,
+            storage_state,
+            include_domains=include_domains,
+            account=account,
         )
+    except OSError as e:
+        # G6: redact the bound exception in the log line (use the type name) so
+        # subprocess stderr / payload data captured in ``e`` is not persisted in
+        # caller log destinations — matching ``cookie_writes._write_extracted_cookies``.
+        logger.error("Failed to save authentication to %s: %s", storage_path, type(e).__name__)
+        _emit(io, f"[red]Failed to save authentication to {storage_path}.[/red]\nDetails: {e}")
+        io.fail(1)
 
-    # Re-run the Tier-1 required-cookie check on the FILTERED state (same
-    # post-filter revalidation the import-cookies path performs). The
-    # validation above is name-based over the permissive converter output,
-    # so a required cookie whose only copy sits on a non-allowlisted domain
-    # (the converter suffix-accepts ``*.google.com``) passes validation and
-    # is then dropped here — without this recheck we would atomically write
-    # unusable auth and exit 0 (the post-write verification below is
-    # deliberately nonfatal).
-    filtered_names = deps.cookie_names_from_storage(storage_state)
-    missing_required = sorted(_auth_public.MINIMUM_REQUIRED_COOKIES.difference(filtered_names))
-    if missing_required:
-        hint = deps.missing_cookies_hint(filtered_names, browser_label=browser_name)
+    if outcome.required_cookies_dropped:
+        # A required cookie's only copy sat on a non-allowlisted domain and was
+        # dropped by the write-time filter; the writer wrote nothing. Same
+        # contract as #2086 (io.fail(1), not-exists).
+        hint = deps.missing_cookies_hint(set(outcome.present_names), browser_label=browser_name)
         _emit(
             io,
             "[red]Required authentication cookies were dropped by the "
             "write-time cookie-domain policy.[/red]\n"
-            f"Missing after domain filtering: {', '.join(missing_required)} "
+            f"Missing after domain filtering: {', '.join(outcome.missing_required)} "
             "(the only copies were scoped to non-allowlisted domains).\n\n"
             f"{hint}",
         )
         io.fail(1)
-
-    # Create parent directory (avoid mode= on Windows to prevent ACL issues)
-    try:
-        storage_path.parent.mkdir(parents=True, exist_ok=True)
-        # Atomic write with chmod 0o600 — avoids non-atomic + world-readable
-        # window from plain write_text + post-hoc chmod.
-        deps.atomic_write_json(storage_path, storage_state)
-        if sys.platform != "win32":
-            # On Unix: ensure directory has restrictive permissions
-            # (atomic_write_json handles the file mode).
-            storage_path.parent.chmod(0o700)
-    except OSError as e:
-        logger.error("Failed to save authentication to %s: %s", storage_path, e)
-        _emit(io, f"[red]Failed to save authentication to {storage_path}.[/red]\nDetails: {e}")
+    if outcome.lock_unavailable:
+        logger.error("Failed to save authentication to %s: storage lock unavailable", storage_path)
+        _emit(
+            io,
+            f"[red]Failed to save authentication to {storage_path}.[/red]\n"
+            "Details: storage lock unavailable (another process may hold it).",
+        )
         io.fail(1)
 
-    # Record account metadata so future calls target the same Google account.
-    # Even on a default-account login (authuser=0, no email), remove stale
-    # metadata so refreshed cookies cannot keep routing to an older account.
-    if authuser or email:
-        from ....auth import write_account_metadata
-
-        try:
-            write_account_metadata(storage_path, authuser=authuser, email=email)
-        except OSError as e:
-            logger.error("Failed to save account metadata for %s: %s", storage_path, e)
-            _emit(
-                io,
-                f"[yellow]Warning: cookies saved but account metadata write failed.[/yellow]\n"
-                f"Details: {e}",
-            )
-    else:
-        from ....auth import clear_account_metadata
-
-        try:
-            clear_account_metadata(storage_path)
-        except OSError as e:
-            logger.warning("Failed to clear stale account metadata for %s: %s", storage_path, e)
+    # The writer embedded (or cleared) the in-band account binding atomically;
+    # drop the legacy sibling ``context.json[account]`` key so a default-account
+    # login can't keep routing to a stale legacy account (best-effort, own lock).
+    drop_legacy_account_key(storage_path)
 
     saved_msg = f"\n[green]Authentication saved to:[/green] {storage_path}"
     if email:
@@ -599,7 +569,6 @@ class RefreshDeps:
     module layout by import string.
     """
 
-    atomic_write_json: Callable[..., Any]
     cookie_names_from_storage: Callable[..., Any]
     confirm_profile_account_overwrite: Callable[..., Any]
     email_to_profile_name: Callable[..., Any]
@@ -611,6 +580,7 @@ class RefreshDeps:
     profiles_by_account_email: Callable[..., Any]
     read_account_metadata: Callable[..., Any]
     read_browser_cookies: Callable[..., Any]
+    replace_from_login: Callable[..., Any]
     resolve_all_accounts_target: Callable[..., Any]
     select_account: Callable[..., Any]
     select_refresh_account: Callable[..., Any]
@@ -621,7 +591,6 @@ class RefreshDeps:
 
 def default_refresh_deps() -> RefreshDeps:
     return RefreshDeps(
-        atomic_write_json=atomic_write_json,
         cookie_names_from_storage=cookie_names_from_storage,
         confirm_profile_account_overwrite=_confirm_profile_account_overwrite,
         email_to_profile_name=email_to_profile_name,
@@ -633,6 +602,7 @@ def default_refresh_deps() -> RefreshDeps:
         profiles_by_account_email=_profiles_by_account_email,
         read_account_metadata=read_account_metadata,
         read_browser_cookies=_read_browser_cookies,
+        replace_from_login=replace_from_login,
         resolve_all_accounts_target=_resolve_all_accounts_target,
         select_account=_select_account,
         select_refresh_account=_select_refresh_account,

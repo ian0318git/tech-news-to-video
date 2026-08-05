@@ -12,15 +12,18 @@ directly), so they live beside the command rather than in ``cli/services/``.
 from __future__ import annotations
 
 import json
-import shutil
 from pathlib import Path
 from typing import Any
 
 import click
 
 from .. import auth
-from ..auth import cookie_names_from_storage, extract_cookies_from_storage, missing_cookies_hint
-from ..io import atomic_write_json
+from ..auth import (
+    cookie_names_from_storage,
+    extract_cookies_from_storage,
+    missing_cookies_hint,
+    replace_from_login,
+)
 from .services.playwright_login import filter_storage_state_cookies_by_domain_policy
 
 __all__ = ["_import_cookie_json", "_read_auth_json_input"]
@@ -140,25 +143,6 @@ def _has_usable_secondary_binding(filtered_state: dict[str, Any]) -> bool:
     return "OSID" in nonempty or {"APISID", "SAPISID", "LSID"} <= nonempty
 
 
-def _backup_existing_storage(storage_path: Path) -> Path | None:
-    """Copy an existing ``storage_state.json`` to a ``.bak`` sibling before overwrite.
-
-    ``import-cookies`` replaces the target outright, so a stale-but-valid import
-    would otherwise silently destroy a working session with no undo. Copying the
-    prior file to ``<name>.bak`` (``copy2`` preserves its ``0o600`` mode) leaves a
-    one-step recovery path. Returns the backup path, or ``None`` when there was
-    nothing to back up.
-    """
-    if not storage_path.exists():
-        return None
-    backup_path = storage_path.with_name(storage_path.name + ".bak")
-    shutil.copy2(storage_path, backup_path)
-    # ``copy2`` preserves the SOURCE mode; force private perms so a backup of a
-    # (legacy/world-readable) storage_state never leaks credentials at rest.
-    backup_path.chmod(0o600)
-    return backup_path
-
-
 def _import_cookie_json(
     *,
     payload: Any,
@@ -244,7 +228,28 @@ def _import_cookie_json(
             "Present: " + ", ".join(sorted(secondary_present))
         )
 
-    storage_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    backup_path = _backup_existing_storage(storage_path)
-    atomic_write_json(storage_path, filtered_state)
-    return filtered_state, backup_path
+    # Persist through the canonical storage writer (refactor (b), b-PR3): it takes
+    # the pre-overwrite ``.bak`` backup INSIDE the storage lock (so it can't race a
+    # concurrent keepalive write), re-applies the same idempotent write-time domain
+    # filter, and writes 0700-dir / 0600-file atomically. The heavy import-side
+    # validation above already guaranteed the required cookies survive the filter,
+    # so ``required_cookies_dropped`` is defensive here.
+    outcome = replace_from_login(
+        storage_path,
+        filtered_state,
+        include_domains=include_domains,
+        include_optional=include_optional,
+        backup=True,
+    )
+    if outcome.required_cookies_dropped:
+        hint = missing_cookies_hint(set(outcome.present_names))
+        raise click.ClickException(  # cli-input-validation: import-cookies post-filter required-cookie validation
+            "Required authentication cookies were dropped by the write-time "
+            f"cookie-domain policy: {', '.join(outcome.missing_required)}.\n\n{hint}"
+        )
+    if outcome.lock_unavailable:
+        raise click.ClickException(  # cli-input-validation: import-cookies storage lock unavailable
+            f"Could not acquire the storage lock to write {storage_path} "
+            "(another process may hold it). Try again."
+        )
+    return filtered_state, outcome.backup_path
