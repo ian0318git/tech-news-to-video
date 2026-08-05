@@ -183,6 +183,11 @@ __all__ = [
 # ``_auth/cookies.py:40``), and ``auth._validate_required_cookies`` IS that
 # same object — so any reverse-assignment would be a no-op.
 _validate_required_cookies = _cookie_policy._validate_required_cookies
+_RequiredCookieValidationError = _cookie_policy.RequiredCookieValidationError
+_validate_cookie_shape = _auth_cookies._validate_cookie_shape
+_sanitize_cookie_entry = _auth_cookies._sanitize_cookie_entry
+_sanitized_auth_entries = _auth_cookies._sanitized_auth_entries
+_validate_routable_entries = _auth_cookies._validate_routable_entries
 
 
 # WIZ field token extraction (CSRF, session ID, generic WIZ data) lives in

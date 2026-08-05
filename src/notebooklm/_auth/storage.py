@@ -65,6 +65,10 @@ class CookieSnapshotValue(NamedTuple):
 
 
 CookieSnapshot: TypeAlias = dict[CookieSnapshotKey, CookieSnapshotValue]
+# ``None`` is a private observation marker for a pre-existing target row whose
+# value was empty, missing, or non-string.  It lets recovery replace an unusable
+# row while still treating a newly-written non-empty sibling as a CAS conflict.
+RecoveryCookieObservation: TypeAlias = dict[CookieSnapshotKey, frozenset[str | None]]
 
 
 @dataclass(frozen=True)
@@ -102,7 +106,12 @@ def _file_lock(lock_path: Path, *, blocking: bool, log_prefix: str) -> Iterator[
     except OSError as exc:
         # Read-only directory, permission denied, ENOSPC, etc. Yield
         # "unavailable" so the wrapper can fail open.
-        logger.debug("%s: lock file unavailable %s (%s)", log_prefix, lock_path, exc)
+        logger.debug(
+            "%s: lock file unavailable %s (%s)",
+            log_prefix,
+            lock_path,
+            type(exc).__name__,
+        )
         yield "unavailable"
         return
     locked = False
@@ -125,11 +134,11 @@ def _file_lock(lock_path: Path, *, blocking: bool, log_prefix: str) -> Iterator[
                 # Non-blocking acquire bounced because another process holds
                 # the lock — this is the "skip" signal.
                 state = "contended"
-                logger.debug("%s: lock contended (%s)", log_prefix, exc)
+                logger.debug("%s: lock contended (%s)", log_prefix, type(exc).__name__)
             else:
                 # NFS without flock, kernel quirk, etc. Caller should fail open.
                 state = "unavailable"
-                logger.debug("%s: lock op unavailable (%s)", log_prefix, exc)
+                logger.debug("%s: lock op unavailable (%s)", log_prefix, type(exc).__name__)
         yield state
     finally:
         if locked:
@@ -143,7 +152,11 @@ def _file_lock(lock_path: Path, *, blocking: bool, log_prefix: str) -> Iterator[
 
                     fcntl.flock(fd, fcntl.LOCK_UN)
             except OSError as exc:
-                logger.debug("%s: failed to release file lock (%s)", log_prefix, exc)
+                logger.debug(
+                    "%s: failed to release file lock (%s)",
+                    log_prefix,
+                    type(exc).__name__,
+                )
         os.close(fd)
 
 
@@ -256,13 +269,20 @@ def _cookie_snapshot_key_variants(key: CookieSnapshotKey) -> set[CookieSnapshotK
     return variants
 
 
-def _stored_cookie_snapshot_key(stored_cookie: dict[str, Any]) -> CookieSnapshotKey | None:
+def _stored_cookie_snapshot_key(stored_cookie: Any) -> CookieSnapshotKey | None:
     """Build a path-aware snapshot key from a Playwright storage_state cookie."""
+    if not isinstance(stored_cookie, dict):
+        return None
     name = stored_cookie.get("name")
     domain = stored_cookie.get("domain", "")
-    if not name or not domain:
+    if not isinstance(name, str) or not name:
         return None
-    path = stored_cookie.get("path") or "/"
+    if not isinstance(domain, str) or not domain:
+        return None
+    raw_path = stored_cookie.get("path")
+    if raw_path is not None and not isinstance(raw_path, str):
+        return None
+    path = raw_path or "/"
     return CookieSnapshotKey(name, domain, path)
 
 
@@ -314,6 +334,7 @@ def save_cookies_to_storage(
     path: Path | None = None,
     *,
     original_snapshot: CookieSnapshot | None = None,
+    recovery_observation: RecoveryCookieObservation | None = None,
     return_result: bool = False,
 ) -> bool | CookieSaveResult:
     """Save an updated httpx.Cookies jar back to Playwright storage_state.json.
@@ -366,15 +387,11 @@ def save_cookies_to_storage(
         With ``return_result=True``, callers can inspect CAS-rejected keys and
         advance their baseline for the keys that did write through.
     """
-    if (
-        not path
-        and "NOTEBOOKLM_AUTH_JSON" in os.environ
-        and os.environ["NOTEBOOKLM_AUTH_JSON"].strip()
-    ):
+    if path is None and "NOTEBOOKLM_AUTH_JSON" in os.environ:
         logger.debug("Skipping cookie sync: Auth loaded from NOTEBOOKLM_AUTH_JSON env var")
         return _cookie_save_return(CookieSaveResult(True), return_result=return_result)
 
-    if not path:
+    if path is None:
         logger.debug("Skipping cookie sync: No storage file path available")
         return _cookie_save_return(CookieSaveResult(True), return_result=return_result)
 
@@ -405,11 +422,14 @@ def save_cookies_to_storage(
         try:
             storage_data = json.loads(path.read_text(encoding="utf-8"))
         except Exception as e:
-            logger.warning("Failed to read storage state for cookie sync: %s", e)
+            logger.warning(
+                "Failed to read storage state for cookie sync: %s",
+                type(e).__name__,
+            )
             return _cookie_save_return(CookieSaveResult(False), return_result=return_result)
 
         cookies = storage_data.get("cookies") if isinstance(storage_data, dict) else None
-        if not isinstance(cookies, list) or any(not isinstance(cookie, dict) for cookie in cookies):
+        if not isinstance(cookies, list):
             logger.warning(
                 "storage_state at %s has an invalid 'cookies' key/payload; "
                 "rotated cookies will not be persisted",
@@ -422,7 +442,10 @@ def save_cookies_to_storage(
             cas_rejected_keys: frozenset[CookieSnapshotKey] = frozenset()
         else:
             updated_count, cas_rejected_keys = _merge_cookies_with_snapshot(
-                cookie_jar, storage_data, original_snapshot
+                cookie_jar,
+                storage_data,
+                original_snapshot,
+                recovery_observation=recovery_observation,
             )
 
         if updated_count == 0:
@@ -444,8 +467,27 @@ def save_cookies_to_storage(
                 return_result=return_result,
             )
         except Exception as e:
-            logger.warning("Failed to write updated cookies to %s: %s", path, e)
+            logger.warning(
+                "Failed to write updated cookies to %s: %s",
+                path,
+                type(e).__name__,
+            )
             return _cookie_save_return(CookieSaveResult(False), return_result=return_result)
+
+
+def _preserved_same_site(stored_cookie: dict[str, Any], fresh_state: dict[str, Any]) -> str:
+    """Keep a stored ``sameSite`` instead of the merge default that erases it.
+
+    ``http.cookiejar.Cookie`` carries no SameSite attribute, so
+    :func:`_cookie_to_storage_state` can only emit the ``"None"`` default. Writing
+    that back over a row captured with ``"Lax"``/``"Strict"`` would downgrade it on
+    every rotation, quietly undoing the attribute preservation the capture and
+    rookiepy converters perform.
+    """
+    stored = stored_cookie.get("sameSite")
+    if stored in {"Strict", "Lax", "None"}:
+        return str(stored)
+    return str(fresh_state["sameSite"])
 
 
 def _merge_cookies_legacy(cookie_jar: httpx.Cookies, storage_data: dict[str, Any]) -> int:
@@ -467,18 +509,24 @@ def _merge_cookies_legacy(cookie_jar: httpx.Cookies, storage_data: dict[str, Any
     updated_count = 0
     stored_keys: set[CookieKey] = set()
     for stored_cookie in storage_data["cookies"]:
+        if not isinstance(stored_cookie, dict):
+            continue
         name = stored_cookie.get("name")
         domain = stored_cookie.get("domain", "")
-        if not name or not domain:
+        if not isinstance(name, str) or not name or not isinstance(domain, str) or not domain:
             continue
 
-        key: CookieKey = (name, domain, stored_cookie.get("path") or "/")
+        stored_key = _stored_cookie_snapshot_key(stored_cookie)
+        if stored_key is None:
+            continue
+        key: CookieKey = stored_key
         stored_keys.update(_cookie_key_variants(key))
         refreshed_cookie = _find_cookie_for_storage(cookies_by_key, key, stored_cookie.get("value"))
         if refreshed_cookie is None:
             continue
 
-        new_expires = refreshed_cookie.expires if refreshed_cookie.expires is not None else -1
+        fresh_state = _cookie_to_storage_state(refreshed_cookie)
+        new_expires = fresh_state["expires"]
         changed = (
             stored_cookie.get("value") != refreshed_cookie.value
             or stored_cookie.get("expires") != new_expires
@@ -495,6 +543,7 @@ def _merge_cookies_legacy(cookie_jar: httpx.Cookies, storage_data: dict[str, Any
             stored_cookie["path"] = refreshed_cookie.path or stored_cookie.get("path") or "/"
             stored_cookie["secure"] = refreshed_cookie.secure
             stored_cookie["httpOnly"] = _cookie_is_http_only(refreshed_cookie)
+            stored_cookie["sameSite"] = _preserved_same_site(stored_cookie, fresh_state)
             updated_count += 1
 
     for key, cookie in cookies_by_key.items():
@@ -506,10 +555,116 @@ def _merge_cookies_legacy(cookie_jar: httpx.Cookies, storage_data: dict[str, Any
     return updated_count
 
 
+_RECOVERY_TARGET_COOKIE_NAMES = frozenset({"__Secure-1PSIDTS", "__Secure-3PSIDTS"})
+
+
+def _merge_recovery_target_rows(
+    storage_cookies: list[Any],
+    deltas: dict[CookieSnapshotKey, Any],
+    observation: RecoveryCookieObservation | None,
+) -> tuple[list[Any], int, set[CookieSnapshotKey], set[CookieSnapshotKey]]:
+    """Collapse observed recovery targets while preserving sibling conflicts."""
+    if observation is None:
+        return storage_cookies, 0, set(), set()
+
+    replacements: dict[int, dict[str, Any]] = {}
+    removals: set[int] = set()
+    appends: list[dict[str, Any]] = []
+    handled: set[CookieSnapshotKey] = set()
+    cas_rejected: set[CookieSnapshotKey] = set()
+    updated_count = 0
+
+    for delta_key, cookie in deltas.items():
+        if delta_key.name not in _RECOVERY_TARGET_COOKIE_NAMES:
+            continue
+
+        variants = _cookie_snapshot_key_variants(delta_key)
+        observed_values: set[str | None] = set()
+        for variant in variants:
+            observed_values.update(observation.get(variant, frozenset()))
+        if not observed_values:
+            # No target row was observed before the POST. Let the ordinary
+            # snapshot/CAS path decide whether a same-key sibling appeared.
+            continue
+
+        row_indices: list[int] = []
+        for index, stored_cookie in enumerate(storage_cookies):
+            stored_key = _stored_cookie_snapshot_key(stored_cookie)
+            if stored_key is not None and variants & _cookie_snapshot_key_variants(stored_key):
+                row_indices.append(index)
+
+        fresh_state = _cookie_to_storage_state(cookie)
+        replaceable: list[int] = []
+        conflicts: list[int] = []
+        for index in row_indices:
+            stored_cookie = storage_cookies[index]
+            stored_value = stored_cookie.get("value") if isinstance(stored_cookie, dict) else None
+            stored_value_is_unusable = not isinstance(stored_value, str) or not stored_value
+            observed_unusable = None in observed_values
+            if (
+                stored_value == cookie.value
+                or stored_value in observed_values
+                or (stored_value_is_unusable and observed_unusable)
+            ):
+                replaceable.append(index)
+            else:
+                conflicts.append(index)
+
+        if conflicts:
+            # This is the recovery-specific CAS rejection. The sibling rows
+            # remain byte-for-byte intact; no stale recovery value may clobber
+            # a value that did not exist when the POST started.
+            #
+            # Deliberately whole-key, even in the mixed case where another row
+            # for this identity *was* replaced below: the key is reported as
+            # rejected, so ``advance_cookie_snapshot_after_save`` leaves the
+            # baseline where it is. A conflicting row is still on disk and the
+            # loaders pick a winner among duplicates, so we cannot claim the
+            # identity now reads as the value we wrote. Advancing on a partial
+            # write would retire a delta that never fully landed.
+            cas_rejected.add(delta_key)
+
+        if replaceable:
+            winner = replaceable[0]
+            # Same ``sameSite`` preservation the ordinary merges apply: only the
+            # cookie's *value* and expiry are being refreshed by the rotation,
+            # and ``fresh_state`` can only carry the ``"None"`` default, so
+            # taking it wholesale would downgrade a captured ``Lax``/``Strict``
+            # on the one path recovery owns.
+            stored_winner = storage_cookies[winner]
+            replacements[winner] = {
+                **fresh_state,
+                "sameSite": _preserved_same_site(
+                    stored_winner if isinstance(stored_winner, dict) else {}, fresh_state
+                ),
+            }
+            removals.update(replaceable[1:])
+            updated_count += 1 + len(replaceable[1:])
+            handled.add(delta_key)
+        elif not row_indices:
+            appends.append(fresh_state)
+            updated_count += 1
+            handled.add(delta_key)
+        elif conflicts:
+            # Preserve an unobserved sibling exactly. The ordinary new-cookie
+            # CAS path would likewise decline to append over an existing row.
+            handled.add(delta_key)
+
+    merged: list[Any] = []
+    for index, stored_cookie in enumerate(storage_cookies):
+        if index in removals:
+            continue
+        merged.append(replacements.get(index, stored_cookie))
+    merged.extend(appends)
+    return merged, updated_count, cas_rejected, handled
+
+
 def _merge_cookies_with_snapshot(
     cookie_jar: httpx.Cookies,
     storage_data: dict[str, Any],
     original_snapshot: CookieSnapshot,
+    *,
+    recovery_observation: RecoveryCookieObservation | None = None,
 ) -> tuple[int, frozenset[CookieSnapshotKey]]:
     """Snapshot/delta merge: write only what this process actually changed.
 
@@ -573,10 +728,11 @@ def _merge_cookies_with_snapshot(
         )
     }
 
-    deltas: dict[CookieSnapshotKey, Any] = {}
-    for snapshot_key, cookie in cookies_by_snapshot_key.items():
-        if original_snapshot.get(snapshot_key) != current_snapshot.get(snapshot_key):
-            deltas[snapshot_key] = cookie
+    deltas = {
+        snapshot_key: cookie
+        for snapshot_key, cookie in cookies_by_snapshot_key.items()
+        if original_snapshot.get(snapshot_key) != current_snapshot.get(snapshot_key)
+    }
 
     deletion_candidates: set[CookieSnapshotKey] = {
         snapshot_key
@@ -592,9 +748,17 @@ def _merge_cookies_with_snapshot(
     updated_count = 0
     cas_rejected_keys: set[CookieSnapshotKey] = set()
 
+    recovery_rows, recovery_updated, recovery_rejected, recovery_handled = (
+        _merge_recovery_target_rows(storage_data["cookies"], deltas, recovery_observation)
+    )
+    updated_count += recovery_updated
+    cas_rejected_keys.update(recovery_rejected)
+    storage_data["cookies"] = recovery_rows
+    merge_deltas = {key: cookie for key, cookie in deltas.items() if key not in recovery_handled}
+
     # Apply deltas + deletions to the existing storage entries in place.
     new_cookies: list[dict[str, Any]] = []
-    matched_delta_keys: set[CookieSnapshotKey] = set()
+    matched_delta_keys: set[CookieSnapshotKey] = set(recovery_handled)
     for stored_cookie in storage_data["cookies"]:
         stored_key = _stored_cookie_snapshot_key(stored_cookie)
         if stored_key is None:
@@ -611,8 +775,8 @@ def _merge_cookies_with_snapshot(
         matched_delta_cookie = None
         matched_delta_key: CookieSnapshotKey | None = None
         for variant in _cookie_snapshot_key_variants(stored_key):
-            if variant in deltas:
-                matched_delta_cookie = deltas[variant]
+            if variant in merge_deltas:
+                matched_delta_cookie = merge_deltas[variant]
                 matched_delta_key = variant
                 break
 
@@ -665,17 +829,16 @@ def _merge_cookies_with_snapshot(
                 matched_delta_keys.add(matched_delta_key)
                 new_cookies.append(stored_cookie)
                 continue
-            new_expires = (
-                matched_delta_cookie.expires if matched_delta_cookie.expires is not None else -1
-            )
+            fresh_state = _cookie_to_storage_state(matched_delta_cookie)
             stored_cookie["value"] = matched_delta_cookie.value
-            stored_cookie["expires"] = new_expires
+            stored_cookie["expires"] = fresh_state["expires"]
             # Mirror :func:`_merge_cookies_legacy`: ``or "/"`` normalizes a
             # present-but-empty ``"path": ""`` so the written row matches the
             # path normalization used by the identity key and every loader.
             stored_cookie["path"] = matched_delta_cookie.path or stored_cookie.get("path") or "/"
             stored_cookie["secure"] = matched_delta_cookie.secure
             stored_cookie["httpOnly"] = _cookie_is_http_only(matched_delta_cookie)
+            stored_cookie["sameSite"] = _preserved_same_site(stored_cookie, fresh_state)
             matched_delta_keys.add(matched_delta_key)
             updated_count += 1
             new_cookies.append(stored_cookie)
@@ -707,7 +870,7 @@ def _merge_cookies_with_snapshot(
 
     # Append delta cookies that didn't match any existing storage entry
     # (genuinely new cookies acquired during the session).
-    for snapshot_key, cookie in deltas.items():
+    for snapshot_key, cookie in merge_deltas.items():
         if snapshot_key in matched_delta_keys:
             continue
         new_cookies.append(_cookie_to_storage_state(cookie))

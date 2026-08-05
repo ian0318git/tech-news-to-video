@@ -370,8 +370,21 @@ class TestLoginCommand:
             # yielded page (e.g. to make ``storage_state()`` raise) without
             # rebuilding this harness.
             mock_page.context = mock_context
-            # storage_state() now returns a dict; atomic_write_json writes it.
-            mock_context.storage_state.return_value = {"cookies": [], "origins": []}
+            # Real captures are validated before persistence. Keep this shared
+            # control-flow fixture minimally authenticated so these tests stay
+            # about navigation/render behavior rather than bypassing auth policy.
+            mock_context.storage_state.return_value = {
+                "cookies": [
+                    {"name": "SID", "value": "sid", "domain": ".google.com", "path": "/"},
+                    {
+                        "name": "__Secure-1PSIDTS",
+                        "value": "psidts",
+                        "domain": ".google.com",
+                        "path": "/",
+                    },
+                ],
+                "origins": [],
+            }
             mock_launch = (
                 mock_pw.return_value.__enter__.return_value.chromium.launch_persistent_context
             )
@@ -712,7 +725,7 @@ class TestLoginCommand:
             mock_page = MagicMock()
             mock_page.url = f"https://{get_base_host()}/"
             mock_context.pages = [mock_page]
-            mock_context.storage_state.return_value = {"cookies": [], "origins": []}
+            mock_context.storage_state.return_value = _required_cookie_state()
             mock_launch = (
                 mock_pw.return_value.__enter__.return_value.chromium.launch_persistent_context
             )
@@ -749,7 +762,7 @@ class TestLoginCommand:
             mock_page = MagicMock()
             mock_page.url = f"https://{get_base_host()}/"
             mock_context.pages = [mock_page]
-            mock_context.storage_state.return_value = {"cookies": [], "origins": []}
+            mock_context.storage_state.return_value = _required_cookie_state()
             mock_launch = (
                 mock_pw.return_value.__enter__.return_value.chromium.launch_persistent_context
             )
@@ -1158,7 +1171,7 @@ class TestLoginCommand:
             mock_page = MagicMock()
             mock_page.url = f"https://{get_base_host()}/"
             mock_context.pages = [mock_page]
-            mock_context.storage_state.return_value = {"cookies": [], "origins": []}
+            mock_context.storage_state.return_value = _required_cookie_state()
             mock_launch = (
                 mock_pw.return_value.__enter__.return_value.chromium.launch_persistent_context
             )
@@ -1244,7 +1257,7 @@ class TestLoginCommand:
             mock_context.pages = [mock_page_stale]
             # new_page() returns a working fresh page
             mock_context.new_page.return_value = mock_page_fresh
-            mock_context.storage_state.return_value = {"cookies": [], "origins": []}
+            mock_context.storage_state.return_value = _required_cookie_state()
 
             mock_launch = (
                 mock_pw.return_value.__enter__.return_value.chromium.launch_persistent_context
@@ -1306,7 +1319,7 @@ class TestLoginCommand:
             mock_page_stale.url = f"https://{get_base_host()}/"
             mock_context.pages = [mock_page_stale]
             mock_context.new_page.return_value = mock_page_fresh
-            mock_context.storage_state.return_value = {"cookies": [], "origins": []}
+            mock_context.storage_state.return_value = _required_cookie_state()
 
             mock_launch = (
                 mock_pw.return_value.__enter__.return_value.chromium.launch_persistent_context
@@ -1362,7 +1375,7 @@ class TestLoginCommand:
             )
             mock_context.pages = [mock_page_stale]
             mock_context.new_page.return_value = mock_page_recovered
-            mock_context.storage_state.return_value = {"cookies": [], "origins": []}
+            mock_context.storage_state.return_value = _required_cookie_state()
 
             mock_launch = (
                 mock_pw.return_value.__enter__.return_value.chromium.launch_persistent_context
@@ -1403,7 +1416,7 @@ class TestLoginCommand:
             )
             mock_context.pages = [mock_page]
             mock_context.new_page.return_value = mock_page  # new pages also fail
-            mock_context.storage_state.return_value = {"cookies": [], "origins": []}
+            mock_context.storage_state.return_value = _required_cookie_state()
 
             mock_launch = (
                 mock_pw.return_value.__enter__.return_value.chromium.launch_persistent_context
@@ -1464,7 +1477,7 @@ class TestLoginCommand:
             )
             mock_context.pages = [mock_page_stale]
             mock_context.new_page.return_value = mock_page_recovered
-            mock_context.storage_state.return_value = {"cookies": [], "origins": []}
+            mock_context.storage_state.return_value = _required_cookie_state()
 
             mock_launch = (
                 mock_pw.return_value.__enter__.return_value.chromium.launch_persistent_context

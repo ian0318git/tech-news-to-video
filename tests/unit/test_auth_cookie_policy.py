@@ -696,6 +696,7 @@ class TestLoadHttpxCookiesRegional:
                 {"name": "SID", "value": "sid_from_uk", "domain": ".google.co.uk"},
                 {"name": "__Secure-1PSIDTS", "value": "test_1psidts", "domain": ".google.co.uk"},
                 {"name": "HSID", "value": "hsid_val", "domain": ".google.co.uk"},
+                {"name": "__Secure-1PSIDTS", "value": "routed_1psidts", "domain": ".google.com"},
             ]
         }
 
@@ -712,6 +713,7 @@ class TestLoadHttpxCookiesRegional:
             "cookies": [
                 {"name": "SID", "value": "sid_de", "domain": ".google.de"},
                 {"name": "__Secure-1PSIDTS", "value": "test_1psidts", "domain": ".google.de"},
+                {"name": "__Secure-1PSIDTS", "value": "routed_1psidts", "domain": ".google.com"},
             ]
         }
         storage_file = tmp_path / "storage.json"

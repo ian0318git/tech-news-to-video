@@ -399,8 +399,15 @@ def load_auth_from_storage(path: Path | None = None) -> dict[str, str]:
     """
     storage_state = _auth_cookies._load_storage_state(path)
     try:
-        return _auth_cookies.extract_cookies_from_storage(storage_state)
-    except ValueError:
+        cookies = _auth_cookies.extract_cookies_from_storage(storage_state)
+        entries = _auth_cookies._sanitized_auth_entries(storage_state)
+        _auth_cookies._validate_routable_entries(
+            entries,
+            to_cookie=_auth_cookies._storage_entry_to_cookie,
+            require_routable=True,
+        )
+        return cookies
+    except _auth_cookies.RequiredCookieValidationError:
         # Inline ``__Secure-1PSIDTS`` recovery (issue #865). Playwright login
         # can land a ``storage_state.json`` that carries SID + secondary
         # binding but lacks PSIDTS, because Google only mints PSIDTS
@@ -415,7 +422,13 @@ def load_auth_from_storage(path: Path | None = None) -> dict[str, str]:
         # we pass ``path`` through verbatim — including ``None`` for the
         # default-profile case.
         if not _auth_psidts_recovery._recover_psidts_inline(path):
-            raise
+            # Recovery declined, so the routing half of the preflight has no
+            # heal to trigger and must not harden into a failure this call
+            # cannot repair. Re-run name-only: it re-raises when a required
+            # cookie is genuinely absent, and otherwise returns exactly what
+            # this function returned before #2061. See
+            # ``_build_httpx_cookies_from_storage_state`` for the rule.
+            return _auth_cookies.extract_cookies_from_storage(storage_state)
         storage_state = _auth_cookies._load_storage_state(path)
         return _auth_cookies.extract_cookies_from_storage(storage_state)
 

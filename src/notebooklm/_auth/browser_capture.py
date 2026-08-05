@@ -72,6 +72,10 @@ from ._browser_cookie_filter import filter_storage_state_cookies_by_domain_polic
 # (``cli/services/playwright_login.py``) and the launch banner.
 from .browser_launch_errors import CHANNEL_BROWSERS, classify_launch_failure
 
+# The captured-state validation bridge is a leaf (ADR-0008) so this module does
+# not grow a second copy of the rookiepy-shaped recovery contract.
+from .browser_state_validation import heal_captured_state as _heal_captured_state
+
 # ``app_host_scope_note`` owns the both-personal-hosts cookie-scope caveat that
 # every "open the app in your browser" instruction needs (it is appended to the
 # binding-related hints in ``cookie_policy.missing_cookies_hint``). It is
@@ -654,7 +658,20 @@ def run_browser_capture(
             filtered_state: dict[str, Any] = filter_storage_state_cookies_by_domain_policy(
                 dict(playwright_state), include_domains=include_domains
             )
+            filtered_state, heal_error = _heal_captured_state(filtered_state)
+            # Persist unconditionally. A failed heal must never discard the
+            # sign-in the user just completed — the cookies are still the best
+            # material available, and the disk-based cold-start recovery retries
+            # from them on the next command.
             atomic_write_json(storage_path, filtered_state)
+            if heal_error is not None:
+                logger.warning(
+                    "Saved the captured session, but it has no usable "
+                    "__Secure-1PSIDTS and the in-memory rotation did not supply "
+                    "one (%s). The next command retries the heal from disk; if "
+                    "authentication keeps failing, re-run 'notebooklm login'.",
+                    heal_error,
+                )
             captured_page_html = active_page_html
 
         except Exception as e:
@@ -850,7 +867,20 @@ def run_cdp_capture(
             filtered_state: dict[str, Any] = filter_storage_state_cookies_by_domain_policy(
                 dict(playwright_state), include_domains=include_domains
             )
+            filtered_state, heal_error = _heal_captured_state(filtered_state)
+            # Persist unconditionally. A failed heal must never discard the
+            # sign-in the user just completed — the cookies are still the best
+            # material available, and the disk-based cold-start recovery retries
+            # from them on the next command.
             atomic_write_json(storage_path, filtered_state)
+            if heal_error is not None:
+                logger.warning(
+                    "Saved the captured session, but it has no usable "
+                    "__Secure-1PSIDTS and the in-memory rotation did not supply "
+                    "one (%s). The next command retries the heal from disk; if "
+                    "authentication keeps failing, re-run 'notebooklm login'.",
+                    heal_error,
+                )
         except PlaywrightError as exc:
             if TARGET_CLOSED_ERROR in str(exc):
                 raise _HeadlessCaptureAbort(_CaptureAbortKind.BROWSER_CLOSED) from exc

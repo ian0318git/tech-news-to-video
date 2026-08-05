@@ -67,6 +67,7 @@ def _enumerate_browser_accounts(
     *,
     verbose: bool = True,
     include_domains: set[str] | None = None,
+    validate_before_probe: bool = True,
     io: LoginIO | None = None,
 ) -> tuple[dict[str | None, list[dict[str, Any]]], list[Account]] | BrowserCookieOutcome:
     """Read cookies from ``browser_name`` and discover signed-in accounts.
@@ -87,6 +88,9 @@ def _enumerate_browser_accounts(
         include_domains: Forwarded to :func:`_read_browser_cookies` to
             broaden the extraction set with sibling-product cookies. See
             :func:`_parse_include_domains`.
+        validate_before_probe: Run route-aware cookie validation before the
+            account probe when true. ``auth inspect`` disables this so a
+            transport failure keeps its historical precedence.
         io: Optional caller-injected :class:`.io_seam.LoginIO` sink (resolved
             to the command-layer default when ``None``) threaded to the
             chromium / firefox readers for their verbose progress lines.
@@ -128,6 +132,7 @@ def _enumerate_browser_accounts(
             raw_cookies,
             profile.browser,
             browser_profile=profile.directory_name,
+            validate_before_probe=validate_before_probe,
             io=io,
         )
         if isinstance(result, BrowserCookieOutcome):
@@ -146,6 +151,7 @@ def _enumerate_browser_accounts(
                 profiles,
                 verbose=verbose,
                 include_domains=include_domains,
+                validate_before_probe=validate_before_probe,
             )
 
     cookies_result = _read_browser_cookies(
@@ -153,10 +159,44 @@ def _enumerate_browser_accounts(
     )
     if isinstance(cookies_result, BrowserCookieOutcome):
         return cookies_result
-    enum_result = _enumerate_one_jar(cookies_result, browser_name, browser_profile=None, io=io)
+    enum_result = _enumerate_one_jar(
+        cookies_result,
+        browser_name,
+        browser_profile=None,
+        validate_before_probe=validate_before_probe,
+        io=io,
+    )
     if isinstance(enum_result, BrowserCookieOutcome):
         return enum_result
     return {None: cookies_result}, enum_result
+
+
+def _inspect_browser_accounts(
+    browser_name: str,
+    *,
+    verbose: bool = True,
+    include_domains: set[str] | None = None,
+    io: LoginIO | None = None,
+) -> tuple[dict[str | None, list[dict[str, Any]]], list[Account]] | BrowserCookieOutcome:
+    """``auth inspect`` variant of :func:`_enumerate_browser_accounts`.
+
+    Identical except that it probes before validating the local cookie set.
+    ``auth inspect`` is a diagnostic: when the network is down, "could not
+    reach Google" is the honest answer, and reporting a cookie-validation
+    failure instead would blame the profile for an unrelated outage. The
+    login/refresh paths keep validate-then-probe, so a heal can still repair
+    the set before the probe that depends on it.
+
+    Lives here rather than at the command so ``session_cmd`` states which
+    flow it wants, not how the flag is spelled.
+    """
+    return _enumerate_browser_accounts(
+        browser_name,
+        verbose=verbose,
+        include_domains=include_domains,
+        validate_before_probe=False,
+        io=io,
+    )
 
 
 def _read_browser_cookies(

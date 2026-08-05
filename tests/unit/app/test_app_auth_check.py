@@ -255,7 +255,7 @@ async def test_token_fetch_env_auth_passes_none_path(tmp_path: Path) -> None:
         )
 
     assert result.checks["token_fetch"] is True
-    fetch.assert_awaited_once_with(None, "work")
+    fetch.assert_awaited_once_with(None, None)
 
 
 @pytest.mark.asyncio

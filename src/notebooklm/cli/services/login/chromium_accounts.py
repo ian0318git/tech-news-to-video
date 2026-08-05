@@ -119,6 +119,7 @@ def _enumerate_chromium_profiles_fanout(
     *,
     verbose: bool,
     include_domains: set[str] | None,
+    validate_before_probe: bool = True,
 ) -> tuple[dict[str | None, list[dict[str, Any]]], list[Account]] | BrowserCookieOutcome:
     """Fan out account discovery across multiple Chromium user-data profiles.
 
@@ -184,6 +185,7 @@ def _enumerate_chromium_profiles_fanout(
                 browser_name,
                 browser_profile=profile.directory_name,
                 quiet=True,
+                validate_before_probe=validate_before_probe,
                 io=io,
             )
         except httpx.RequestError as e:

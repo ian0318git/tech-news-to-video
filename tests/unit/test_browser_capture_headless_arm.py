@@ -138,6 +138,14 @@ def test_headless_authenticated_landing_persists_storage(tmp_path: Path) -> None
 
     cookies = [
         {"name": "SID", "value": "v", "domain": ".google.com", "path": "/"},
+        {"name": "APISID", "value": "a", "domain": ".google.com", "path": "/"},
+        {"name": "SAPISID", "value": "s", "domain": ".google.com", "path": "/"},
+        {
+            "name": "__Secure-1PSIDTS",
+            "value": "ts",
+            "domain": ".google.com",
+            "path": "/",
+        },
         # A sibling-product cookie that the domain filter must DROP.
         {"name": "X", "value": "y", "domain": "mail.google.com", "path": "/"},
     ]

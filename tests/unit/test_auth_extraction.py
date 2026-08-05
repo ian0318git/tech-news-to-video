@@ -670,7 +670,7 @@ class TestExtractCookiesEdgeCases:
         assert len(cookies) == 2
 
     def test_handles_cookie_with_empty_value(self):
-        """Test handles cookies with empty values."""
+        """Empty required values are skipped and produce the typed failure."""
         storage_state = {
             "cookies": [
                 {"name": "SID", "value": "", "domain": ".google.com"},
@@ -678,8 +678,8 @@ class TestExtractCookiesEdgeCases:
             ]
         }
 
-        cookies = extract_cookies_from_storage(storage_state)
-        assert cookies["SID"] == ""
+        with pytest.raises(ValueError, match="Missing required cookies: SID"):
+            extract_cookies_from_storage(storage_state)
 
 
 class TestExtractCSRFRedirect:

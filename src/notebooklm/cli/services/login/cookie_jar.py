@@ -81,6 +81,7 @@ def _enumerate_one_jar(
     browser_profile: str | None,
     *,
     quiet: bool = False,
+    validate_before_probe: bool = True,
     io: LoginIO | None = None,
 ) -> list[Account] | BrowserCookieOutcome:
     """Probe ``?authuser=N`` against one cookie set and return tagged Accounts.
@@ -107,6 +108,10 @@ def _enumerate_one_jar(
             (``httpx.RequestError``) are NOT downgraded — they propagate
             as-is so the caller can distinguish transport failures from
             per-profile "signed out".
+        validate_before_probe: When true, run the normal route-aware cookie
+            validation/recovery before account enumeration. ``auth inspect``
+            sets this false to preserve its historical network-error
+            precedence, then validates after a successful probe.
 
     Returns:
         list[Account]: signed-in Google accounts on the success path.
@@ -129,30 +134,30 @@ def _enumerate_one_jar(
     from ....auth import (
         Account,
         build_cookie_jar,
+        convert_rookiepy_cookies_to_storage_state,
         enumerate_accounts,
         extract_cookies_with_domains,
     )
 
     io = resolve_login_io(io)
-    storage_state, validation_error = validate_with_recovery(raw_cookies)
-    if validation_error is not None:
-        if quiet:
-            return CookieValidationFailure(
-                code="COOKIE_VALIDATION_FAILED",
-                message=f"No valid Google authentication cookies found in {browser_name}.",
+    if validate_before_probe:
+        storage_state, validation_error = validate_with_recovery(raw_cookies)
+        if validation_error is not None:
+            return _cookie_validation_failure(
+                storage_state, validation_error, browser_name=browser_name, quiet=quiet
             )
-        cookie_names = cookie_names_from_storage(storage_state)
-        hint = missing_cookies_hint(cookie_names, browser_label=browser_name)
-        return CookieValidationFailure(
-            code="COOKIE_VALIDATION_FAILED",
-            message=(
-                "[red]No valid Google authentication cookies found.[/red]\n"
-                f"{validation_error}\n\n"
-                f"{hint}"
-            ),
-        )
+    else:
+        # ``auth inspect`` historically attempted account enumeration before
+        # classifying the local cookie set.  Keep that transport-error
+        # precedence without weakening the normal browser-extraction loader:
+        # this projection is probe-only and the full validation still runs
+        # after a successful network probe.
+        storage_state = convert_rookiepy_cookies_to_storage_state(raw_cookies)
+        validation_error = None
 
-    cookie_map = extract_cookies_with_domains(storage_state)
+    cookie_map = extract_cookies_with_domains(
+        storage_state, validate_required=validate_before_probe
+    )
     jar = build_cookie_jar(cookies=cookie_map)
     try:
         accounts = io.run_async(enumerate_accounts(jar))
@@ -201,6 +206,13 @@ def _enumerate_one_jar(
             ),
         )
 
+    if not validate_before_probe:
+        storage_state, validation_error = validate_with_recovery(raw_cookies)
+        if validation_error is not None:
+            return _cookie_validation_failure(
+                storage_state, validation_error, browser_name=browser_name, quiet=quiet
+            )
+
     if browser_profile is None:
         return list(accounts)
     return [
@@ -212,3 +224,28 @@ def _enumerate_one_jar(
         )
         for a in accounts
     ]
+
+
+def _cookie_validation_failure(
+    storage_state: dict[str, Any],
+    validation_error: ValueError,
+    *,
+    browser_name: str,
+    quiet: bool,
+) -> CookieValidationFailure:
+    """Project a browser-cookie validation failure after the network probe."""
+    if quiet:
+        return CookieValidationFailure(
+            code="COOKIE_VALIDATION_FAILED",
+            message=f"No valid Google authentication cookies found in {browser_name}.",
+        )
+    cookie_names = cookie_names_from_storage(storage_state)
+    hint = missing_cookies_hint(cookie_names, browser_label=browser_name)
+    return CookieValidationFailure(
+        code="COOKIE_VALIDATION_FAILED",
+        message=(
+            "[red]No valid Google authentication cookies found.[/red]\n"
+            f"{validation_error}\n\n"
+            f"{hint}"
+        ),
+    )

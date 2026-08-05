@@ -11,6 +11,7 @@ preserve explicit caller intent vs. resolved-from-storage defaults.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -25,13 +26,39 @@ def _resolve_token_route_kwargs(
 ) -> dict[str, Any]:
     """Resolve token-fetch routing while preserving explicit caller intent."""
     explicit_authuser = authuser is not None
-    resolved_authuser = get_authuser_for_storage(storage_path) if authuser is None else authuser
+    env_auth_present = storage_path is None and "NOTEBOOKLM_AUTH_JSON" in os.environ
+    env_authuser = 0
+    env_account_email: str | None = None
+    if env_auth_present and authuser is None:
+        from .account import read_account_metadata_from_storage_state
+        from .cookies import _load_storage_state
+
+        try:
+            metadata = read_account_metadata_from_storage_state(_load_storage_state(None))
+        except (OSError, ValueError, TypeError):
+            metadata = {}
+        raw_authuser = metadata.get("authuser")
+        raw_email = metadata.get("email")
+        if type(raw_authuser) is int and raw_authuser >= 0:
+            env_authuser = raw_authuser
+        if isinstance(raw_email, str) and raw_email.strip():
+            env_account_email = raw_email.strip()
+
+    resolved_authuser = (
+        authuser
+        if authuser is not None
+        else env_authuser
+        if env_auth_present
+        else get_authuser_for_storage(storage_path)
+    )
     if account_email is not None:
         resolved_account_email = account_email
     elif explicit_authuser:
         resolved_account_email = None
     else:
-        resolved_account_email = get_account_email_for_storage(storage_path)
+        resolved_account_email = (
+            env_account_email if env_auth_present else get_account_email_for_storage(storage_path)
+        )
 
     route_kwargs: dict[str, Any] = {"authuser": resolved_authuser}
     if resolved_account_email is not None:

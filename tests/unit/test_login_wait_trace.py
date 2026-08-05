@@ -520,7 +520,18 @@ def _run_fake_interactive_login(tmp_path: Path) -> Any:
 
     context = MagicMock()
     context.pages = [page]
-    context.storage_state.return_value = {"cookies": [], "origins": []}
+    context.storage_state.return_value = {
+        "cookies": [
+            {"name": "SID", "value": "sid", "domain": ".google.com", "path": "/"},
+            {
+                "name": "__Secure-1PSIDTS",
+                "value": "psidts",
+                "domain": ".google.com",
+                "path": "/",
+            },
+        ],
+        "origins": [],
+    }
     playwright = MagicMock()
     playwright.chromium.launch_persistent_context.return_value = context
 

@@ -73,7 +73,7 @@ from .services.auth_source import AUTH_JSON_ENV_NAME, auth_source_from_ctx, has_
 
 # Direct imports replace the D1-PR-3-retired forwarding wrappers; see ADR-0008.
 from .services.login import (
-    _enumerate_browser_accounts,
+    _inspect_browser_accounts,
     _login_all_accounts_from_browser,
     _login_browser_cookies_single,
     _refresh_from_browser_cookies,
@@ -664,7 +664,7 @@ def register_session_commands(cli):
         """
         include_domains = _parse_include_domains(include_domains_raw)
         try:
-            enum_result = _enumerate_browser_accounts(
+            enum_result = _inspect_browser_accounts(
                 browser_name, verbose=not json_output, include_domains=include_domains
             )
         except httpx.RequestError as e:

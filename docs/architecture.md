@@ -529,6 +529,9 @@ the default dependency.
 | [`_auth/headers.py`](../src/notebooklm/_auth/headers.py) | HTTP header construction. |
 | [`_auth/cookies.py`](../src/notebooklm/_auth/cookies.py) | Cookie maps + `_update_cookie_input` helper. |
 | [`_auth/cookie_policy.py`](../src/notebooklm/_auth/cookie_policy.py) | Domain allowlist, cookie-domain builder (`build_cookie_domain_allowlist`), and cookie policy decisions. |
+| [`_auth/cookie_semantics.py`](../src/notebooklm/_auth/cookie_semantics.py) | Shared cookie-shape and expiry semantics used by sanitized auth loaders and persistence boundaries. |
+| [`_auth/browser_cookie_recovery.py`](../src/notebooklm/_auth/browser_cookie_recovery.py) | Leaf bridge that validates captured browser cookies and retries in-memory PSIDTS recovery. |
+| [`_auth/browser_state_validation.py`](../src/notebooklm/_auth/browser_state_validation.py) | Best-effort in-memory PSIDTS heal for Playwright-captured state, preserving cookie attributes. Returns `(state, error)` and never raises, so a failed heal cannot discard a completed sign-in. |
 | [`_auth/browser_capture.py`](../src/notebooklm/_auth/browser_capture.py) | Transport-neutral browser launch→navigate→capture→filter→persist core (lazy `playwright`); shared by the interactive CLI login adapter and the layer-3 headless re-auth layer (ADR-0021). The headless arm classifies the landing URL (authenticated→capture, redirected-to-login→`HeadlessLoginRequiredError`). `run_cdp_capture` is an alternative credential source: attach to an operator-pointed already-running Chrome over CDP (`connect_over_cdp`, disconnect-only teardown) using the SAME landing classification + cookie-domain allowlist. |
 | [`_auth/_browser_cookie_filter.py`](../src/notebooklm/_auth/_browser_cookie_filter.py) | Pure storage-state cookie filter shared by browser-capture arms: applies the domain policy, skips malformed rows with value-free diagnostics, and deduplicates exact RFC 6265 identities. |
 | [`_auth/browser_launch_errors.py`](../src/notebooklm/_auth/browser_launch_errors.py) | Transport-neutral leaf for `browser_capture`: the `CHANNEL_BROWSERS` channel registry plus `classify_launch_failure`, which maps a Playwright launch failure to actionable help (system browser not installed, bundled Chromium not downloaded, or a Windows `spawn UNKNOWN` execution veto from AppLocker/WDAC/Defender) or to `None` so the original exception propagates. Pure string-in/string-out — no Playwright, no I/O, no CLI. |
@@ -993,6 +996,9 @@ Per-file index plus the full `src/notebooklm` + `tests` repository tree. The tre
 | `_auth/headers.py` | HTTP header construction |
 | `_auth/cookies.py` | Cookie map manipulation + `_update_cookie_input` |
 | `_auth/cookie_policy.py` | Cookie-domain allowlist, `build_cookie_domain_allowlist` builder, and policy decisions |
+| `_auth/cookie_semantics.py` | Shared cookie-shape and expiry semantics at loader/persistence boundaries |
+| `_auth/browser_cookie_recovery.py` | Captured-cookie validation and in-memory PSIDTS recovery bridge |
+| `_auth/browser_state_validation.py` | Best-effort PSIDTS heal for captured state; returns `(state, error)`, never raises |
 | `_auth/browser_capture.py` | Transport-neutral browser launch→capture→filter→persist core (lazy `playwright`); shared by the interactive CLI login adapter (`cli/services/playwright_login.py`) and the layer-3 headless re-auth layer (ADR-0021) |
 | `_auth/_browser_cookie_filter.py` | Pure storage-state cookie filter shared by browser-capture arms; applies domain policy and normalizes malformed/duplicate rows |
 | `_auth/browser_launch_errors.py` | `CHANNEL_BROWSERS` registry + `classify_launch_failure` launch-failure triage (not-installed / bundled-Chromium-missing / Windows `spawn UNKNOWN` execution veto); pure leaf of `browser_capture.py` (ADR-0008) |
@@ -1170,6 +1176,9 @@ src/notebooklm/
 │   ├── headers.py               # HTTP header construction
 │   ├── cookies.py               # Cookie maps + _update_cookie_input
 │   ├── cookie_policy.py         # Domain allowlist + cookie-domain builder and policy
+│   ├── cookie_semantics.py      # Shared cookie-shape and expiry semantics
+│   ├── browser_cookie_recovery.py # Captured-cookie validation + in-memory PSIDTS recovery bridge
+│   ├── browser_state_validation.py # Best-effort PSIDTS heal for captured state (never raises)
 │   ├── browser_capture.py       # Transport-neutral browser launch→capture→filter→persist core (lazy playwright)
 │   ├── _browser_cookie_filter.py # Shared storage-state cookie-domain filter + row normalization
 │   ├── browser_launch_errors.py # Channel registry + launch-failure triage (pure leaf of browser_capture)

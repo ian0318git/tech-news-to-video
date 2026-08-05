@@ -16,6 +16,10 @@ from notebooklm._env import (
 logger = logging.getLogger("notebooklm.auth")
 
 
+class RequiredCookieValidationError(ValueError):
+    """Typed required-cookie/preflight failure used by recovery wrappers."""
+
+
 def cookie_names_from_storage(storage_state: Mapping[str, Any]) -> set[str]:
     """Return the set of cookie names present in a Playwright storage_state.
 
@@ -26,11 +30,22 @@ def cookie_names_from_storage(storage_state: Mapping[str, Any]) -> set[str]:
     ``None`` / empty-string names (so the returned set never contains ``""``).
     """
     cookies = storage_state.get("cookies", [])
-    return {
-        name
-        for entry in cookies
-        if isinstance(entry, dict) and isinstance(name := entry.get("name"), str) and name
-    }
+    names: set[str] = set()
+    if not isinstance(cookies, list):
+        return names
+    for entry in cookies:
+        # This helper is deliberately a lightweight diagnostic projection, not
+        # a loader/conversion boundary.  Doctor and compatibility callers have
+        # historically supplied minimal ``{"name": ..., "value": ...}``
+        # rows, so requiring storage-only fields such as ``domain`` here would
+        # turn a usable profile into a false "SID missing" report.  Full shape
+        # and expiry sanitization remains in the cookie loaders.
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name")
+        if isinstance(name, str) and name:
+            names.add(name)
+    return names
 
 
 # Tier 1: cookies whose absence Google rejects deterministically.
@@ -185,7 +200,7 @@ def _validate_required_cookies(
         if extra_diagnostics:
             parts.extend(extra_diagnostics)
         parts.append(_EXTRACTION_HINT)
-        raise ValueError("\n".join(parts))
+        raise RequiredCookieValidationError("\n".join(parts))
 
     if not _has_valid_secondary_binding(cookie_names):
         global _SECONDARY_BINDING_WARNED

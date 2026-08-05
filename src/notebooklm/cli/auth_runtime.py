@@ -7,6 +7,7 @@ as ``notebooklm.cli.helpers.get_auth_tokens`` and
 ``notebooklm.cli.helpers.run_async`` continue to affect runtime behavior.
 """
 
+import json
 import logging
 import time
 from collections.abc import Awaitable, Callable
@@ -18,7 +19,12 @@ from typing import Any, NoReturn, TypeVar, cast
 import click
 
 from ..auth import AuthTokens
-from .services.auth_source import AUTH_JSON_ENV_NAME, AuthSource, has_env_auth_json
+from .services.auth_source import (
+    AUTH_JSON_ENV_NAME,
+    AuthSource,
+    has_env_auth_json,
+    read_env_auth_json,
+)
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
@@ -114,8 +120,9 @@ def get_auth_tokens(ctx) -> AuthTokens:
     storage_path, _ = _auth_context(ctx)
     resolved_storage_path = _resolved_auth_storage_path(ctx)
     typed_storage_path = cast(Path | None, resolved_storage_path)
+    env_auth = storage_path is None and has_env_auth_json()
 
-    if has_env_auth_json() and storage_path is None:
+    if env_auth:
         from ..auth import build_httpx_cookies_from_storage
 
         jar = build_httpx_cookies_from_storage(None)
@@ -124,7 +131,23 @@ def get_auth_tokens(ctx) -> AuthTokens:
 
     # Read persisted account routing so RPC URLs target the same Google
     # account the tokens were minted for.
-    from ..auth import get_account_email_for_storage, get_authuser_for_storage
+    from ..auth import (
+        get_account_email_for_storage,
+        get_authuser_for_storage,
+        read_account_metadata_from_storage_state,
+    )
+
+    if env_auth:
+        metadata = read_account_metadata_from_storage_state(json.loads(read_env_auth_json()))
+        raw_authuser = metadata.get("authuser")
+        resolved_authuser = raw_authuser if type(raw_authuser) is int and raw_authuser >= 0 else 0
+        raw_email = metadata.get("email")
+        resolved_email = raw_email.strip() if isinstance(raw_email, str) else None
+        if not resolved_email:
+            resolved_email = None
+    else:
+        resolved_authuser = get_authuser_for_storage(typed_storage_path)
+        resolved_email = get_account_email_for_storage(typed_storage_path)
 
     return AuthTokens(
         cookies=cookies,
@@ -132,8 +155,8 @@ def get_auth_tokens(ctx) -> AuthTokens:
         session_id=session_id,
         storage_path=typed_storage_path,
         cookie_jar=jar,
-        authuser=get_authuser_for_storage(typed_storage_path),
-        account_email=get_account_email_for_storage(typed_storage_path),
+        authuser=resolved_authuser,
+        account_email=resolved_email,
     )
 
 

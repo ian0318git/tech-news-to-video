@@ -768,22 +768,22 @@ class TestSaveReturnsBoolSuccess:
         assert save_cookies_to_storage(jar, storage, original_snapshot=snapshot) is False
 
     @pytest.mark.parametrize(
-        "storage_state",
+        ("storage_state", "expected"),
         [
-            pytest.param({"origins": []}, id="missing-cookies"),
-            pytest.param({"cookies": "not-a-list"}, id="cookies-not-list"),
-            pytest.param({"cookies": ["not-a-dict"]}, id="cookie-row-not-dict"),
+            pytest.param({"origins": []}, False, id="missing-cookies"),
+            pytest.param({"cookies": "not-a-list"}, False, id="cookies-not-list"),
+            pytest.param({"cookies": ["not-a-dict"]}, True, id="cookie-row-not-dict"),
         ],
     )
-    def test_returns_false_when_cookies_payload_is_malformed(self, tmp_path, storage_state):
-        """Malformed cookie payloads must fail gracefully before merge logic."""
+    def test_handles_malformed_cookies_payload(self, tmp_path, storage_state, expected):
+        """Invalid schema fails; non-dict rows are retained while merging."""
         storage = tmp_path / "storage_state.json"
         storage.write_text(json.dumps(storage_state), encoding="utf-8")
         jar = httpx.Cookies()
         jar.set("SID", "new", domain=".google.com", path="/")
         snapshot: dict = {}
 
-        assert save_cookies_to_storage(jar, storage, original_snapshot=snapshot) is False
+        assert save_cookies_to_storage(jar, storage, original_snapshot=snapshot) is expected
 
     def test_returns_false_when_file_missing(self, tmp_path):
         """Storage file vanished between snapshot capture and save (e.g. an

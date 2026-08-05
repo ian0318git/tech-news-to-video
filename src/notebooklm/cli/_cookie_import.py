@@ -76,15 +76,21 @@ def _normalize_imported_cookie(cookie: Any) -> dict[str, Any]:
             "Each cookie must be a JSON object; the cookie list contains a non-object entry."
         )
 
-    normalized = dict(cookie)
+    try:
+        normalized = auth._validate_cookie_shape(cookie, require_nonempty_value=False)
+    except ValueError:
+        # Keep malformed object rows intact for the shared filter to classify
+        # and skip with a bounded diagnostic; do not inspect their raw fields
+        # in this adapter.
+        return dict(cookie)
     if "expires" not in normalized:
         # EditThisCookie / Cookie-Editor style exports usually call this field
         # ``expirationDate``. Playwright storage_state uses ``expires``.
         normalized["expires"] = normalized.pop("expirationDate", -1)
     normalized.setdefault("path", "/")
     normalized.setdefault("httpOnly", False)
-    name = normalized.get("name")
-    if isinstance(name, str) and name.startswith(("__Secure-", "__Host-")):
+    name = normalized["name"]
+    if name.startswith(("__Secure-", "__Host-")):
         # ``__Secure-``/``__Host-`` prefixed cookies are invalid unless ``Secure``
         # (Chromium rejects them on a storage_state re-injection), so force the
         # flag rather than persist an insecure variant when a bare-list export
@@ -171,27 +177,56 @@ def _import_cookie_json(
         include_optional=include_optional,
         include_domains=include_domains,
     )
-    cookie_names = cookie_names_from_storage(filtered_state)
-    try:
-        # This validates required cookies and catches malformed cookie shapes
-        # using the same loader later runtime calls use.
-        extracted_cookies = extract_cookies_from_storage(filtered_state)
-    except ValueError as exc:
-        hint = missing_cookies_hint(cookie_names)
-        raise click.ClickException(  # cli-input-validation: import-cookies required-cookie validation
-            f"{exc}\n\n{hint}"
-        ) from None
+    shaped_entries: list[dict[str, Any]] = []
+    for raw_entry in filtered_state.get("cookies", []):
+        try:
+            shaped_entries.append(
+                auth._validate_cookie_shape(raw_entry, require_nonempty_value=False)
+            )
+        except ValueError:
+            continue
 
+    raw_names = {entry["name"] for entry in shaped_entries}
     empty_required = sorted(
         name
         for name in auth.MINIMUM_REQUIRED_COOKIES
-        if not isinstance(extracted_cookies.get(name), str) or not extracted_cookies[name]
+        if any(entry["name"] == name and not entry["value"] for entry in shaped_entries)
     )
     if empty_required:
         raise click.ClickException(  # cli-input-validation: import-cookies required-cookie value validation
             "Required cookies must have non-empty string values: " + ", ".join(empty_required)
         )
 
+    # Normalize before any validation, diagnostics, backup, or write.  This
+    # drops malformed rows without exposing raw expiry/converter errors and
+    # gives the route preflight the exact storage converter used at runtime.
+    filtered_state = {
+        "cookies": [
+            sanitized
+            for raw_cookie in filtered_state.get("cookies", [])
+            if (sanitized := auth._sanitize_cookie_entry(raw_cookie)) is not None
+        ],
+        "origins": [],
+    }
+    cookie_names = cookie_names_from_storage(filtered_state)
+    try:
+        # This validates required cookies and catches malformed cookie shapes
+        # using the same loader later runtime calls use.
+        extract_cookies_from_storage(filtered_state)
+        auth._validate_routable_entries(
+            auth._sanitized_auth_entries(filtered_state),
+            to_cookie=auth._storage_entry_to_cookie,
+            require_routable=True,
+        )
+    except ValueError as exc:
+        hint = missing_cookies_hint(cookie_names)
+        raise click.ClickException(  # cli-input-validation: import-cookies required-cookie validation
+            f"{exc}\n\n{hint}"
+        ) from None
+
+    # Value-level binding check, run on the pre-normalization rows: normalization
+    # drops empty-valued rows, so reading the persisted state here would report a
+    # present-but-empty cookie as absent and skip the check entirely.
     # The name-level secondary-binding check counts a present-but-empty cookie as
     # satisfying the binding, so a set whose ``APISID``/``SAPISID`` (or ``OSID``)
     # are present-but-empty can pass required-cookie validation yet be unusable.
@@ -200,8 +235,8 @@ def _import_cookie_json(
     # ``LSID`` is in the set: without it an LSID-only import has an empty
     # ``secondary_present``, skips the check entirely, and persists a state the
     # canonical rule rejects. It also belongs in the ``Present:`` diagnostic.
-    secondary_present = {"OSID", "APISID", "SAPISID", "LSID"} & set(cookie_names)
-    if secondary_present and not _has_usable_secondary_binding(filtered_state):
+    secondary_present = {"OSID", "APISID", "SAPISID", "LSID"} & raw_names
+    if secondary_present and not _has_usable_secondary_binding({"cookies": shaped_entries}):
         raise click.ClickException(  # cli-input-validation: import-cookies secondary-binding validation
             "Secondary-binding cookies are present but do not form a usable "
             "binding — either their values are empty or the set is incomplete "

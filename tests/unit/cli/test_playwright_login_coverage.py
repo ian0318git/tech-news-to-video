@@ -71,6 +71,22 @@ class _FakeLoginIO:
         return asyncio.run(coro)
 
 
+def _required_capture_state() -> dict[str, Any]:
+    """Return the minimal authenticated state accepted by real capture."""
+    return {
+        "cookies": [
+            {"name": "SID", "value": "sid", "domain": ".google.com", "path": "/"},
+            {
+                "name": "__Secure-1PSIDTS",
+                "value": "psidts",
+                "domain": ".google.com",
+                "path": "/",
+            },
+        ],
+        "origins": [{"origin": "https://notebooklm.google.com", "localStorage": []}],
+    }
+
+
 # ---------------------------------------------------------------------------
 # _select_playwright_account
 # ---------------------------------------------------------------------------
@@ -633,7 +649,7 @@ def test_run_playwright_login_capture_html_error_is_swallowed(tmp_path) -> None:
     mock_page.url = f"https://{get_base_host()}/"
     mock_page.content.side_effect = PlaywrightError("cannot read content")
     mock_context.pages = [mock_page]
-    mock_context.storage_state.return_value = {"cookies": [], "origins": []}
+    mock_context.storage_state.return_value = _required_capture_state()
     mock_playwright = MagicMock()
     mock_playwright.chromium.launch_persistent_context.return_value = mock_context
 
@@ -701,7 +717,7 @@ def test_run_playwright_login_cookie_forcing_inner_recovery_reraises(tmp_path) -
     mock_page_recovered.goto.side_effect = PlaywrightError("net::ERR_SOMETHING_ELSE while loading")
     mock_context.pages = [mock_page_stale]
     mock_context.new_page.return_value = mock_page_recovered
-    mock_context.storage_state.return_value = {"cookies": [], "origins": []}
+    mock_context.storage_state.return_value = _required_capture_state()
     mock_playwright = MagicMock()
     mock_playwright.chromium.launch_persistent_context.return_value = mock_context
 
@@ -823,7 +839,7 @@ def test_run_playwright_login_wait_for_url_other_error_reraises(tmp_path) -> Non
     mock_page.goto.return_value = None
     mock_page.wait_for_url.side_effect = PlaywrightError("net::ERR_WEIRD other failure")
     mock_context.pages = [mock_page]
-    mock_context.storage_state.return_value = {"cookies": [], "origins": []}
+    mock_context.storage_state.return_value = _required_capture_state()
     mock_playwright = MagicMock()
     mock_playwright.chromium.launch_persistent_context.return_value = mock_context
 
@@ -878,7 +894,7 @@ def test_run_playwright_login_io_fail_inside_block_still_closes_context(tmp_path
     mock_page.url = "https://accounts.google.com/AccountChooser"
     mock_page.goto.return_value = None
     mock_context.pages = [mock_page]
-    mock_context.storage_state.return_value = {"cookies": [], "origins": []}
+    mock_context.storage_state.return_value = _required_capture_state()
     mock_playwright = MagicMock()
     mock_playwright.chromium.launch_persistent_context.return_value = mock_context
 

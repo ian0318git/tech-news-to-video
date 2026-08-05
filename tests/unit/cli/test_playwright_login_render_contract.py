@@ -197,7 +197,7 @@ def _drive_login(
     the Playwright service's own render lines.
     """
     if storage_state is None:
-        storage_state = {"cookies": [], "origins": []}
+        storage_state = _required_cookie_state()
     with ExitStack() as stack:
         if patch_ensure:
             stack.enter_context(patch.object(_pl, "ensure_chromium_installed"))

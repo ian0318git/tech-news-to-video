@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from . import cookie_semantics as _cookie_semantics
 from .cookie_policy import build_cookie_domain_allowlist
 
 logger = logging.getLogger(__name__)
@@ -145,6 +146,19 @@ def filter_storage_state_cookies_by_domain_policy(
         if path is not None and not isinstance(path, str):
             logger.warning(
                 "Skipping storage_state cookie with non-str path (%s)",
+                _safe_cookie_shape(cookie),
+            )
+            continue
+        # A row whose ``expires`` cannot be normalized is unusable: every
+        # loader that later rebuilds it goes through ``int(float(expires))``
+        # inside ``http.cookiejar.Cookie``, which raises. Dropping it at
+        # capture time keeps the persisted state loadable rather than
+        # deferring the failure to the first authed call (#2061).
+        try:
+            _cookie_semantics.normalize_cookie_expiry(cookie.get("expires"))
+        except _cookie_semantics.CookieRowError:
+            logger.warning(
+                "Skipping storage_state cookie with unusable expires (%s)",
                 _safe_cookie_shape(cookie),
             )
             continue

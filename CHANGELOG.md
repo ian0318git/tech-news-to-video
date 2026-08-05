@@ -45,6 +45,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A present-but-unusable `__Secure-1PSIDTS` now triggers recovery instead of
+  failing on the first RPC.** The cookie-load preflight checked required cookie
+  *names* and nothing else, and PSIDTS recovery only ever runs from the `except`
+  arm around that preflight — so a `__Secure-1PSIDTS` that was present but
+  expired, or scoped to a domain that never routes to `accounts.google.com`,
+  satisfied the check, skipped recovery, and surfaced later as an opaque auth
+  failure. The loaders now apply the same RFC 6265 routing predicate the recovery
+  gate uses, so the two conditions cannot drift apart
+  ([#2061](https://github.com/teng-lin/notebooklm-py/issues/2061)).
+
+  Cookie rows also go through one shared shape/expiry normalizer before any
+  `http.cookiejar.Cookie` is built, so a row whose `expires` is `""`, `"never"`,
+  `nan`, `inf`, or a non-numeric type is skipped with a value-free diagnostic
+  rather than raising a bare `float()` coercion error out of a recovery handler
+  — including at capture time, so such a row is no longer persisted at all.
+  Storage-shape problems (missing file, malformed JSON, no `cookies` list) now
+  raise a distinct `StorageStateValidationError` so a configuration failure can
+  never be mistaken for a cookie-validation failure and fire a network POST.
+
+  **What changes for you:** on a profile in one of those states, the client now
+  makes a `RotateCookies` POST and a storage write during startup where it
+  previously went straight to a failing RPC. Nothing that loaded before stops
+  loading: a routed, live PSIDTS short-circuits before any POST, and if the heal
+  cannot run or does not succeed the load continues exactly as it did before.
+  The routing condition is only raised where a recovery attempt follows it, so
+  artifact downloads and the read-only `fetch_tokens_passive` probe are
+  unchanged — a PSIDTS scoped to the app host is unrotatable, not unusable.
+  `auth inspect` likewise keeps probing before validating, so a network outage
+  is still reported as a network outage rather than as a bad cookie set.
+
 - **The pinned frontend build label is current again, and can no longer rot
   unwatched.** `_env.DEFAULT_BL` — the `bl` value sent on the chat streaming
   endpoint — had been pinned to `boq_labs-tailwind-frontend_20260301.03_p0` since
