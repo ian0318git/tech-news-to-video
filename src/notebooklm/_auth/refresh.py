@@ -458,8 +458,14 @@ async def _fetch_tokens_with_refresh(
     account_email: str | None = None,
     force_authuser_query: bool = False,
     allow_headless: bool = False,
+    env_auth: bool = False,
 ) -> tuple[str, str, bool, _auth_storage.CookieSnapshot | None]:
     """Fetch tokens, optionally running NOTEBOOKLM_REFRESH_CMD on auth expiry.
+
+    ``env_auth`` is set only by callers whose credentials came from inline
+    ``NOTEBOOKLM_AUTH_JSON``. It cannot be inferred from ``storage_path is None``
+    plus the ambient env var — ``fetch_tokens`` passes explicit cookies with no
+    path, and suppressing its refresh for an unrelated env var breaks it (#2084).
 
     Returns ``(csrf, session_id, refreshed, post_refresh_snapshot)``.
 
@@ -521,6 +527,13 @@ async def _fetch_tokens_with_refresh(
                 else:
                     return csrf, session_id, True, recovery.snapshot
         if not _should_try_refresh(err):
+            raise
+        if env_auth:
+            # No writable backing store: the fallback below would lock, rewrite
+            # and then read a profile file this caller bypassed. The refresh
+            # command cannot help anyway — NOTEBOOKLM_AUTH_JSON is scrubbed from
+            # its environment, so it cannot re-mint the credential in use (#2083).
+            logger.debug("Skipping %s: env auth has no file", NOTEBOOKLM_REFRESH_CMD_ENV)
             raise
         logger.warning(
             "NotebookLM auth failed (%s). Running %s to refresh cookies.",
@@ -903,14 +916,13 @@ async def fetch_tokens_with_domains(
         ValueError: If tokens cannot be extracted from response.
         RuntimeError: If ``NOTEBOOKLM_REFRESH_CMD`` is set but fails.
     """
-    if path is None and (profile is not None or "NOTEBOOKLM_AUTH_JSON" not in os.environ):
-        path = get_storage_path(profile=profile)
+    path = _auth_cookies.resolve_auth_storage_path(path, profile)
     jar = build_httpx_cookies_from_storage(path)
     # Capture the open-time snapshot before any rotation could fire. The
     # snapshot is the input to the dirty-flag/delta merge that closes the
     # stale-overwrite-fresh race (docs/auth-cookie-lifecycle.md §3.4.1).
     snapshot = snapshot_cookie_jar(jar)
-    refresh_options: dict[str, Any] = {}
+    refresh_options: dict[str, Any] = {"env_auth": path is None}
     if authuser is not None:
         refresh_options.update(authuser=authuser, force_authuser_query=True)
     if account_email is not None:
@@ -976,8 +988,7 @@ async def fetch_tokens_passive(
         httpx.HTTPError: If request fails.
         ValueError: If tokens cannot be extracted (e.g. redirected to sign-in).
     """
-    if path is None and (profile is not None or "NOTEBOOKLM_AUTH_JSON" not in os.environ):
-        path = get_storage_path(profile=profile)
+    path = _auth_cookies.resolve_auth_storage_path(path, profile)
     # Strict (no-recovery) loader: a missing/expired PSIDTS raises ``ValueError``
     # here rather than triggering the inline ``RotateCookies`` rotation + save
     # that ``build_httpx_cookies_from_storage`` would. A readiness probe reports

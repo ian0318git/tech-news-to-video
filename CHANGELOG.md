@@ -45,6 +45,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`NOTEBOOKLM_AUTH_JSON` now beats a profile everywhere, as documented.** The
+  precedence `--storage` > `NOTEBOOKLM_AUTH_JSON` > profile file is stated in
+  `docs/configuration.md`, drawn in `docs/architecture.md`, and implemented by
+  `cli.services.auth_source.AuthSource` — but three library call sites spelled
+  the predicate themselves and two of them ranked the profile *above* the env
+  var. Running any command with both an active profile and inline env auth
+  produced a client assembled from **two different accounts**: the CLI resolved
+  the storage path through `AuthSource` (`None`, meaning env auth) and passed
+  the profile name alongside, so `fetch_tokens_with_domains` re-resolved to the
+  profile's `storage_state.json` and minted CSRF/session tokens from it while
+  the cookie jar was loaded from the env var
+  ([#2083](https://github.com/teng-lin/notebooklm-py/issues/2083)).
+
+  The predicate now lives in one place, `_auth.cookies.resolve_auth_storage_path`,
+  so the three sites cannot drift apart again. It also tests *presence* rather
+  than truthiness, matching the loader: an empty `NOTEBOOKLM_AUTH_JSON` is a
+  configuration error reported by name, not a silent fall-through to a file.
+
+  Relatedly, `NOTEBOOKLM_REFRESH_CMD` no longer fires for env-only auth. It had
+  been falling back to `get_storage_path(profile=...)`, so it would lock,
+  rewrite and then read a profile file the caller had bypassed — silently
+  converting env auth into file auth and mutating a profile that may belong to
+  another account. It could not have helped anyway: `NOTEBOOKLM_AUTH_JSON` is
+  scrubbed from the refresh subprocess's environment, so the command cannot
+  re-mint the credential actually in use. The original auth error is preserved
+  and the env-only caller stays side-effect free.
+
+  **What changes for you:** if you set `NOTEBOOKLM_AUTH_JSON` *and* select a
+  profile (via `--profile`, `-p`, or `NOTEBOOKLM_PROFILE`), the env var now wins
+  consistently instead of half-winning. Use `--storage PATH` to authenticate
+  from a file while the env var is set — it still overrides both.
+
 - **A present-but-unusable `__Secure-1PSIDTS` now triggers recovery instead of
   failing on the first RPC.** The cookie-load preflight checked required cookie
   *names* and nothing else, and PSIDTS recovery only ever runs from the `except`

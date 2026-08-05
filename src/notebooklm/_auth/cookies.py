@@ -341,6 +341,35 @@ def extract_cookies_from_storage(storage_state: dict[str, Any]) -> dict[str, str
     return cookies
 
 
+def resolve_auth_storage_path(path: Path | None, profile: str | None) -> Path | None:
+    """Resolve which storage file auth should read, or ``None`` for env auth.
+
+    The single source of the library-side precedence, mirroring
+    ``cli.services.auth_source.AuthSource``:
+
+    1. an explicit ``path`` (the ``--storage`` override) wins outright;
+    2. inline ``NOTEBOOKLM_AUTH_JSON`` → ``None``, so the loaders read the env
+       var and nothing writes to disk;
+    3. otherwise the profile's ``storage_state.json``.
+
+    A profile does **not** re-resolve a file when env auth is present. Three
+    call sites used to spell this predicate themselves and two of them ranked
+    profile above the env var, so ``--profile x`` with ``NOTEBOOKLM_AUTH_JSON``
+    set produced a client whose CSRF/session tokens were minted from the
+    profile file while its cookie jar came from the env var — two accounts in
+    one client (#2083). Keep the rule here, not at the call sites.
+
+    Presence, not truthiness: an empty ``NOTEBOOKLM_AUTH_JSON`` is a
+    configuration error :func:`_load_storage_state` reports, not a silent
+    fall-through to a file. This matches ``_resolve_recovery_path``.
+    """
+    if path is not None:
+        return path
+    if "NOTEBOOKLM_AUTH_JSON" in os.environ:
+        return None
+    return get_storage_path(profile=profile)
+
+
 def _load_storage_state(path: Path | None = None) -> dict[str, Any]:
     """Load Playwright storage state from file or environment variable.
 

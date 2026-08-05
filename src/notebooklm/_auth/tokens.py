@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TypeAlias
 
 import httpx
 
-from ..paths import get_storage_path
 from . import account as _auth_account
 from . import cookies as _auth_cookies
 from . import psidts_recovery as _auth_psidts_recovery
@@ -259,8 +257,7 @@ class AuthTokens:
             # Load from a specific profile
             auth = await AuthTokens.from_storage(profile="work")
         """
-        if path is None and (profile is not None or not os.environ.get("NOTEBOOKLM_AUTH_JSON")):
-            path = get_storage_path(profile=profile)
+        path = _auth_cookies.resolve_auth_storage_path(path, profile)
 
         if path is None:
             authuser = 0
@@ -295,6 +292,7 @@ class AuthTokens:
                 authuser=authuser,
                 account_email=account_email,
                 allow_headless=allow_headless,
+                env_auth=True,
             )
         elif allow_headless:
             fetch_result = await _auth_refresh._fetch_tokens_with_refresh(
