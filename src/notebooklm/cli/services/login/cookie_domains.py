@@ -68,12 +68,14 @@ def _warn_missing_optional_domains(
     *,
     warn: Callable[[str], None] | None = None,
 ) -> str | None:
-    """Build or emit the migration warning for the minimum-cookies default.
+    """Build or emit the migration warning for the reduced request default.
 
     The cookie-domain split narrows the default extraction set to
     :data:`REQUIRED_COOKIE_DOMAINS`. Users upgrading from the prior
-    behavior need a heads-up that YouTube / Docs / myaccount / Mail
-    cookies are no longer scraped at login.
+    behavior need a heads-up that sibling hosts are no longer explicitly
+    requested at login. Trusted Google-root cookies returned by the extractor
+    are still retained for compatibility; distinct roots such as YouTube are
+    excluded unless opted in.
 
     ``warn`` is injected by the command layer for interactive CLI runs so
     this service module does not import presentation helpers.
@@ -82,14 +84,16 @@ def _warn_missing_optional_domains(
         return None
     supported = ", ".join(sorted(OPTIONAL_COOKIE_DOMAINS_BY_LABEL))
     message = (
-        "[dim]Note: sibling-product cookies not included by default. "
-        f"Pass --include-domains=<{supported}> (or =all) to extract them.[/dim]"
+        "[dim]Note: sibling-product domains are not explicitly requested by default. "
+        "Cookies under trusted Google roots may still be retained for compatibility. "
+        f"Pass --include-domains=<{supported}> (or =all) to request them.[/dim]"
     )
     if warn is not None:
         warn(message)
     logger.info(
-        "Login extracting REQUIRED_COOKIE_DOMAINS only (cookie-domain split default). "
-        "Pass --include-domains=%s (or =all) to include sibling cookies.",
+        "Login explicitly requesting REQUIRED_COOKIE_DOMAINS only. Trusted Google-root "
+        "subdomains returned by the extractor remain compatible. Pass --include-domains=%s "
+        "(or =all) to request known sibling hosts.",
         supported,
     )
     return message
@@ -127,8 +131,8 @@ def _build_google_cookie_domains(
     """Return the cookie-domain list fed to extractors (rookiepy / Firefox).
 
     Defaults to :data:`REQUIRED_COOKIE_DOMAINS` plus all known regional
-    ``.google.<ccTLD>`` variants. Sibling-product cookies (YouTube, Docs,
-    myaccount, Mail) are excluded unless the caller opts in via
+    ``.google.<ccTLD>`` variants. Sibling-product hosts (YouTube, Docs,
+    myaccount, Mail) are not explicitly requested unless the caller opts in via
     ``include_optional=True`` or a non-empty ``include_domains`` label
     set.
 
@@ -143,7 +147,7 @@ def _build_google_cookie_domains(
             accepted as a shortcut for every label.
 
     Returns:
-        List of cookie-domain strings (suitable for ``rookiepy.load(
+        Sorted cookie-domain strings (suitable for ``rookiepy.load(
         domains=...)`` or :func:`extract_firefox_container_cookies`).
     """
     selected_optional: frozenset[str]
@@ -154,9 +158,6 @@ def _build_google_cookie_domains(
     else:
         selected_optional = frozenset()
 
-    domains: list[str] = list(REQUIRED_COOKIE_DOMAINS | selected_optional)
-    for cctld in GOOGLE_REGIONAL_CCTLDS:
-        domain = f".google.{cctld}"
-        if domain not in domains:
-            domains.append(domain)
-    return domains
+    domains = set(REQUIRED_COOKIE_DOMAINS | selected_optional)
+    domains.update(f".google.{cctld}" for cctld in GOOGLE_REGIONAL_CCTLDS)
+    return sorted(domains)

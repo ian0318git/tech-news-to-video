@@ -147,7 +147,7 @@ def test_headless_authenticated_landing_persists_storage(tmp_path: Path) -> None
             "path": "/",
         },
         # A sibling-product cookie that the domain filter must DROP.
-        {"name": "X", "value": "y", "domain": "mail.google.com", "path": "/"},
+        {"name": "X", "value": "y", "domain": ".youtube.com", "path": "/"},
     ]
     playwright, _context, _page = _fake_playwright_landing(_landed_on_app(), cookies=cookies)
     io = _RaisingCaptureIO()
@@ -158,7 +158,7 @@ def test_headless_authenticated_landing_persists_storage(tmp_path: Path) -> None
         playwright,
     )
 
-    # Persisted, and the domain allowlist filtered out the mail.google.com row.
+    # Persisted, and the domain allowlist filtered out unrequested YouTube.
     assert storage.exists()
     persisted = json.loads(storage.read_text(encoding="utf-8"))
     names = {c["name"] for c in persisted["cookies"]}

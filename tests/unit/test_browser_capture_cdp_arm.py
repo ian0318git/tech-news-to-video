@@ -154,8 +154,8 @@ def _authenticated_cookies() -> list[dict[str, str]]:
 def test_cdp_authenticated_landing_persists_and_filters(tmp_path: Path) -> None:
     cookies = [
         *_authenticated_cookies(),
-        # A sibling-product cookie the domain filter must DROP.
-        {"name": "X", "value": "y", "domain": "mail.google.com", "path": "/"},
+        # A distinct optional root the domain filter must DROP.
+        {"name": "X", "value": "y", "domain": ".youtube.com", "path": "/"},
     ]
     playwright, browser, _context, page = _fake_cdp_browser(_landed_on_app(), cookies=cookies)
     io = _RaisingCaptureIO()
@@ -169,7 +169,7 @@ def test_cdp_authenticated_landing_persists_and_filters(tmp_path: Path) -> None:
     # wait_until would waste 30s then TimeoutError before classification (#1697).
     page.goto.assert_called_once()
     assert page.goto.call_args.kwargs.get("wait_until") in {"commit", "domcontentloaded"}
-    # Persisted, with the same domain allowlist (mail.google.com dropped).
+    # Persisted, with the same domain allowlist (unrequested YouTube dropped).
     storage = tmp_path / "storage_state.json"
     assert storage.exists()
     persisted = json.loads(storage.read_text(encoding="utf-8"))

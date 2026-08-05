@@ -325,19 +325,14 @@ class TestIsAllowedAuthDomain:
         assert _is_allowed_auth_domain(".not-google.com.sg") is False
         assert _is_allowed_auth_domain(".google.zz") is False  # Invalid ccTLD
 
-    def test_requires_leading_dot_for_regional(self):
-        """Test regional domains require leading dot.
-
-        Regional ccTLDs like ``google.com.sg`` (no leading dot) are not in
-        ALLOWED_COOKIE_DOMAINS and are not accepted by ``_is_google_domain``
-        (which requires the leading dot for regional patterns) or by the
-        suffix paths (which require the leading-dot suffix).
-        """
+    def test_accepts_host_scoped_regional_domains(self):
+        """Host-only regional roots and subdomains follow the trusted-root policy."""
         from notebooklm.auth import _is_allowed_auth_domain
 
-        assert _is_allowed_auth_domain("google.com.sg") is False
-        assert _is_allowed_auth_domain("google.co.uk") is False
-        assert _is_allowed_auth_domain("google.de") is False
+        assert _is_allowed_auth_domain("google.com.sg") is True
+        assert _is_allowed_auth_domain("accounts.google.com.hk") is True
+        assert _is_allowed_auth_domain("lh3.google.co.uk") is True
+        assert _is_allowed_auth_domain("google.de") is True
 
 
 class TestAuthDomainPriority:

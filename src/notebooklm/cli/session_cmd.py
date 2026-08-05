@@ -254,8 +254,8 @@ def register_session_commands(cli):
         multiple=True,
         default=(),
         help=(
-            "Opt in to extracting sibling-product cookies (default: required "
-            "Google auth/Drive cookies only). Pass labels comma-separated or "
+            "Explicitly request known sibling hosts. Trusted Google-root subdomains "
+            "returned by the browser are retained for compatibility. Pass labels or "
             "repeat the flag: --include-domains=youtube,docs OR "
             "--include-domains=youtube --include-domains=docs. Supported "
             "labels: youtube, docs, myaccount, mail, all."
@@ -688,10 +688,10 @@ def register_session_commands(cli):
         multiple=True,
         default=(),
         help=(
-            "Opt in to persisting sibling-product cookies. Same syntax as "
+            "Explicitly request known sibling-product hosts. Trusted Google-root "
+            "subdomains returned by the browser are retained for compatibility. Syntax: "
             "'notebooklm login --include-domains': youtube, docs, myaccount, "
-            "mail, all. By default, only required Google auth/Drive/NotebookLM "
-            "cookie domains are kept."
+            "mail, all. Distinct unrequested roots are discarded by default."
         ),
     )
     @click.option(

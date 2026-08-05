@@ -26,6 +26,15 @@ from typing import Any, NoReturn
 
 import httpx
 
+# Module-object import for ``auth.MINIMUM_REQUIRED_COOKIES`` — the same
+# access pattern ``cli/_cookie_import.py`` uses; the constant is public in
+# behavior but deliberately not part of ``auth.__all__``.
+from .... import auth as _auth_public
+
+# ``browser_capture`` is the one sanctioned ``_auth`` import for the CLI
+# adapter (see tests/_guardrails/test_cli_boundary.py); it re-exports the
+# write-time domain filter from its ``_browser_cookie_filter`` leaf.
+from ...._auth.browser_capture import filter_storage_state_cookies_by_domain_policy
 from ....auth import (
     cookie_names_from_storage,
     fetch_tokens_with_domains,
@@ -174,6 +183,7 @@ def _login_browser_cookies_single(
         profile=storage_profile,
         authuser=selected.authuser,
         email=selected.email,
+        include_domains=include_domains,
     )
     if isinstance(write_outcome, BrowserCookieOutcome):
         _exit_on_outcome(io, write_outcome)
@@ -307,6 +317,7 @@ def _login_all_accounts_from_browser(
             profile=target_profile,
             authuser=account.authuser,
             email=account.email,
+            include_domains=include_domains,
         )
         if isinstance(write_outcome, BrowserCookieOutcome):
             _exit_on_outcome(io, write_outcome)
@@ -357,6 +368,7 @@ def _refresh_from_browser_cookies(
         profile=profile,
         authuser=selected.authuser,
         email=selected.email,
+        include_domains=include_domains,
         quiet=True,
     )
     if isinstance(write_outcome, BrowserCookieOutcome):
@@ -413,6 +425,49 @@ def _login_with_browser_cookies(
             io,
             "[red]No valid Google authentication cookies found.[/red]\n"
             f"{validation_error}\n\n"
+            f"{hint}",
+        )
+        io.fail(1)
+
+    # Write-time blast-radius gate — parity with the Playwright capture path.
+    # The rookiepy/Firefox extractors suffix-match dot-prefixed domains
+    # (rookiepy semantics), so requesting ``.google.com`` also returns
+    # sibling-product cookies (mail/docs/myaccount), and the runtime
+    # converter above is deliberately permissive over the REQUIRED ∪
+    # OPTIONAL union. Filter AFTER ``validate_with_recovery`` (recovery must
+    # see the full jar) and BEFORE the atomic write so only policy-allowed +
+    # opted-in domains reach ``storage_state.json``.
+    pre_filter_count = len(storage_state.get("cookies", []))
+    storage_state = filter_storage_state_cookies_by_domain_policy(
+        storage_state, include_domains=include_domains
+    )
+    dropped = pre_filter_count - len(storage_state["cookies"])
+    if dropped:
+        # Count-only breadcrumb — never cookie names or values.
+        logger.debug(
+            "Dropped %d cookie(s) outside the write-time cookie-domain policy for %s",
+            dropped,
+            storage_path,
+        )
+
+    # Re-run the Tier-1 required-cookie check on the FILTERED state (same
+    # post-filter revalidation the import-cookies path performs). The
+    # validation above is name-based over the permissive converter output,
+    # so a required cookie whose only copy sits on a non-allowlisted domain
+    # (the converter suffix-accepts ``*.google.com``) passes validation and
+    # is then dropped here — without this recheck we would atomically write
+    # unusable auth and exit 0 (the post-write verification below is
+    # deliberately nonfatal).
+    filtered_names = deps.cookie_names_from_storage(storage_state)
+    missing_required = sorted(_auth_public.MINIMUM_REQUIRED_COOKIES.difference(filtered_names))
+    if missing_required:
+        hint = deps.missing_cookies_hint(filtered_names, browser_label=browser_name)
+        _emit(
+            io,
+            "[red]Required authentication cookies were dropped by the "
+            "write-time cookie-domain policy.[/red]\n"
+            f"Missing after domain filtering: {', '.join(missing_required)} "
+            "(the only copies were scoped to non-allowlisted domains).\n\n"
             f"{hint}",
         )
         io.fail(1)

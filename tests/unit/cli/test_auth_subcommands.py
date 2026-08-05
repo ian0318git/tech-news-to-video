@@ -170,9 +170,9 @@ class TestAuthImportCookiesCommand:
                 _valid_cookie_export(
                     [
                         {
-                            "name": "DOCS_PREF",
-                            "value": "docs-cookie",
-                            "domain": "docs.google.com",
+                            "name": "YOUTUBE_PREF",
+                            "value": "youtube-cookie",
+                            "domain": ".youtube.com",
                             "path": "/",
                         }
                     ]
@@ -190,7 +190,7 @@ class TestAuthImportCookiesCommand:
             cookie["name"]
             for cookie in json.loads(storage_path.read_text(encoding="utf-8"))["cookies"]
         }
-        assert "DOCS_PREF" not in default_names
+        assert "YOUTUBE_PREF" not in default_names
 
         result_optin = runner.invoke(
             cli,
@@ -201,7 +201,7 @@ class TestAuthImportCookiesCommand:
                 "import-cookies",
                 str(input_path),
                 "--include-domains",
-                "docs",
+                "youtube",
             ],
         )
 
@@ -210,7 +210,7 @@ class TestAuthImportCookiesCommand:
             cookie["name"]
             for cookie in json.loads(storage_path.read_text(encoding="utf-8"))["cookies"]
         }
-        assert "DOCS_PREF" in optin_names
+        assert "YOUTUBE_PREF" in optin_names
 
     def test_import_cookies_sets_private_file_and_directory_permissions(self, runner, tmp_path):
         if sys.platform == "win32":

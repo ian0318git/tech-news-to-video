@@ -1,9 +1,10 @@
 """Filter captured browser cookies before auth storage is persisted.
 
-The Playwright login and headless re-auth arms both capture a complete browser
-storage state. This leaf applies the shared cookie-domain policy and removes
-malformed or exact-identity duplicate rows without depending on Playwright or
-the browser-capture lifecycle.
+The Playwright login and headless re-auth arms capture a complete browser
+storage state; the rookiepy/Firefox CLI writers persist an extracted jar. All
+of them funnel through this leaf, which applies the shared cookie-domain
+policy and removes malformed or exact-identity duplicate rows without
+depending on Playwright or the browser-capture lifecycle.
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ import logging
 from typing import Any
 
 from . import cookie_semantics as _cookie_semantics
-from .cookie_policy import build_cookie_domain_allowlist
+from .cookie_policy import _is_trusted_google_cookie_domain, build_cookie_domain_allowlist
 
 logger = logging.getLogger(__name__)
 
@@ -46,16 +47,23 @@ def filter_storage_state_cookies_by_domain_policy(
     """Filter a Playwright ``storage_state`` dict to the configured cookie-domain policy.
 
     The Playwright login flow captures every cookie the browser context holds.
-    Without this filter, sibling-product cookies (``mail.google.com``,
-    ``myaccount.google.com``, ``docs.google.com``, ``.youtube.com``) the user
-    happens to be signed into leak into the persisted ``storage_state.json``
-    and inflate the blast radius. This applies the same allowlist the rookiepy
-    path uses (:func:`_build_google_cookie_domains`) at write time so both
-    login paths produce equivalent on-disk state, opt-in via
-    ``--include-domains=...``. The match is exact-against-allowlist with
-    leading-dot/no-dot equivalence (``http.cookiejar`` may normalize either);
-    sibling subdomains are deliberately NOT matched by a broad ``.google.com``
-    suffix — that's the bug being fixed.
+    Without this filter, unrelated non-Google cookies and origin storage from
+    the user's browser context can leak into the persisted
+    ``storage_state.json`` and inflate the blast radius. This applies the
+    shared allowlist (:func:`build_cookie_domain_allowlist`, the same set the
+    rookiepy extraction request is built from) at write time; the
+    rookiepy/Firefox persist path (``_write_extracted_cookies`` /
+    ``_login_with_browser_cookies``) runs this same filter before its atomic
+    write — the Firefox extractor suffix-matches dot-prefixed domains, so
+    extraction-time narrowing alone is not enough — so both login paths
+    produce equivalent on-disk state. Distinct optional roots remain opt-in
+    via ``--include-domains=...``.
+    Exact allowlist entries use leading-dot/no-dot equivalence
+    (``http.cookiejar`` may normalize either). In addition, trusted Google
+    roots use boundary-aware suffix matching. This compatibility-first rule
+    preserves unknown ``*.google.com``, ``*.googleusercontent.com``, and
+    regional Google subdomains until they can be narrowed with live-flow
+    evidence, while still rejecting lookalikes such as ``evilgoogle.com``.
 
     Two hardening behaviors (#1513) ride on top of the allowlist:
 
@@ -99,16 +107,22 @@ def filter_storage_state_cookies_by_domain_policy(
 
     Returns:
         A new ``storage_state`` dict with ``cookies`` filtered and ``origins``
-        copied verbatim. The input dict is not mutated.
+        cleared. Origin localStorage / IndexedDB is not used for cookie auth
+        and must not bypass the domain policy. The input dict is not mutated.
     """
     allowed_list = build_cookie_domain_allowlist(
         include_optional=include_optional, include_domains=include_domains
     )
     allowed: frozenset[str] = frozenset(allowed_list)
-    allowed_stripped: frozenset[str] = frozenset(d.lstrip(".") for d in allowed_list)
+    allowed_stripped: frozenset[str] = frozenset(d.lstrip(".").lower() for d in allowed_list)
 
     def _is_allowed(domain: str) -> bool:
-        return domain in allowed or domain.lstrip(".") in allowed_stripped
+        normalized = domain[1:] if domain.startswith(".") else domain
+        return (
+            domain in allowed
+            or normalized.lower() in allowed_stripped
+            or _is_trusted_google_cookie_domain(domain)
+        )
 
     filtered_cookies: list[dict[str, Any]] = []
     index_by_identity: dict[tuple[str, str, Any], int] = {}
@@ -188,7 +202,7 @@ def filter_storage_state_cookies_by_domain_policy(
 
     return {
         "cookies": filtered_cookies,
-        "origins": list(state.get("origins", [])),
+        "origins": [],
     }
 
 
