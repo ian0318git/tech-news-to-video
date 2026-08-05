@@ -28,10 +28,12 @@ friends) extracted from a real browser sign-in. Two clocks govern their validity
 
 - **`__Secure-1PSIDTS` has a *recommended* rotation cadence of ~600 s**
   (self-reported by Google as `["identity.hfcr",600]` on the `RotateCookies`
-  response). This is a *hint*, not a hard rejection TTL: the prior value keeps
-  authenticating far longer — commonly hours to days on a stable IP / non-Workspace
-  account. Worst-case profiles (datacenter egress, cross-IP, Workspace policy,
-  incomplete extraction) can collapse that to hours or less.
+  response). This is a *hint*, not a hard rejection TTL — but see §2.5: once a
+  newer value has been issued, the **superseded** one is now rejected within
+  roughly half an hour. The "hours to days" figure below applies only while no
+  other client has rotated the session out from under you; a copied snapshot
+  does not qualify. Worst-case profiles (datacenter egress, cross-IP, Workspace
+  policy, incomplete extraction) collapse it further.
 - **`SID` and `__Secure-1PSID`** have very long server-side lifetimes (months to
   years) and effectively don't expire under normal usage.
 - **Cookie set completeness matters more than freshness.** Google rejects cookie
@@ -155,7 +157,9 @@ on a schedule:
    (off-minute schedule avoids fleet collision).
 4. Keeping the source browser running with a Google tab adds resilience, but even
    a closed browser works for hours-to-days while `RotateCookies` keeps
-   succeeding from `SID` alone.
+   succeeding from `SID` alone — provided this is the only client using the
+   session. A second client rotating the same session supersedes your value;
+   see §2.5.
 
 > **Browser support:** `--browser-cookies` accepts any of the ~16 browsers rookiepy
 > reads on the host (`arc`, `brave`, `chrome`, `edge`, `firefox`, `opera`, `safari`,
@@ -326,17 +330,39 @@ Playwright-minted one. Extraction asks for the full multi-domain set
 specific paths (e.g. losing `.notebooklm.google.com` cookies breaks artifact
 downloads).
 
-### 2.5 Three timers people confuse
+### 2.5 Four timers people confuse
 
 | Timer | Magnitude | Lives in | Meaning |
 |---|---|---|---|
-| **`*PSIDTS` rotation cadence** | ~600 s | Google's identity surface | Recommended active-client refresh interval (`["identity.hfcr",600]`). Not a hard rejection TTL — prior values stay valid much longer on stable profiles. |
+| **`*PSIDTS` rotation cadence** | ~600 s | Google's identity surface | Recommended active-client refresh interval, advertised in the `RotateCookies` response body as `["identity.hfcr",600]`. Re-measured 2026-08-05: still 600. |
+| **`*PSIDTS` supersede grace** | **short, and not ours to set** | Google's identity surface | How long a *superseded* value keeps working after a newer one is issued. Undocumented, server-side, and observed to have tightened sharply — see the warning below. |
 | **`*SIDCC` sliding window** | ~5 min | Google's RPC surface | A different cookie family; rotates on nearly every request; not load-bearing for our auth. |
 | **Client-side rotation throttle** | 60 s | `_auth/keepalive.py` | Don't fire two `RotateCookies` POSTs within a minute (avoids 429). Unrelated to how often Google *requires* rotation. |
 
-Reports that "cookies are expiring faster" usually trace to the session entering a
-risk-flagged state (§3.1) or to the rotation mechanism failing until `*SID` finally
-ages out — not to a shorter hard rejection TTL.
+> **The supersede grace collapsed (observed 2026-08).** This document used to
+> assert that "prior values stay valid much longer on stable profiles," and that
+> reports of faster expiry trace to a risk-flagged session (§3.1) rather than a
+> shorter TTL. That advice is no longer safe to follow. A cookie snapshot copied
+> out of a working profile has been observed dying **within ~30 minutes**, while
+> the cadence (600 s) and the cookie's own `expires` stamp (365 days, verified
+> across every local profile) are both unchanged.
+>
+> Two consequences worth internalising:
+>
+> * **The expiry field tells you nothing.** A snapshot whose `__Secure-1PSIDTS`
+>   is a year from expiring can already be rejected. Nothing client-side can
+>   detect this in advance — the only signal is the request failing.
+> * **Any other active client kills your copy.** At a 600 s cadence, a
+>   workstation, a second CI job, or a keepalive supersedes the value you
+>   shipped within ten minutes; the grace period then decides how long your copy
+>   limps on. That is why a cookie snapshot is no longer a viable CI credential
+>   and why the ladder's persistence steps are load-bearing rather than an
+>   optimisation.
+>
+> The durable answer is a credential that does not rotate: ship
+> `master_token.json` and let §4.4 mint a session per run. All four of this
+> repo's secret-bearing workflows do exactly that and ship no cookie snapshot at
+> all.
 
 ### 2.6 Domain tiering: REQUIRED vs OPTIONAL cookie domains
 
@@ -386,7 +412,7 @@ Cookie decay clocks by class:
 
 | Cookie | Rotation / expiry signal | Lifecycle |
 |---|---|---|
-| `__Secure-1PSIDTS` / `*-3PSIDTS` | Recommended cadence ~600 s (`["identity.hfcr",600]`); not a hard TTL | Refreshed opportunistically; stale values work for hours-to-days, then drift into sign-in redirects |
+| `__Secure-1PSIDTS` / `*-3PSIDTS` | Recommended cadence ~600 s (`["identity.hfcr",600]`); not a hard TTL | Refreshed opportunistically. An *un-superseded* stale value works for hours-to-days; a **superseded** one dies within ~30 min (§2.5) |
 | `SIDCC` / `__Secure-*SIDCC` | ~5 min sliding window | Ephemeral; generally not load-bearing for auth |
 | `SID`, `HSID`, `SSID`, `APISID`, `SAPISID` (+ `__Secure-` cousins) | Months → ~1 year | Long-lived identity; not rotated by us |
 | `OSID`, `__Secure-OSID` | Per-product session | Re-issued on each sign-in |

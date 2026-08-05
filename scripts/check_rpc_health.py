@@ -52,7 +52,8 @@ Rebrand-host lane (``notebook.google.com``):
     lane as a green one.
 
 Environment variables:
-    NOTEBOOKLM_AUTH_JSON - Playwright storage state JSON (required)
+    NOTEBOOKLM_AUTH_JSON - Playwright storage state JSON (optional; the
+        profile's storage_state.json is used when unset, which is what CI does)
     NOTEBOOKLM_READ_ONLY_NOTEBOOK_ID - Notebook ID for read operations
     NOTEBOOKLM_GENERATION_NOTEBOOK_ID - Notebook ID for write operations
     NOTEBOOKLM_RPC_DELAY - Delay between RPC calls in seconds (default: 1.0)
@@ -343,9 +344,9 @@ async def load_auth(storage_path: Path | None) -> AuthTokens:
     Routes through :meth:`AuthTokens.from_storage` — the same loader the CLI
     and library use — which handles:
 
-    - ``NOTEBOOKLM_AUTH_JSON`` env var (for CI) and the profile storage file
-      (for local dev), via ``storage_path`` resolved by
-      :func:`resolve_storage_path`
+    - the profile storage file (what CI and local dev both use) and the
+      short-lived ``NOTEBOOKLM_AUTH_JSON`` env var, via ``storage_path``
+      resolved by :func:`resolve_storage_path`
     - cookie-domain filtering *and* per-cookie domain preservation
     - authuser / account-email routing and the CSRF + session token fetch
 
