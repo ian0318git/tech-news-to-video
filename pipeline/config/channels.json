@@ -1,0 +1,20 @@
+{
+  "channels": [
+    {
+      "slug": "embedded",
+      "keyword": "embedded linux",
+      "title_prefix": "Embedded Linux Daily",
+      "hl": "en",
+      "gl": "US",
+      "ceid": "US:en"
+    },
+    {
+      "slug": "tech",
+      "keyword": "technology OR artificial intelligence",
+      "title_prefix": "Tech & AI Daily",
+      "hl": "en",
+      "gl": "US",
+      "ceid": "US:en"
+    }
+  ]
+}

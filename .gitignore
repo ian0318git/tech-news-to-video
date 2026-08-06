@@ -45,3 +45,7 @@ docs/scratch/
 
 # Baked into the wheel by hatch_build.py; never committed.
 src/notebooklm/_commit.py
+
+# pipeline 執行產物(tech-news-to-video)
+output/
+logs/
