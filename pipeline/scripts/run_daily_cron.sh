@@ -27,7 +27,8 @@ mkdir -p "$POC/logs"
   echo "----- Shorts(tech 頻道 TOP 1)-----"
   "$PY" "$POC/scripts/run_shorts_pipeline.py" --channel tech \
     || { echo "[FAIL] shorts_pipeline"; exit 1; }
-  SHORTS_FILE="$POC/output/tech/shorts_$(date +%Y-%m-%d).mp4"
+  # 注意: run_shorts_pipeline.py 用 UTC 日期命名檔案 — cron 也必須用 UTC,否則 07:00(23:00 UTC)必然對不上
+  SHORTS_FILE="$POC/output/tech/shorts_$(date -u +%Y-%m-%d).mp4"
   "$PY" "$POC/scripts/youtube_upload.py" --channel tech --file "$SHORTS_FILE" \
     || { echo "[FAIL] youtube_upload shorts"; exit 1; }
   echo "[OK] Shorts 完成"

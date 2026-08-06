@@ -29,6 +29,23 @@ Every day at **07:00 (Asia/Taipei)**, completely unattended:
 5. **Upload** — downloads the MP4 and uploads it to my YouTube channel via the **YouTube Data API v3** (privacy configurable via `UPLOAD_PRIVACY`, currently `public`).
 6. **Shorts** — a 60-second vertical Short is also generated daily from the Tech & AI channel's top story.
 
+### What we built (from scratch)
+
+Everything above the vendored [notebooklm-py](https://github.com/teng-lin/notebooklm-py) library is original work — the library itself was used as-is, untouched.
+
+| # | Feature | Files |
+|---|---|---|
+| 1 | **News fetching** — Google News RSS (configurable keywords & languages) | `fetch_news.py` |
+| 2 | **AI story selection** — Gemini ranks 20 stories and picks TOP 1 with a written rationale | `rank_news.py` |
+| 3 | **Source collector** — authoritative sources (official docs / GitHub / vendor) + reachability checks + resolves Google redirects to the real article URL | `collect_sources.py` |
+| 4 | **End-to-end video** — notebook → sources → Video Overview (Explainer) → MP4 download | `run_video_pipeline.py` |
+| 5 | **Daily Shorts** — 60-second vertical video (Pro format) | `run_shorts_pipeline.py` |
+| 6 | **YouTube upload** — device-flow auth (no browser on the server), resumable upload, duplicate protection, configurable privacy | `youtube_auth.py` · `youtube_upload.py` |
+| 7 | **Multi-channel architecture** — adding a channel is a one-line config change | `config/channels.json` |
+| 8 | **Idempotent pipeline** — re-runs never duplicate notebooks, sources, videos, or uploads | `_common.py` |
+| 9 | **Daily 07:00 automation** — cron: auth refresh → 2 long-form + 1 Short → auto-publish | `run_daily_cron.sh` |
+| 10 | **16 unit tests** + bilingual README + auth guide + design decisions | `tests/` · `docs/` |
+
 ### Architecture
 
 ```
@@ -157,6 +174,23 @@ cp pipeline/.env.example .env   # fill in GEMINI_API_KEY
 4. **生成影片** — 用 [notebooklm-py](https://github.com/teng-lin/notebooklm-py) 建立 NotebookLM notebook、加入來源、生成 **Video Overview**(Explainer 格式)。
 5. **上傳** — 下載 MP4,透過 **YouTube Data API v3** 上傳到我的 YouTube 頻道(隱私由 `UPLOAD_PRIVACY` 控制,目前 `public` 自動公開)。
 6. **Shorts** — 另外從 Tech & AI 頻道的 TOP 1 新聞,每天製作一支 60 秒直式 Short。
+
+### 我們從無到有新增的功能
+
+架構圖中所有在 [notebooklm-py](https://github.com/teng-lin/notebooklm-py) 函式庫**之上**的東西都是我們原創的 — 函式庫本身一行未改,純粹被我們駕馭。
+
+| # | 功能 | 對應檔案 |
+|---|---|---|
+| 1 | **新聞抓取** — Google News RSS(關鍵字與語系可設) | `fetch_news.py` |
+| 2 | **AI 選題** — Gemini 排名 20 則新聞選 TOP 1(附理由) | `rank_news.py` |
+| 3 | **Source Collector** — 官方文件/GitHub/vendor 來源 + 可達性檢查 + Google 轉址解析成真實文章網址 | `collect_sources.py` |
+| 4 | **端到端影片** — 建 notebook → 加來源 → Video Overview(Explainer)→ 下載 MP4 | `run_video_pipeline.py` |
+| 5 | **每日 Shorts** — 60 秒直式影片(Pro 限定格式) | `run_shorts_pipeline.py` |
+| 6 | **YouTube 上傳** — device flow 認證(伺服器不需瀏覽器)、resumable 上傳、防重複、隱私可設 | `youtube_auth.py` · `youtube_upload.py` |
+| 7 | **多頻道架構** — 改 config 一行就新增頻道 | `config/channels.json` |
+| 8 | **冪等 pipeline** — 重跑不重複建 notebook/來源/影片/上傳 | `_common.py` |
+| 9 | **每日 07:00 全自動** — cron:auth refresh → 2 長片 + 1 Shorts → 自動公開上傳 | `run_daily_cron.sh` |
+| 10 | **16 個單元測試** + 雙語 README + 認證指南 + 設計決策文件 | `tests/` · `docs/` |
 
 ### 技術棧與致謝
 
