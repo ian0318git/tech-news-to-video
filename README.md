@@ -20,7 +20,7 @@ This project is also part of my portfolio: it demonstrates building a **fully au
 
 ### What it does
 
-Every day at **07:00 (Asia/Taipei)**, completely unattended:
+Every day at **06:00 (Australia/Sydney, AEST)**, completely unattended:
 
 1. **Fetch** — pulls the latest news from **Google News RSS** for two channels: `embedded linux` and `technology OR artificial intelligence`.
 2. **Rank** — **Gemini** scores each story (relevance, recency, technical depth, source authority) and picks the **TOP 1** with a written rationale.
@@ -166,7 +166,7 @@ cp pipeline/.env.example .env   # fill in GEMINI_API_KEY
 
 ### 系統運作
 
-每天 **07:00(台北時間)**,完全無人值守:
+每天 **06:00(澳洲東部時間 AEST,雪梨)**,完全無人值守:
 
 1. **抓取** — 從 **Google News RSS** 拉取兩個頻道的新聞:`embedded linux` 與 `technology OR artificial intelligence`。
 2. **排名** — **Gemini** 依相關性、新鮮度、技術深度、來源權威性評分,選出 **TOP 1** 並附理由。
