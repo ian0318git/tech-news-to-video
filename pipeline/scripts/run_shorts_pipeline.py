@@ -11,7 +11,6 @@
 
 import json
 import sys
-from datetime import datetime, timezone
 
 from _common import (
     channel_dir,
@@ -24,6 +23,7 @@ from _common import (
     run_live,
     setup_logging,
     sync_sources,
+    today_str,
 )
 
 logger = setup_logging("shorts_pipeline")
@@ -55,7 +55,7 @@ def main() -> None:
     if not urls:
         fail(logger, "sources.json 沒有可加來源")
 
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today = today_str()
     news = top1.get("news", top1)
     title = f"Shorts {today} - {news.get('title', '')}"[:80]
     logger.info(f"[INFO] Shorts 主題: {news.get('title')}")

@@ -69,4 +69,4 @@ RSS 解析(標題/來源/摘要/上限/壞 XML)、`flag_value` 參數解析、�
 - resumable upload 需 `part=snippet,status` query;streaming 回應需先 `read()` 再 `json()`
 - OAuth client 類型必須是「TVs and Limited Input devices」,桌面應用程式類型被 device flow 拒絕
 - Google News RSS 的 description 第一個 href 也是轉址,真實文章網址需瀏覽器跟隨 JS 重導
-- cron 的 Shorts 檔名必須與 pipeline 一致用 UTC 日期(`date -u`),否則 06:00 AEST(前一日 20:00 UTC)必然對不上
+- pipeline 的「今天」以**雪梨當地日期**為準(`today_str()` + cron 用 `TZ=Australia/Sydney date`)— 若用 UTC 日期,06:00 AEST(前一日 20:00 UTC)產出的檔名會落在「昨天」,重跑時誤判已存在而跳過
