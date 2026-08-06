@@ -59,6 +59,76 @@ def channel_dir(channel: dict) -> Path:
     d.mkdir(parents=True, exist_ok=True)
     return d
 
+
+def _list_notebooks(logger) -> list[dict]:
+    out = run_cli(["list", "--json"], logger)
+    data = json.loads(out)
+    return data if isinstance(data, list) else data.get("notebooks", data.get("items", []))
+
+
+def _list_sources(logger) -> list[dict]:
+    out = run_cli(["source", "list", "--json"], logger)
+    data = json.loads(out)
+    return data if isinstance(data, list) else data.get("sources", [])
+
+
+def ensure_notebook(cdir: Path, today: str, title: str, state_name: str, logger) -> str:
+    """冪等: 重用當天已建的 notebook(state 檔記錄),否則建立新的。回傳 notebook id。"""
+    state_file = cdir / state_name
+    state = {}
+    if state_file.exists():
+        try:
+            state = json.loads(state_file.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            logger.warning(f"[WARN] {state_name} 損壞,重新建立 notebook")
+
+    if state.get("date") == today and state.get("notebook_id"):
+        nb_id = state["notebook_id"]
+        exists = any(
+            nb.get("id", "") == nb_id or nb.get("id", "").startswith(nb_id)
+            for nb in _list_notebooks(logger)
+        )
+        if exists:
+            logger.info(f"[INFO] 重用當天 notebook: {nb_id} ({title})")
+            run_cli(["use", nb_id], logger)
+            return nb_id
+        logger.warning(f"[WARN] state 中的 notebook {nb_id} 已不存在,重新建立")
+
+    out = run_cli(["create", title, "--use", "--json"], logger)
+    result = json.loads(out)
+    nb_id = (result.get("notebook") or {}).get("id")
+    if not nb_id:
+        fail(logger, "無法取得 notebook id", out)
+    save_json({"date": today, "notebook_id": nb_id, "title": title}, state_file)
+    logger.info(f"[OK] Notebook 已建立: {nb_id}  {title}")
+    return nb_id
+
+
+def sync_sources(urls: list[str], logger) -> None:
+    """冪等: 加入缺漏來源,刪除 error 狀態來源(會卡住生成)。全部失敗才停。"""
+    existing = {s.get("url", "") for s in _list_sources(logger)}
+    ok, failed = 0, []
+    for url in urls:
+        if url in existing:
+            logger.info(f"[INFO] 來源已存在,跳過: {url}")
+            ok += 1
+            continue
+        try:
+            run_cli(["source", "add", url, "--timeout", "90", "--json"], logger)
+            ok += 1
+        except SystemExit:
+            failed.append(url)
+            logger.warning(f"[WARN] 來源加入失敗(記錄,繼續): {url}")
+    if ok == 0:
+        fail(logger, "沒有可用來源(全部已存在但無效,或全部加入失敗)", "\n".join(failed))
+    logger.info(f"[INFO] 來源: {ok} 可用 / {len(failed)} 失敗{f'({failed})' if failed else ''}")
+
+    # 重新列出: add 成功但伺服器端抓取失敗的來源可能出現 error 狀態
+    for s in _list_sources(logger):
+        if s.get("status") == "error":
+            logger.warning(f"[WARN] 來源 {s.get('title')} 狀態為 error,刪除: {s.get('id')}")
+            run_cli(["source", "delete", s["id"], "-y", "--json"], logger)
+
 # The notebooklm CLI lives in the same venv as this script's interpreter.
 CLI = Path(sys.executable).parent / "notebooklm"
 

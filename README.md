@@ -26,7 +26,8 @@ Every day at **07:00 (Asia/Taipei)**, completely unattended:
 2. **Rank** — **Gemini** scores each story (relevance, recency, technical depth, source authority) and picks the **TOP 1** with a written rationale.
 3. **Collect** — gathers authoritative sources for the story (official docs, GitHub, vendor pages) and verifies each URL is reachable.
 4. **Generate** — [notebooklm-py](https://github.com/teng-lin/notebooklm-py) creates a NotebookLM notebook, adds the sources, and generates a **Video Overview** (Explainer format).
-5. **Upload** — downloads the MP4 and uploads it **privately** to my YouTube channel via the **YouTube Data API v3**.
+5. **Upload** — downloads the MP4 and uploads it to my YouTube channel via the **YouTube Data API v3** (privacy configurable via `UPLOAD_PRIVACY`, currently `public`).
+6. **Shorts** — a 60-second vertical Short is also generated daily from the Tech & AI channel's top story.
 
 ### Architecture
 
@@ -154,7 +155,8 @@ cp pipeline/.env.example .env   # fill in GEMINI_API_KEY
 2. **排名** — **Gemini** 依相關性、新鮮度、技術深度、來源權威性評分,選出 **TOP 1** 並附理由。
 3. **收集來源** — 為這則新聞收集權威來源(官方文件、GitHub、vendor 官網),並逐一驗證網址可達。
 4. **生成影片** — 用 [notebooklm-py](https://github.com/teng-lin/notebooklm-py) 建立 NotebookLM notebook、加入來源、生成 **Video Overview**(Explainer 格式)。
-5. **上傳** — 下載 MP4,透過 **YouTube Data API v3** 以 **private** 上傳到我的 YouTube 頻道。
+5. **上傳** — 下載 MP4,透過 **YouTube Data API v3** 上傳到我的 YouTube 頻道(隱私由 `UPLOAD_PRIVACY` 控制,目前 `public` 自動公開)。
+6. **Shorts** — 另外從 Tech & AI 頻道的 TOP 1 新聞,每天製作一支 60 秒直式 Short。
 
 ### 技術棧與致謝
 
