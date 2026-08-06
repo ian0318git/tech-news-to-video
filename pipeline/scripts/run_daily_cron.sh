@@ -23,5 +23,13 @@ mkdir -p "$POC/logs"
       || { echo "[FAIL] youtube_upload $CH"; continue; }
     echo "[OK] 頻道 $CH 完成"
   done
+
+  echo "----- Shorts(tech 頻道 TOP 1)-----"
+  "$PY" "$POC/scripts/run_shorts_pipeline.py" --channel tech \
+    || { echo "[FAIL] shorts_pipeline"; exit 1; }
+  SHORTS_FILE="$POC/output/tech/shorts_$(date +%Y-%m-%d).mp4"
+  "$PY" "$POC/scripts/youtube_upload.py" --channel tech --file "$SHORTS_FILE" \
+    || { echo "[FAIL] youtube_upload shorts"; exit 1; }
+  echo "[OK] Shorts 完成"
   echo "===== $(date '+%Y-%m-%d %H:%M:%S') 結束 ====="
 } >> "$LOG" 2>&1

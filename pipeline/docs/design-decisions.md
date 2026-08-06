@@ -32,6 +32,7 @@ POC(notebooklm-py 影片流程)驗證通過後,實作正式系統:
 | D17 | **冪等設計**: notebook 重用(`pipeline_state.json`)、來源 URL 去重、當天影片已存在即整個跳過、上傳記錄(`youtube_uploads.json`)防重複 | cron 無人監督環境,重跑必須安全 |
 | D18 | Gemini 呼叫對暫時性錯誤(429/5xx)**自動重試 2 次**(backoff 5s/10s) | 實測遇過 503;cron 環境不能因暫時錯誤整日失敗 |
 | D19 | cron 逐頻道 fail-fast:單一頻道失敗記錄 `[FAIL]` 並繼續其他頻道 | 一個頻道故障不拖垮當日全部產出 |
+| D20 | **每日 Shorts**: `run_shorts_pipeline.py` 用 tech 頻道 TOP 1 製作 60 秒直式影片(`--format short`),cron 加在長片之後 | 每天 3 支(2 長片 + 1 Shorts);Shorts 為 Pro/Ultra 限定、英文、分階段開放,生成可能 30+ 分鐘(等待預算 3600s) |
 
 ## 測試
 

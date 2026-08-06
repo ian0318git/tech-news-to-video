@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""End-to-end(per-channel): 把 daily pipeline 產出的 sources.json 變成一支長片影片(冪等)。
+"""每日 Shorts(60 秒直式影片,冪等)。
 
-用法: python scripts/run_video_pipeline.py [--channel <slug>]
+用法: python scripts/run_shorts_pipeline.py [--channel tech]
+用指定頻道(預設 tech)的今日 TOP 1 新聞製作一支 Shorts:
+建/重用 notebook → 加入缺漏來源 → generate --format short(--wait,預算 60 分鐘)
+→ 下載成 output/<slug>/shorts_<日期>.mp4
 
-冪等: notebook 重用(pipeline_state.json)、來源去重、當天影片已存在即整個跳過。
-流程: 建/重用 notebook → 加入缺漏來源 → 生成 Video Overview(explainer, --wait)
-→ 下載成 output/<slug>/video_<日期>.mp4
+注意: NotebookLM Short 功能為 Pro/Ultra 限定、英文、分階段開放;生成可能 30+ 分鐘。
 """
 
 import json
@@ -25,15 +26,21 @@ from _common import (
     sync_sources,
 )
 
-logger = setup_logging("video_pipeline")
+logger = setup_logging("shorts_pipeline")
 
-WAIT_TIMEOUT = 1800  # 秒,影片生成等待預算
+WAIT_TIMEOUT = 3600  # 秒,Shorts 生成等待預算(官方:可能超過 30 分鐘)
+
+SHORTS_PROMPT = (
+    "Make a punchy 60-second vertical short about this news story. "
+    "Hook viewers in the first 3 seconds, explain what happened and why it matters. "
+    "Keep it fast-paced and easy to follow."
+)
 
 
 def main() -> None:
     load_env()
     args = sys.argv[1:]
-    slug = flag_value(args, "--channel")
+    slug = flag_value(args, "--channel", "tech")
     channel = resolve_channel(slug, logger)
     cdir = channel_dir(channel)
 
@@ -50,36 +57,35 @@ def main() -> None:
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     news = top1.get("news", top1)
-    prefix = channel.get("title_prefix", "Daily News")
-    title = f"{today} {prefix} - {news.get('title', '')}"[:80]
-    logger.info(f"[INFO] 頻道 {channel['slug']} 今天主題: {news.get('title')}")
+    title = f"Shorts {today} - {news.get('title', '')}"[:80]
+    logger.info(f"[INFO] Shorts 主題: {news.get('title')}")
 
-    # 0. 影片已存在 → 全部跳過(最優先,避免重跑時亂建 notebook/加來源)
-    video_path = cdir / f"video_{today}.mp4"
+    # 0. 當天 shorts 已存在 → 整個跳過
+    video_path = cdir / f"shorts_{today}.mp4"
     if video_path.exists():
         size = video_path.stat().st_size
-        logger.info(f"[PASS] 當天影片已存在,整個流程跳過: {video_path} ({size / 1024 / 1024:.1f} MB)")
+        logger.info(f"[PASS] 當天 Shorts 已存在,整個流程跳過: {video_path} ({size / 1024 / 1024:.1f} MB)")
         return
 
     # 1. Notebook + 2. 來源(皆冪等)
-    ensure_notebook(cdir, today, title, "pipeline_state.json", logger)
+    ensure_notebook(cdir, today, title, "shorts_state.json", logger)
     sync_sources(urls, logger)
 
-    # 3. 生成 + 下載
-    desc = f"Summarize today's top {channel['keyword']} news: {news.get('title')}. Explain the key points clearly."
+    # 3. 生成 Short + 4. 下載
+    desc = f"{SHORTS_PROMPT} Story: {news.get('title')}"
     run_live(
-        ["generate", "video", desc, "--format", "explainer", "--wait",
+        ["generate", "video", desc, "--format", "short", "--wait",
          "--timeout", str(WAIT_TIMEOUT), "--interval", "2", "--json"],
         logger,
         timeout=WAIT_TIMEOUT + 120,
     )
-    logger.info("[OK] Video Overview 生成完成")
+    logger.info("[OK] Short 生成完成")
 
     run_cli(["download", "video", str(video_path), "--latest", "--no-clobber"], logger)
     if not video_path.exists():
         fail(logger, f"下載後檔案不存在: {video_path}")
     size = video_path.stat().st_size
-    logger.info(f"[PASS] 端到端完成: {video_path}  ({size / 1024 / 1024:.1f} MB)")
+    logger.info(f"[PASS] Shorts 完成: {video_path}  ({size / 1024 / 1024:.1f} MB)")
 
 
 if __name__ == "__main__":
