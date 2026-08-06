@@ -126,7 +126,7 @@ cp pipeline/.env.example .env   # fill in GEMINI_API_KEY
 .venv/bin/python pipeline/scripts/youtube_upload.py --channel tech
 ```
 
-> Setup details (NotebookLM master-token auth, YouTube OAuth client, cron scheduling) live in the companion documentation of the live project; contact me if you'd like the full operations guide.
+> Operations docs: [master-token auth](pipeline/docs/master-token-auth.md) · [design decisions](pipeline/docs/design-decisions.md)
 
 ### License
 
@@ -196,7 +196,7 @@ cp pipeline/.env.example .env   # 填入 GEMINI_API_KEY
 .venv/bin/python pipeline/scripts/youtube_upload.py --channel tech
 ```
 
-> 完整營運文件(NotebookLM master-token 認證、YouTube OAuth client、cron 排程)在實際專案的 companion 文件裡,需要的話歡迎聯絡我索取。
+> 營運文件:[master-token 認證](pipeline/docs/master-token-auth.md) · [設計決策](pipeline/docs/design-decisions.md)
 
 ### 授權
 
