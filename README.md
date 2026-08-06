@@ -93,7 +93,7 @@ News → AI → NotebookLM → Video → YouTube
 - **Multi-channel** — channels are config-driven (`config/channels.json`); adding one is a one-line change
 - **Idempotent** — safe to re-run at any point: no duplicate notebooks, sources, videos, or uploads
 - **Fail-fast with logs** — each step stops with a clear diagnosis; per-step logs make failures easy to trace
-- **Private by default** — videos upload as `private` (configurable)
+- **Privacy configurable** — upload as `private` by default; set `UPLOAD_PRIVACY=public` in `.env` to publish automatically
 - **Tested** — 16 unit tests covering RSS parsing, argument handling, and source filtering
 
 ### Repository layout
@@ -175,7 +175,7 @@ cp pipeline/.env.example .env   # fill in GEMINI_API_KEY
 - **多頻道** — 頻道以設定檔驅動(`config/channels.json`),新增頻道只要改一行
 - **冪等** — 任何階段重跑都安全:不會重複建 notebook、重複加來源、重複生成影片或重複上傳
 - **Fail-fast + 完整 log** — 每步失敗即停並附診斷,每步 log 獨立,方便追查
-- **預設 private 上傳**(可設定)
+- **上傳隱私可設定** — 預設 `private`;在 `.env` 設 `UPLOAD_PRIVACY=public` 即可自動公開上傳
 - **16 個單元測試** — RSS 解析、參數處理、來源過濾
 
 ### 快速開始

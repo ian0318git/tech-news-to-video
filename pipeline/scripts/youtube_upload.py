@@ -10,6 +10,7 @@
 """
 
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -123,7 +124,8 @@ def main() -> None:
     file = Path(file_arg) if file_arg else latest_video(cdir)
     if not file.exists():
         fail(logger, f"影片檔不存在: {file}")
-    privacy = flag_value(args, "--privacy", "private")
+    # 隱私: --privacy 旗標 > .env 的 UPLOAD_PRIVACY > 預設 private
+    privacy = flag_value(args, "--privacy", os.environ.get("UPLOAD_PRIVACY", "private"))
     custom_title = flag_value(args, "--title")
     force = "--force" in args
 
