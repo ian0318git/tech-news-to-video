@@ -10,7 +10,12 @@ import os
 import shutil
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
+# Pipeline 的「今天」以雪梨當地日期為準(與 cron 06:00 AEST 排程一致)
+PIPELINE_TZ = ZoneInfo("Australia/Sydney")
 
 ROOT = Path(__file__).resolve().parent.parent
 LOGS_DIR = ROOT / "logs"
@@ -51,6 +56,15 @@ def resolve_channel(slug: str | None, logger) -> dict:
 def flag_value(args: list[str], flag: str, default: str | None = None) -> str | None:
     """回傳旗標的下一個參數值(如 --channel tech → 'tech');旗標不存在回傳 default。"""
     return next((args[i + 1] for i, a in enumerate(args) if a == flag and i + 1 < len(args)), default)
+
+
+def today_str() -> str:
+    """Pipeline 的「今天」= 雪梨當地日期(2026-08-07 格式)。
+
+    06:00 AEST 排程 = 前一日 20:00 UTC;若用 UTC 日期,檔名會落在「昨天」,
+    導致 06:00 產出的影片被命名成前一天、且重跑時誤判已存在而跳過。
+    """
+    return datetime.now(PIPELINE_TZ).strftime("%Y-%m-%d")
 
 
 def channel_dir(channel: dict) -> Path:
