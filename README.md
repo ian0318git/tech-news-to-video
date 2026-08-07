@@ -179,7 +179,7 @@ cp pipeline/.env.example pipeline/.env   # fill in GEMINI_API_KEY (load_env read
 
 ### Contact
 
-📧 Portfolio & LinkedIn: *add your LinkedIn URL here* — happy to discuss the design.
+📧 Portfolio & LinkedIn: [linkedin.com/in/ian-chang-56136479](https://www.linkedin.com/in/ian-chang-56136479) — happy to discuss the design.
 
 ### License
 
@@ -355,7 +355,7 @@ cp pipeline/.env.example pipeline/.env   # 填入 GEMINI_API_KEY(load_env 讀 pi
 
 ### 聯絡
 
-📧 作品集與 LinkedIn:*在此填入你的 LinkedIn 連結* — 歡迎討論設計細節。
+📧 作品集與 LinkedIn:[linkedin.com/in/ian-chang-56136479](https://www.linkedin.com/in/ian-chang-56136479)— 歡迎討論設計細節。
 
 ### 授權
 
