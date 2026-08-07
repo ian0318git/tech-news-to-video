@@ -36,6 +36,7 @@ from _config import (
     today_str,
 )
 from _gemini import gemini_json
+from _orchestrator import run_video_flow
 
 __all__ = [
     "CHANNELS_FILE",
@@ -60,6 +61,7 @@ __all__ = [
     "notebook_list",
     "notebook_use",
     "resolve_channel",
+    "run_video_flow",
     "save_json",
     "setup_logging",
     "source_add",
