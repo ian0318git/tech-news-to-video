@@ -6,41 +6,57 @@
   python scripts/run_daily.py --channel tech       # 只跑 tech 頻道
   python scripts/run_daily.py --skip-fetch         # 跳過抓取
 
-每一支子腳本都有獨立 log(logs/<step>.log),失敗即停。
+子步驟以 import 呼叫(同程序執行,注入 argv)— 不 spawn 子程序,
+路徑與 cwd / 啟動方式無關;腳本改名時錯誤在 import 當下顯現。
 """
 
-import subprocess
+import importlib
 import sys
+from pathlib import Path
 
-from _common import flag_value, load_channels, load_env, resolve_channel, setup_logging
+# 確保 scripts/ 在 import 路徑上 — 與 cwd、啟動方式無關
+SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
 
-logger = setup_logging("run_daily")
+from _common import (  # noqa: E402 — sys.path 插入必須在匯入前
+    flag_value,
+    load_channels,
+    load_env,
+    resolve_channel,
+    setup_logging,
+)
 
-SCRIPTS = {
-    "fetch": "fetch_news.py",
-    "rank": "rank_news.py",
-    "collect": "collect_sources.py",
-}
+STEPS = {"fetch": "fetch_news", "rank": "rank_news", "collect": "collect_sources"}
 
 
-def run(script: str, args: list[str] | None = None) -> None:
-    cmd = [sys.executable, f"{sys.path[0]}/{script}", *(args or [])]
-    logger.info(f"===== 執行 {script} {' '.join(args or [])} =====")
-    proc = subprocess.run(cmd, check=False)
-    if proc.returncode != 0:
-        logger.error(
-            f"[FAIL] {script} 失敗 (exit {proc.returncode}) — 請查 logs/{script.replace('.py', '')}.log"
-        )
-        sys.exit(proc.returncode)
-    logger.info(f"===== {script} 完成 =====")
+def run(module_name: str, args: list[str], logger) -> None:
+    """同程序呼叫步驟腳本的 main()(注入 argv)。非零 exit code 向外傳播。"""
+    logger.info(f"===== 執行 {module_name} {' '.join(args)} =====")
+    module = importlib.import_module(module_name)
+    old_argv = sys.argv
+    sys.argv = [f"{module_name}.py", *args]
+    try:
+        module.main()
+    except SystemExit as exc:
+        code = exc.code if isinstance(exc.code, int) else 1
+        if code != 0:
+            logger.error(
+                f"[FAIL] {module_name} 失敗 (exit {code}) — 請查 logs/{module_name}.log"
+            )
+            sys.exit(code)
+    finally:
+        sys.argv = old_argv
+    logger.info(f"===== {module_name} 完成 =====")
 
 
 def main() -> None:
     load_env()
+    logger = setup_logging("run_daily")
     args = sys.argv[1:]
     slug = flag_value(args, "--channel")
     skip = {arg.removeprefix("--skip-") for arg in args if arg.startswith("--skip-")}
-    steps = [s for s in SCRIPTS if s not in skip]
+    steps = [s for s in STEPS if s not in skip]
     if not steps:
         logger.error("所有步驟都被跳過,沒有事可做")
         sys.exit(1)
@@ -50,7 +66,7 @@ def main() -> None:
     for ch in targets:
         logger.info(f"########## 頻道: {ch['slug']} ({ch['keyword']}) ##########")
         for step in steps:
-            run(SCRIPTS[step], ["--channel", ch["slug"]])
+            run(STEPS[step], ["--channel", ch["slug"]], logger)
     logger.info(
         "[PASS] Daily pipeline 完成 — 下一步: scripts/run_video_pipeline.py --channel <slug>"
     )
