@@ -4,7 +4,6 @@ import logging
 
 from collect_sources import filter_suggested
 
-
 pytest_logger = logging.getLogger("test")  # 簡潔起見用模組層 logger
 
 

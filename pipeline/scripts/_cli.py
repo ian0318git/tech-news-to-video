@@ -1,6 +1,9 @@
-"""notebooklm CLI 執行層: 子程序執行、notebook/來源編排。
+"""notebooklm CLI 契約層: typed wrappers + 低階執行器。
 
 依賴規則: 只匯入 _base(兄弟模組);不得匯入 _common facade。
+
+契約: 每個命令一個 wrapper,回傳標準化 dict(形狀由 tests/test_cli_contract.py 鎖定)。
+run_cli/run_live 是內部實作,步驟腳本不得直接使用。
 """
 
 import json
@@ -14,6 +17,9 @@ from _base import fail, save_json
 
 # The notebooklm CLI lives in the same venv as this script's interpreter.
 CLI = Path(sys.executable).parent / "notebooklm"
+
+
+# ---------- 低階執行器(內部) ----------
 
 
 def run_cli(args, logger, timeout: int | None = None) -> str:
@@ -76,18 +82,120 @@ def run_live(args, logger, timeout: int | None = None) -> str:
     return "".join(chunks)
 
 
-def _list_notebooks(logger) -> list[dict]:
+def _last_json_object(out: str, logger, command: str) -> dict | None:
+    """從多行輸出中找最後一個可解析的 JSON 物件(CLI pretty-print 的終態)。"""
+    final = None
+    for line in out.splitlines():
+        try:
+            final = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+    if final is None:
+        logger.warning(f"[WARN] {command} 輸出中沒有可解析的 JSON,以 exit 0 為準")
+    return final
+
+
+# ---------- typed wrappers(契約) ----------
+
+
+def notebook_list(logger) -> list[dict]:
+    """`list --json` → 標準化 notebook 清單 [{id, title, ...}]。"""
     out = run_cli(["list", "--json"], logger)
     data = json.loads(out)
-    return (
-        data if isinstance(data, list) else data.get("notebooks", data.get("items", []))
-    )
+    items = data if isinstance(data, list) else data.get("notebooks")
+    if not isinstance(items, list):
+        fail(logger, "notebook list 回應形狀不符(預期 notebooks 陣列)", out[:500])
+    return items
 
 
-def _list_sources(logger) -> list[dict]:
+def notebook_create(title: str, logger) -> str:
+    """`create <title> --use --json` → notebook id。"""
+    out = run_cli(["create", title, "--use", "--json"], logger)
+    result = json.loads(out)
+    nb_id = (result.get("notebook") or {}).get("id")
+    if not nb_id:
+        fail(logger, "create 回應缺少 notebook.id", out[:500])
+    return nb_id
+
+
+def notebook_use(nb_id: str, logger) -> None:
+    """`use <id>` — 設為 active context。"""
+    run_cli(["use", nb_id], logger)
+
+
+def login_refresh(logger) -> None:
+    """`login --master-token-refresh` — 從 master token 重新 mint cookie。"""
+    run_cli(["login", "--master-token-refresh"], logger)
+
+
+def auth_check(logger) -> dict:
+    """`auth check --test --json` → 標準化 {status, ...}。"""
+    out = run_cli(["auth", "check", "--test", "--json"], logger)
+    result = json.loads(out)
+    if "status" not in result:
+        fail(logger, "auth check 回應缺少 status 欄位", out[:500])
+    return result
+
+
+def source_list(logger) -> list[dict]:
+    """`source list --json` → 標準化來源清單 [{id, title, url, status}]。"""
     out = run_cli(["source", "list", "--json"], logger)
     data = json.loads(out)
-    return data if isinstance(data, list) else data.get("sources", [])
+    items = data if isinstance(data, list) else data.get("sources")
+    if not isinstance(items, list):
+        fail(logger, "source list 回應形狀不符(預期 sources 陣列)", out[:500])
+    return items
+
+
+def source_add(url: str, logger) -> dict:
+    """`source add <url> --json` → 標準化來源 {id, title, type, url}。"""
+    out = run_cli(["source", "add", url, "--timeout", "90", "--json"], logger)
+    result = json.loads(out)
+    src = result.get("source", result)
+    if not src.get("id"):
+        fail(logger, "source add 回應缺少 id", out[:500])
+    return src
+
+
+def source_delete(src_id: str, logger) -> None:
+    """`source delete <id> -y` — 刪除來源(含 error 狀態來源)。"""
+    run_cli(["source", "delete", src_id, "-y", "--json"], logger)
+
+
+def generate_video(
+    desc: str, fmt: str, logger, timeout: int = 1800, interval: int = 2
+) -> dict:
+    """`generate video <desc> --format <fmt> --wait --json` → 終態 {task_id, status, ...}。
+
+    阻塞等待生成完成(串流進度);逾時(含餘裕)會 kill 子程序並 fail。
+    """
+    out = run_live(
+        [
+            "generate",
+            "video",
+            desc,
+            "--format",
+            fmt,
+            "--wait",
+            "--timeout",
+            str(timeout),
+            "--interval",
+            str(interval),
+            "--json",
+        ],
+        logger,
+        timeout=timeout + 120,
+    )
+    final = _last_json_object(out, logger, "generate video")
+    return final or {"status": "completed"}
+
+
+def download_video(path: Path, logger) -> None:
+    """`download video <path> --latest --no-clobber` — 下載最新影片。"""
+    run_cli(["download", "video", str(path), "--latest", "--no-clobber"], logger)
+
+
+# ---------- 編排(建立在 wrappers 之上) ----------
 
 
 def ensure_notebook(cdir: Path, today: str, title: str, state_name: str, logger) -> str:
@@ -104,19 +212,15 @@ def ensure_notebook(cdir: Path, today: str, title: str, state_name: str, logger)
         nb_id = state["notebook_id"]
         exists = any(
             nb.get("id", "") == nb_id or nb.get("id", "").startswith(nb_id)
-            for nb in _list_notebooks(logger)
+            for nb in notebook_list(logger)
         )
         if exists:
             logger.info(f"[INFO] 重用當天 notebook: {nb_id} ({title})")
-            run_cli(["use", nb_id], logger)
+            notebook_use(nb_id, logger)
             return nb_id
         logger.warning(f"[WARN] state 中的 notebook {nb_id} 已不存在,重新建立")
 
-    out = run_cli(["create", title, "--use", "--json"], logger)
-    result = json.loads(out)
-    nb_id = (result.get("notebook") or {}).get("id")
-    if not nb_id:
-        fail(logger, "無法取得 notebook id", out)
+    nb_id = notebook_create(title, logger)
     save_json({"date": today, "notebook_id": nb_id, "title": title}, state_file)
     logger.info(f"[OK] Notebook 已建立: {nb_id}  {title}")
     return nb_id
@@ -124,7 +228,7 @@ def ensure_notebook(cdir: Path, today: str, title: str, state_name: str, logger)
 
 def sync_sources(urls: list[str], logger) -> None:
     """冪等: 加入缺漏來源,刪除 error 狀態來源(會卡住生成)。全部失敗才停。"""
-    existing = {s.get("url", "") for s in _list_sources(logger)}
+    existing = {s.get("url", "") for s in source_list(logger)}
     ok, failed = 0, []
     for url in urls:
         if url in existing:
@@ -132,7 +236,7 @@ def sync_sources(urls: list[str], logger) -> None:
             ok += 1
             continue
         try:
-            run_cli(["source", "add", url, "--timeout", "90", "--json"], logger)
+            source_add(url, logger)
             ok += 1
         except SystemExit:
             failed.append(url)
@@ -144,9 +248,9 @@ def sync_sources(urls: list[str], logger) -> None:
     )
 
     # 重新列出: add 成功但伺服器端抓取失敗的來源可能出現 error 狀態
-    for s in _list_sources(logger):
+    for s in source_list(logger):
         if s.get("status") == "error":
             logger.warning(
                 f"[WARN] 來源 {s.get('title')} 狀態為 error,刪除: {s.get('id')}"
             )
-            run_cli(["source", "delete", s["id"], "-y", "--json"], logger)
+            source_delete(s["id"], logger)

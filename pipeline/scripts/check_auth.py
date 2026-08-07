@@ -16,7 +16,7 @@ import json
 import os
 from pathlib import Path
 
-from _common import fail, run_cli, setup_logging
+from _common import auth_check, fail, login_refresh, setup_logging
 
 logger = setup_logging("check_auth")
 
@@ -47,15 +47,10 @@ def main() -> None:
     logger.info(f"[OK] master_token.json 就位 ({perms}, {TOKEN_FILE})")
 
     # 2. 從 master token mint 出 session cookie
-    run_cli(["login", "--master-token-refresh"], logger)
+    login_refresh(logger)
 
     # 3. 網路層認證驗證
-    out = run_cli(["auth", "check", "--test", "--json"], logger)
-    try:
-        result = json.loads(out)
-    except json.JSONDecodeError:
-        fail(logger, "auth check 輸出不是有效 JSON", out)
-
+    result = auth_check(logger)
     status = result.get("status")
     if status == "ok":
         logger.info("[PASS] 認證檢查通過: status = ok")

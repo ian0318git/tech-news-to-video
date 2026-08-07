@@ -13,13 +13,13 @@ import sys
 
 from _common import (
     channel_dir,
+    download_video,
     ensure_notebook,
     fail,
     flag_value,
+    generate_video,
     load_env,
     resolve_channel,
-    run_cli,
-    run_live,
     setup_logging,
     sync_sources,
     today_str,
@@ -78,26 +78,10 @@ def main() -> None:
 
     # 3. 生成 + 下載
     desc = f"Summarize today's top {channel['keyword']} news: {news.get('title')}. Explain the key points clearly."
-    run_live(
-        [
-            "generate",
-            "video",
-            desc,
-            "--format",
-            "explainer",
-            "--wait",
-            "--timeout",
-            str(WAIT_TIMEOUT),
-            "--interval",
-            "2",
-            "--json",
-        ],
-        logger,
-        timeout=WAIT_TIMEOUT + 120,
-    )
+    generate_video(desc, "explainer", logger, timeout=WAIT_TIMEOUT)
     logger.info("[OK] Video Overview 生成完成")
 
-    run_cli(["download", "video", str(video_path), "--latest", "--no-clobber"], logger)
+    download_video(video_path, logger)
     if not video_path.exists():
         fail(logger, f"下載後檔案不存在: {video_path}")
     size = video_path.stat().st_size

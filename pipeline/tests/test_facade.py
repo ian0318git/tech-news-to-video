@@ -15,7 +15,8 @@ SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
 def test_facade_exports_every_symbol_scripts_import():
     needed = set()
     for f in glob.glob(str(SCRIPTS_DIR / "*.py")):
-        tree = ast.parse(open(f, encoding="utf-8").read())
+        with open(f, encoding="utf-8") as fh:
+            tree = ast.parse(fh.read())
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and node.module == "_common":
                 needed.update(a.name for a in node.names)
