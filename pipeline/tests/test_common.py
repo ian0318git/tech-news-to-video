@@ -3,7 +3,6 @@
 import logging
 
 import pytest
-
 from _common import flag_value, resolve_channel
 
 

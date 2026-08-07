@@ -3,10 +3,24 @@
 依賴規則:
 - 內部模組(_base / _config / _cli / _gemini)不得匯入本檔案,只能匯入兄弟模組
 - 步驟腳本只能從本檔案匯入(未來刪除 facade 時,一次過改所有匯入點)
+- 低階 run_cli/run_live 不經 facade 外洩 — 一律使用 typed wrappers
 """
 
 from _base import fail, load_env, save_json, setup_logging
-from _cli import ensure_notebook, run_cli, run_live, sync_sources
+from _cli import (
+    auth_check,
+    download_video,
+    ensure_notebook,
+    generate_video,
+    login_refresh,
+    notebook_create,
+    notebook_list,
+    notebook_use,
+    source_add,
+    source_delete,
+    source_list,
+    sync_sources,
+)
 from _config import (
     CHANNELS_FILE,
     INPUT_DIR,
@@ -31,18 +45,26 @@ __all__ = [
     "PIPELINE_TZ",
     "SCRIPTS_DIR",
     "VIDEO_FILE",
+    "auth_check",
     "channel_dir",
+    "download_video",
     "ensure_notebook",
     "fail",
     "flag_value",
     "gemini_json",
+    "generate_video",
     "load_channels",
     "load_env",
+    "login_refresh",
+    "notebook_create",
+    "notebook_list",
+    "notebook_use",
     "resolve_channel",
-    "run_cli",
-    "run_live",
     "save_json",
     "setup_logging",
+    "source_add",
+    "source_delete",
+    "source_list",
     "sync_sources",
     "today_str",
 ]
