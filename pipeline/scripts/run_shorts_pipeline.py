@@ -25,8 +25,10 @@ WAIT_TIMEOUT = 3600  # 秒,Shorts 生成等待預算(官方:可能超過 30 分�
 
 SHORTS_PROMPT = (
     "Make a punchy 60-second vertical short about this news story. "
-    "Hook viewers in the first 3 seconds, explain what happened and why it matters. "
-    "Keep it fast-paced and easy to follow."
+    "Open with a bold, scroll-stopping hook in the first 2-3 seconds — a provocative "
+    "question or surprising fact. Keep the pacing fast with quick scene changes and "
+    "on-screen keyword highlights. End with a takeaway that makes viewers want to "
+    "follow the channel. High energy, confident and fun tone."
 )
 
 

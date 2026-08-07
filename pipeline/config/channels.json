@@ -5,6 +5,8 @@
       "slug": "embedded",
       "keyword": "embedded linux",
       "title_prefix": "Embedded Linux Daily",
+      "video_style": "custom",
+      "style_prompt": "Sleek dark tech aesthetic: deep navy-black background with subtle circuit board traces and PCB patterns, glowing cyan and teal HUD interface elements, crisp monospace accents, minimalist modern typography. Precise, engineering-grade feel.",
       "hl": "en",
       "gl": "US",
       "ceid": "US:en"
@@ -13,6 +15,8 @@
       "slug": "tech",
       "keyword": "technology OR artificial intelligence",
       "title_prefix": "TechSnack Daily",
+      "video_style": "custom",
+      "style_prompt": "Modern friendly tech aesthetic: clean light background with soft blue-purple gradients, floating tech motifs (chips, rockets, robots, network nodes), playful rounded shapes, vibrant accents — approachable and energetic, like a friendly tech explainer show.",
       "hl": "en",
       "gl": "US",
       "ceid": "US:en"
