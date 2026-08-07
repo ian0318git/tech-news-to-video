@@ -9,7 +9,6 @@
 """
 
 import json
-import sys
 
 from _common import fail, run_cli, setup_logging
 
@@ -60,8 +59,7 @@ def main() -> None:
 
     for m in matches:
         logger.info(
-            f"[PASS] 來源已確認: id={m.get('id')}  "
-            f"title={m.get('title')}  status={m.get('status')}"
+            f"[PASS] 來源已確認: id={m.get('id')}  title={m.get('title')}  status={m.get('status')}"
         )
 
 

@@ -11,11 +11,21 @@ import json
 import os
 import sys
 
-from _common import channel_dir, fail, flag_value, gemini_json, load_env, resolve_channel, save_json, setup_logging
+from _common import (
+    channel_dir,
+    fail,
+    flag_value,
+    gemini_json,
+    load_env,
+    resolve_channel,
+    save_json,
+    setup_logging,
+    today_str,
+)
 
 logger = setup_logging("rank_news")
 
-MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+DEFAULT_MODEL = "gemini-2.5-flash"
 
 RANK_PROMPT_TEMPLATE = """You are a news editor for an audience interested in the topic "{topic}".
 Rank the following news items by: (1) relevance to the topic, (2) recency,
@@ -42,34 +52,58 @@ def main() -> None:
 
     raw_path = cdir / "news_raw.json"
     if not raw_path.exists():
-        fail(logger, f"找不到 {raw_path} — 請先執行 scripts/fetch_news.py --channel {channel['slug']}")
+        fail(
+            logger,
+            f"找不到 {raw_path} — 請先執行 scripts/fetch_news.py --channel {channel['slug']}",
+        )
     raw = json.loads(raw_path.read_text(encoding="utf-8"))
     items = raw["items"]
     if not items:
         fail(logger, "news_raw.json 沒有任何新聞項目")
 
     items_for_prompt = [
-        {"index": i, "title": it["title"], "url": it["url"], "source": it["source"], "summary": it["summary"]}
+        {
+            "index": i,
+            "title": it["title"],
+            "url": it["url"],
+            "source": it["source"],
+            "summary": it["summary"],
+        }
         for i, it in enumerate(items)
     ]
     prompt = RANK_PROMPT_TEMPLATE.format(
-        topic=channel["keyword"], items_json=json.dumps(items_for_prompt, ensure_ascii=False, indent=2)
+        topic=channel["keyword"],
+        items_json=json.dumps(items_for_prompt, ensure_ascii=False, indent=2),
     )
-    result = gemini_json(prompt, logger, model=MODEL)
+    model = os.environ.get("GEMINI_MODEL", DEFAULT_MODEL)  # load_env 之後才讀
+    result = gemini_json(prompt, logger, model=model)
 
     ranking = result.get("ranking")
     top1 = result.get("top1")
     if not isinstance(ranking, list) or not isinstance(top1, dict):
-        fail(logger, "Gemini 回傳缺少 ranking/top1 欄位", json.dumps(result, ensure_ascii=False)[:2000])
+        fail(
+            logger,
+            "Gemini 回傳缺少 ranking/top1 欄位",
+            json.dumps(result, ensure_ascii=False)[:2000],
+        )
 
-    idx = top1.get("index")
-    if not isinstance(idx, int) or not (0 <= idx < len(items)):
-        fail(logger, f"top1.index 無效: {idx!r}(有效範圍 0-{len(items) - 1})", json.dumps(top1, ensure_ascii=False))
+    # LLM 可能把 index 回成字串 "0" — 強制轉 int 再檢查範圍
+    try:
+        idx = int(top1.get("index"))
+    except (TypeError, ValueError):
+        idx = -1
+    if not (0 <= idx < len(items)):
+        fail(
+            logger,
+            f"top1.index 無效: {top1.get('index')!r}(有效範圍 0-{len(items) - 1})",
+            json.dumps(top1, ensure_ascii=False),
+        )
 
     chosen = items[idx]
     top1_full = {
         **top1,
         "channel": channel["slug"],
+        "date": today_str(),  # 供下游檢查新聞新鮮度(避免用昨天的新聞)
         "news": {
             "title": chosen["title"],
             "url": chosen["url"],  # Google News 轉址 — collect 階段會解析成真實網址

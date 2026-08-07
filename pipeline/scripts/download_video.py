@@ -4,9 +4,6 @@
 用 --latest 抓最新一個 video artifact(--no-clobber 避免覆蓋已有檔案)。
 """
 
-import os
-import sys
-
 from _common import VIDEO_FILE, fail, run_cli, setup_logging
 
 logger = setup_logging("download_video")

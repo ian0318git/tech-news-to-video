@@ -16,14 +16,20 @@ import time
 from pathlib import Path
 
 import httpx
-
-from _common import channel_dir, fail, flag_value, load_env, resolve_channel, save_json, setup_logging
+from _common import (
+    channel_dir,
+    fail,
+    flag_value,
+    load_env,
+    resolve_channel,
+    save_json,
+    setup_logging,
+)
 from _youtube import ensure_access_token
 
 logger = setup_logging("youtube_upload")
 
 UPLOAD_URL = "https://www.googleapis.com/upload/youtube/v3/videos"
-CHUNK = 4 * 1024 * 1024  # 4 MB
 
 
 UPLOADS_RECORD = "youtube_uploads.json"  # 每個頻道目錄內的上傳記錄
@@ -32,7 +38,10 @@ UPLOADS_RECORD = "youtube_uploads.json"  # 每個頻道目錄內的上傳記錄
 def latest_video(cdir: Path) -> Path:
     candidates = sorted(cdir.glob("video_*.mp4"), key=lambda p: p.stat().st_mtime)
     if not candidates:
-        fail(logger, f"找不到 {cdir}/video_*.mp4 — 請先執行 scripts/run_video_pipeline.py --channel <slug>")
+        fail(
+            logger,
+            f"找不到 {cdir}/video_*.mp4 — 請先執行 scripts/run_video_pipeline.py --channel <slug>",
+        )
     return candidates[-1]
 
 
@@ -95,22 +104,26 @@ def init_upload(access_token: str, size: int, title: str, description: str, priv
 
 
 def upload_body(session_uri: str, file: Path) -> dict:
-    def chunks():
-        with open(file, "rb") as fh:
-            while chunk := fh.read(CHUNK):
-                yield chunk
+    """PUT 影片內容到 session URI(bytes + 明確 Content-Length)。
 
-    with httpx.stream(
-        "PUT", session_uri, headers={"Content-Type": "video/mp4"}, data=chunks(), timeout=300.0
-    ) as resp:
-        body = resp.read().decode("utf-8", errors="replace")  # streaming 模式需先 read
-        if resp.status_code not in (200, 201):
-            fail(
-                logger,
-                f"上傳失敗 (HTTP {resp.status_code})",
-                body[:1000],
-            )
-        return json.loads(body)
+    不能用 generator(data=): httpx 0.28 會轉成 Transfer-Encoding: chunked
+    且無 Content-Length,Google resumable endpoint 不保證接受(chunked)。
+    """
+    with open(file, "rb") as fh:
+        payload = fh.read()
+    resp = httpx.put(
+        session_uri,
+        content=payload,
+        headers={"Content-Type": "video/mp4", "Content-Length": str(len(payload))},
+        timeout=300.0,
+    )
+    if resp.status_code not in (200, 201):
+        fail(
+            logger,
+            f"上傳失敗 (HTTP {resp.status_code})",
+            resp.text[:1000],
+        )
+    return resp.json()
 
 
 def main() -> None:
@@ -133,11 +146,15 @@ def main() -> None:
     records = load_upload_records(cdir)
     if file.name in records and not force:
         rec = records[file.name]
-        logger.info(f"[INFO] {file.name} 已上傳過,跳過(用 --force 強制重傳): {rec.get('url', rec.get('video_id'))}")
+        logger.info(
+            f"[INFO] {file.name} 已上傳過,跳過(用 --force 強制重傳): {rec.get('url', rec.get('video_id'))}"
+        )
         return
 
     size = file.stat().st_size
-    logger.info(f"[INFO] 頻道 {channel['slug']}: 影片 {file} ({size / 1024 / 1024:.1f} MB),privacy={privacy}")
+    logger.info(
+        f"[INFO] 頻道 {channel['slug']}: 影片 {file} ({size / 1024 / 1024:.1f} MB),privacy={privacy}"
+    )
 
     access_token = ensure_access_token(logger)
     title, description = build_metadata(cdir, channel, file)

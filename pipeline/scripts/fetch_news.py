@@ -7,7 +7,7 @@
 """
 
 import html
-import json
+import os
 import re
 import sys
 import urllib.parse
@@ -15,12 +15,19 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 
 import httpx
-
-from _common import channel_dir, fail, flag_value, load_env, resolve_channel, save_json, setup_logging
+from _common import (
+    channel_dir,
+    fail,
+    flag_value,
+    load_env,
+    resolve_channel,
+    save_json,
+    setup_logging,
+)
 
 logger = setup_logging("fetch_news")
 
-LIMIT = int(__import__("os").environ.get("NEWS_LIMIT", "20"))
+LIMIT = 20  # 預設;實際值在 main() 讀 .env 後覆寫
 UA = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
@@ -41,24 +48,25 @@ def fetch_rss(channel: dict) -> str:
     return resp.text
 
 
-def parse_items(xml_text: str) -> list[dict]:
+def parse_items(xml_text: str, limit: int | None = None) -> list[dict]:
     try:
         root = ET.fromstring(xml_text)
     except ET.ParseError as exc:
         fail(logger, "RSS XML 解析失敗", str(exc))
+
+    def text(item, tag: str) -> str:
+        node = item.find(tag)
+        return (node.text or "").strip() if node is not None and node.text else ""
+
     items = []
     for item in root.iter("item"):
-        def text(tag: str) -> str:
-            node = item.find(tag)
-            return (node.text or "").strip() if node is not None and node.text else ""
-
-        title = text("title")
-        link = text("link")
+        title = text(item, "title")
+        link = text(item, "link")
         if not title or not link:
             continue
         source = item.find("source")
         source_name = source.text.strip() if source is not None and source.text else ""
-        desc = text("description")
+        desc = text(item, "description")
         summary = re.sub(r"<[^>]+>", "", desc)
         summary = html.unescape(re.sub(r"\s+", " ", summary)).strip()
         items.append(
@@ -67,10 +75,10 @@ def parse_items(xml_text: str) -> list[dict]:
                 "url": link,  # Google News 轉址 — 真實網址在 collect 階段跟隨轉址解析
                 "source": source_name,
                 "summary": summary[:500],
-                "published": text("pubDate"),
+                "published": text(item, "pubDate"),
             }
         )
-    return items[:LIMIT]
+    return items[: limit if limit else LIMIT]
 
 
 def main() -> None:
@@ -79,8 +87,14 @@ def main() -> None:
     slug = flag_value(args, "--channel")
     channel = resolve_channel(slug, logger)
 
+    global LIMIT  # .env 的 NEWS_LIMIT 在 load_env 之後才讀
+    try:
+        LIMIT = int(os.environ.get("NEWS_LIMIT", "20"))
+    except ValueError:
+        fail(logger, f"NEWS_LIMIT 不是數字: {os.environ.get('NEWS_LIMIT')!r}")
+
     rss = fetch_rss(channel)
-    items = parse_items(rss)
+    items = parse_items(rss, limit=LIMIT)
     if not items:
         fail(logger, f"關鍵字 {channel['keyword']!r} 沒有抓到任何新聞")
     payload = {

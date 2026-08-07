@@ -6,9 +6,8 @@
 """
 
 import json
-import sys
 
-from _common import fail, run_live, setup_logging
+from _common import run_live, setup_logging
 
 logger = setup_logging("generate_video")
 
@@ -48,7 +47,9 @@ def main() -> None:
         logger.info(f"[INFO] 最終狀態: {json.dumps(final, ensure_ascii=False)}")
     else:
         logger.warning("[WARN] 輸出中沒有可解析的 JSON,以 CLI exit 0 為準")
-        logger.info(f"[INFO] 最後輸出: {out.strip().splitlines()[-1]}")
+        last_line = [ln for ln in out.strip().splitlines() if ln.strip()]
+        if last_line:
+            logger.info(f"[INFO] 最後輸出: {last_line[-1]}")
 
     logger.info("[PASS] Video Overview 生成完成(進入下載階段)")
 

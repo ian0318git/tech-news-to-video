@@ -7,10 +7,8 @@ Token 存在 output/youtube_token.json(0600),憑證在 output/client_secret.json
 import json
 import os
 import time
-from pathlib import Path
 
 import httpx
-
 from _common import OUTPUT_DIR, fail
 
 TOKEN_PATH = OUTPUT_DIR / "youtube_token.json"
@@ -77,6 +75,12 @@ def device_auth(logger, client: dict) -> dict:
         )
         body = poll.json()
         if poll.status_code == 200 and "access_token" in body:
+            if "refresh_token" not in body:
+                fail(
+                    logger,
+                    "授權回應缺少 refresh_token(重複授權時 Google 可能省略)",
+                    "請刪除 output/youtube_token.json 後重新執行 youtube_auth.py",
+                )
             body["client_id"] = client["client_id"]
             body["client_secret"] = client["client_secret"]
             body["expires_at"] = time.time() + body.get("expires_in", 3600) - 60
@@ -107,25 +111,44 @@ def ensure_access_token(logger) -> str:
     token = json.loads(TOKEN_PATH.read_text(encoding="utf-8"))
     if token.get("expires_at", 0) > time.time():
         return token["access_token"]
+    if not token.get("refresh_token"):
+        fail(
+            logger,
+            "token 檔缺少 refresh_token(檔案可能損壞)",
+            f"請刪除 {TOKEN_PATH} 後重跑 python scripts/youtube_auth.py",
+        )
 
-    # refresh
+    # refresh: 暫時性錯誤(429/5xx)重試並保留 token;認證錯誤(400 級)才清除
     logger.info("[INFO] access token 過期,自動 refresh ...")
-    resp = httpx.post(
-        TOKEN_URL,
-        data={
-            "client_id": token["client_id"],
-            "client_secret": token["client_secret"],
-            "refresh_token": token["refresh_token"],
-            "grant_type": "refresh_token",
-        },
-        timeout=30.0,
-    )
-    if resp.status_code != 200:
+    resp = None
+    for _attempt in range(2):
+        resp = httpx.post(
+            TOKEN_URL,
+            data={
+                "client_id": token["client_id"],
+                "client_secret": token["client_secret"],
+                "refresh_token": token["refresh_token"],
+                "grant_type": "refresh_token",
+            },
+            timeout=30.0,
+        )
+        if resp.status_code == 200:
+            break
+        if resp.status_code in (429,) or resp.status_code >= 500:
+            logger.warning(f"[WARN] refresh 暫時失敗 (HTTP {resp.status_code}),5s 後重試 ...")
+            time.sleep(5)
+            continue
         TOKEN_PATH.unlink(missing_ok=True)
         fail(
             logger,
-            f"refresh 失敗 (HTTP {resp.status_code})",
-            resp.text[:500] + "\n已清除舊 token,請重跑 python scripts/youtube_auth.py 重新授權",
+            f"refresh 失敗 (HTTP {resp.status_code}) — 已清除 token,請重跑 youtube_auth.py",
+            resp.text[:500],
+        )
+    else:
+        fail(
+            logger,
+            f"refresh 暫時失敗 (HTTP {resp.status_code}) — token 已保留,稍後重試",
+            resp.text[:500],
         )
     new = resp.json()
     token.update(

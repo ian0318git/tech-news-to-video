@@ -6,7 +6,6 @@ output/notebook_id.txt(供後續腳本與手動檢查使用)。
 """
 
 import json
-import sys
 from pathlib import Path
 
 from _common import NOTEBOOK_ID_FILE, fail, run_cli, save_json, setup_logging
