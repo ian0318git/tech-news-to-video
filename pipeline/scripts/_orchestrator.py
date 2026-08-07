@@ -25,6 +25,8 @@ def run_video_flow(
     urls: list[str],
     logger,
     cli=None,
+    style: str | None = None,
+    style_prompt: str | None = None,
 ) -> Path:
     """冪等影片流程: 新鮮度閘門 → 存在跳過 → notebook → 來源 → 生成 → 下載。
 
@@ -54,7 +56,9 @@ def run_video_flow(
     cli.sync_sources(urls, logger)
 
     # 4. 生成 + 下載
-    cli.generate_video(desc, fmt, logger, timeout=timeout)
+    cli.generate_video(
+        desc, fmt, logger, timeout=timeout, style=style, style_prompt=style_prompt
+    )
     logger.info(f"[OK] {fmt} 生成完成")
     cli.download_video(video_path, logger)
 

@@ -25,8 +25,10 @@ class FakeCli:
     def sync_sources(self, urls, logger):
         self.calls.append(("sync_sources", urls))
 
-    def generate_video(self, desc, fmt, logger, timeout=1800):
-        self.calls.append(("generate_video", fmt, timeout))
+    def generate_video(
+        self, desc, fmt, logger, timeout=1800, style=None, style_prompt=None
+    ):
+        self.calls.append(("generate_video", fmt, timeout, style))
         return {"status": "completed"}
 
     def download_video(self, path, logger):

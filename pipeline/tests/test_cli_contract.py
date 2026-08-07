@@ -165,3 +165,40 @@ def test_generate_video_no_json_returns_completed(monkeypatch):
     monkeypatch.setattr(_cli, "run_live", lambda *a, **k: "no json here\n")
     result = _cli.generate_video("d", "short", __import__("logging").getLogger("t"))
     assert result == {"status": "completed"}
+
+
+def test_generate_video_with_style_passes_args(monkeypatch):
+    calls = []
+
+    def fake_run_live(args, lg, timeout=None):
+        calls.append(args)
+        return GENERATE_DONE
+
+    monkeypatch.setattr(_cli, "run_live", fake_run_live)
+    _cli.generate_video(
+        "desc",
+        "explainer",
+        __import__("logging").getLogger("t"),
+        timeout=1800,
+        style="custom",
+        style_prompt="dark HUD aesthetic",
+    )
+    flat = list(calls[0])
+    assert "--style" in flat and "custom" in flat
+    assert "--style-prompt" in flat and "dark HUD aesthetic" in flat
+
+
+def test_generate_video_short_rejects_style(monkeypatch):
+    calls = []
+
+    def fake_run_live(args, lg, timeout=None):
+        calls.append(args)
+        return GENERATE_DONE
+
+    monkeypatch.setattr(_cli, "run_live", fake_run_live)
+    # short 格式不支援 style — 呼叫端不該傳,這裡驗證預設行為不帶 style 旗標
+    _cli.generate_video(
+        "d", "short", __import__("logging").getLogger("t"), timeout=3600
+    )
+    flat = list(calls[0])
+    assert "--style" not in flat

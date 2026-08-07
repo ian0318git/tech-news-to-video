@@ -163,29 +163,37 @@ def source_delete(src_id: str, logger) -> None:
 
 
 def generate_video(
-    desc: str, fmt: str, logger, timeout: int = 1800, interval: int = 2
+    desc: str,
+    fmt: str,
+    logger,
+    timeout: int = 1800,
+    interval: int = 2,
+    style: str | None = None,
+    style_prompt: str | None = None,
 ) -> dict:
     """`generate video <desc> --format <fmt> --wait --json` → 終態 {task_id, status, ...}。
 
     阻塞等待生成完成(串流進度);逾時(含餘裕)會 kill 子程序並 fail。
+    style/--style-prompt 僅對標準格式(explainer/brief)有效;cinematic/short 不支援。
     """
-    out = run_live(
-        [
-            "generate",
-            "video",
-            desc,
-            "--format",
-            fmt,
-            "--wait",
-            "--timeout",
-            str(timeout),
-            "--interval",
-            str(interval),
-            "--json",
-        ],
-        logger,
-        timeout=timeout + 120,
-    )
+    args = [
+        "generate",
+        "video",
+        desc,
+        "--format",
+        fmt,
+        "--wait",
+        "--timeout",
+        str(timeout),
+        "--interval",
+        str(interval),
+        "--json",
+    ]
+    if style:
+        args += ["--style", style]
+        if style_prompt:
+            args += ["--style-prompt", style_prompt]
+    out = run_live(args, logger, timeout=timeout + 120)
     final = _last_json_object(out, logger, "generate video")
     return final or {"status": "completed"}
 

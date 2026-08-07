@@ -65,6 +65,8 @@ def main() -> None:
         top1_date=top1.get("date"),
         urls=urls,
         logger=logger,
+        style=channel.get("video_style"),
+        style_prompt=channel.get("style_prompt"),
     )
     size = video_path.stat().st_size
     logger.info(f"[PASS] 端到端完成: {video_path}  ({size / 1024 / 1024:.1f} MB)")
