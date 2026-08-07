@@ -1,19 +1,27 @@
 #!/usr/bin/env bash
-# 每日 07:00 自動執行(crontab 呼叫):
+# 每日 06:00 自動執行(crontab 呼叫,雪梨時間):
 #   auth refresh(保 cookie 新鮮)→ 每個頻道: run_daily(新聞→選題→來源)→ 影片 → YouTube 上傳
+# 頻道清單與 Shorts 來源由 config/channels.json 驅動(單一真相,加頻道不需改 cron)。
 # 逐頻道 fail-fast: 單一頻道失敗不影響其他頻道,全部記錄在 logs/daily_cron.log
 set -u
 
 POC=/home/ian/github-project/notebooklm-py
 LOG="$POC/logs/daily_cron.log"
 PY="$POC/.venv/bin/python"
+CONFIG="$POC/config/channels.json"
 mkdir -p "$POC/logs"
 
 {
   echo "===== $(date '+%Y-%m-%d %H:%M:%S') 開始 ====="
   "$POC/.venv/bin/notebooklm" auth refresh --quiet && echo "[OK] auth refresh" || echo "[FAIL] auth refresh"
 
-  for CH in embedded tech; do
+  # 頻道與 Shorts 來源從 config 讀取
+  CHANNELS=$("$PY" -c "import json; print(' '.join(c['slug'] for c in json.load(open('$CONFIG'))['channels']))")
+  SHORTS_CH=$("$PY" -c "import json; print(json.load(open('$CONFIG')).get('shorts_channel', 'tech'))")
+  echo "[INFO] 頻道清單: $CHANNELS | Shorts 來源: $SHORTS_CH"
+
+  SHORTS_OK=0
+  for CH in $CHANNELS; do
     echo "----- 頻道: $CH -----"
     "$PY" "$POC/scripts/run_daily.py" --channel "$CH" \
       || { echo "[FAIL] run_daily $CH"; continue; }
@@ -22,15 +30,20 @@ mkdir -p "$POC/logs"
     "$PY" "$POC/scripts/youtube_upload.py" --channel "$CH" \
       || { echo "[FAIL] youtube_upload $CH"; continue; }
     echo "[OK] 頻道 $CH 完成"
+    [ "$CH" = "$SHORTS_CH" ] && SHORTS_OK=1
   done
 
-  echo "----- Shorts(tech 頻道 TOP 1)-----"
-  "$PY" "$POC/scripts/run_shorts_pipeline.py" --channel tech \
-    || { echo "[FAIL] shorts_pipeline"; exit 1; }
-  # 注意: pipeline 的「今天」= 雪梨當地日期 — cron 必須用同一時區,否則 06:00(前一日 20:00 UTC)必然對不上
-  SHORTS_FILE="$POC/output/tech/shorts_$(TZ=Australia/Sydney date +%Y-%m-%d).mp4"
-  "$PY" "$POC/scripts/youtube_upload.py" --channel tech --file "$SHORTS_FILE" \
-    || { echo "[FAIL] youtube_upload shorts"; exit 1; }
-  echo "[OK] Shorts 完成"
+  echo "----- Shorts($SHORTS_CH 頻道 TOP 1)-----"
+  if [ "$SHORTS_OK" = "1" ]; then
+    "$PY" "$POC/scripts/run_shorts_pipeline.py" --channel "$SHORTS_CH" \
+      || { echo "[FAIL] shorts_pipeline"; exit 1; }
+    # 注意: pipeline 的「今天」= 雪梨當地日期 — cron 必須用同一時區,否則 06:00(前一日 20:00 UTC)必然對不上
+    SHORTS_FILE="$POC/output/$SHORTS_CH/shorts_$(TZ=Australia/Sydney date +%Y-%m-%d).mp4"
+    "$PY" "$POC/scripts/youtube_upload.py" --channel "$SHORTS_CH" --file "$SHORTS_FILE" \
+      || { echo "[FAIL] youtube_upload shorts"; exit 1; }
+    echo "[OK] Shorts 完成"
+  else
+    echo "[FAIL] $SHORTS_CH 頻道未成功,跳過 Shorts(避免用昨天的舊新聞)"
+  fi
   echo "===== $(date '+%Y-%m-%d %H:%M:%S') 結束 ====="
 } >> "$LOG" 2>&1
