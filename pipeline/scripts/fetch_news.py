@@ -42,7 +42,9 @@ def fetch_rss(channel: dict) -> str:
         f"&hl={channel.get('hl', 'en')}&gl={channel.get('gl', 'US')}&ceid={channel.get('ceid', 'US:en')}"
     )
     logger.info(f"[INFO] 抓取 Google News RSS ({channel['slug']}): {url}")
-    resp = httpx.get(url, headers={"User-Agent": UA}, timeout=30.0, follow_redirects=True)
+    resp = httpx.get(
+        url, headers={"User-Agent": UA}, timeout=30.0, follow_redirects=True
+    )
     if resp.status_code != 200:
         fail(logger, f"Google News RSS 回傳 HTTP {resp.status_code}", resp.text[:1000])
     return resp.text

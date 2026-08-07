@@ -75,7 +75,9 @@ def build_metadata(cdir: Path, channel: dict, file: Path) -> tuple[str, str]:
     return title[:95], description
 
 
-def init_upload(access_token: str, size: int, title: str, description: str, privacy: str) -> str:
+def init_upload(
+    access_token: str, size: int, title: str, description: str, privacy: str
+) -> str:
     resp = httpx.post(
         f"{UPLOAD_URL}?uploadType=resumable&part=snippet,status",
         headers={
@@ -96,7 +98,9 @@ def init_upload(access_token: str, size: int, title: str, description: str, priv
         timeout=60.0,
     )
     if resp.status_code not in (200, 201):
-        fail(logger, f"建立上傳 session 失敗 (HTTP {resp.status_code})", resp.text[:1000])
+        fail(
+            logger, f"建立上傳 session 失敗 (HTTP {resp.status_code})", resp.text[:1000]
+        )
     location = resp.headers.get("Location")
     if not location:
         fail(logger, "回應缺少 Location header", resp.text[:500])
@@ -168,7 +172,11 @@ def main() -> None:
 
     video_id = result.get("id")
     if not video_id:
-        fail(logger, "上傳回應缺少 video id", json.dumps(result, ensure_ascii=False)[:1000])
+        fail(
+            logger,
+            "上傳回應缺少 video id",
+            json.dumps(result, ensure_ascii=False)[:1000],
+        )
     records[file.name] = {
         "video_id": video_id,
         "url": f"https://youtu.be/{video_id}",

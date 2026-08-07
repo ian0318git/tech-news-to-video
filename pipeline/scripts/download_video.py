@@ -21,7 +21,9 @@ def main() -> None:
     if size == 0:
         fail(logger, "檔案大小為 0 bytes — 下載可能失敗")
     if size < 1024 * 1024:  # < 1MB 對影片而言異常小
-        logger.warning(f"[WARN] 檔案大小 {size:,} bytes 小於 1MB,請用 file 指令檢查格式")
+        logger.warning(
+            f"[WARN] 檔案大小 {size:,} bytes 小於 1MB,請用 file 指令檢查格式"
+        )
 
 
 if __name__ == "__main__":

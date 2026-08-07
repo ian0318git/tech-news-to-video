@@ -29,7 +29,10 @@ def main() -> None:
         fail(logger, "無法從回應取得 notebook id", out)
 
     NOTEBOOK_ID_FILE.write_text(str(nb_id), encoding="utf-8")
-    save_json(result, Path(__file__).resolve().parent.parent / "output" / "create_notebook.json")
+    save_json(
+        result,
+        Path(__file__).resolve().parent.parent / "output" / "create_notebook.json",
+    )
     logger.info(f"[PASS] Notebook 已建立: id={nb_id}  title={TITLE!r}")
     logger.info(f"      notebook id 已存到 {NOTEBOOK_ID_FILE}")
 

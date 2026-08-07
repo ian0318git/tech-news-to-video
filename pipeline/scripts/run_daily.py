@@ -16,7 +16,11 @@ from _common import flag_value, load_channels, load_env, resolve_channel, setup_
 
 logger = setup_logging("run_daily")
 
-SCRIPTS = {"fetch": "fetch_news.py", "rank": "rank_news.py", "collect": "collect_sources.py"}
+SCRIPTS = {
+    "fetch": "fetch_news.py",
+    "rank": "rank_news.py",
+    "collect": "collect_sources.py",
+}
 
 
 def run(script: str, args: list[str] | None = None) -> None:

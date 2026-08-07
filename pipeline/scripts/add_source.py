@@ -37,7 +37,9 @@ def main() -> None:
         logger.info(f"[INFO] 來源已存在({len(matches)} 筆),跳過 add,直接驗證")
     else:
         # 2. 加入來源
-        out = run_cli(["source", "add", SOURCE_URL, "--timeout", "90", "--json"], logger)
+        out = run_cli(
+            ["source", "add", SOURCE_URL, "--timeout", "90", "--json"], logger
+        )
         try:
             result = json.loads(out)
         except json.JSONDecodeError:
