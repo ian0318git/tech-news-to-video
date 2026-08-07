@@ -47,7 +47,9 @@ News topic:
 
 def check_url(url: str) -> tuple[bool, int]:
     try:
-        resp = httpx.get(url, headers={"User-Agent": UA}, timeout=15.0, follow_redirects=True)
+        resp = httpx.get(
+            url, headers={"User-Agent": UA}, timeout=15.0, follow_redirects=True
+        )
         return resp.status_code < 400, resp.status_code
     except httpx.HTTPError:
         return False, 0
@@ -77,7 +79,9 @@ def resolve_article_url(url: str, logger=None) -> str | None:
             return final
     except Exception as exc:  # noqa: BLE001 — 解析失敗不阻斷 pipeline
         if logger:
-            logger.warning(f"[WARN] 轉址解析例外: {type(exc).__name__}: {str(exc)[:200]}")
+            logger.warning(
+                f"[WARN] 轉址解析例外: {type(exc).__name__}: {str(exc)[:200]}"
+            )
     return None
 
 
@@ -150,7 +154,11 @@ def main() -> None:
 
     prompt = COLLECT_PROMPT_TEMPLATE.format(
         news_json=json.dumps(
-            {"title": news.get("title"), "url": news.get("url"), "summary": news.get("summary")},
+            {
+                "title": news.get("title"),
+                "url": news.get("url"),
+                "summary": news.get("summary"),
+            },
             ensure_ascii=False,
         )
     )
@@ -159,7 +167,11 @@ def main() -> None:
 
     suggested = result.get("sources")
     if not isinstance(suggested, list):
-        fail(logger, "Gemini 回傳缺少 sources 欄位", json.dumps(result, ensure_ascii=False)[:2000])
+        fail(
+            logger,
+            "Gemini 回傳缺少 sources 欄位",
+            json.dumps(result, ensure_ascii=False)[:2000],
+        )
 
     sources = filter_suggested(suggested, news, logger)
 
@@ -171,18 +183,28 @@ def main() -> None:
         if reachable:
             ok_sources.append(s)
         else:
-            logger.warning(f"[WARN] 無法存取 {s['url']}(HTTP {status or '連線失敗'}),已排除")
+            logger.warning(
+                f"[WARN] 無法存取 {s['url']}(HTTP {status or '連線失敗'}),已排除"
+            )
 
     if not ok_sources:
         fail(logger, "所有建議來源都無法存取")
 
     save_json(
-        {"topic": news.get("title"), "sources": ok_sources, "total_suggested": len(sources)},
+        {
+            "topic": news.get("title"),
+            "sources": ok_sources,
+            "total_suggested": len(sources),
+        },
         cdir / "sources.json",
     )
     for s in ok_sources:
-        logger.info(f"  [{s['category']}] {s['title']}  {s['url']}  (HTTP {s['http_status']})")
-    logger.info(f"[PASS] 來源已寫入 {cdir / 'sources.json'}({len(ok_sources)} 個可達來源)")
+        logger.info(
+            f"  [{s['category']}] {s['title']}  {s['url']}  (HTTP {s['http_status']})"
+        )
+    logger.info(
+        f"[PASS] 來源已寫入 {cdir / 'sources.json'}({len(ok_sources)} 個可達來源)"
+    )
 
 
 if __name__ == "__main__":

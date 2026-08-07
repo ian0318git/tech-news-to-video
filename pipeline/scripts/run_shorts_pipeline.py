@@ -47,7 +47,10 @@ def main() -> None:
     top1_path, sources_path = cdir / "top1.json", cdir / "sources.json"
     for p in (top1_path, sources_path):
         if not p.exists():
-            fail(logger, f"找不到 {p} — 請先執行 scripts/run_daily.py --channel {channel['slug']}")
+            fail(
+                logger,
+                f"找不到 {p} — 請先執行 scripts/run_daily.py --channel {channel['slug']}",
+            )
 
     top1 = json.loads(top1_path.read_text(encoding="utf-8"))
     sources = json.loads(sources_path.read_text(encoding="utf-8"))

@@ -90,7 +90,11 @@ def device_auth(logger, client: dict) -> dict:
             if err == "slow_down":
                 interval += 5
             continue
-        fail(logger, f"裝置授權失敗: {err or 'unknown'}", json.dumps(body, ensure_ascii=False))
+        fail(
+            logger,
+            f"裝置授權失敗: {err or 'unknown'}",
+            json.dumps(body, ensure_ascii=False),
+        )
     fail(logger, "裝置授權逾時(5 分鐘內未完成授權)")
 
 
@@ -135,7 +139,9 @@ def ensure_access_token(logger) -> str:
         if resp.status_code == 200:
             break
         if resp.status_code in (429,) or resp.status_code >= 500:
-            logger.warning(f"[WARN] refresh 暫時失敗 (HTTP {resp.status_code}),5s 後重試 ...")
+            logger.warning(
+                f"[WARN] refresh 暫時失敗 (HTTP {resp.status_code}),5s 後重試 ..."
+            )
             time.sleep(5)
             continue
         TOKEN_PATH.unlink(missing_ok=True)
