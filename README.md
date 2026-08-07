@@ -43,7 +43,7 @@ Built by an **embedded software engineer** as both a working product and a portf
 4. **Generate** — notebooklm-py creates a notebook, adds the sources, and generates a **Video Overview** (Explainer) plus a **60-second vertical Short**.
 5. **Upload** — publishes both to YouTube via the Data API v3 (resumable upload), privacy controlled by `UPLOAD_PRIVACY`.
 
-### System design (what an interviewer will ask about)
+### System design
 
 | Decision | How it works | Why it matters |
 |---|---|---|
@@ -220,7 +220,7 @@ cp pipeline/.env.example pipeline/.env   # fill in GEMINI_API_KEY (load_env read
 4. **生成影片** — notebooklm-py 建 notebook、加來源、生成 **Video Overview(Explainer)** + **60 秒直式 Short**。
 5. **上傳** — 透過 YouTube Data API v3(resumable)上傳,隱私由 `UPLOAD_PRIVACY` 控制。
 
-### 系統設計(面試會問的)
+### 系統設計
 
 | 決策 | 做法 | 為什麼重要 |
 |---|---|---|
