@@ -7,9 +7,10 @@ and mirrors the same output to the console.
 import json
 import logging
 import os
-import shutil
 import subprocess
 import sys
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -55,7 +56,9 @@ def resolve_channel(slug: str | None, logger) -> dict:
 
 def flag_value(args: list[str], flag: str, default: str | None = None) -> str | None:
     """回傳旗標的下一個參數值(如 --channel tech → 'tech');旗標不存在回傳 default。"""
-    return next((args[i + 1] for i, a in enumerate(args) if a == flag and i + 1 < len(args)), default)
+    return next(
+        (args[i + 1] for i, a in enumerate(args) if a == flag and i + 1 < len(args)), default
+    )
 
 
 def today_str() -> str:
@@ -143,6 +146,7 @@ def sync_sources(urls: list[str], logger) -> None:
             logger.warning(f"[WARN] 來源 {s.get('title')} 狀態為 error,刪除: {s.get('id')}")
             run_cli(["source", "delete", s["id"], "-y", "--json"], logger)
 
+
 # The notebooklm CLI lives in the same venv as this script's interpreter.
 CLI = Path(sys.executable).parent / "notebooklm"
 
@@ -179,7 +183,7 @@ def run_cli(args, logger: logging.Logger, timeout: int | None = None) -> str:
     """
     cmd = [str(CLI), *args]
     logger.info(f"$ {CLI.name} {' '.join(args)}")
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
     if proc.stdout:
         logger.info(proc.stdout.rstrip())
     if proc.returncode != 0:
@@ -191,6 +195,7 @@ def run_live(args, logger: logging.Logger, timeout: int | None = None) -> str:
     """Run the CLI streaming stdout live to console + log (for --wait polls).
 
     Returns the full captured stdout; fails loudly on non-zero exit.
+    Timeout 是真正的安全網: 逾時會 kill 子程序並 fail(而非無限期卡住 cron)。
     """
     cmd = [str(CLI), *args]
     logger.info(f"$ {CLI.name} {' '.join(args)}")
@@ -198,12 +203,26 @@ def run_live(args, logger: logging.Logger, timeout: int | None = None) -> str:
         cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1
     )
     assert proc.stdout is not None and proc.stderr is not None
+
     chunks: list[str] = []
-    for line in proc.stdout:
-        chunks.append(line)
-        logger.info(line.rstrip())
-    err = proc.stderr.read()
-    proc.wait(timeout=timeout)
+
+    def reader() -> None:
+        for line in proc.stdout:
+            chunks.append(line)
+            logger.info(line.rstrip())
+
+    t = threading.Thread(target=reader, daemon=True)
+    t.start()
+
+    deadline = time.monotonic() + timeout if timeout else None
+    while proc.poll() is None:
+        if deadline and time.monotonic() > deadline:
+            proc.kill()
+            proc.wait(timeout=10)
+            fail(logger, f"指令逾時({timeout}s),已終止: {' '.join(args)}")
+        time.sleep(0.5)
+    t.join(timeout=5)
+    err = proc.stderr.read() or ""
     if proc.returncode != 0:
         fail(logger, f"指令失敗 (exit {proc.returncode}): {' '.join(args)}", err.rstrip())
     return "".join(chunks)
@@ -217,8 +236,11 @@ def read_notebook_id(logger) -> str:
 
 
 def save_json(payload: dict, path: Path) -> None:
+    """原子寫入 JSON(temp 檔 + os.replace),避免中途被 kill 造成檔案截斷。"""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def load_env() -> None:
@@ -236,12 +258,12 @@ def load_env() -> None:
             os.environ[key] = value
 
 
-GEMINI_API_URL = (
-    "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-)
+GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
 
-def gemini_json(prompt: str, logger: logging.Logger, model: str = "gemini-2.5-flash", temperature: float = 0.2) -> dict:
+def gemini_json(
+    prompt: str, logger: logging.Logger, model: str = "gemini-2.5-flash", temperature: float = 0.2
+) -> dict:
     """Call Gemini with a JSON-response prompt; return the parsed JSON object.
 
     Requires GEMINI_API_KEY in the environment (loaded from .env via load_env).
@@ -273,23 +295,32 @@ def gemini_json(prompt: str, logger: logging.Logger, model: str = "gemini-2.5-fl
             )
             resp.raise_for_status()
             break
-        except httpx.HTTPStatusError as exc:
+        except httpx.HTTPStatusError:
             if resp.status_code in (429, 500, 502, 503, 504) and attempt < retries:
                 import time as _time
 
                 wait = 5 * (attempt + 1)
-                logger.warning(f"[WARN] Gemini HTTP {resp.status_code},{wait}s 後重試 ({attempt + 1}/{retries}) ...")
+                logger.warning(
+                    f"[WARN] Gemini HTTP {resp.status_code},{wait}s 後重試 ({attempt + 1}/{retries}) ..."
+                )
                 _time.sleep(wait)
                 continue
             fail(logger, f"Gemini API 錯誤 (HTTP {resp.status_code})", resp.text[:2000])
         except httpx.HTTPError as exc:
             fail(logger, "Gemini API 連線失敗", str(exc))
 
-    data = resp.json()
+    try:
+        data = resp.json()
+    except json.JSONDecodeError:
+        fail(logger, "Gemini 回傳 200 但 body 不是 JSON(可能是閘道錯誤頁)", resp.text[:2000])
     try:
         text = data["candidates"][0]["content"]["parts"][0]["text"]
     except (KeyError, IndexError, TypeError):
-        fail(logger, "Gemini 回應缺少 candidates/content", json.dumps(data, ensure_ascii=False)[:2000])
+        fail(
+            logger,
+            "Gemini 回應缺少 candidates/content",
+            json.dumps(data, ensure_ascii=False)[:2000],
+        )
     try:
         return json.loads(text)
     except json.JSONDecodeError:

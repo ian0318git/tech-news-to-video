@@ -49,6 +49,12 @@ def main() -> None:
         fail(logger, "sources.json 沒有可加來源")
 
     today = today_str()
+    if top1.get("date") and top1["date"] != today:
+        fail(
+            logger,
+            f"top1.json 的新聞日期是 {top1['date']},不是今天({today})",
+            "請先執行 scripts/run_daily.py --channel 更新選題",
+        )
     news = top1.get("news", top1)
     prefix = channel.get("title_prefix", "Daily News")
     title = f"{today} {prefix} - {news.get('title', '')}"[:80]
@@ -58,7 +64,9 @@ def main() -> None:
     video_path = cdir / f"video_{today}.mp4"
     if video_path.exists():
         size = video_path.stat().st_size
-        logger.info(f"[PASS] 當天影片已存在,整個流程跳過: {video_path} ({size / 1024 / 1024:.1f} MB)")
+        logger.info(
+            f"[PASS] 當天影片已存在,整個流程跳過: {video_path} ({size / 1024 / 1024:.1f} MB)"
+        )
         return
 
     # 1. Notebook + 2. 來源(皆冪等)
@@ -68,8 +76,19 @@ def main() -> None:
     # 3. 生成 + 下載
     desc = f"Summarize today's top {channel['keyword']} news: {news.get('title')}. Explain the key points clearly."
     run_live(
-        ["generate", "video", desc, "--format", "explainer", "--wait",
-         "--timeout", str(WAIT_TIMEOUT), "--interval", "2", "--json"],
+        [
+            "generate",
+            "video",
+            desc,
+            "--format",
+            "explainer",
+            "--wait",
+            "--timeout",
+            str(WAIT_TIMEOUT),
+            "--interval",
+            "2",
+            "--json",
+        ],
         logger,
         timeout=WAIT_TIMEOUT + 120,
     )

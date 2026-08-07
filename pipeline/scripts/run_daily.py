@@ -12,7 +12,7 @@
 import subprocess
 import sys
 
-from _common import flag_value, load_channels, load_env, setup_logging
+from _common import flag_value, load_channels, load_env, resolve_channel, setup_logging
 
 logger = setup_logging("run_daily")
 
@@ -22,9 +22,11 @@ SCRIPTS = {"fetch": "fetch_news.py", "rank": "rank_news.py", "collect": "collect
 def run(script: str, args: list[str] | None = None) -> None:
     cmd = [sys.executable, f"{sys.path[0]}/{script}", *(args or [])]
     logger.info(f"===== 執行 {script} {' '.join(args or [])} =====")
-    proc = subprocess.run(cmd)
+    proc = subprocess.run(cmd, check=False)
     if proc.returncode != 0:
-        logger.error(f"[FAIL] {script} 失敗 (exit {proc.returncode}) — 請查 logs/{script.replace('.py', '')}.log")
+        logger.error(
+            f"[FAIL] {script} 失敗 (exit {proc.returncode}) — 請查 logs/{script.replace('.py', '')}.log"
+        )
         sys.exit(proc.returncode)
     logger.info(f"===== {script} 完成 =====")
 
@@ -39,13 +41,15 @@ def main() -> None:
         logger.error("所有步驟都被跳過,沒有事可做")
         sys.exit(1)
 
-    channels = load_channels(logger)
-    targets = [c for c in channels if c["slug"] == slug] if slug else channels
+    # 未知 slug 會 fail,不會靜默 PASS
+    targets = [resolve_channel(slug, logger)] if slug else load_channels(logger)
     for ch in targets:
         logger.info(f"########## 頻道: {ch['slug']} ({ch['keyword']}) ##########")
         for step in steps:
             run(SCRIPTS[step], ["--channel", ch["slug"]])
-    logger.info("[PASS] Daily pipeline 完成 — 下一步: scripts/run_video_pipeline.py --channel <slug>")
+    logger.info(
+        "[PASS] Daily pipeline 完成 — 下一步: scripts/run_video_pipeline.py --channel <slug>"
+    )
 
 
 if __name__ == "__main__":

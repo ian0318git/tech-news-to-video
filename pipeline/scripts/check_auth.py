@@ -14,11 +14,9 @@
 
 import json
 import os
-import subprocess
-import sys
 from pathlib import Path
 
-from _common import CLI, fail, run_cli, setup_logging
+from _common import fail, run_cli, setup_logging
 
 logger = setup_logging("check_auth")
 
@@ -62,7 +60,11 @@ def main() -> None:
     if status == "ok":
         logger.info("[PASS] 認證檢查通過: status = ok")
     else:
-        fail(logger, f"認證檢查未通過: status = {status}", json.dumps(result, ensure_ascii=False, indent=2))
+        fail(
+            logger,
+            f"認證檢查未通過: status = {status}",
+            json.dumps(result, ensure_ascii=False, indent=2),
+        )
 
 
 if __name__ == "__main__":

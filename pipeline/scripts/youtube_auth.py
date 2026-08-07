@@ -9,10 +9,9 @@
 輸出: output/youtube_token.json (0600)
 """
 
-import json
 import sys
 
-from _common import OUTPUT_DIR, fail, setup_logging
+from _common import fail, setup_logging
 from _youtube import TOKEN_PATH, ensure_access_token, load_client_secret
 
 logger = setup_logging("youtube_auth")
@@ -21,9 +20,8 @@ logger = setup_logging("youtube_auth")
 def main() -> None:
     if "--check" in sys.argv:
         if not TOKEN_PATH.exists():
-            fail(logger, f"沒有 token — 請先執行 python scripts/youtube_auth.py")
-        token = json.loads(TOKEN_PATH.read_text(encoding="utf-8"))
-        logger.info(f"[INFO] token 存在: 帳戶需在下次上傳時由 API 驗證")
+            fail(logger, "沒有 token — 請先執行 python scripts/youtube_auth.py")
+        logger.info("[INFO] token 存在: 帳戶需在下次上傳時由 API 驗證")
         ensure_access_token(logger)
         logger.info("[PASS] token 有效(refresh 成功)")
         return

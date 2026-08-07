@@ -111,7 +111,7 @@ News → AI → NotebookLM → Video → YouTube
 - **Multi-channel** — channels are config-driven (`config/channels.json`); adding one is a one-line change
 - **Idempotent** — safe to re-run at any point: no duplicate notebooks, sources, videos, or uploads
 - **Fail-fast with logs** — each step stops with a clear diagnosis; per-step logs make failures easy to trace
-- **Privacy configurable** — upload as `private` by default; set `UPLOAD_PRIVACY=public` in `.env` to publish automatically
+- **Privacy configurable** — uploads default to `private`; the live deployment sets `UPLOAD_PRIVACY=public` in `.env` to auto-publish
 - **Tested** — 16 unit tests covering RSS parsing, argument handling, and source filtering
 
 ### Repository layout
@@ -132,7 +132,7 @@ News → AI → NotebookLM → Video → YouTube
 git clone https://github.com/ian0318git/tech-news-to-video.git
 cd tech-news-to-video
 python3 -m venv .venv && .venv/bin/pip install ".[headless,browser]"
-cp pipeline/.env.example .env   # fill in GEMINI_API_KEY
+cp pipeline/.env.example pipeline/.env   # fill in GEMINI_API_KEY (load_env reads pipeline/.env)
 
 # news → top story → sources
 .venv/bin/python pipeline/scripts/run_daily.py --channel tech
@@ -140,7 +140,7 @@ cp pipeline/.env.example .env   # fill in GEMINI_API_KEY
 # notebook → video → MP4 (idempotent, safe to re-run)
 .venv/bin/python pipeline/scripts/run_video_pipeline.py --channel tech
 
-# upload to YouTube (private)
+# upload to YouTube (default private; set UPLOAD_PRIVACY=public in pipeline/.env to auto-publish)
 .venv/bin/python pipeline/scripts/youtube_upload.py --channel tech
 ```
 
@@ -211,7 +211,7 @@ cp pipeline/.env.example .env   # fill in GEMINI_API_KEY
 - **多頻道** — 頻道以設定檔驅動(`config/channels.json`),新增頻道只要改一行
 - **冪等** — 任何階段重跑都安全:不會重複建 notebook、重複加來源、重複生成影片或重複上傳
 - **Fail-fast + 完整 log** — 每步失敗即停並附診斷,每步 log 獨立,方便追查
-- **上傳隱私可設定** — 預設 `private`;在 `.env` 設 `UPLOAD_PRIVACY=public` 即可自動公開上傳
+- **上傳隱私可設定** — 預設 `private`;實際部署在 `.env` 設 `UPLOAD_PRIVACY=public` 自動公開
 - **16 個單元測試** — RSS 解析、參數處理、來源過濾
 
 ### 快速開始
@@ -220,7 +220,7 @@ cp pipeline/.env.example .env   # fill in GEMINI_API_KEY
 git clone https://github.com/ian0318git/tech-news-to-video.git
 cd tech-news-to-video
 python3 -m venv .venv && .venv/bin/pip install ".[headless,browser]"
-cp pipeline/.env.example .env   # 填入 GEMINI_API_KEY
+cp pipeline/.env.example pipeline/.env   # 填入 GEMINI_API_KEY(load_env 讀 pipeline/.env)
 
 # 新聞 → TOP 1 → 來源
 .venv/bin/python pipeline/scripts/run_daily.py --channel tech
@@ -228,7 +228,7 @@ cp pipeline/.env.example .env   # 填入 GEMINI_API_KEY
 # notebook → 影片 → MP4(冪等,可安全重跑)
 .venv/bin/python pipeline/scripts/run_video_pipeline.py --channel tech
 
-# 上傳 YouTube(private)
+# 上傳 YouTube(預設 private;在 pipeline/.env 設 UPLOAD_PRIVACY=public 自動公開)
 .venv/bin/python pipeline/scripts/youtube_upload.py --channel tech
 ```
 

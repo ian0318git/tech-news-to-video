@@ -150,7 +150,7 @@ force-include = {"SKILL.md" = "notebooklm/data/SKILL.md", "AGENTS.md" = "noteboo
 artifacts = ["src/notebooklm/_commit.py"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "pipeline/tests"]
 # Put the repo root on sys.path so the ``tests`` package is importable as
 # ``tests.*`` under any invocation (plain ``pytest``/``uv run pytest`` does NOT
 # add CWD; only ``python -m pytest`` does). This is what lets test files use

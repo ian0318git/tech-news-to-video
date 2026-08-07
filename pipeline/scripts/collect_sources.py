@@ -11,12 +11,20 @@ import os
 import sys
 
 import httpx
-
-from _common import channel_dir, fail, flag_value, gemini_json, load_env, resolve_channel, save_json, setup_logging
+from _common import (
+    channel_dir,
+    fail,
+    flag_value,
+    gemini_json,
+    load_env,
+    resolve_channel,
+    save_json,
+    setup_logging,
+)
 
 logger = setup_logging("collect_sources")
 
-MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+DEFAULT_MODEL = "gemini-2.5-flash"
 UA = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
@@ -67,7 +75,7 @@ def resolve_article_url(url: str, logger=None) -> str | None:
                 browser.close()
         if final and "news.google.com" not in final:
             return final
-    except Exception as exc:  # 解析失敗不阻斷 pipeline
+    except Exception as exc:  # noqa: BLE001 — 解析失敗不阻斷 pipeline
         if logger:
             logger.warning(f"[WARN] 轉址解析例外: {type(exc).__name__}: {str(exc)[:200]}")
     return None
@@ -123,7 +131,10 @@ def main() -> None:
 
     top1_path = cdir / "top1.json"
     if not top1_path.exists():
-        fail(logger, f"找不到 {top1_path} — 請先執行 scripts/rank_news.py --channel {channel['slug']}")
+        fail(
+            logger,
+            f"找不到 {top1_path} — 請先執行 scripts/rank_news.py --channel {channel['slug']}",
+        )
     top1 = json.loads(top1_path.read_text(encoding="utf-8"))
     news = top1.get("news", top1)
 
@@ -143,7 +154,8 @@ def main() -> None:
             ensure_ascii=False,
         )
     )
-    result = gemini_json(prompt, logger, model=MODEL)
+    model = os.environ.get("GEMINI_MODEL", DEFAULT_MODEL)  # load_env 之後才讀
+    result = gemini_json(prompt, logger, model=model)
 
     suggested = result.get("sources")
     if not isinstance(suggested, list):
@@ -164,7 +176,10 @@ def main() -> None:
     if not ok_sources:
         fail(logger, "所有建議來源都無法存取")
 
-    save_json({"topic": news.get("title"), "sources": ok_sources, "total_suggested": len(sources)}, cdir / "sources.json")
+    save_json(
+        {"topic": news.get("title"), "sources": ok_sources, "total_suggested": len(sources)},
+        cdir / "sources.json",
+    )
     for s in ok_sources:
         logger.info(f"  [{s['category']}] {s['title']}  {s['url']}  (HTTP {s['http_status']})")
     logger.info(f"[PASS] 來源已寫入 {cdir / 'sources.json'}({len(ok_sources)} 個可達來源)")
