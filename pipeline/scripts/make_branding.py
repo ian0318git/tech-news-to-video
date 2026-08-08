@@ -18,7 +18,8 @@ from _common import OUTPUT_DIR, fail, setup_logging
 logger = setup_logging("make_branding")
 
 BRAND_DIR = OUTPUT_DIR / "branding"
-FONT = "Liberation Sans"  # libass 用字體名稱
+FONT = "Liberation Sans"
+MONO = "Liberation Mono"  # libass 用字體名稱
 OUT_W, OUT_H, FPS = 1280, 720, 24      # 最終輸出
 SCALE = 2
 W, H = OUT_W * SCALE, OUT_H * SCALE    # 內部渲染 2x → 真超採樣
@@ -41,6 +42,7 @@ Style: Main,{FONT},176,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,1,0,0,0,100,1
 Style: Sub,{FONT},112,&H00F5E0CF,&H00FFFFFF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,3,0,5,0,0,0,1
 Style: Accent,{FONT},192,&H00BFD42D,&H00FFFFFF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,3,0,5,0,0,0,1
 Style: Handle,{FONT},104,&H00F5E0CF,&H00FFFFFF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,3,0,5,0,0,0,1
+Style: Mono,{FONT},30,&H00BFD42D,&H00FFFFFF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1
 Style: Trace,{FONT},1,&H00BFD42D,&H00FFFFFF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1
 
 [Events]
@@ -88,14 +90,38 @@ def _brackets(start: float, end: float) -> str:
     )
 
 
+def _grid(start: float, end: float) -> str:
+    """科技網格: 垂直+水平細線,低透明度。"""
+    shapes = []
+    step = 320
+    for x in range(step, W, step):
+        shapes.append(f"m {x} 0 l {x + 4} 0 l {x + 4} {H} l {x} {H}")
+    for y in range(step, H, step):
+        shapes.append(f"m 0 {y} l {W} {y} l {W} {y + 4} l 0 {y + 4}")
+    return (
+        f"Dialogue: 0,{_ts(start)},{_ts(end)},Trace,,0,0,0,,"
+        f"{{\\alpha&H90&\\p1}}" + " ".join(shapes) + "{\\p0}"
+    )
+
+
+def _vias(start: float, end: float, pts: list[tuple[int, int]]) -> str:
+    """焊點: 走線轉折/端點的小方塊(PCB 真實感)。"""
+    shapes = [f"m {x - 10} {y - 10} l {x + 10} {y - 10} l {x + 10} {y + 10} l {x - 10} {y + 10}" for x, y in pts]
+    return (
+        f"Dialogue: 0,{_ts(start)},{_ts(end)},Trace,,0,0,0,,"
+        f"{{\\alpha&H70&\\p1}}" + " ".join(shapes) + "{\\p0}"
+    )
+
+
 def write_ass(path: Path, lines: list[tuple[float, float, str, str, int, int]], traces: list) -> None:
     """lines: [(開始秒, 結束秒, Style 名, 文字, x, y)];traces: 額外繪製事件字串。"""
     events = []
     for start, end, style, text, x, y in lines:
         sp = "\\fsp4" if style == "Main" else ("\\fsp2" if style in ("Sub", "Handle") else "")
+        anchor = "\\an7" if style == "Mono" else ""
         events.append(
             f"Dialogue: 0,{_ts(start)},{_ts(end)},{style},,0,0,0,,"
-            f"{{\\fad(600,400){sp}\\pos({x},{y})}}{text}"
+            f"{{\\fad(600,400){sp}{anchor}\\pos({x},{y})}}{text}"
         )
     events.extend(traces)
     path.write_text(ASS_HEADER.format(W=W, H=H, FONT=FONT) + "\n".join(events) + "\n", encoding="utf-8")
@@ -121,14 +147,31 @@ def audio_filters(sfx_events: list[tuple[float, str]], duration: float) -> tuple
     return inputs, f"{pad};{';'.join(chains)};{amix}"
 
 
-def build(name: str, duration: float, ass_lines: list, traces: list, sfx_events: list, scanline: bool = True) -> None:
+def build(
+    name: str,
+    duration: float,
+    ass_lines: list,
+    traces: list,
+    sfx_events: list,
+    scanline: bool = True,
+    bg_image: Path | None = None,
+) -> None:
     ass_file = BRAND_DIR / f"{name}.ass"
     write_ass(ass_file, ass_lines, traces)
     out = BRAND_DIR / f"{name}.mp4"
 
-    # 視覺鏈: 漸層 → 中央光暈 → 字幕+HUD 繪製 → 掃描線 → 縮到 720p(超採樣)
-    glow_size = 1200
-    vf = f"[0:v][glow]overlay=x={ (W - glow_size) // 2 }:y={ (H - glow_size) // 2 }[bg]"
+    # 背景: 指定圖片(scale/crop 到 2x 畫布)或程式化漸層
+    if bg_image:
+        vf = (
+            f"[0:v]scale={W}:{H}:force_original_aspect_ratio=increase,"
+            f"crop={W}:{H}[bg0]"
+        )
+        scrim_color, glow_size = "0x000000@0.20", 1500  # 黑色柔光暈 → 文字可讀
+    else:
+        vf = "[0:v]null[bg0]"
+        scrim_color, glow_size = ACCENT, 1200
+    vf += ";[2:v]format=rgba,gblur=sigma=300[glow]"
+    vf += f";[bg0][glow]overlay=x={ (W - glow_size) // 2 }:y={ (H - glow_size) // 2 }[bg]"
     vf += f";[bg]subtitles={ass_file}"
     if scanline:
         vf += f",drawbox=x=0:y='mod(t*300,{H})':w={W}:h=6:color={ACCENT}@0.07:t=fill"
@@ -140,18 +183,22 @@ def build(name: str, duration: float, ass_lines: list, traces: list, sfx_events:
     )
     sfx_inputs, audio_fc = audio_filters(sfx_events, duration)
 
-    cmd = [
-        "-f", "lavfi", "-i",
-        f"gradients=size={W}x{H}:rate={FPS}:speed=0.02:c0={BG_C0}:c1={BG_C1}:nb_colors=2",
-        "-f", "lavfi", "-i", music,
-        "-f", "lavfi", "-i", f"color=c={ACCENT}@0.05:s={glow_size}x{glow_size}:r={FPS}",
+    cmd = []
+    if bg_image:
+        cmd += ["-i", str(bg_image)]
+    else:
+        cmd += [
+            "-f", "lavfi", "-i",
+            f"gradients=size={W}x{H}:rate={FPS}:speed=0.02:c0={BG_C0}:c1={BG_C1}:nb_colors=2",
+        ]
+    cmd += ["-f", "lavfi", "-i", music,
+        "-f", "lavfi", "-i", f"color=c={scrim_color}:s={glow_size}x{glow_size}:r={FPS}",
     ]
     for src in sfx_inputs:
         cmd += ["-f", "lavfi", "-i", src]
     cmd += [
         "-filter_complex",
         (
-            f"[2:v]format=rgba,gblur=sigma=300[glow];"
             f"{vf};{audio_fc}"
         ),
         "-map", "[vout]", "-map", "[aout]",
@@ -169,11 +216,7 @@ def build(name: str, duration: float, ass_lines: list, traces: list, sfx_events:
 
 def main() -> None:
     BRAND_DIR.mkdir(parents=True, exist_ok=True)
-    intro_traces = [
-        _trace(0.3, 2.0, [(120, 200), (420, 200), (420, 700), (760, 700), (760, 300)]),
-        _trace(0.6, 2.4, [(W - 120, H - 160), (W - 460, H - 160), (W - 460, 620), (W - 820, 620)]),
-        _brackets(0.2, 5.0),
-    ]
+    intro_traces = []  # 圖片本身已夠好,不疊 HUD 元素
     build(
         "intro",
         5.0,
@@ -188,11 +231,10 @@ def main() -> None:
             (1.6, "chime"),
             (3.2, "tick"),
         ],
+        scanline=False,
+        bg_image=OUTPUT_DIR / "Gemini_Generated_Image_aos1lqaos1lqaos1.png",
     )
-    outro_traces = [
-        _trace(0.3, 3.6, [(120, H - 160), (420, H - 160), (420, 240), (760, 240)]),
-        _brackets(0.2, 4.0),
-    ]
+    outro_traces = []  # 圖片本身已夠好,不疊 HUD 元素
     build(
         "outro",
         4.0,
@@ -207,6 +249,8 @@ def main() -> None:
             (1.4, "sweep"),
             (2.0, "tick"),
         ],
+        scanline=False,
+        bg_image=OUTPUT_DIR / "Gemini_Generated_Image_1048861048861048.png",
     )
     logger.info("[PASS] 品牌動畫生成完成")
 
