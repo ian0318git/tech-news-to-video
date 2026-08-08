@@ -6,7 +6,7 @@
 - 低階 run_cli/run_live 不經 facade 外洩 — 一律使用 typed wrappers
 """
 
-from _base import fail, load_env, save_json, setup_logging
+from _base import LOGS_DIR, fail, load_env, save_json, setup_logging
 from _cli import (
     auth_check,
     download_video,
@@ -41,6 +41,7 @@ from _orchestrator import run_video_flow
 __all__ = [
     "CHANNELS_FILE",
     "INPUT_DIR",
+    "LOGS_DIR",
     "NOTEBOOK_ID_FILE",
     "OUTPUT_DIR",
     "PIPELINE_TZ",
