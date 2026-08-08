@@ -36,9 +36,14 @@ def brand(file: Path, logger) -> Path:
     cmd = [
         str(FFMPEG), "-hide_banner", "-loglevel", "error", "-y",
         "-i", str(intro), "-i", str(file), "-i", str(outro),
-        "-filter_complex", "[0:v][1:v][2:v]concat=n=3:v=1:a=0[out]",
-        "-map", "[out]", "-c:v", "libx264", "-preset", "fast",
-        "-crf", "20", "-pix_fmt", "yuv420p", str(out),
+        # 保留音訊(旁白 + 片頭尾音樂)— 之前 a=0 造成靜音 bug
+        "-filter_complex",
+        "[0:v][0:a][1:v][1:a][2:v][2:a]concat=n=3:v=1:a=1[v][a]",
+        "-map", "[v]", "-map", "[a]",
+        "-c:v", "libx264", "-preset", "fast",
+        "-crf", "20", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "128k",
+        str(out),
     ]
     proc = subprocess.run(cmd, check=False)
     if proc.returncode != 0:
