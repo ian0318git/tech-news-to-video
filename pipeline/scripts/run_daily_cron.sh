@@ -33,7 +33,12 @@ FAILED=0
       || { echo "[FAIL] run_daily $CH"; FAILED=1; continue; }
     "$PY" "$POC/scripts/run_video_pipeline.py" --channel "$CH" \
       || { echo "[FAIL] video_pipeline $CH"; FAILED=1; continue; }
+    # 長片加品牌片頭/片尾,上傳品牌版
+    TODAY_FILE="$POC/output/$CH/video_$(TZ=Australia/Sydney date +%Y-%m-%d).mp4"
+    "$PY" "$POC/scripts/brand_video.py" --file "$TODAY_FILE" \
+      || { echo "[FAIL] brand_video $CH"; FAILED=1; continue; }
     "$PY" "$POC/scripts/youtube_upload.py" --channel "$CH" \
+      --file "$POC/output/$CH/video_$(TZ=Australia/Sydney date +%Y-%m-%d).branded.mp4" \
       || { echo "[FAIL] youtube_upload $CH"; FAILED=1; continue; }
     echo "[OK] 頻道 $CH 完成"
     [ "$CH" = "$SHORTS_CH" ] && SHORTS_OK=1
