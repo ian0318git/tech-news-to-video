@@ -15,7 +15,7 @@
 
 ### Overview
 
-An unattended daily system that turns tech news into published YouTube videos. Every day at **06:00 (Australia/Sydney)**, it fetches the day's news, uses Gemini to pick the most important story, gathers authoritative sources, generates a NotebookLM video (long-form + 60-second Short), and uploads both — **publicly, automatically, on a command-line-only VM with no desktop and no browser**.
+An unattended daily system that turns tech news into published YouTube videos. Every day at **08:00 (Australia/Sydney)**, it fetches the day's news, uses Gemini to pick the most important story, gathers authoritative sources, generates a NotebookLM video (long-form + 60-second Short), and uploads both — **publicly, automatically, on a command-line-only VM with no desktop and no browser**.
 
 Built by an **embedded software engineer** as both a working product and a portfolio piece: it demonstrates headless authentication, third-party API integration, scheduled execution, idempotent retry design, and disciplined failure handling.
 
@@ -49,7 +49,7 @@ Built by an **embedded software engineer** as both a working product and a portf
 |---|---|---|
 | **Headless-first auth** | NotebookLM: durable *master token* minted once, sessions re-minted per run. YouTube: OAuth **device flow** (no browser needed on the server), refresh-token auto-renewal | Runs on a server with no GUI — the whole product depends on this |
 | **Idempotent pipeline** | State files per channel (`pipeline_state.json`, `shorts_state.json`) + upload records (`youtube_uploads.json`); notebooks/sources/videos/uploads are deduplicated | Safe to re-run after any failure — no duplicate videos on the channel |
-| **Fail-fast with logs** | Each step stops with a typed diagnosis; every step has its own log file | A cron run at 06:00 must be diagnosable at 06:01 |
+| **Fail-fast with logs** | Each step stops with a typed diagnosis; every step has its own log file | A cron run at 08:00 must be diagnosable at 08:01 |
 | **Resilience** | Gemini calls retry 429/5xx with backoff; YouTube token is preserved on transient errors; CLI timeouts are enforced with process kill (no hung cron) | Unattended operation survives network blips without losing credentials or hanging overnight |
 | **Freshness gates** | Pipeline "today" = Sydney local date (matches the schedule); stale news (yesterday's TOP 1) is rejected | Prevents publishing yesterday's story after a failure |
 | **Contracted CLI seam** | Typed wrappers (`notebook_create`, `source_list`, `generate_video`…) behind a facade; envelope parsing lives in one place, pinned by contract tests | If the underlying CLI changes shape, tests fail loudly with the exact difference |
@@ -59,7 +59,7 @@ Built by an **embedded software engineer** as both a working product and a portf
 
 ```
 News → AI → NotebookLM → Video → YouTube
-                         DAILY 06:00 AEST
+                         DAILY 08:00 AEST
                               │
                               ▼
                      ┌────────────────┐
@@ -136,7 +136,7 @@ Everything above the vendored library is original work — the library itself wa
 | 6 | YouTube upload — device-flow auth, resumable upload, dedup, privacy config | `youtube_auth.py` · `youtube_upload.py` |
 | 7 | Multi-channel architecture — one-line config change adds a channel | `config/channels.json` |
 | 8 | Idempotent pipeline — re-runs never duplicate anything | `_cli.py` (state files) |
-| 9 | Daily 06:00 automation — cron + auth refresh + per-channel fail-fast | `run_daily_cron.sh` |
+| 9 | Daily 08:00 automation — cron + auth refresh + per-channel fail-fast | `run_daily_cron.sh` |
 | 10 | 26 unit tests, contract-tested CLI seam, bilingual docs | `tests/` · `docs/` |
 
 ### Repository layout
@@ -192,7 +192,7 @@ cp pipeline/.env.example pipeline/.env   # fill in GEMINI_API_KEY (load_env read
 
 ### 專案簡介
 
-一個**全自動、無人值守**的每日系統:把科技新聞變成已發佈的 YouTube 影片。每天 **06:00(雪梨時間)**,系統抓取當天新聞 → Gemini 選出最重要的故事 → 收集權威來源 → 用 NotebookLM 生成影片(長片 + 60 秒 Shorts)→ **自動公開上傳** — 全程跑在一台**只有命令列、沒有桌面也沒有瀏覽器**的 VM 上。
+一個**全自動、無人值守**的每日系統:把科技新聞變成已發佈的 YouTube 影片。每天 **08:00(墨爾本/雪梨時間)**,系統抓取當天新聞 → Gemini 選出最重要的故事 → 收集權威來源 → 用 NotebookLM 生成影片(長片 + 60 秒 Shorts)→ **自動公開上傳** — 全程跑在一台**只有命令列、沒有桌面也沒有瀏覽器**的 VM 上。
 
 作者是**嵌入式軟體工程師**,這個專案同時是實際運作的產品與作品集:展示了無頭(headless)認證、第三方 API 整合、排程執行、冪等重試設計與嚴謹的失敗處理。
 
@@ -226,7 +226,7 @@ cp pipeline/.env.example pipeline/.env   # fill in GEMINI_API_KEY (load_env read
 |---|---|---|
 | **Headless 認證** | NotebookLM 用持久 master token、每次執行重 mint;YouTube 用 OAuth **device flow**(伺服器不需瀏覽器)+ 自動 refresh | 整台伺服器沒有 GUI — 這是整個產品成立的前提 |
 | **冪等 pipeline** | 每頻道 state 檔 + 上傳記錄;notebook/來源/影片/上傳全部去重 | 任何失敗後重跑都安全 — 頻道上不會出現重複影片 |
-| **Fail-fast + 完整 log** | 每步失敗即停並附診斷;每步獨立 log | 06:00 跑的 job,06:01 就要能查出問題 |
+| **Fail-fast + 完整 log** | 每步失敗即停並附診斷;每步獨立 log | 08:00 跑的 job,08:01 就要能查出問題 |
 | **韌性** | Gemini 429/5xx 自動重試;YouTube token 在暫時性錯誤時保留;CLI 逾時會 kill 程序(不會掛整夜) | 無人值守必須經得起網路抖動,且不能掉憑證 |
 | **新鮮度閘門** | pipeline 的「今天」= 雪梨當地日期(與排程一致);過期新聞直接拒絕 | 防止失敗後把昨天的新聞發出去 |
 | **CLI 契約層** | typed wrappers(facade 之後)+ envelope 解析集中一處,由契約測試鎖定 | 底層 CLI 改形狀時,測試立刻紅並指出差異 |
@@ -236,7 +236,7 @@ cp pipeline/.env.example pipeline/.env   # fill in GEMINI_API_KEY (load_env read
 
 ```
 News → AI → NotebookLM → Video → YouTube
-                         DAILY 06:00 AEST
+                         DAILY 08:00 AEST
                               │
                               ▼
                      ┌────────────────┐
@@ -313,7 +313,7 @@ News → AI → NotebookLM → Video → YouTube
 | 6 | YouTube 上傳 — device flow 認證、resumable 上傳、防重複、隱私可設 | `youtube_auth.py` · `youtube_upload.py` |
 | 7 | 多頻道架構 — 改 config 一行就新增頻道 | `config/channels.json` |
 | 8 | 冪等 pipeline — 重跑永不重複 | `_cli.py`(state 檔) |
-| 9 | 每日 06:00 自動化 — cron + auth refresh + 逐頻道 fail-fast | `run_daily_cron.sh` |
+| 9 | 每日 08:00 自動化 — cron + auth refresh + 逐頻道 fail-fast | `run_daily_cron.sh` |
 | 10 | 26 個單元測試、契約測試、雙語文件 | `tests/` · `docs/` |
 
 ### Repository 佈局
