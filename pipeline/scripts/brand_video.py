@@ -21,35 +21,58 @@ if not FFMPEG.exists():
     FFMPEG = Path("/usr/bin/ffmpeg")
 
 
-def detect_end_card(file: Path, logger) -> float | None:
-    """用 freezedetect 找最後一段靜止畫面(NotebookLM 結束卡)的起點。
-
-    安全條件: 靜止段 ≥1s 且位於影片最後 15% — 避免誤裁中間的靜止圖表。
-    回傳裁切點(秒);找不到回傳 None。
-    """
+def _duration(file: Path) -> float | None:
     proc = subprocess.run(
+        [str(FFMPEG), "-hide_banner", "-i", str(file), "-f", "null", "-"],
+        capture_output=True, text=True, check=False,
+    )
+    m = __import__("re").search(r"Duration: (\d+):(\d+):(\d+\.\d+)", proc.stderr)
+    if not m:
+        return None
+    return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
+
+
+def detect_end_card(file: Path, logger) -> float | None:
+    """偵測 NotebookLM 結束卡起點 — 音訊為主、靜止畫面為輔。
+
+    結束卡 = 旁白結束後的一段靜音+品牌畫面(可能有動畫,freezedetect 抓不全):
+    1. 音訊: 找「延伸到片尾」的最後一段靜音的起點(旁白結束點)
+    2. 視訊: freezedetect 最後一段完全靜止的起點
+    取兩者較早者;安全條件: 位於最後 15% 且尾段 ≥1s。
+    """
+    duration = _duration(file)
+    if not duration:
+        return None
+
+    # 1. 音訊: 尾部靜音(延伸到片尾)的起點
+    sil_proc = subprocess.run(
+        [str(FFMPEG), "-hide_banner", "-i", str(file),
+         "-af", "silencedetect=noise=-35dB:d=0.8,ametadata=print:key=lavfi.silence_start",
+         "-f", "null", "-"],
+        capture_output=True, text=True, check=False,
+    )
+    starts = [float(m) for m in __import__("re").findall(r"silence_start: ([0-9.]+)", sil_proc.stderr)]
+    audio_trim = max((s for s in starts if duration - s >= 1.0), default=None)
+
+    # 2. 視訊: 最後一段完全靜止的起點
+    frz_proc = subprocess.run(
         [str(FFMPEG), "-hide_banner", "-i", str(file),
          "-vf", "freezedetect=n=-50dB:d=1.5,metadata=print:key=lavfi.freezedetect.freeze_start",
          "-an", "-f", "null", "-"],
         capture_output=True, text=True, check=False,
     )
-    starts = [float(m) for m in __import__("re").findall(r"freeze_start=([0-9.]+)", proc.stderr)]
-    if not starts:
+    freezes = [float(m) for m in __import__("re").findall(r"freeze_start=([0-9.]+)", frz_proc.stderr)]
+    video_trim = max((f for f in freezes if duration - f >= 1.0), default=None)
+
+    candidates = [t for t in (audio_trim, video_trim) if t is not None and t >= duration * 0.85]
+    if not candidates:
+        logger.info(f"[INFO] 未偵測到尾部結束卡(影片 {duration:.1f}s)")
         return None
-    last = max(starts)
-    dur_proc = subprocess.run(
-        [str(FFMPEG), "-hide_banner", "-i", str(file), "-f", "null", "-"],
-        capture_output=True, text=True, check=False,
+    trim = min(candidates)  # 取較早者: 完整移除含動畫的結束卡
+    logger.info(
+        f"[INFO] 結束卡偵測: 音訊尾靜音 {audio_trim}, 靜止尾段 {video_trim} → 裁切點 {trim:.1f}s"
     )
-    m = __import__("re").search(r"Duration: (\d+):(\d+):(\d+\.\d+)", dur_proc.stderr)
-    if not m:
-        return None
-    duration = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
-    if duration - last >= 1.0 and last >= duration * 0.85:
-        logger.info(f"[INFO] 偵測到 NotebookLM 結束卡(自 {last:.1f}s 起),將裁掉尾段")
-        return last
-    logger.info(f"[INFO] 未偵測到尾部結束卡(最後靜止 {last:.1f}s,影片 {duration:.1f}s)")
-    return None
+    return trim
 
 
 def brand(file: Path, logger) -> Path:
