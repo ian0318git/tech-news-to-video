@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 每日 06:00 自動執行(crontab 呼叫,雪梨時間):
+# 每日 08:00 自動執行(crontab 呼叫,墨爾本/雪梨時間 AEST):
 #   auth refresh(保 cookie 新鮮)→ 每個頻道: run_daily(新聞→選題→來源)→ 影片 → YouTube 上傳
 # 頻道清單與 Shorts 來源由 config/channels.json 驅動(單一真相,加頻道不需改 cron)。
 # 逐頻道 fail-fast: 單一頻道失敗不影響其他頻道,全部記錄在 logs/daily_cron.log
