@@ -9,7 +9,9 @@
 
 import json
 import os
+import re
 import sys
+from datetime import date, timedelta
 
 from _common import (
     channel_dir,
@@ -41,6 +43,37 @@ Return JSON only, with this exact shape:
 News items:
 {items_json}
 """
+
+
+HISTORY_FILE_NAME = "topic_history.json"
+HISTORY_DAYS = 7
+
+
+def title_key(title: str) -> str:
+    """主題正規化: 小寫 + 去非字母數字 — 供去重比對。"""
+    return re.sub(r"[^a-z0-9]", "", title.lower())
+
+
+def pick_topic(
+    items: list, ranking: list, history: list, today: str
+) -> tuple[dict, dict]:
+    """依排名挑選,跳過 HISTORY_DAYS 天內已選過的主題。
+
+    ranking: Gemini 的 [{index, title, ...}] 列表(已依分數排序)。
+    全部重複時退回第一名(極端情況)。回傳 (chosen_item, chosen_ranking_entry)。
+    """
+    cutoff = date.fromisoformat(today) - timedelta(days=HISTORY_DAYS - 1)
+    recent = {
+        title_key(h["title"])
+        for h in history
+        if date.fromisoformat(h["date"]) >= cutoff
+    }
+    for entry in ranking:
+        item = items[int(entry["index"])]
+        if title_key(item["title"]) not in recent:
+            return item, entry
+    # 全部都是近期主題(極端) → 退回第一名
+    return items[int(ranking[0]["index"])], ranking[0]
 
 
 def main() -> None:
