@@ -58,7 +58,7 @@ RSS 解析(標題/來源/摘要/上限/壞 XML)、`flag_value` 參數解析、�
 - [x] 首次授權實測(device flow + 測試使用者 + channel 建立)
 - [x] 上傳實測(tech: `2oN6Z-4Oi2U`;embedded: `kFttyvxMZFw`)
 - [x] 多頻道: embedded + tech(AI),`config/channels.json` + `--channel`
-- [x] cron 每日 06:00(TZ=Australia/Sydney)+ `auth refresh` + 逐頻道 fail-fast
+- [x] cron 每日 08:00(TZ=Australia/Sydney)+ `auth refresh` + 逐頻道 fail-fast
 - [x] 冪等強化: notebook 重用、來源去重、影片存在跳過、上傳防重複
 - [x] 真實文章 URL 解析(playwright 跟隨 Google News 轉址)
 - [x] 單元測試 16 個(pytest,不連網)+ 文件
