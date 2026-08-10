@@ -11,6 +11,7 @@ import json
 import sys
 
 from _common import (
+    SIMPLE_EN_STYLE,
     channel_dir,
     fail,
     flag_value,
@@ -28,7 +29,8 @@ SHORTS_PROMPT = (
     "Open with a bold, scroll-stopping hook in the first 2-3 seconds — a provocative "
     "question or surprising fact. Keep the pacing fast with quick scene changes and "
     "on-screen keyword highlights. End with a takeaway that makes viewers want to "
-    "follow the channel. High energy, confident and fun tone."
+    "follow the channel. High energy, confident and fun tone. "
+    f"{SIMPLE_EN_STYLE}"
 )
 
 

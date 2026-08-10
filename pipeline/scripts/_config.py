@@ -22,6 +22,16 @@ CHANNELS_FILE = ROOT / "config" / "channels.json"
 # Pipeline 的「今天」以雪梨當地日期為準(與 cron 06:00 AEST 排程一致)
 PIPELINE_TZ = ZoneInfo("Australia/Sydney")
 
+# 影片旁白風格: 簡單英文(B1)+ 輕量澳洲口語 — 觀眾以英語學習者為主
+SIMPLE_EN_STYLE = (
+    "Narrate in simple, easy-to-understand English (around CEFR B1 level). "
+    "Keep sentences short and explain technical terms in plain words. "
+    "Use a light, friendly Australian tone — relaxed and approachable, "
+    "as if explaining today's tech news to a mate. "
+    "A few everyday Australian expressions are welcome, but never at the "
+    "cost of clarity."
+)
+
 
 def load_channels(logger) -> list[dict]:
     """讀取 config/channels.json 的頻道定義。"""

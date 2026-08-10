@@ -9,6 +9,7 @@ import json
 import sys
 
 from _common import (
+    SIMPLE_EN_STYLE,
     channel_dir,
     fail,
     flag_value,
@@ -49,7 +50,7 @@ def main() -> None:
     title = f"{today} {prefix} - {news.get('title', '')}"[:80]
     desc = (
         f"Summarize today's top {channel['keyword']} news: {news.get('title')}. "
-        "Explain the key points clearly."
+        f"Explain the key points clearly. {SIMPLE_EN_STYLE}"
     )
     logger.info(f"[INFO] 頻道 {channel['slug']} 今天主題: {news.get('title')}")
 
