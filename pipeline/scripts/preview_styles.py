@@ -18,6 +18,7 @@ from _cli import download_video
 from _common import (
     LOGS_DIR,
     OUTPUT_DIR,
+    SIMPLE_EN_STYLE,
     channel_dir,
     fail,
     flag_value,
@@ -80,7 +81,7 @@ def preview_long(channel, logger) -> None:
             continue
         title = f"PREVIEW {today} {channel.get('title_prefix', '')} - {news['title']}"[:80]
         notebook_create(title, logger)
-        desc = f"Summarize this news story: {news['title']}. Explain the key points clearly."
+        desc = f"Summarize this news story: {news['title']}. Explain the key points clearly. {SIMPLE_EN_STYLE}"
         generate_video(
             desc,
             "explainer",
