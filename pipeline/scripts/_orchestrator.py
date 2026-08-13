@@ -34,22 +34,29 @@ def run_video_flow(
     """
     cli = cli or _cli_module
 
-    # 1. 新鮮度閘門 — 拒絕用昨天的新聞
+    # 1. 當天影片已存在且非空 → 整個跳過(冪等)。
+    #    放在新鮮度閘門之前: 影片已存在就代表今天已產出,不需要再檢查新聞日期。
+    video_path = cdir / filename_pattern.format(date=today)
+    if video_path.exists():
+        size = video_path.stat().st_size
+        if size == 0:
+            # 零位元 = 之前下載被中斷(VM 暫停/磁碟滿)留下的殘骸 —
+            # 刪掉重跑,否則會被永久當成完成品(品牌拼接、上傳都會吃它)
+            logger.warning(f"[WARN] 當天影片是零位元殘骸,刪除重跑: {video_path}")
+            video_path.unlink()
+        else:
+            logger.info(
+                f"[PASS] 當天影片已存在,整個流程跳過: {video_path} ({size / 1024 / 1024:.1f} MB)"
+            )
+            return video_path
+
+    # 2. 新鮮度閘門 — 拒絕用昨天的新聞(只有在真的要生成時才檢查)
     if top1_date and top1_date != today:
         fail(
             logger,
             f"top1.json 的新聞日期是 {top1_date},不是今天({today})",
             "請先執行 scripts/run_daily.py --channel 更新選題",
         )
-
-    # 2. 當天影片已存在 → 整個跳過(冪等)
-    video_path = cdir / filename_pattern.format(date=today)
-    if video_path.exists():
-        size = video_path.stat().st_size
-        logger.info(
-            f"[PASS] 當天影片已存在,整個流程跳過: {video_path} ({size / 1024 / 1024:.1f} MB)"
-        )
-        return video_path
 
     # 3. notebook + 來源(皆冪等)
     cli.ensure_notebook(cdir, today, title, state_name, logger)
@@ -64,4 +71,6 @@ def run_video_flow(
 
     if not video_path.exists():
         fail(logger, f"下載後檔案不存在: {video_path}")
+    if video_path.stat().st_size == 0:
+        fail(logger, f"下載後檔案是零位元(可能被中斷): {video_path}")
     return video_path

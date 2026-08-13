@@ -22,7 +22,12 @@ CLI = Path(sys.executable).parent / "notebooklm"
 # ---------- 低階執行器(內部) ----------
 
 
-def run_cli(args, logger, timeout: int | None = None) -> str:
+# run_cli 的安全網: 沒人傳 timeout 時也預設 1800s — CLI 卡死不會無限卡住 cron。
+# 長任務(生成)走 run_live 並帶 timeout,不受此影響。
+DEFAULT_CLI_TIMEOUT = 1800
+
+
+def run_cli(args, logger, timeout: int | None = DEFAULT_CLI_TIMEOUT) -> str:
     """Run the notebooklm CLI, log stdout/stderr, return stdout.
 
     On non-zero exit: report stderr verbatim and stop (per POC rule).
@@ -256,8 +261,18 @@ def sync_sources(urls: list[str], logger) -> None:
     )
 
     # 重新列出: add 成功但伺服器端抓取失敗的來源可能出現 error 狀態
-    for s in source_list(logger):
-        if s.get("status") == "error":
+    listed = source_list(logger)
+    errors = [s for s in listed if s.get("status") == "error"]
+    remaining = [s for s in listed if s.get("status") != "error"]
+    if errors:
+        if not remaining:
+            # 全部 error → 刪光會在空 notebook 上生成 — 提早停,避免晚期模糊失敗
+            fail(
+                logger,
+                "所有來源皆為 error 狀態,停止(避免在空 notebook 上生成)",
+                "\n".join(f"{s.get('title')} ({s.get('id')})" for s in errors),
+            )
+        for s in errors:
             logger.warning(
                 f"[WARN] 來源 {s.get('title')} 狀態為 error,刪除: {s.get('id')}"
             )

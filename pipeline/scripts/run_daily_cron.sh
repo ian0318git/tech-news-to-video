@@ -11,6 +11,14 @@ PY="$POC/.venv/bin/python"
 CONFIG="$POC/config/channels.json"
 mkdir -p "$POC/logs"
 
+# 與 catch-up 互斥: 持鎖才執行;已有 run 進行中 → 直接跳出(冪等,不重複跑)。
+# 用 exec 9 持鎖到腳本結束 — 08:00 主 run 超過 15 分鐘時,catchup 的 flock -n 會失敗而跳過。
+exec 9>"$POC/logs/pipeline.lock"
+if ! flock -n 9; then
+  echo "$(date '+%Y-%m-%d %H:%M:%S') [SKIP] 已有執行中的 run,跳過" >> "$LOG"
+  exit 0
+fi
+
 FAILED=0
 {
   echo "===== $(date '+%Y-%m-%d %H:%M:%S') 開始 ====="

@@ -76,6 +76,26 @@ def test_stale_top1_fails(tmp_path, logger):
     assert cli.calls == []
 
 
+def test_zero_byte_video_regenerates(tmp_path, logger):
+    """零位元殘骸(下載中斷)→ 刪除重跑,不被當成完成品。"""
+    video = tmp_path / f"video_{TODAY}.mp4"
+    video.write_bytes(b"")
+    cli = FakeCli(tmp_path)
+    result = _flow(tmp_path, cli)
+    assert next(c[0] for c in cli.calls) == "ensure_notebook"  # 有重跑
+    assert result.exists() and result.stat().st_size > 0
+
+
+def test_stale_top1_with_existing_video_skips(tmp_path, logger):
+    """影片已存在 → 直接跳過,不因 top1 過期而硬失敗(冪等優先)。"""
+    video = tmp_path / f"video_{TODAY}.mp4"
+    video.write_bytes(b"x" * 100)
+    cli = FakeCli(tmp_path)
+    result = _flow(tmp_path, cli, top1_date="2026-08-06")
+    assert result == video
+    assert cli.calls == []
+
+
 def test_happy_path_order(tmp_path, logger):
     cli = FakeCli(tmp_path)
     result = _flow(tmp_path, cli)
@@ -87,9 +107,11 @@ def test_happy_path_order(tmp_path, logger):
         "download_video",
     ]
     # 參數檢查
-    assert cli.calls[0][2] == "pipeline_state.json"
-    assert cli.calls[2][1] == "explainer"
-    assert cli.calls[2][2] == 1800
+    first = cli.calls[0]
+    gen = cli.calls[2]
+    assert first[2] == "pipeline_state.json"
+    assert gen[1] == "explainer"
+    assert gen[2] == 1800
 
 
 def test_short_variant(tmp_path, logger):

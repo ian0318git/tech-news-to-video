@@ -87,3 +87,20 @@ def test_case_and_punctuation_mismatch_still_dedup():
     ]
     item, _ = pick_topic(ITEMS, RANKING, history, TODAY)
     assert item["index"] == 1  # 標點/大小寫不同仍視為同一主題
+
+
+def test_same_day_entry_does_not_block_rerun():
+    """同日(catch-up 重跑)已記錄的主題不封鎖 → 當天選題維持穩定。"""
+    history = [{"date": TODAY, "title": ITEMS[0]["title"]}]
+    item, _ = pick_topic(ITEMS, RANKING, history, TODAY)
+    assert item["index"] == 0
+
+
+def test_malformed_history_entry_ignored():
+    """壞日期/缺欄位的歷史條目被忽略,不讓選題崩潰或誤封鎖。"""
+    history = [
+        {"date": "not-a-date", "title": ITEMS[0]["title"]},
+        {"date": "2026-08-09", "title": ITEMS[1]["title"]},
+    ]
+    item, _ = pick_topic(ITEMS, RANKING, history, TODAY)
+    assert item["index"] == 0  # 壞資料被忽略,#0 未被近期選過

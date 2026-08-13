@@ -19,7 +19,7 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from _common import (  # noqa: E402 — sys.path 插入必須在匯入前
+from _common import (
     flag_value,
     load_channels,
     load_env,
