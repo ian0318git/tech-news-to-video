@@ -75,3 +75,5 @@ cron 指向這裡;GitHub repo 的 `pipeline/` 是**作品集快照**。兩者需
 - OAuth client 類型必須是「TVs and Limited Input devices」,桌面應用程式類型被 device flow 拒絕
 - Google News RSS 的 description 第一個 href 也是轉址,真實文章網址需瀏覽器跟隨 JS 重導
 - pipeline 的「今天」以**雪梨當地日期**為準(`today_str()` + cron 用 `TZ=Australia/Sydney date`)— 若用 UTC 日期,06:00 AEST(前一日 20:00 UTC)產出的檔名會落在「昨天」,重跑時誤判已存在而跳過
+- 7 天選題去重失效(2026-08-10 重構後 `pick_topic` 未被 `main()` 呼叫、歷史檔無人寫入)→ embedded 連日選中同一篇 FIT 新聞;已接回去重呼叫 + 回寫 `topic_history.json`(同日 catch-up 重跑不封鎖,維持當天主題穩定)
+- 2026-08-13 code-review 批量強化: 零位元影片殘骸不再被當完成品(刪除重跑)、新鮮度閘門移到存在跳過之後、cron 主 run 自行持 flock 與 catch-up 互斥、ffmpeg 加 timeout + temp 檔原子替換、token/secret 權限收緊 0600 + 原子寫入、suggested 非物件元素防呆、全部來源 error 時提早停、run_cli 預設 timeout

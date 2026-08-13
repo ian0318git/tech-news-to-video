@@ -79,6 +79,10 @@ def filter_suggested(suggested: list, news: dict, logger) -> list[dict]:
         logger.warning("[WARN] 原文 URL 是 Google News 轉址或無效,略過原文來源")
 
     for s in suggested:
+        if not isinstance(s, dict):
+            # Gemini 偶爾回傳非物件元素(字串/null)— 跳過,別讓整支 pipeline 炸掉
+            logger.warning(f"[WARN] suggested 中有非物件元素,略過: {s!r}")
+            continue
         url = str(s.get("url", "")).strip()
         if not url.startswith("http") or url in seen:
             continue

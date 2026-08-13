@@ -20,11 +20,14 @@ FFMPEG = Path.home() / "bin" / "ffmpeg"
 if not FFMPEG.exists():
     FFMPEG = Path("/usr/bin/ffmpeg")
 
+# ffmpeg 卡死(壞輸入/VM 暫停)時不讓 cron 無限等待 — 900s 對 7 分鐘影片綽綽有餘
+FFMPEG_TIMEOUT = 900
+
 
 def _duration(file: Path) -> float | None:
     proc = subprocess.run(
         [str(FFMPEG), "-hide_banner", "-i", str(file), "-f", "null", "-"],
-        capture_output=True, text=True, check=False,
+        capture_output=True, text=True, check=False, timeout=FFMPEG_TIMEOUT,
     )
     m = __import__("re").search(r"Duration: (\d+):(\d+):(\d+\.\d+)", proc.stderr)
     if not m:
@@ -49,7 +52,7 @@ def detect_end_card(file: Path, logger) -> float | None:
         [str(FFMPEG), "-hide_banner", "-i", str(file),
          "-af", "silencedetect=noise=-35dB:d=0.8,ametadata=print:key=lavfi.silence_start",
          "-f", "null", "-"],
-        capture_output=True, text=True, check=False,
+        capture_output=True, text=True, check=False, timeout=FFMPEG_TIMEOUT,
     )
     starts = [float(m) for m in __import__("re").findall(r"silence_start: ([0-9.]+)", sil_proc.stderr)]
     audio_trim = max((s for s in starts if duration - s >= 1.0), default=None)
@@ -59,7 +62,7 @@ def detect_end_card(file: Path, logger) -> float | None:
         [str(FFMPEG), "-hide_banner", "-i", str(file),
          "-vf", "freezedetect=n=-50dB:d=1.5,metadata=print:key=lavfi.freezedetect.freeze_start",
          "-an", "-f", "null", "-"],
-        capture_output=True, text=True, check=False,
+        capture_output=True, text=True, check=False, timeout=FFMPEG_TIMEOUT,
     )
     freezes = [float(m) for m in __import__("re").findall(r"freeze_start=([0-9.]+)", frz_proc.stderr)]
     video_trim = max((f for f in freezes if duration - f >= 1.0), default=None)
@@ -91,11 +94,16 @@ def brand(file: Path, logger) -> Path:
             fail(logger, f"缺少品牌動畫: {p} — 請先執行 scripts/make_branding.py 或設定 .env")
 
     out = file.with_name(file.stem + ".branded" + file.suffix)
-    if out.exists() and out.stat().st_mtime >= file.stat().st_mtime:
+    if (
+        out.exists()
+        and out.stat().st_size > 0  # 零位元 = 之前 ffmpeg 被中斷的殘骸,重跑
+        and out.stat().st_mtime >= file.stat().st_mtime
+    ):
         logger.info(f"[INFO] 品牌檔已存在且未過期,跳過: {out}")
         return out
 
     logger.info(f"[INFO] 拼接品牌動畫: {file}")
+    tmp = out.with_name(out.stem + ".tmp" + out.suffix)  # 先寫 temp,成功後原子替換
     trim_end = detect_end_card(file, logger)  # 裁掉 NotebookLM 結束卡
     mid_v = f"[1:v]trim=end={trim_end},setpts=PTS-STARTPTS[v1]" if trim_end else "[1:v]fps=24,setpts=PTS-STARTPTS[v1]"
     mid_a = f"[1:a]atrim=end={trim_end},asetpts=PTS-STARTPTS[a1]" if trim_end else "[1:a]aresample=44100[a1]"
@@ -117,13 +125,17 @@ def brand(file: Path, logger) -> Path:
         "-c:v", "libx264", "-preset", "fast",
         "-crf", "20", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "128k",
-        str(out),
+        str(tmp),
     ]
-    proc = subprocess.run(cmd, check=False)
+    try:
+        proc = subprocess.run(cmd, check=False, timeout=FFMPEG_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        fail(logger, f"ffmpeg 拼接逾時({FFMPEG_TIMEOUT}s),已放棄: {file}")
     if proc.returncode != 0:
         fail(logger, f"ffmpeg 拼接失敗 (exit {proc.returncode})")
-    if not out.exists():
-        fail(logger, f"拼接後檔案不存在: {out}")
+    if not tmp.exists() or tmp.stat().st_size == 0:
+        fail(logger, f"拼接後檔案不存在或為空: {tmp}")
+    os.replace(tmp, out)  # 原子替換 — 中途被殺不會留下「看起來完整」的殘骸
     logger.info(f"[PASS] 品牌檔: {out}")
     return out
 

@@ -30,6 +30,8 @@ def load_client_secret(logger) -> dict:
     try:
         data = json.loads(CLIENT_SECRET_PATH.read_text(encoding="utf-8"))
         installed = data.get("installed", data.get("web", {}))
+        # 憑證必須 0600(曾以 0644 躺在磁碟上)— 強制收緊,避免被其他本機使用者讀走
+        os.chmod(CLIENT_SECRET_PATH, 0o600)
         return {
             "client_id": installed["client_id"],
             "client_secret": installed["client_secret"],
@@ -99,8 +101,12 @@ def device_auth(logger, client: dict) -> dict:
 
 
 def _save_token(token: dict) -> None:
-    TOKEN_PATH.write_text(json.dumps(token, indent=2), encoding="utf-8")
-    os.chmod(TOKEN_PATH, 0o600)
+    """原子寫入權杖: 先寫 temp + chmod,再 os.replace — 中間過程不會出現
+    0644 權限或截斷內容的正式檔案(VM 暫停/斷電也不留殘骸)。"""
+    tmp = TOKEN_PATH.with_name(TOKEN_PATH.name + ".tmp")
+    tmp.write_text(json.dumps(token, indent=2), encoding="utf-8")
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, TOKEN_PATH)
 
 
 def ensure_access_token(logger) -> str:
@@ -112,7 +118,14 @@ def ensure_access_token(logger) -> str:
         logger.info(f"[OK] 授權完成,token 已存到 {TOKEN_PATH}")
         return token["access_token"]
 
-    token = json.loads(TOKEN_PATH.read_text(encoding="utf-8"))
+    try:
+        token = json.loads(TOKEN_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        fail(
+            logger,
+            f"{TOKEN_PATH} 內容損壞(不是 JSON)",
+            "刪除該檔後重跑即可重新授權(device flow)",
+        )
     if token.get("expires_at", 0) > time.time():
         return token["access_token"]
     if not token.get("refresh_token"):
