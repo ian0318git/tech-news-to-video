@@ -6,11 +6,16 @@
   python scripts/youtube_upload.py --channel embedded --file 指定檔.mp4  # 指定檔案
   python scripts/youtube_upload.py --privacy unlisted --title "自訂標題"
 
-標題預設: "<title_prefix> - <top1 新聞標題>"。輸出: output/<slug>/youtube_upload.json。
+標題預設: "<title_prefix> - <top1 新聞標題>"。輸出: output/<slug>/youtube_uploads.json。
+
+冪等設計: init_upload 後立即把 resumable session URI 寫進記錄(status=uploading);
+若上傳中途被打斷(回應遺失/斷線/VM 暫停),重跑會先查 session 狀態 —
+已完成的直接補記,未完成的從斷點續傳,不會重複上傳。
 """
 
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -53,6 +58,28 @@ def load_upload_records(cdir: Path) -> dict:
         except json.JSONDecodeError:
             logger.warning(f"[WARN] {UPLOADS_RECORD} 損壞,重新開始記錄")
     return {}
+
+
+def save_upload_records(records: dict, cdir: Path) -> None:
+    """寫入上傳記錄;內含 session_uri(resumable 上傳憑證)→ 收緊 0600。"""
+    path = cdir / UPLOADS_RECORD
+    save_json(records, path)
+    os.chmod(path, 0o600)
+
+
+def record_done(
+    records: dict, cdir: Path, file: Path, video_id: str, title: str, privacy: str
+) -> None:
+    """上傳完成的記錄(status=done,清掉 session_uri)。"""
+    records[file.name] = {
+        "video_id": video_id,
+        "url": f"https://youtu.be/{video_id}",
+        "title": title,
+        "privacy": privacy,
+        "uploaded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "status": "done",
+    }
+    save_upload_records(records, cdir)
 
 
 def build_metadata(cdir: Path, channel: dict, file: Path) -> tuple[str, str]:
@@ -107,18 +134,91 @@ def init_upload(
     return location
 
 
-def upload_body(session_uri: str, file: Path) -> dict:
+def query_upload_status(session_uri: str) -> httpx.Response:
+    """PUT Content-Range: bytes */0 → 問 YouTube 上次 session 傳到哪。
+
+    200/201 = 已完成(回應附影片資源);308 = 未完成(附 Range header);
+    404/410 = session 失效,要重新建立。
+    """
+    return httpx.put(
+        session_uri,
+        content=b"",
+        headers={"Content-Range": "bytes */0"},
+        timeout=60.0,
+    )
+
+
+def parse_range_end(range_header: str | None) -> int | None:
+    """解析 308 的 Range header(bytes=0-<end>)→ 已接收位元組數(end+1)。"""
+    if not range_header:
+        return None
+    m = re.match(r"bytes=0-(\d+)", range_header)
+    if not m:
+        return None
+    return int(m.group(1)) + 1
+
+
+def decide_resume(
+    status_code: int, range_header: str | None, size: int
+) -> tuple[str, int | None]:
+    """查詢 resumable session 狀態後的決定(純函式,可單元測試)。
+
+    回傳 (動作, 參數):
+      ("done", None)     — 上次上傳已完成(回應遺失)→ 補記記錄,不用重傳
+      ("resume", offset) — 續傳,從 offset 送剩餘 bytes(offset==size 表示全收到,只差收尾)
+      ("restart", None)  — session 失效(404/410)→ 重新 init_upload
+      ("fail", None)     — 無法判定的回應 → 停止,不冒重複上傳的險
+    """
+    if status_code in (200, 201):
+        return "done", None
+    if status_code == 308:
+        offset = parse_range_end(range_header) or 0
+        return "resume", min(offset, size)
+    if status_code in (404, 410):
+        return "restart", None
+    return "fail", None
+
+
+def finalize_upload(session_uri: str, size: int) -> httpx.Response:
+    """所有 bytes 已收到但未收尾 → 空 PUT Content-Range: bytes */<size> 完成。"""
+    return httpx.put(
+        session_uri,
+        content=b"",
+        headers={"Content-Range": f"bytes */{size}"},
+        timeout=60.0,
+    )
+
+
+def _video_id_from(resp: httpx.Response) -> str:
+    """從完成回應中取 video id;缺 id / 壞 JSON 都 fail(不默默放行)。"""
+    try:
+        result = resp.json()
+    except json.JSONDecodeError:
+        fail(logger, "上傳完成但回應不是 JSON", resp.text[:1000])
+    video_id = result.get("id")
+    if not video_id:
+        fail(logger, "上傳完成但回應缺少 video id", resp.text[:1000])
+    return video_id
+
+
+def upload_body(session_uri: str, file: Path, offset: int = 0) -> dict:
     """PUT 影片內容到 session URI(bytes + 明確 Content-Length)。
 
     不能用 generator(data=): httpx 0.28 會轉成 Transfer-Encoding: chunked
     且無 Content-Length,Google resumable endpoint 不保證接受(chunked)。
+    offset>0 表示續傳,需要 Content-Range 指定起點與總長。
     """
+    size = file.stat().st_size
     with open(file, "rb") as fh:
+        fh.seek(offset)
         payload = fh.read()
+    headers = {"Content-Type": "video/mp4", "Content-Length": str(len(payload))}
+    if offset:
+        headers["Content-Range"] = f"bytes {offset}-{size - 1}/{size}"
     resp = httpx.put(
         session_uri,
         content=payload,
-        headers={"Content-Type": "video/mp4", "Content-Length": str(len(payload))},
+        headers=headers,
         timeout=300.0,
     )
     if resp.status_code not in (200, 201):
@@ -146,10 +246,11 @@ def main() -> None:
     custom_title = flag_value(args, "--title")
     force = "--force" in args
 
-    # 防重複上傳: 同檔名已有記錄就跳過(--force 可覆蓋)
+    # 防重複上傳: 同檔名已完成(status=done 或舊版無 status)→ 跳過(--force 可覆蓋);
+    # status=uploading → 上次被打斷,走下面的續傳/查狀態流程
     records = load_upload_records(cdir)
-    if file.name in records and not force:
-        rec = records[file.name]
+    rec = records.get(file.name)
+    if rec and rec.get("status") != "uploading" and not force:
         logger.info(
             f"[INFO] {file.name} 已上傳過,跳過(用 --force 強制重傳): {rec.get('url', rec.get('video_id'))}"
         )
@@ -166,10 +267,58 @@ def main() -> None:
         title = custom_title[:95]
     logger.info(f"[INFO] 標題: {title}")
 
-    session_uri = init_upload(access_token, size, title, description, privacy)
-    logger.info("[INFO] 上傳中(36 MB 約 1-3 分鐘)...")
-    result = upload_body(session_uri, file)
+    # ── 上次上傳被打斷 → 查 session 狀態: 已完成的補記,未完成的續傳,失效的重啟
+    offset = 0
+    session_uri = None
+    if rec and rec.get("status") == "uploading" and rec.get("session_uri"):
+        logger.info("[INFO] 偵測到未完成的上傳記錄,查詢 session 狀態...")
+        status_resp = query_upload_status(rec["session_uri"])
+        action, offset = decide_resume(
+            status_resp.status_code, status_resp.headers.get("Range"), size
+        )
+        if action == "done":
+            video_id = _video_id_from(status_resp)
+            record_done(records, cdir, file, video_id, title, privacy)
+            logger.info(
+                f"[PASS] 上次其實已上傳完成(回應遺失),補記: https://youtu.be/{video_id}"
+            )
+            return
+        if action == "resume":
+            session_uri = rec["session_uri"]
+            if offset >= size:
+                # 所有 bytes 已收到,只差收尾
+                final = finalize_upload(session_uri, size)
+                if final.status_code not in (200, 201):
+                    fail(
+                        logger,
+                        f"上傳收尾失敗 (HTTP {final.status_code})",
+                        final.text[:1000],
+                    )
+                video_id = _video_id_from(final)
+                record_done(records, cdir, file, video_id, title, privacy)
+                logger.info(
+                    f"[PASS] 上傳完成(續傳收尾): https://youtu.be/{video_id} (privacy={privacy})"
+                )
+                return
+            logger.info(f"[INFO] 續傳: 已上傳 {offset}/{size} bytes")
+        elif action == "restart":
+            logger.warning("[WARN] 上傳 session 已失效,重新建立")
+        else:
+            fail(
+                logger,
+                f"無法判定上次上傳狀態 (HTTP {status_resp.status_code}),"
+                "停止以避免重複上傳",
+                status_resp.text[:1000],
+            )
 
+    if not session_uri:
+        session_uri = init_upload(access_token, size, title, description, privacy)
+        # 立即持久化 session — 之後任何崩潰/斷線,重跑都能續傳或查狀態,不會重複上傳
+        records[file.name] = {"status": "uploading", "session_uri": session_uri}
+        save_upload_records(records, cdir)
+
+    logger.info("[INFO] 上傳中(36 MB 約 1-3 分鐘)...")
+    result = upload_body(session_uri, file, offset=offset)
     video_id = result.get("id")
     if not video_id:
         fail(
@@ -177,14 +326,7 @@ def main() -> None:
             "上傳回應缺少 video id",
             json.dumps(result, ensure_ascii=False)[:1000],
         )
-    records[file.name] = {
-        "video_id": video_id,
-        "url": f"https://youtu.be/{video_id}",
-        "title": title,
-        "privacy": privacy,
-        "uploaded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-    }
-    save_json(records, cdir / UPLOADS_RECORD)
+    record_done(records, cdir, file, video_id, title, privacy)
     logger.info(f"[PASS] 上傳完成: https://youtu.be/{video_id} (privacy={privacy})")
 
 
