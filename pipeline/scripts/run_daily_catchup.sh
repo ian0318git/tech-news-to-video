@@ -15,5 +15,5 @@ LOCK="$POC/logs/pipeline.lock"
 flock -n "$LOCK" true 2>/dev/null || exit 0   # 有執行中 → 跳出
 
 echo "$(date '+%Y-%m-%d %H:%M:%S') [CATCHUP] 錯過排程,開始補跑..." >> "$POC/logs/catchup.log"
-# 主 run 由 run_daily_cron.sh 自己持鎖 — 這裡不要再 flock 包一層(會與 cron 內部的鎖互斥而自鎖死)
-"$POC/scripts/run_daily_cron.sh" >> "$POC/logs/catchup.log" 2>&1
+# 持鎖執行 cron(與 08:00 主 run 的 crontab flock 互斥)— 鎖在 cron 腳本外層
+flock -n "$LOCK" "$POC/scripts/run_daily_cron.sh" >> "$POC/logs/catchup.log" 2>&1
