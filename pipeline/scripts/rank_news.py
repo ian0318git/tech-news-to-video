@@ -51,8 +51,14 @@ HISTORY_DAYS = 7
 
 
 def title_key(title: str) -> str:
-    """主題正規化: 小寫 + 去非字母數字 — 供去重比對。"""
-    return re.sub(r"[^a-z0-9]", "", title.lower())
+    """主題正規化: 小寫 + 去非字母數字 — 供去重比對。
+
+    先去掉「 - 來源名」尾綴 — RSS/Gemini 對同一新聞的來源名寫法會變
+    (「- Phoronix」vs「- phoronix.com」),不去掉就封鎖不到
+    (08-14 實測: FIT 以 phoronix.com 變體繞過 7 天去重)。
+    """
+    base = re.sub(r"\s*-\s*[^\s-]+$", "", title, flags=re.IGNORECASE)
+    return re.sub(r"[^a-z0-9]", "", base.lower())
 
 
 def parse_history_date(entry: dict) -> date | None:
@@ -163,8 +169,14 @@ def main() -> None:
     except (TypeError, ValueError):
         top1_index = None
     if top1_index is not None and top1_index != idx:
+        # 去重改選時,top1 的識別欄位也要跟著換成真正選中的那篇 —
+        # 只改 why_top/headline 會留下被封鎖文章的 title/url(08-14 實測:
+        # top1.json 出現「FIT 標題 + ELBE news」的混合檔)
         top1 = {
             **top1,
+            "index": idx,
+            "title": chosen["title"],
+            "url": chosen["url"],
             "why_top": chosen_entry.get("reason", ""),
             "headline": chosen.get("summary", ""),
         }

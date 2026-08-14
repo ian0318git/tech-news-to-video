@@ -20,11 +20,13 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from _common import (
+    channel_dir,
     flag_value,
     load_channels,
     load_env,
     resolve_channel,
     setup_logging,
+    today_str,
 )
 
 STEPS = {"fetch": "fetch_news", "rank": "rank_news", "collect": "collect_sources"}
@@ -65,6 +67,15 @@ def main() -> None:
     targets = [resolve_channel(slug, logger)] if slug else load_channels(logger)
     for ch in targets:
         logger.info(f"########## 頻道: {ch['slug']} ({ch['keyword']}) ##########")
+        # 當天影片已存在 → 選題已鎖定,不重跑 fetch/rank/collect。
+        # 否則 re-rank 會覆寫 top1.json(08-14 實測: 下午重選 ELBE 蓋掉早上
+        # 的 OpenSTLinux),上傳時標題/描述與影片內容不符。
+        if (channel_dir(ch) / f"video_{today_str()}.mp4").exists():
+            logger.info(
+                f"[SKIP] 當天影片已存在 (video_{today_str()}.mp4) — "
+                "鎖定早上選題,不重跑新聞流程"
+            )
+            continue
         for step in steps:
             run(STEPS[step], ["--channel", ch["slug"]], logger)
     logger.info(
