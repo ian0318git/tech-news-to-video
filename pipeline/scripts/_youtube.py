@@ -6,6 +6,7 @@ Token 存在 output/youtube_token.json(0600),憑證在 output/client_secret.json
 
 import json
 import os
+import sys
 import time
 
 import httpx
@@ -112,6 +113,15 @@ def _save_token(token: dict) -> None:
 def ensure_access_token(logger) -> str:
     """回傳有效 access token(必要時自動 refresh / 首次授權)。"""
     if not TOKEN_PATH.exists():
+        # 非互動環境(cron)沒有「人」能開瀏覽器 — 直接快速失敗,不啟動 device flow
+        # 空等(2026-08-14 實測: cron 下啟動後卡 2 小時直到 expired_token,整日癱瘓)。
+        if not sys.stdin.isatty():
+            fail(
+                logger,
+                "沒有有效的 youtube_token.json,且目前不是互動式終端(cron 環境)",
+                "請在互動式終端執行 python scripts/youtube_auth.py 完成授權後重跑"
+                "(注意: 測試模式 OAuth app 的 refresh token 約 7 天到期,需定期重新授權)",
+            )
         client = load_client_secret(logger)
         token = device_auth(logger, client)
         _save_token(token)
@@ -161,7 +171,8 @@ def ensure_access_token(logger) -> str:
         fail(
             logger,
             f"refresh 失敗 (HTTP {resp.status_code}) — 已清除 token,請重跑 youtube_auth.py",
-            resp.text[:500],
+            resp.text[:500]
+            + "\n(測試模式 OAuth app 的 refresh token 約 7 天到期,屬預期現象;重新授權即可)",
         )
     else:
         fail(
