@@ -36,6 +36,34 @@ def test_title_key_normalizes():
     assert title_key("  Hello, World!! ") == "helloworld"
 
 
+def test_title_key_source_suffix_variant():
+    """來源名寫法不同(Phoronix vs phoronix.com)仍視為同一主題。"""
+    a = title_key("Flattened Image Tree 1.0 Specification - Phoronix")
+    b = title_key("Flattened Image Tree 1.0 Specification - phoronix.com")
+    assert a == b == "flattenedimagetree10specification"
+
+
+def test_pick_skips_source_suffix_variant():
+    """history 用「- Phoronix」封鎖,候選「- phoronix.com」變體也要被封鎖。"""
+    history = [
+        {"date": "2026-08-08", "title": "Flattened Image Tree 1.0 Specification - Phoronix"}
+    ]
+    items = [
+        {
+            "index": 0,
+            "title": "Flattened Image Tree 1.0 Specification - phoronix.com",
+            "url": "https://x",
+        },
+        *ITEMS[1:],
+    ]
+    ranking = [
+        {"index": 0, "title": items[0]["title"], "score": 9.5},
+        *RANKING[1:],
+    ]
+    item, _ = pick_topic(items, ranking, history, TODAY)
+    assert item["index"] == 1  # 選到第二順位,不是變體 FIT
+
+
 def test_pick_top1_when_no_recent_match():
     item, _entry = pick_topic(ITEMS, RANKING, [], TODAY)
     assert item["index"] == 0
