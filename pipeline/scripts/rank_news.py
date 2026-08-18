@@ -47,7 +47,9 @@ News items:
 
 
 HISTORY_FILE_NAME = "topic_history.json"
-HISTORY_DAYS = 7
+# 08-19: 7→14 — FIT spec 於 08-10 選過,9 天後(08-19)視窗已過又被撿回(霸榜頭條),
+# 使用者反應短期重複。14 天窗口讓熱門舊聞退場前不會立刻重複。
+HISTORY_DAYS = 14
 
 
 def title_key(title: str) -> str:

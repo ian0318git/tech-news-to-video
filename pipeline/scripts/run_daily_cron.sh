@@ -11,6 +11,10 @@ PY="$POC/.venv/bin/python"
 CONFIG="$POC/config/channels.json"
 mkdir -p "$POC/logs"
 
+# Pipeline 的「今天」: 預設雪梨當地日期;PIPELINE_DATE 可覆寫
+# (2026-08-18 停電預製 08-19 影片 — 與 Python 端 today_str() 同一變數,檔名/去重/新鮮度一致)
+TODAY="${PIPELINE_DATE:-$(TZ=Australia/Sydney date +%Y-%m-%d)}"
+
 # 注意: 與 catch-up 的互斥由 crontab 的 flock -n pipeline.lock 負責(08:00 主 run)
 # 與 catchup 腳本自身的 flock(catchup 呼叫 cron 時)— 不要再在腳本內加鎖,
 # 否則會與外層鎖互斥,主 run 每次都把自己 SKIP 掉(2026-08-14 實測教訓)。
@@ -37,11 +41,11 @@ FAILED=0
     "$PY" "$POC/scripts/run_video_pipeline.py" --channel "$CH" \
       || { echo "[FAIL] video_pipeline $CH"; FAILED=1; continue; }
     # 長片加品牌片頭/片尾,上傳品牌版
-    TODAY_FILE="$POC/output/$CH/video_$(TZ=Australia/Sydney date +%Y-%m-%d).mp4"
+    TODAY_FILE="$POC/output/$CH/video_${TODAY}.mp4"
     "$PY" "$POC/scripts/brand_video.py" --file "$TODAY_FILE" \
       || { echo "[FAIL] brand_video $CH"; FAILED=1; continue; }
     "$PY" "$POC/scripts/youtube_upload.py" --channel "$CH" \
-      --file "$POC/output/$CH/video_$(TZ=Australia/Sydney date +%Y-%m-%d).branded.mp4" \
+      --file "$POC/output/$CH/video_${TODAY}.branded.mp4" \
       || { echo "[FAIL] youtube_upload $CH"; FAILED=1; continue; }
     echo "[OK] 頻道 $CH 完成"
     [ "$CH" = "$SHORTS_CH" ] && SHORTS_OK=1
@@ -52,7 +56,7 @@ FAILED=0
     "$PY" "$POC/scripts/run_shorts_pipeline.py" --channel "$SHORTS_CH" \
       || { echo "[FAIL] shorts_pipeline"; FAILED=1; }
     # 注意: pipeline 的「今天」= 雪梨當地日期 — cron 必須用同一時區,否則 06:00(前一日 20:00 UTC)必然對不上
-    SHORTS_FILE="$POC/output/$SHORTS_CH/shorts_$(TZ=Australia/Sydney date +%Y-%m-%d).mp4"
+    SHORTS_FILE="$POC/output/$SHORTS_CH/shorts_${TODAY}.mp4"
     "$PY" "$POC/scripts/youtube_upload.py" --channel "$SHORTS_CH" --file "$SHORTS_FILE" \
       || { echo "[FAIL] youtube_upload shorts"; FAILED=1; }
     if [ "$FAILED" = "0" ]; then
@@ -67,7 +71,7 @@ FAILED=0
 
 # 完成 marker 只在「全部成功」時寫 — 有失敗則讓補跑機制重試
 if [ "$FAILED" = "0" ]; then
-  touch "$POC/logs/done_$(TZ=Australia/Sydney date +%Y-%m-%d).marker"
+  touch "$POC/logs/done_${TODAY}.marker"
 else
   echo "$(date '+%Y-%m-%d %H:%M:%S') [CATCHUP] 本次有失敗,不寫 marker(每 15 分鐘的補跑會重試)" >> "$LOG"
   exit 1
