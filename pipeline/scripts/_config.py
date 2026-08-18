@@ -4,6 +4,7 @@
 """
 
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -70,7 +71,18 @@ def today_str() -> str:
 
     06:00 AEST 排程 = 前一日 20:00 UTC;若用 UTC 日期,檔名會落在「昨天」,
     導致 06:00 產出的影片被命名成前一天、且重跑時誤判已存在而跳過。
+
+    PIPELINE_DATE 環境變數可覆寫(2026-08-18 停電預製 08-19 影片時使用):
+    整個 pipeline(檔名、去重、新鮮度)必須用同一個「今天」才一致。
     """
+    override = os.environ.get("PIPELINE_DATE")
+    if override:
+        try:
+            datetime.strptime(override, "%Y-%m-%d")
+        except ValueError:
+            # 壞格式直接報錯 — 不允許靜默失敗(CLAUDE.md)
+            raise ValueError(f"PIPELINE_DATE 格式錯誤: {override!r}(需 YYYY-MM-DD)")
+        return override
     return datetime.now(PIPELINE_TZ).strftime("%Y-%m-%d")
 
 

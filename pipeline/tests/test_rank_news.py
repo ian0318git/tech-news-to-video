@@ -85,14 +85,14 @@ def test_skips_multiple_recent():
     assert item["index"] == 3  # 前三名都近期選過 → 第四名
 
 
-def test_window_boundary_seven_days():
-    # 剛好 7 天前(08-04)選過 → 仍在窗口內,應跳過
-    history = [{"date": "2026-08-04", "title": ITEMS[0]["title"]}]
+def test_window_boundary_fourteen_days():
+    # 13 天前(07-28)選過 → 仍在 14 天窗口內,應跳過
+    history = [{"date": "2026-07-28", "title": ITEMS[0]["title"]}]
     item, _ = pick_topic(ITEMS, RANKING, history, TODAY)
     assert item["index"] == 1
 
-    # 8 天前(08-02)選過 → 超出窗口,不影響
-    history = [{"date": "2026-08-02", "title": ITEMS[0]["title"]}]
+    # 14 天前(07-27)選過 → 超出窗口,不影響
+    history = [{"date": "2026-07-27", "title": ITEMS[0]["title"]}]
     item, _ = pick_topic(ITEMS, RANKING, history, TODAY)
     assert item["index"] == 0
 

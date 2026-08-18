@@ -1,9 +1,10 @@
 """_common 的參數解析與頻道解析單元測試。"""
 
 import logging
+import re
 
 import pytest
-from _common import flag_value, resolve_channel
+from _common import flag_value, resolve_channel, today_str
 
 
 @pytest.fixture
@@ -42,3 +43,23 @@ def test_resolve_channel_by_slug(test_logger):
 def test_resolve_channel_unknown_fails(test_logger):
     with pytest.raises(SystemExit):
         resolve_channel("nope", test_logger)
+
+
+# ---- today_str: PIPELINE_DATE 覆寫(停電預製次日影片用)----
+
+
+def test_today_str_default_format(monkeypatch):
+    monkeypatch.delenv("PIPELINE_DATE", raising=False)
+    s = today_str()
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", s)
+
+
+def test_today_str_override_valid(monkeypatch):
+    monkeypatch.setenv("PIPELINE_DATE", "2026-08-19")
+    assert today_str() == "2026-08-19"
+
+
+def test_today_str_override_invalid_format(monkeypatch):
+    monkeypatch.setenv("PIPELINE_DATE", "19-08-2026")
+    with pytest.raises(ValueError):
+        today_str()
