@@ -33,6 +33,7 @@ POC(notebooklm-py 影片流程)驗證通過後,實作正式系統:
 | D18 | Gemini 呼叫對暫時性錯誤(429/5xx)**自動重試 2 次**(backoff 5s/10s) | 實測遇過 503;cron 環境不能因暫時錯誤整日失敗 |
 | D19 | cron 逐頻道 fail-fast:單一頻道失敗記錄 `[FAIL]` 並繼續其他頻道 | 一個頻道故障不拖垮當日全部產出 |
 | D20 | **每日 Shorts**: `run_shorts_pipeline.py` 用 tech 頻道 TOP 1 製作 60 秒直式影片(`--format short`),cron 加在長片之後 | 每天 3 支(2 長片 + 1 Shorts);Shorts 為 Pro/Ultra 限定、英文、分階段開放,生成可能 30+ 分鐘(等待預算 3600s) |
+| D21 | **自動刪除 NotebookLM 專案**: 每支影片下載成功後立即刪當天該 channel 的 notebook(`_orchestrator.run_video_flow` 尾部 hook)+ `cleanup_notebooks.py` 每日掃描舊專案(state 日期 < 今天 且 `done_<日期>.marker` 存在才刪,支援 `--dry-run`) | 影片下載後 notebook 不再被使用,不刪會永久堆積在帳號介面;安全原則: 失敗不刪、刪除失敗只警告絕不影響主流程;CLI `delete -n <id> -y --json` 冪等;`AUTO_DELETE_NOTEBOOKS` 開關(預設 true) |
 
 **前置(一次性,使用者操作)**: Google Cloud 專案 → 啟用 YouTube Data API v3 →
 OAuth 同意畫面(External,加入測試使用者)→ 建立 OAuth 用戶端 ID(**TVs and Limited Input devices**)

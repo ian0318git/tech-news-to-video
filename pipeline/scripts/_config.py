@@ -86,6 +86,17 @@ def today_str() -> str:
     return datetime.now(PIPELINE_TZ).strftime("%Y-%m-%d")
 
 
+AUTO_DELETE_VALUES = {"1", "true", "yes", "on"}
+
+
+def auto_delete_enabled() -> bool:
+    """AUTO_DELETE_NOTEBOOKS 開關(load_env 之後讀)。預設 true — 主要訴求就是別讓專案累積。
+
+    任何值 ∈ {1, true, yes, on}(不分大小寫)啟用;其餘停用。
+    """
+    return os.environ.get("AUTO_DELETE_NOTEBOOKS", "true").strip().lower() in AUTO_DELETE_VALUES
+
+
 def channel_dir(channel: dict) -> Path:
     """每個頻道有自己的 output/<slug>/ 目錄,避免產出互相覆蓋。"""
     d = OUTPUT_DIR / channel["slug"]
