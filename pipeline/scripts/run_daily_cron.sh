@@ -28,6 +28,10 @@ FAILED=0
     FAILED=1
   fi
 
+  # 清理舊 notebook(僅刪「當天全成功」的舊 state;best-effort,失敗不影響主流程)
+  "$PY" "$POC/scripts/cleanup_notebooks.py" \
+    || echo "[WARN] cleanup_notebooks 失敗(忽略,不影響主流程)"
+
   # 頻道與 Shorts 來源從 config 讀取
   CHANNELS=$("$PY" -c "import json; print(' '.join(c['slug'] for c in json.load(open('$CONFIG'))['channels']))")
   SHORTS_CH=$("$PY" -c "import json; print(json.load(open('$CONFIG')).get('shorts_channel', 'tech'))")

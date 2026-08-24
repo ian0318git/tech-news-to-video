@@ -167,6 +167,15 @@ def source_delete(src_id: str, logger) -> None:
     run_cli(["source", "delete", src_id, "-y", "--json"], logger)
 
 
+def notebook_delete(nb_id: str, logger) -> None:
+    """`delete -n <id> -y --json` — 刪除 notebook(冪等: 已刪除的也成功)。
+
+    注意與 source_delete 不同: delete 是頂層指令,id 走 -n option。
+    失敗時 run_cli 會 raise SystemExit — 呼叫端依 sync_sources 模式自行 catch。
+    """
+    run_cli(["delete", "-n", nb_id, "-y", "--json"], logger)
+
+
 def generate_video(
     desc: str,
     fmt: str,

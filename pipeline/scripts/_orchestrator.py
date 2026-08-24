@@ -5,10 +5,12 @@
 流程順序、跳過邏輯與新鮮度閘門,不需要真實 NotebookLM。
 """
 
+import json
 from pathlib import Path
 
 import _cli as _cli_module
 from _base import fail
+from _config import auto_delete_enabled
 
 
 def run_video_flow(
@@ -73,4 +75,31 @@ def run_video_flow(
         fail(logger, f"下載後檔案不存在: {video_path}")
     if video_path.stat().st_size == 0:
         fail(logger, f"下載後檔案是零位元(可能被中斷): {video_path}")
+
+    # 5. 影片確認完成 → 自動刪除今天的 notebook(開關 AUTO_DELETE_NOTEBOOKS)。
+    #    失敗只警告,絕不影響主流程;刪除冪等(已刪除的也成功)。
+    _delete_today_notebook(cdir, state_name, today, logger, cli)
     return video_path
+
+
+def _delete_today_notebook(cdir: Path, state_name: str, today: str, logger, cli) -> None:
+    """影片已確認產出後,刪除今天使用的 notebook。任何失敗只警告。"""
+    if not auto_delete_enabled():
+        logger.info("[INFO] AUTO_DELETE_NOTEBOOKS 未啟用,保留 notebook")
+        return
+    state_file = cdir / state_name
+    if not state_file.exists():
+        return
+    try:
+        state = json.loads(state_file.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        logger.warning(f"[WARN] {state_name} 損壞,跳過自動刪除")
+        return
+    nb_id = state.get("notebook_id")
+    if not nb_id or state.get("date") != today:
+        return  # 不是「今天」的 notebook 記錄 → 沒東西可刪
+    try:
+        cli.notebook_delete(nb_id, logger)
+        logger.info(f"[OK] 已刪除 notebook: {nb_id}")
+    except SystemExit:
+        logger.warning(f"[WARN] notebook 刪除失敗(保留以便手動重試): {nb_id}")

@@ -103,6 +103,31 @@ def test_notebook_create_contract(mock_run_cli):
     assert nb_id == "3777c627-39a7-483c-97ce-dfd2a36126c9"
 
 
+def test_notebook_delete_contract(mock_run_cli):
+    fake, calls = mock_run_cli
+    fake.out = '{"notebook_id": "3777c627-39a7-483c-97ce-dfd2a36126c9", "success": true}'
+    _cli.notebook_delete(
+        "3777c627-39a7-483c-97ce-dfd2a36126c9", __import__("logging").getLogger("t")
+    )
+    # delete 是頂層指令,id 走 -n option,JSON 模式強制 --yes
+    assert calls[0] == [
+        "delete",
+        "-n",
+        "3777c627-39a7-483c-97ce-dfd2a36126c9",
+        "-y",
+        "--json",
+    ]
+
+
+def test_notebook_delete_failure_raises(monkeypatch):
+    def boom(args, logger, timeout=None):
+        raise SystemExit(1)
+
+    monkeypatch.setattr(_cli, "run_cli", boom)
+    with pytest.raises(SystemExit):
+        _cli.notebook_delete("nb-1", __import__("logging").getLogger("t"))
+
+
 # ---------- source 契約 ----------
 
 
