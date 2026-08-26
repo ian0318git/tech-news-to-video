@@ -28,7 +28,7 @@ POC(notebooklm-py 影片流程)驗證通過後,實作正式系統:
 | D13 | token 存 `output/youtube_token.json`(0600),refresh token 自動續用 | 與 master_token 相同安全原則 |
 | D14 | 憑證放 `output/client_secret.json`(已 gitignore);**OAuth client 類型必須是「TVs and Limited Input devices」**(桌面應用程式類型不支援 device flow,會回 `invalid_client / Invalid client type`) | 實測踩過的坑 |
 | D15 | **多頻道架構**: `config/channels.json` 定義頻道,每個頻道獨立 `output/<slug>/` 目錄,所有腳本吃 `--channel` | 產出不互相覆蓋;新增頻道只需改 config |
-| D16 | `tech` 頻道關鍵字用 OR 語法:`technology OR artificial intelligence` | 一支影片涵蓋科技 + AI 新聞 |
+| D16 | `tech` 頻道關鍵字用 OR 語法(2026-08-26 擴充):`technology OR artificial intelligence OR smartphone OR apple OR samsung OR tesla OR spacex OR "electric vehicle"` | 一支影片涵蓋 AI + 消費電子 + 太空 + 電動車新聞(用戶要求納入創新科技範圍);Gemini 排名從候選池挑 TOP 1 |
 | D17 | **冪等設計**: notebook 重用(`pipeline_state.json`)、來源 URL 去重、當天影片已存在即整個跳過、上傳記錄(`youtube_uploads.json`)防重複 | cron 無人監督環境,重跑必須安全 |
 | D18 | Gemini 呼叫對暫時性錯誤(429/5xx)**自動重試 2 次**(backoff 5s/10s) | 實測遇過 503;cron 環境不能因暫時錯誤整日失敗 |
 | D19 | cron 逐頻道 fail-fast:單一頻道失敗記錄 `[FAIL]` 並繼續其他頻道 | 一個頻道故障不拖垮當日全部產出 |

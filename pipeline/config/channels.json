@@ -13,7 +13,7 @@
     },
     {
       "slug": "tech",
-      "keyword": "technology OR artificial intelligence",
+      "keyword": "technology OR artificial intelligence OR smartphone OR apple OR samsung OR tesla OR spacex OR \"electric vehicle\"",
       "title_prefix": "TechSnack Daily",
       "video_style": "custom",
       "style_prompt": "Modern friendly dark tech aesthetic: deep charcoal-indigo background with soft glowing gradient orbs, large rounded shapes and smooth 3D-style bubbles, floating tech icons (chips, rockets, robots) with soft edges, warm vibrant accents (coral and violet), playful and welcoming — a cozy night-mode tech explainer show.",
