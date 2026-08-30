@@ -18,7 +18,7 @@
 
 ## 同步與提交(雙副本 by-design)
 
-- 營運目錄(VM 實際執行、非 git):`/home/ian/github-project/notebooklm-py/`
+- 營運目錄(VM 實際執行、非 git):`<VM 上 clone 本 repo 的目錄>`(例如 `~/tech-news-to-video/`)
 - 改完營運目錄 → `cp` 到 `pipeline/` → commit → push 到 `ian`(ian0318git/tech-news-to-video)
 - 上游 `origin`(teng-lin/notebooklm-py)只收函式庫 issue 回報,不直接 push
 

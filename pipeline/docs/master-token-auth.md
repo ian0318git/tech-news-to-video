@@ -94,8 +94,8 @@ notebooklm auth check --test --json       # 預期 "status": "ok"
 或者直接執行自動化腳本(它會自動完成 Step 3 的所有檢查):
 
 ```bash
-source /home/ian/github-project/notebooklm-py/.venv/bin/activate
-python /home/ian/github-project/notebooklm-py/scripts/check_auth.py
+source <VM上repo路徑>/.venv/bin/activate
+python <VM上repo路徑>/scripts/check_auth.py
 ```
 
 ## 錯誤排除
