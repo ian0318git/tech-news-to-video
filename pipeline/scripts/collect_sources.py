@@ -11,6 +11,7 @@ import os
 import sys
 
 import httpx
+import _http
 from _browser import resolve_article_url
 from _common import (
     channel_dir,
@@ -46,10 +47,20 @@ News topic:
 """
 
 
-def check_url(url: str) -> tuple[bool, int]:
+def check_url(url: str, deadline: float = 30.0) -> tuple[bool, int]:
+    """驗證單一 URL 可達性。失敗一律降級為 (False, 0),不中斷其他來源檢查。
+
+    以執行緒護欄執行(見 _http):httpx timeout 管不到 DNS 解析卡死
+    (2026-09-08 教訓)— GuardTimeoutError 繼承 httpx.HTTPError,與連線
+    失敗同路徑處理。deadline 可注入供測試,生產預設 30s:每個 URL 至多等
+    30s(DNS 卡死時),避免 N 個來源無限拖住整支 pipeline。
+    """
     try:
-        resp = httpx.get(
-            url, headers={"User-Agent": UA}, timeout=15.0, follow_redirects=True
+        resp = _http.bounded_get(
+            url,
+            headers={"User-Agent": UA},
+            timeout=15.0,
+            deadline=deadline,
         )
         return resp.status_code < 400, resp.status_code
     except httpx.HTTPError:
