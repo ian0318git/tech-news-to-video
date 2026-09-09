@@ -8,8 +8,10 @@
 
 import html
 import os
+import queue
 import re
 import sys
+import threading
 import urllib.parse
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
@@ -32,6 +34,50 @@ UA = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
 )
+REQUEST_TIMEOUT = 30.0  # httpx 層:涵蓋 TCP 連線/讀寫
+FETCH_DEADLINE = 45.0  # 執行緒護欄總期限;必須 > REQUEST_TIMEOUT
+
+
+def _bounded_get(url: str) -> httpx.Response:
+    """daemon thread 執行 httpx.get,DNS/連線卡死時快速失敗。
+
+    httpx/socket 的 timeout 管不到 libc 的 DNS 解析(getaddrinfo 阻塞不遵守
+    socket timeout)— 2026-09-08 整天卡在 "Temporary failure in name
+    resolution"、fetch 空轉 8 小時的實測教訓。護欄保證主流程在
+    FETCH_DEADLINE 內一定返回:逾時則 fail(卡住的 daemon thread 隨
+    process 結束回收,不阻塞 exit);httpx 例外原樣送回主執行緒重拋,
+    維持呼叫方的錯誤處理不變。
+    """
+    box: queue.Queue[tuple[str, object]] = queue.Queue(maxsize=1)
+
+    def worker() -> None:
+        try:
+            resp = httpx.get(
+                url,
+                headers={"User-Agent": UA},
+                timeout=REQUEST_TIMEOUT,
+                follow_redirects=True,
+            )
+            box.put(("ok", resp))
+        except Exception as exc:  # httpx.HTTPError 等
+            box.put(("err", exc))
+
+    t = threading.Thread(target=worker, daemon=True, name="rss-fetch")
+    t.start()
+    try:
+        status, payload = box.get(timeout=FETCH_DEADLINE)
+    except queue.Empty:
+        fail(
+            logger,
+            f"Google News RSS 抓取逾時(DNS/連線卡住 > {FETCH_DEADLINE:.0f}s)"
+            "— 快速失敗,待下一輪重試",
+        )
+    if status == "err":
+        assert isinstance(payload, BaseException)
+        raise payload
+    resp = payload
+    assert isinstance(resp, httpx.Response)
+    return resp
 
 
 def fetch_rss(channel: dict) -> str:
@@ -42,9 +88,7 @@ def fetch_rss(channel: dict) -> str:
         f"&hl={channel.get('hl', 'en')}&gl={channel.get('gl', 'US')}&ceid={channel.get('ceid', 'US:en')}"
     )
     logger.info(f"[INFO] 抓取 Google News RSS ({channel['slug']}): {url}")
-    resp = httpx.get(
-        url, headers={"User-Agent": UA}, timeout=30.0, follow_redirects=True
-    )
+    resp = _bounded_get(url)
     if resp.status_code != 200:
         fail(logger, f"Google News RSS 回傳 HTTP {resp.status_code}", resp.text[:1000])
     return resp.text

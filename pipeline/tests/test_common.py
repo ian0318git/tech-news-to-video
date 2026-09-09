@@ -1,7 +1,9 @@
 """_common 的參數解析與頻道解析單元測試。"""
 
+import json
 import logging
 import re
+from pathlib import Path
 
 import pytest
 from _common import flag_value, resolve_channel, today_str
@@ -36,8 +38,15 @@ def test_resolve_channel_default_first(test_logger):
 
 
 def test_resolve_channel_by_slug(test_logger):
+    # config/channels.json 是單一真相 — 斷言對應 slug 的 keyword 與 config 一致
+    # (08-26 擴充查詢時曾漏改此處,導致測試卡在舊關鍵字)
     ch = resolve_channel("tech", test_logger)
-    assert ch["keyword"] == "technology OR artificial intelligence"
+    cfg_path = Path(__file__).parent.parent / "config" / "channels.json"
+    config = json.loads(cfg_path.read_text(encoding="utf-8"))
+    expected = next(
+        c["keyword"] for c in config["channels"] if c["slug"] == "tech"
+    )
+    assert ch["keyword"] == expected
 
 
 def test_resolve_channel_unknown_fails(test_logger):

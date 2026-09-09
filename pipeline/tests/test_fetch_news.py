@@ -1,4 +1,9 @@
-"""fetch_news.parse_items 的 RSS 解析單元測試(mock XML,不連網)。"""
+"""fetch_news 的單元測試(mock httpx,不連網):parse_items 解析 + fetch_rss 護欄。"""
+
+import time
+
+import httpx
+import pytest
 
 import fetch_news
 
@@ -44,8 +49,6 @@ def test_parse_items_empty():
 
 
 def test_parse_items_bad_xml_raises():
-    import pytest
-
     with pytest.raises(SystemExit):
         fetch_news.parse_items("<rss><channel><item></rss>")  # 未關閉標籤
 
@@ -54,3 +57,56 @@ def test_parse_items_respects_limit(monkeypatch):
     monkeypatch.setattr(fetch_news, "LIMIT", 1)
     items = fetch_news.parse_items(SAMPLE_RSS)
     assert len(items) == 1
+
+
+CH = {"slug": "embedded", "keyword": "embedded linux"}
+
+
+def test_fetch_rss_ok(monkeypatch):
+    seen: dict = {}
+
+    def fake_get(url, **kwargs):
+        seen["url"] = url
+        seen["timeout"] = kwargs.get("timeout")
+        return httpx.Response(200, text="<rss/>")
+
+    monkeypatch.setattr(fetch_news.httpx, "get", fake_get)
+    out = fetch_news.fetch_rss(CH)
+    assert out == "<rss/>"
+    assert "embedded%20linux" in seen["url"]
+    assert seen["timeout"] == fetch_news.REQUEST_TIMEOUT
+
+
+def test_fetch_rss_non_200_fails(monkeypatch):
+    monkeypatch.setattr(
+        fetch_news.httpx, "get", lambda url, **kw: httpx.Response(503, text="nope")
+    )
+    with pytest.raises(SystemExit):
+        fetch_news.fetch_rss(CH)
+
+
+def test_fetch_rss_reraises_http_error(monkeypatch):
+    """httpx 例外(含 DNS ConnectError)應原樣送回主執行緒,不吞錯。"""
+
+    def boom(url, **kwargs):
+        raise httpx.ConnectError("Temporary failure in name resolution")
+
+    monkeypatch.setattr(fetch_news.httpx, "get", boom)
+    with pytest.raises(httpx.ConnectError):
+        fetch_news.fetch_rss(CH)
+
+
+def test_fetch_rss_deadline_fast_fails(monkeypatch):
+    """DNS 卡死(worker 永久阻塞)時,護欄應在 FETCH_DEADLINE 內快速失敗,
+    而不是等 worker 結束(2026-09-08 空轉整天教訓的防護)。"""
+
+    def slow_get(url, **kwargs):
+        time.sleep(2.0)  # 模擬 getaddrinfo 卡死
+        raise AssertionError("護欄失效:worker 竟然跑完了")
+
+    monkeypatch.setattr(fetch_news.httpx, "get", slow_get)
+    monkeypatch.setattr(fetch_news, "FETCH_DEADLINE", 0.05)
+    start = time.monotonic()
+    with pytest.raises(SystemExit):
+        fetch_news.fetch_rss(CH)
+    assert time.monotonic() - start < 1.0  # 應快速失敗,而非等滿 2 秒
