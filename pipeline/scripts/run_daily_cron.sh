@@ -5,7 +5,7 @@
 # 逐頻道 fail-fast: 單一頻道失敗不影響其他頻道,全部記錄在 logs/daily_cron.log
 set -u
 
-POC=/home/ian/github-project/notebooklm-py
+POC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG="$POC/logs/daily_cron.log"
 PY="$POC/.venv/bin/python"
 CONFIG="$POC/config/channels.json"

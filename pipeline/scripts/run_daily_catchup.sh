@@ -6,7 +6,7 @@
 # crontab 搭配: */15 6-12 * * * run_daily_catchup.sh
 set -u
 
-POC=/home/ian/github-project/notebooklm-py
+POC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TODAY=$(TZ=Australia/Sydney date +%Y-%m-%d)
 MARKER="$POC/logs/done_${TODAY}.marker"
 LOCK="$POC/logs/pipeline.lock"
