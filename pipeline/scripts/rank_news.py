@@ -13,6 +13,7 @@ import os
 import re
 import sys
 from datetime import date, timedelta
+from urllib.parse import parse_qsl, urlencode, urlsplit
 
 from _common import (
     channel_dir,
@@ -49,18 +50,106 @@ News items:
 HISTORY_FILE_NAME = "topic_history.json"
 # 08-19: 7→14 — FIT spec 於 08-10 選過,9 天後(08-19)視窗已過又被撿回(霸榜頭條),
 # 使用者反應短期重複。14 天窗口讓熱門舊聞退場前不會立刻重複。
-HISTORY_DAYS = 14
+#
+# 09-16: 14→90 — 14 天仍然不夠。由 YouTube 歷史反查證實:同一篇文章會在
+# RSS feed 裡存活數週(FIT spec 08-06 起被選中,09-02 又中;U-Boot CVE
+# 08-31 選過,09-15 又中),只要撐過窗口就重新可選,等於整支影片重製。
+# 窗口拉長後,候選池理論上可能被全部封鎖 → pick_topic 會明確 fail(見該函式),
+# 寧可當天不產片也不要重複上傳。
+HISTORY_DAYS = 90
+
+# URL 比對前剝除的追蹤參數 — 與文章身分無關。
+# 只剝這些,不整段丟棄 query:部分網站的 query 就是文章身分(如 ?id=123)。
+TRACKING_PARAMS = frozenset(
+    {
+        "oc",
+        "hl",
+        "gl",
+        "ceid",
+        "utm_source",
+        "utm_medium",
+        "utm_campaign",
+        "utm_content",
+        "utm_term",
+        "fbclid",
+        "gclid",
+    }
+)
+
+# 尾綴剝離後至少要有這麼多個正規化字元,否則視為過度剝離 → 保留原標題。
+# 避免「Foo - Bar」這類短標題被剝成「Foo」而在去重時與其他主題誤撞。
+MIN_BASE_LEN = 20
+
+# 可用候選低於此數就發警告(但不失敗)— 讓候選池被去重吃乾前先看到徵兆
+LOW_POOL_WARN = 5
+
+
+def normalize_title(text: str) -> str:
+    """只做字元正規化: 小寫 + 去非字母數字。"""
+    return re.sub(r"[^a-z0-9]", "", text.lower())
 
 
 def title_key(title: str) -> str:
-    """主題正規化: 小寫 + 去非字母數字 — 供去重比對。
+    """主題正規化 — 供去重比對。
 
-    先去掉「 - 來源名」尾綴 — RSS/Gemini 對同一新聞的來源名寫法會變
-    (「- Phoronix」vs「- phoronix.com」),不去掉就封鎖不到
-    (08-14 實測: FIT 以 phoronix.com 變體繞過 7 天去重)。
+    先剝掉「 - 來源名」尾綴再正規化。**一律剝掉最後一個「 - 」之後的整段**,
+    不去猜來源名有幾個字:來源名寫法與長度都會變 —
+    「- Phoronix」/「- phoronix.com」/「- Embedded Computing Design」。
+
+    舊版用 `[^-\\s]+$` 只剝得掉「單一 token」的來源名,多字來源名原樣留著,
+    於是同一篇文章「…Platforms - Embedded Computing Design」與
+    「…Platforms - embeddedcomputing.com」產生**不同 key** → 去重靜默失效
+    (2026-09-16 由 YouTube 歷史反查證實:同一篇文被重製 14 次)。
+    注意:部分剝離比完全不剝離更糟 — 它讓「本該相符」的兩者錯開。
+
+    只認「空白-空白」的破折號,所以「Linux-Based」「GPT-6」這類連字號不受影響。
     """
-    base = re.sub(r"\s*-\s*[^\s-]+$", "", title, flags=re.IGNORECASE)
-    return re.sub(r"[^a-z0-9]", "", base.lower())
+    base = re.sub(r"\s+-\s+.*$", "", title).strip()
+    if len(normalize_title(base)) >= MIN_BASE_LEN:
+        return normalize_title(base)
+    return normalize_title(title)
+
+
+def url_key(url: str) -> str:
+    """文章 URL 正規化 — 供去重比對。
+
+    去 scheme / www. / fragment / 追蹤參數,其餘原樣保留。
+    2026-09-16 實證:同一篇文章的 Google News 轉址 URL 在相隔 26 天的
+    兩次抓取中**逐字元相同**(14 次重複上傳的 URL 全等),而標題尾端的
+    來源名寫法會變 — 所以 URL 是比標題更可靠的鍵。
+    """
+    raw = (url or "").strip()
+    if not raw:
+        return ""
+    try:
+        parts = urlsplit(raw)
+    except ValueError:
+        return normalize_title(raw)
+    host = parts.netloc.lower().removeprefix("www.")
+    kept = sorted(
+        (k, v)
+        for k, v in parse_qsl(parts.query, keep_blank_values=True)
+        if k.lower() not in TRACKING_PARAMS
+    )
+    query = urlencode(kept)
+    return f"{host}{parts.path}" + (f"?{query}" if query else "")
+
+
+def topic_keys(title: str = "", url: str = "") -> set[str]:
+    """主題比對鍵集合 — 任一鍵相符即視為同一主題。
+
+    同時算 URL 與標題兩種鍵:
+    - **URL 是主要訊號**(穩定,見 url_key)。
+    - **標題保留為次要訊號** — 舊版 history 沒有 url 欄位,且文章可能
+      以新的 URL 重新入池。兩者取聯集,比單用其一更不容易漏封鎖。
+    """
+    keys = set()
+    if title:
+        keys.add(title_key(title))
+    if url:
+        keys.add(url_key(url))
+    keys.discard("")  # 全標點/空字串不該變成萬用鍵
+    return keys
 
 
 def parse_history_date(entry: dict) -> date | None:
@@ -80,23 +169,50 @@ def pick_topic(
     """依排名挑選,跳過 HISTORY_DAYS 天內已選過的主題。
 
     ranking: Gemini 的 [{index, title, ...}] 列表(已依分數排序)。
-    全部重複時退回第一名(極端情況)。回傳 (chosen_item, chosen_ranking_entry)。
+    回傳 (chosen_item, chosen_ranking_entry)。
 
     當天(同日 catch-up 重跑)已記錄的主題不封鎖 —
     否則重跑會改選別的主題,造成同日主題翻轉。
+
+    若**全部候選都在去重窗口內**,直接 fail 而不是退回第一名:
+    重複主題 = 重製一支既有影片(浪費 NotebookLM 配額 + 頻道多一支重複),
+    比當天不產片更糟,而且使用者無從得知。舊版靜默退回第一名正是
+    2026-09 重複上傳的成因之一。
     """
     cutoff = date.fromisoformat(today) - timedelta(days=HISTORY_DAYS - 1)
     recent: set[str] = set()
+    recent_titles: list[str] = []
     for h in history:
         d = parse_history_date(h)
         if d is not None and h.get("date") != today and d >= cutoff:
-            recent.add(title_key(h.get("title", "")))
-    for entry in ranking:
-        item = items[int(entry["index"])]
-        if title_key(item["title"]) not in recent:
-            return item, entry
-    # 全部都是近期主題(極端) → 退回第一名
-    return items[int(ranking[0]["index"])], ranking[0]
+            recent |= topic_keys(h.get("title", ""), h.get("url", ""))
+            if h.get("title"):
+                recent_titles.append(h["title"])
+    available = [
+        e
+        for e in ranking
+        if not (
+            topic_keys(
+                items[int(e["index"])]["title"], items[int(e["index"])].get("url", "")
+            )
+            & recent
+        )
+    ]
+    if not available:
+        fail(
+            logger,
+            f"{len(ranking)} 則候選全部落在 {HISTORY_DAYS} 天去重窗口內,沒有新主題可選",
+            "新聞池可能過期或去重窗口過長。寧可當天不產片,也不要重複上傳既有主題;"
+            f"最近的已選主題: {recent_titles[:3]}",
+        )
+    if len(available) <= LOW_POOL_WARN:
+        # 先預警再失敗:窗口拉長後候選池會逐步被吃掉,這裡讓使用者提早看到
+        logger.warning(
+            f"[WARN] 可用主題僅剩 {len(available)} 則(候選 {len(ranking)} 則,"
+            f"窗口 {HISTORY_DAYS} 天)— 新聞池可能過窄"
+        )
+    entry = available[0]
+    return items[int(entry["index"])], entry
 
 
 def main() -> None:
@@ -195,13 +311,17 @@ def main() -> None:
             "published": chosen["published"],
         },
     }
-    # 回寫歷史:同日(catch-up 重跑)不重複記錄;只保留 7 天窗口
-    key = title_key(chosen["title"])
+    # 回寫歷史:同日(catch-up 重跑)不重複記錄;只保留 HISTORY_DAYS 天窗口。
+    # 一併寫入 url — 之後的比對才有穩定的鍵可用(舊條目沒有 url,靠標題鍵涵蓋)。
+    keys = topic_keys(chosen["title"], chosen.get("url", ""))
     if not any(
-        h.get("date") == today and title_key(h.get("title", "")) == key
+        h.get("date") == today
+        and topic_keys(h.get("title", ""), h.get("url", "")) & keys
         for h in history
     ):
-        history.append({"date": today, "title": chosen["title"]})
+        history.append(
+            {"date": today, "title": chosen["title"], "url": chosen.get("url", "")}
+        )
     cutoff = date.fromisoformat(today) - timedelta(days=HISTORY_DAYS - 1)
     pruned: list[dict] = []
     for h in history:

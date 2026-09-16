@@ -9,6 +9,7 @@ import logging
 import os
 import sys
 from pathlib import Path
+from typing import NoReturn
 
 # 專案根目錄(本檔案在 scripts/ 下,上一層即根)
 ROOT = Path(__file__).resolve().parent.parent
@@ -32,8 +33,12 @@ def setup_logging(step: str) -> logging.Logger:
     return logger
 
 
-def fail(logger: logging.Logger, message: str, details: str = "") -> None:
-    """Stop on failure: report, log, and exit non-zero. Never guess onward."""
+def fail(logger: logging.Logger, message: str, details: str = "") -> NoReturn:
+    """Stop on failure: report, log, and exit non-zero. Never guess onward.
+
+    NoReturn(而非 None)— 本函式永不正常返回,呼叫端在其後不需再寫
+    return/raise 來滿足型別檢查。
+    """
     logger.error(f"[FAIL] {message}")
     if details:
         logger.error(details)
