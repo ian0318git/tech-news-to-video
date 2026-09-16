@@ -35,6 +35,7 @@ POC(notebooklm-py 影片流程)驗證通過後,實作正式系統:
 | D20 | **每日 Shorts**: `run_shorts_pipeline.py` 用 tech 頻道 TOP 1 製作 60 秒直式影片(`--format short`),cron 加在長片之後 | 每天 3 支(2 長片 + 1 Shorts);Shorts 為 Pro/Ultra 限定、英文、分階段開放,生成可能 30+ 分鐘(等待預算 3600s) |
 | D21 | **自動刪除 NotebookLM 專案**: 每支影片下載成功後立即刪當天該 channel 的 notebook(`_orchestrator.run_video_flow` 尾部 hook)+ `cleanup_notebooks.py` 每日掃描舊專案(state 日期 < 今天 且 `done_<日期>.marker` 存在才刪,支援 `--dry-run`) | 影片下載後 notebook 不再被使用,不刪會永久堆積在帳號介面;安全原則: 失敗不刪、刪除失敗只警告絕不影響主流程;CLI `delete -n <id> -y --json` 冪等;`AUTO_DELETE_NOTEBOOKS` 開關(預設 true) |
 | D22 | **唯讀權杖與上傳權杖分離**:`_youtube_read.py` 另存 `output/youtube_read_token.json`(scope `youtube.readonly`),`_youtube.py` 的權杖管理抽成通用 `ensure_token(path, scope, script)` 供兩者共用 | 重新授權生產中的上傳權杖會有失效窗口(2026-08-14 實測 refresh token 失效導致整日 pipeline 癱瘓);唯讀權杖獨立,壞了不影響上傳,也符合最小權限。**device flow 的 scope 限制(實測)**:`youtube.readonly` ✅、`youtube.upload` ✅(文件稱不在允許清單,實測可用)、`yt-analytics.readonly` ❌ `invalid_scope` → Analytics API(留存率/流量來源/CTR)無法用 device flow 取得 |
+| D23 | **歷史去重記錄可從 YouTube 重建**(`backfill_history.py`):讀唯讀 API 的已上傳影片清單,反推每支影片對應的文章標題/日期,回填 `topic_history.json`;預設乾跑,`--write` 才寫入 | 去重狀態是**每台機器獨立**的檔案,而 `topic_history.json` 只從本機跑過的日子開始累積 — VPS 遷移後本機那份就停在遷移日,且早期資料沒有 `url` 欄位。這正是去重漏洞的溫床:狀態一旦落後,人工補跑 fallback 就會重製既有主題。以 YouTube 實際產出為真相來源重建,與哪台機器跑過無關。安全:預設乾跑、只增不減、`save_json` 原子寫入 |
 
 **前置(一次性,使用者操作)**: Google Cloud 專案 → 啟用 YouTube Data API v3 →
 OAuth 同意畫面(External,加入測試使用者)→ 建立 OAuth 用戶端 ID(**TVs and Limited Input devices**)
@@ -42,11 +43,12 @@ OAuth 同意畫面(External,加入測試使用者)→ 建立 OAuth 用戶端 ID(
 
 ## 測試
 
-`pipeline/tests/` — **130 個單元測試**(pytest,mock 不連網):
+`pipeline/tests/` — **144 個單元測試**(pytest,mock 不連網):
 RSS 解析(標題/來源/摘要/上限/壞 XML)、`flag_value` 參數解析、頻道解析、來源過濾
 (Google 轉址排除、去重、非 http 排除)、選題去重(`title_key` / `url_key` / `pick_topic`)、
 權杖管理(refresh 重試、缺 refresh_token、原子寫入)、`channel_stats` 品牌帳號
-fallback(`mine=true` 空 → `forHandle`)。
+fallback(`mine=true` 空 → `forHandle`)、`backfill_history` 標題解析(含 `\xa0\xa0`
+分隔的來源名剝離)與乾跑/寫入行為。
 
 執行: `cd pipeline && pytest tests -q`
 
@@ -67,8 +69,8 @@ fallback(`mine=true` 空 → `forHandle`)。
 - [x] cron 每日 08:00(TZ=Australia/Sydney)+ `auth refresh` + 逐頻道 fail-fast
 - [x] 冪等強化: notebook 重用、來源去重、影片存在跳過、上傳防重複
 - [x] 真實文章 URL 解析(playwright 跟隨 Google News 轉址)
-- [x] 單元測試 130 個(pytest,不連網)+ 文件
-- [x] 唯讀工具: `youtube_read_auth.py`(device flow,scope `youtube.readonly`)+ `channel_stats.py`(頻道數據;品牌帳號需 `forHandle` fallback)+ `deploy.sh`
+- [x] 單元測試 144 個(pytest,不連網)+ 文件
+- [x] 唯讀工具: `youtube_read_auth.py`(device flow,scope `youtube.readonly`)+ `channel_stats.py`(頻道數據;品牌帳號需 `forHandle` fallback)+ `backfill_history.py`(從 YouTube 重建去重歷史)+ `deploy.sh`
 
 ## 部署佈局(by-design)
 
