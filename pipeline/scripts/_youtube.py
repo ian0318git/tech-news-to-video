@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import time
+from pathlib import Path
 
 import httpx
 from _common import OUTPUT_DIR, fail
@@ -41,12 +42,17 @@ def load_client_secret(logger) -> dict:
         fail(logger, "client_secret.json 格式不正確", str(exc))
 
 
-def device_auth(logger, client: dict) -> dict:
-    """OAuth device flow — 印出網址與代碼,由使用者在任何裝置的瀏覽器完成。"""
+def device_auth(logger, client: dict, scope: str = SCOPE) -> dict:
+    """OAuth device flow — 印出網址與代碼,由使用者在任何裝置的瀏覽器完成。
+
+    scope 預設為上傳權限;唯讀流程傳入 READ_SCOPE 以取得不同用途的權杖。
+    注意 device flow 只接受特定 scope 清單 — `yt-analytics.readonly` 實測會被拒
+    (invalid_scope),`youtube.readonly` 與 `youtube.upload` 皆可。
+    """
     logger.info("[INFO] 取得裝置授權碼 ...")
     resp = httpx.post(
         DEVICE_CODE_URL,
-        data={"client_id": client["client_id"], "scope": SCOPE},
+        data={"client_id": client["client_id"], "scope": scope},
         timeout=30.0,
     )
     if resp.status_code != 200:
@@ -101,40 +107,43 @@ def device_auth(logger, client: dict) -> dict:
     fail(logger, "裝置授權逾時(5 分鐘內未完成授權)")
 
 
-def _save_token(token: dict) -> None:
+def _save_token(token: dict, path: Path = TOKEN_PATH) -> None:
     """原子寫入權杖: 先寫 temp + chmod,再 os.replace — 中間過程不會出現
     0644 權限或截斷內容的正式檔案(VM 暫停/斷電也不留殘骸)。"""
-    tmp = TOKEN_PATH.with_name(TOKEN_PATH.name + ".tmp")
+    tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(json.dumps(token, indent=2), encoding="utf-8")
     os.chmod(tmp, 0o600)
-    os.replace(tmp, TOKEN_PATH)
+    os.replace(tmp, path)
 
 
-def ensure_access_token(logger) -> str:
-    """回傳有效 access token(必要時自動 refresh / 首次授權)。"""
-    if not TOKEN_PATH.exists():
+def ensure_token(logger, token_path: Path, scope: str, auth_script: str) -> str:
+    """通用權杖管理: 讀取快取 → 過期則 refresh → 不存在則走 device flow。
+
+    抽成通用形式是為了讓唯讀權杖(見 _youtube_read.py)共用同一套
+    refresh 重試 / 快速失敗 / 原子寫入行為,不必複製一份邏輯。
+    """
+    if not token_path.exists():
         # 非互動環境(cron)沒有「人」能開瀏覽器 — 直接快速失敗,不啟動 device flow
         # 空等(2026-08-14 實測: cron 下啟動後卡 2 小時直到 expired_token,整日癱瘓)。
         if not sys.stdin.isatty():
             fail(
                 logger,
-                "沒有有效的 youtube_token.json,且目前不是互動式終端(cron 環境)",
-                "請在互動式終端執行 python scripts/youtube_auth.py 完成授權後重跑"
-                "(注意: 測試模式 OAuth app 的 refresh token 約 7 天到期,需定期重新授權)",
+                f"沒有有效的 {token_path.name},且目前不是互動式終端(cron 環境)",
+                f"請在互動式終端執行 python scripts/{auth_script} 完成授權後重跑",
             )
         client = load_client_secret(logger)
-        token = device_auth(logger, client)
-        _save_token(token)
-        logger.info(f"[OK] 授權完成,token 已存到 {TOKEN_PATH}")
+        token = device_auth(logger, client, scope=scope)
+        _save_token(token, token_path)
+        logger.info(f"[OK] 授權完成,token 已存到 {token_path}")
         return token["access_token"]
 
     try:
-        token = json.loads(TOKEN_PATH.read_text(encoding="utf-8"))
+        token = json.loads(token_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         fail(
             logger,
-            f"{TOKEN_PATH} 內容損壞(不是 JSON)",
-            "刪除該檔後重跑即可重新授權(device flow)",
+            f"{token_path} 內容損壞(不是 JSON)",
+            f"刪除該檔後重跑 python scripts/{auth_script} 即可重新授權(device flow)",
         )
     if token.get("expires_at", 0) > time.time():
         return token["access_token"]
@@ -142,7 +151,7 @@ def ensure_access_token(logger) -> str:
         fail(
             logger,
             "token 檔缺少 refresh_token(檔案可能損壞)",
-            f"請刪除 {TOKEN_PATH} 後重跑 python scripts/youtube_auth.py",
+            f"請刪除 {token_path} 後重跑 python scripts/{auth_script}",
         )
 
     # refresh: 暫時性錯誤(429/5xx)重試並保留 token;認證錯誤(400 級)才清除
@@ -167,12 +176,12 @@ def ensure_access_token(logger) -> str:
             )
             time.sleep(5)
             continue
-        TOKEN_PATH.unlink(missing_ok=True)
+        token_path.unlink(missing_ok=True)
         fail(
             logger,
-            f"refresh 失敗 (HTTP {resp.status_code}) — 已清除 token,請重跑 youtube_auth.py",
+            f"refresh 失敗 (HTTP {resp.status_code}) — 已清除 token,請重跑 {auth_script}",
             resp.text[:500]
-            + "\n(測試模式 OAuth app 的 refresh token 約 7 天到期,屬預期現象;重新授權即可)",
+            + "\n(若為測試模式 OAuth app,refresh token 約 7 天到期,屬預期現象;重新授權即可)",
         )
     else:
         fail(
@@ -187,6 +196,11 @@ def ensure_access_token(logger) -> str:
             "expires_at": time.time() + new.get("expires_in", 3600) - 60,
         }
     )
-    _save_token(token)
+    _save_token(token, token_path)
     logger.info("[OK] token 已 refresh")
     return token["access_token"]
+
+
+def ensure_access_token(logger) -> str:
+    """回傳有效的上傳用 access token(必要時自動 refresh / 首次授權)。"""
+    return ensure_token(logger, TOKEN_PATH, SCOPE, "youtube_auth.py")

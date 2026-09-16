@@ -34,6 +34,7 @@ POC(notebooklm-py 影片流程)驗證通過後,實作正式系統:
 | D19 | cron 逐頻道 fail-fast:單一頻道失敗記錄 `[FAIL]` 並繼續其他頻道 | 一個頻道故障不拖垮當日全部產出 |
 | D20 | **每日 Shorts**: `run_shorts_pipeline.py` 用 tech 頻道 TOP 1 製作 60 秒直式影片(`--format short`),cron 加在長片之後 | 每天 3 支(2 長片 + 1 Shorts);Shorts 為 Pro/Ultra 限定、英文、分階段開放,生成可能 30+ 分鐘(等待預算 3600s) |
 | D21 | **自動刪除 NotebookLM 專案**: 每支影片下載成功後立即刪當天該 channel 的 notebook(`_orchestrator.run_video_flow` 尾部 hook)+ `cleanup_notebooks.py` 每日掃描舊專案(state 日期 < 今天 且 `done_<日期>.marker` 存在才刪,支援 `--dry-run`) | 影片下載後 notebook 不再被使用,不刪會永久堆積在帳號介面;安全原則: 失敗不刪、刪除失敗只警告絕不影響主流程;CLI `delete -n <id> -y --json` 冪等;`AUTO_DELETE_NOTEBOOKS` 開關(預設 true) |
+| D22 | **唯讀權杖與上傳權杖分離**:`_youtube_read.py` 另存 `output/youtube_read_token.json`(scope `youtube.readonly`),`_youtube.py` 的權杖管理抽成通用 `ensure_token(path, scope, script)` 供兩者共用 | 重新授權生產中的上傳權杖會有失效窗口(2026-08-14 實測 refresh token 失效導致整日 pipeline 癱瘓);唯讀權杖獨立,壞了不影響上傳,也符合最小權限。**device flow 的 scope 限制(實測)**:`youtube.readonly` ✅、`youtube.upload` ✅(文件稱不在允許清單,實測可用)、`yt-analytics.readonly` ❌ `invalid_scope` → Analytics API(留存率/流量來源/CTR)無法用 device flow 取得 |
 
 **前置(一次性,使用者操作)**: Google Cloud 專案 → 啟用 YouTube Data API v3 →
 OAuth 同意畫面(External,加入測試使用者)→ 建立 OAuth 用戶端 ID(**TVs and Limited Input devices**)
@@ -41,9 +42,13 @@ OAuth 同意畫面(External,加入測試使用者)→ 建立 OAuth 用戶端 ID(
 
 ## 測試
 
-`pipeline/tests/` — **16 個單元測試**(pytest,mock 不連網):
+`pipeline/tests/` — **130 個單元測試**(pytest,mock 不連網):
 RSS 解析(標題/來源/摘要/上限/壞 XML)、`flag_value` 參數解析、頻道解析、來源過濾
-(Google 轉址排除、去重、非 http 排除)。
+(Google 轉址排除、去重、非 http 排除)、選題去重(`title_key` / `url_key` / `pick_topic`)、
+權杖管理(refresh 重試、缺 refresh_token、原子寫入)、`channel_stats` 品牌帳號
+fallback(`mine=true` 空 → `forHandle`)。
+
+執行: `cd pipeline && pytest tests -q`
 
 手動驗證方式: 依序執行 `run_daily.py` 各步,檢查 `logs/*.log` 的 `[PASS]`/`[FAIL]`
 與 `output/<slug>/` 的 JSON 內容(`news_raw.json` → `ranking.json`/`top1.json` → `sources.json`)。
@@ -62,13 +67,25 @@ RSS 解析(標題/來源/摘要/上限/壞 XML)、`flag_value` 參數解析、�
 - [x] cron 每日 08:00(TZ=Australia/Sydney)+ `auth refresh` + 逐頻道 fail-fast
 - [x] 冪等強化: notebook 重用、來源去重、影片存在跳過、上傳防重複
 - [x] 真實文章 URL 解析(playwright 跟隨 Google News 轉址)
-- [x] 單元測試 16 個(pytest,不連網)+ 文件
+- [x] 單元測試 130 個(pytest,不連網)+ 文件
+- [x] 唯讀工具: `youtube_read_auth.py`(device flow,scope `youtube.readonly`)+ `channel_stats.py`(頻道數據;品牌帳號需 `forHandle` fallback)+ `deploy.sh`
 
 ## 部署佈局(by-design)
 
 VM 營運目錄 `/home/ian/github-project/notebooklm-py/`(非 git)是**實際執行**的副本,
 cron 指向這裡;GitHub repo 的 `pipeline/` 是**作品集快照**。兩者需同步 — 每次改腳本
 都要 `cp` 到 repo 並 commit(已建立此習慣)。已知影響:雙副本,改動時需記得同步。
+
+**VPS 部署**:`./deploy.sh`(在營運目錄,不進本 repo — 內含主機資訊)。
+流程為 比對兩端 md5 → 只列變更計畫 →(`-y` 或確認後)備份即將被覆蓋的遠端檔案
+→ `rsync` → 重讀遠端 md5 逐檔驗證 → 遠端 `compileall` → 遠端 `pytest`。
+只同步 `scripts/` 與 `tests/`,**刻意不同步** `output/`(各機器狀態:token、
+`topic_history.json`、`youtube_uploads.json`)、`logs/`、`.env`;`config/` 只偵測差異
+並警告,不自動覆蓋。
+
+這支腳本的存在理由:VPS 沒有 git、沒有自動部署,改動只能手動 scp,很容易漏 —
+2026-09-16 就是這樣(選題去重修好了但 VPS 跑舊版,重複上傳照樣發生;`_youtube.py`
+的權杖重構也同樣沒部署)。**`--dry-run` 可隨時確認兩端差異。**
 ## 已知修正紀錄
 
 - `flag_value()` helper: 原本 `--channel` 等旗標解析回傳旗標本身而非下一個值,6 支腳本皆受影響,已統一改用 helper
@@ -80,3 +97,4 @@ cron 指向這裡;GitHub repo 的 `pipeline/` 是**作品集快照**。兩者需
 - 2026-08-13 code-review 批量強化: 零位元影片殘骸不再被當完成品(刪除重跑)、新鮮度閘門移到存在跳過之後、cron 主 run 自行持 flock 與 catch-up 互斥、ffmpeg 加 timeout + temp 檔原子替換、token/secret 權限收緊 0600 + 原子寫入、suggested 非物件元素防呆、全部來源 error 時提早停、run_cli 預設 timeout
 - **2026-08-14 flock 雙鎖教訓(修正 08-13 的「cron 主 run 自行持 flock」)**: code-review #4 是假警報 — reviewer 只看腳本、沒看 crontab;crontab 主 run 本來就用 `flock -n pipeline.lock` 包住 run_daily_cron.sh。08-13 誤加 cron 內層鎖後,crontab 外層持鎖 → 內層 flock 失敗 → 主 run 自己 SKIP 自己(08-14 實測 08:00 連兩次 `[SKIP]`,只能靠 08:15 catch-up 才跑)。已回退 cron 內層鎖與 catchup 的直接呼叫,互斥回到原始設計:單一 `pipeline.lock`,crontab(08:00 主 run)與 catchup 外層各持一把 — 主 run 持鎖時 catchup 預檢查失敗跳出;catchup 持鎖執行時 08:00 主 run 被 crontab 層 flock -n 擋下,永遠不會並發
 - **2026-09-16 選題去重三個漏洞**: 用 YouTube 唯讀 API 反查 135 支歷史影片,發現 47 組重複故事、17 組跨日重複(同一篇文章重製後再次上傳),占上傳 12.6% — 同一篇 Phoronix 文章被製作了 14 次。三個獨立漏洞:①去重窗口只有 14 天,而文章會在 RSS feed 存活數週,撐過窗口即可重新選中;②`title_key` 的來源名尾綴剝離只認單一 token,多字來源名與其網域寫法因此產生不同鍵(有記錄卻封鎖不住);③全部候選被封鎖時靜默退回第一名。已修:改以文章 URL 為主要去重鍵(標題為輔,兼顧舊資料)、窗口拉長至 90 天、尾綴一律剝除(留下限防過度剝離)、無可用主題時明確失敗並在候選過少時預警。教訓:**「有寫入去重記錄」不等於「去重有效」** — 只有從外部(實際產出)反查才看得出來
+- **2026-09-16 唯讀授權 + `channel_stats.py` 品牌帳號坑**: 新增唯讀授權(device flow,scope `youtube.readonly`)作為量測工具,才得以從 YouTube 反查歷史影片、發現上表的去重漏洞。`channels.list(mine=true)` 對**品牌帳號(Brand Account)**回 `items=0` — 授權明明成功卻查不到頻道;改為 `mine` 空時 fallback `forHandle=@handle`(可用 `YOUTUBE_CHANNEL_HANDLE` 覆寫)。同時發現 `_youtube.py` 的權杖重構一直沒部署到 VPS(本機改了、正式環境還是舊版)—— 這正是 `deploy.sh` 存在的理由
