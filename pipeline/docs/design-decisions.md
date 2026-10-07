@@ -38,6 +38,7 @@ POC(notebooklm-py 影片流程)驗證通過後,實作正式系統:
 | D23 | **歷史去重記錄可從 YouTube 重建**(`backfill_history.py`):讀唯讀 API 的已上傳影片清單,反推每支影片對應的文章標題/日期,回填 `topic_history.json`;預設乾跑,`--write` 才寫入 | 去重狀態是**每台機器獨立**的檔案,而 `topic_history.json` 只從本機跑過的日子開始累積 — VPS 遷移後本機那份就停在遷移日,且早期資料沒有 `url` 欄位。這正是去重漏洞的溫床:狀態一旦落後,人工補跑 fallback 就會重製既有主題。以 YouTube 實際產出為真相來源重建,與哪台機器跑過無關。安全:預設乾跑、只增不減、`save_json` 原子寫入 |
 
 | D24 | **選題準則:科技巨頭 / 商業衝突 / 突破性硬體,並由同一次 Gemini 呼叫產生爆款標題**(2026-10-08):`RANK_PROMPT_TEMPLATE` 加入明確編輯優先序(①主要科技公司 ②商業與競爭衝突 ③突破性硬體或 AI 產品),醫療臨床與純學術**降權但不剔除**;同時要求 Gemini 為 #1 產出兩條英文爆款標題(四公式擇一:數字與天價 / 對立與衝突 / 反直覺未來感 / 強烈懸念),寫入 `top1.json` 的 `video_title`(長片,≤60 字元)與 `shorts_title`(Shorts,≤50 字元) | **不另開 Gemini 呼叫是關鍵** — 免費層每日僅 20 次配額,多一次就是少一天的產能。兩者合併進既有呼叫 = 零額外成本。標題串接集中在 `_config.build_title()`(淨化 `\n`/`<`/`>`、`TITLE_MAX=95` 截斷、爆款標題從缺時退回新聞標題並警告);消費端是 `youtube_upload.build_metadata()`,Shorts 依檔名前綴取用專屬欄位。選題準則的取捨:頻道受眾是科技新聞,醫療/學術選題點閱與定位都不合。**已知未解**:`relevance to the topic` 被寫成 tie-breaker、embedded 頻道沒有對應的 PRIORITISE 類別 — 觀察數日再決定是否加 per-channel 準則 |
+| D25 | **Gemini 配額保護三件套**(2026-10-08,接 D24 的 20 次/天前提):**A** `_gemini.daily_quota_hit()` 解析 429 body,`quotaId`/`quotaMetric` 含 `PerDay` → 立刻 fail 不重試;**B** `run_daily` 在 `top1.json` 的 `date == 今天` 時跳過 fetch/rank;**C** `sources.json` 的 `topic` 等於今天選題且 `sources` 非空時跳過 collect | 起因:cron 08:00 主 run + `*/15 8-14` 補跑 = 28 次/天,而唯一的冪等閘門是「今天的影片檔存在」— **失敗時該條件永遠不成立**,所以一次短暫故障會在兩個 tick 內燒光當日 20 次額度,之後整天 429(實測 274 筆同型)。**判準只看 `quotaId` 不看 `retryDelay`**:同一種 429 的 `retryDelay` 實測 32s–85477s 都有,拿它判斷會把每分鐘速率限制誤判成每日;而每分鐘版本的 `quotaMetric` 與每日版本逐字元相同,只有 `quotaId` 的 `PerMinute`/`PerDay` 不同(兩種情境各有測試釘住)。**C 的 `topic` 比對不是冗餘**:top1.json 被換題時,舊 sources.json 是別的題目的來源。判斷抽成純函式(`load_top1`/`locked_topic`/`sources_ready`/`skip_reason`)以便離線測試;畸形輸入一律當「沒跑過」重跑而非當「已完成」跳過,未知步驟一律執行。**未採用 D(補跑間隔 15→60 分)**:B/C 讓已完成時每 tick 零成本,15 分鐘密度反而是短暫故障能快速自癒的優點 |
 
 **前置(一次性,使用者操作)**: Google Cloud 專案 → 啟用 YouTube Data API v3 →
 OAuth 同意畫面(External,加入測試使用者)→ 建立 OAuth 用戶端 ID(**TVs and Limited Input devices**)
@@ -45,7 +46,7 @@ OAuth 同意畫面(External,加入測試使用者)→ 建立 OAuth 用戶端 ID(
 
 ## 測試
 
-`pipeline/tests/` — **203 個單元測試**(pytest,mock 不連網):
+`pipeline/tests/` — **246 個單元測試**(pytest,mock 不連網):
 RSS 解析(標題/來源/摘要/上限/壞 XML)、`flag_value` 參數解析、頻道解析、來源過濾
 (Google 轉址排除、去重、非 http 排除)、選題去重(`title_key` / `url_key` / `pick_topic`)、
 權杖管理(refresh 重試、缺 refresh_token、原子寫入)、`channel_stats` 品牌帳號
@@ -58,6 +59,14 @@ fallback(`mine=true` 空 → `forHandle`)、`backfill_history` 標題解析(含 
 畸形 index、缺 key)、`entry_index` 與畸形 ranking 跳過、`youtube_upload.build_metadata`
 (真的決定 YouTube 標題的地方 — 長片/Shorts 各取專屬欄位、跨日 top1 的日期閘門、
 news 欄位畸形)、resumable 續傳決策。
+
+2026-10-08 追加(D25):`_gemini.daily_quota_hit` 的判準 — 真實的每日配額 payload、
+每分鐘速率限制(quotaMetric 相同、只有 quotaId 不同)必須**不**被誤判、非 JSON /
+JSON 陣列 / `error` 是字串 / `details` 畸形等一律回空字串(→ 照常重試),以及兩個
+行為測試(每日配額 → 只打 1 次 HTTP、不 sleep;每分鐘 → 照舊 3 次、sleep 5/10);
+`run_daily` 的冪等判斷 — `load_top1` 對損壞/非物件 JSON 回空 dict、`locked_topic`
+只認今天的 date 且容忍畸形的 `news`、`sources_ready` 拒絕空的/壞的來源清單、
+`skip_reason` 在換題後必須重收來源、未知步驟一律執行。
 
 執行: `cd pipeline && pytest tests -q`
 
@@ -109,6 +118,8 @@ cron 指向這裡;GitHub repo 的 `pipeline/` 是**作品集快照**。兩者需
 - **2026-08-14 flock 雙鎖教訓(修正 08-13 的「cron 主 run 自行持 flock」)**: code-review #4 是假警報 — reviewer 只看腳本、沒看 crontab;crontab 主 run 本來就用 `flock -n pipeline.lock` 包住 run_daily_cron.sh。08-13 誤加 cron 內層鎖後,crontab 外層持鎖 → 內層 flock 失敗 → 主 run 自己 SKIP 自己(08-14 實測 08:00 連兩次 `[SKIP]`,只能靠 08:15 catch-up 才跑)。已回退 cron 內層鎖與 catchup 的直接呼叫,互斥回到原始設計:單一 `pipeline.lock`,crontab(08:00 主 run)與 catchup 外層各持一把 — 主 run 持鎖時 catchup 預檢查失敗跳出;catchup 持鎖執行時 08:00 主 run 被 crontab 層 flock -n 擋下,永遠不會並發
 - **2026-09-16 選題去重三個漏洞**: 用 YouTube 唯讀 API 反查 135 支歷史影片,發現 47 組重複故事、17 組跨日重複(同一篇文章重製後再次上傳),占上傳 12.6% — 同一篇 Phoronix 文章被製作了 14 次。三個獨立漏洞:①去重窗口只有 14 天,而文章會在 RSS feed 存活數週,撐過窗口即可重新選中;②`title_key` 的來源名尾綴剝離只認單一 token,多字來源名與其網域寫法因此產生不同鍵(有記錄卻封鎖不住);③全部候選被封鎖時靜默退回第一名。已修:改以文章 URL 為主要去重鍵(標題為輔,兼顧舊資料)、窗口拉長至 90 天、尾綴一律剝除(留下限防過度剝離)、無可用主題時明確失敗並在候選過少時預警。教訓:**「有寫入去重記錄」不等於「去重有效」** — 只有從外部(實際產出)反查才看得出來
 - **2026-09-16 唯讀授權 + `channel_stats.py` 品牌帳號坑**: 新增唯讀授權(device flow,scope `youtube.readonly`)作為量測工具,才得以從 YouTube 反查歷史影片、發現上表的去重漏洞。`channels.list(mine=true)` 對**品牌帳號(Brand Account)**回 `items=0` — 授權明明成功卻查不到頻道;改為 `mine` 空時 fallback `forHandle=@handle`(可用 `YOUTUBE_CHANNEL_HANDLE` 覆寫)。同時發現 `_youtube.py` 的權杖重構一直沒部署到 VPS(本機改了、正式環境還是舊版)—— 這正是 `deploy.sh` 存在的理由
+- **2026-10-08 換 Gemini key 才發現:模型權限與配額都綁「專案」,不綁「key」**: 使用者提供新 key 後實測,現行設定的 `gemini-2.5-flash` 回 404 `"no longer available to new users"`,連 `gemini-2.5-flash-lite` / `gemini-2.0-flash` 也一樣;換 Google 推薦的 `gemini-3.8-flash` 則全數 503 `"high demand"` 或**永不回應**(`v1beta` / `v1` / Interactions API、curl / httpx、本機 / VPS 六種組合一致)。舊 key 之所以還能用 2.5-flash,是因為它屬於**下線前就存在的舊專案**(既有專案沿用,非新用戶)。兩個必須記住的觀念:**① 想在同專案新增 key 來解決配額是無效的** — 額度是每專案共用的一份 20 次/天,要換的是專案不是 key;**② 免費層配額在太平洋時間午夜重置 = 墨爾本 18:00**,遠早於隔天 08:00 的 cron,所以每天早上都是滿額,一天正常只需 4 次。**教訓:「換 key」不是填進去就好的動作** — 它也決定了你能用哪些模型。當時未先備份舊 key 就直接覆寫兩台 `.env`,導致無法回退
+
 - **2026-10-08 爆款標題接錯線(C1,reviewer 查出)**: 初版把爆款標題接到 `run_video_pipeline.py` / `run_shorts_pipeline.py` 的 `title` 變數,而那個 title 只流向 `cli.ensure_notebook()` — 是 NotebookLM 的**專案名稱**,影片下載後專案立刻被自動刪除,**成品完全沒套用**,整個功能等於白做。真正決定 YouTube 標題的是 `youtube_upload.build_metadata()`(讀 `top1.json`)。已修正並補回歸測試(`tests/test_youtube_upload.py` 釘住「上傳標題的來源是 build_metadata」),兩支 pipeline 檔改回原樣並加註解標明「這裡的 title 不是 YouTube 標題」。**教訓:接好線之後要一路追到「誰消費這個值、使用者最後看到什麼」才算完成 — 變數存在且測試綠燈 ≠ 功能生效**
 - **2026-10-08 同批加固(與 D24 同一輪 review)**: ①`build_title` 把「可用性判斷」移到淨化**之後** — 舊寫法下 `viral="<>"` 會被判定有值、淨化後成空字串、fallback 被跳過,產出尾端懸空的 `"prefix - "` 直接上傳;②`pick_topic` 對 ranking 條目 index 全壞時改報專屬訊息(舊版一律報「全部落在 N 天去重窗口內」,會把排查帶去翻沒問題的 `topic_history.json`);③`youtube_upload` 加上傳端**日期閘門**(`dates_agree`):`top1.json` 的 `date` 與影片檔名日期不符 → 標題與說明改用檔名並警告。這是「A 的標題出現在 B 的影片上」唯一殘存路徑(跨日補傳),正常流程不受影響,任一邊取不到日期時放行以免誤擋手動補傳;④`news.title` 為 `null` 或淨化後成空時仍會產生懸空標題 → fallback 改為「保證非空」(兩條 fallback 路徑共用 `stem_label`,避免同一件事有兩種輸出);⑤畸形 ranking 條目不再丟未捕捉例外(`entry_index`)。測試 144 → **203 passed**
 - **2026-10-08 Gemini 免費配額被 429 打爆(未修,待決)**: 症狀「早上跑得動、10:00 之後整天 429」。根因是配額算術:免費層 **20 次/天**;一次完整 run 要 4 次呼叫(2 頻道 × (`rank_news` + `collect_sources`)),`_gemini.py` 對 429/5xx 重試 2 次(每次呼叫最多 3 個 HTTP 請求);cron 08:00 主 run + `*/15 8-14` 補跑 = **28 次/天**,而唯一的冪等閘門是「今天的影片檔存在」,失敗時該條件永不成立 → 一次短暫故障就在約兩個 tick 內燒光當日額度。**教訓:重試機制在有限配額下會把單次失敗放大成整日癱瘓**。待決方案 A–E(不重試每日配額型 429 / 補跑冪等 / `collect_sources` 同樣處理 / 補跑間隔 15→60 分 / 付費 key)

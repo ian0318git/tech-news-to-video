@@ -24,7 +24,7 @@
 
 ## 測試
 
-- `pytest`(203 tests:facade / CLI contract / orchestrator / rank_news 去重 / 標題組合 / 上傳 metadata)
+- `pytest`(246 tests:facade / CLI contract / orchestrator / rank_news 去重 / 標題組合 / 上傳 metadata / Gemini 配額判準 / 補跑冪等)
 - `ruff check .`
 
 ## 安全(不可違反)
@@ -35,5 +35,6 @@
 
 - NotebookLM 並發生成會失敗 → 全程 flock
 - 品牌拼接須保留音訊;Gemini 結束卡靠尾靜音偵測裁切
-- Gemini 429 常見 → gemini_json 內建重試
+- Gemini 429 常見 → gemini_json 內建重試;**但每日配額耗盡(quotaId 含 `PerDay`)不重試**,直接 fail(免費層 20 次/天,重試只是白等 — 判準見 D25)
+- Gemini 免費層配額**每專案** 20 次/天(換 key 不等於換額度,要換專案),太平洋午夜重置 = 墨爾本 18:00;補跑靠 `top1.json`/`sources.json` 冪等,不靠影片檔
 - `.env` 內路徑必須絕對(cron cwd 下相對路徑失效)
