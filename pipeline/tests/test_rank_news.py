@@ -4,9 +4,22 @@ import logging
 from datetime import date, timedelta
 
 import pytest
-from rank_news import HISTORY_DAYS, pick_topic, title_key, topic_keys, url_key
+from _common import SHORTS_TITLE_FIELD, VIDEO_TITLE_FIELD
+from rank_news import (
+    HISTORY_DAYS,
+    RANK_PROMPT_TEMPLATE,
+    apply_dedup_choice,
+    entry_index,
+    pick_topic,
+    title_key,
+    topic_keys,
+    url_key,
+)
 
 TODAY = "2026-08-10"
+
+# apply_dedup_choice 需要 logger(只用在警告);測試用獨立的,不碰 rank_news 的檔案 handler
+logger = logging.getLogger("test_rank_news")
 
 ITEMS = [
     {
@@ -288,6 +301,40 @@ def test_all_recent_fails_instead_of_repeating():
         pick_topic(ITEMS, RANKING, history, TODAY)
 
 
+def test_all_invalid_ranking_blames_index_not_dedup(caplog):
+    """R2(2026-10-08 reviewer):ranking 條目的 index 全部壞掉時,真因是 Gemini
+    回傳格式,不是去重窗口 — 舊版一律報「全部落在去重窗口內」,事故排查會走錯
+    方向(去翻 topic_history.json,而那裡根本沒問題)。"""
+    ranking = [{"index": 99}, {"index": "abc"}, {"index": -1}, {"index": None}]
+    with caplog.at_level(logging.ERROR), pytest.raises(SystemExit):
+        pick_topic(ITEMS, ranking, [], TODAY)
+    assert "index 全部無效" in caplog.text
+    assert "去重窗口" not in caplog.text
+
+
+def test_empty_ranking_reports_empty_not_invalid(caplog):
+    """F2(2026-10-08 reviewer):空 ranking 會讓 `invalid == len(ranking)` 成立
+    (0 == 0),報成「0 則條目 index 全部無效」語意不通。"""
+    with caplog.at_level(logging.ERROR), pytest.raises(SystemExit):
+        pick_topic(ITEMS, [], [], TODAY)
+    assert "空陣列" in caplog.text
+    assert "index 全部無效" not in caplog.text
+
+
+def test_all_blocked_message_includes_invalid_count(caplog):
+    """壞條目與去重封鎖同時發生時,訊息要帶上壞條目數,否則看不出 pool 變小
+    有兩個成因。"""
+    history = [
+        {"date": d, "title": ITEMS[i]["title"]}
+        for i, d in enumerate(["2026-08-04", "2026-08-05", "2026-08-06", "2026-08-07"])
+    ]
+    ranking = [*RANKING, {"index": 99}]
+    with caplog.at_level(logging.ERROR), pytest.raises(SystemExit):
+        pick_topic(ITEMS, ranking, history, TODAY)
+    assert f"全部落在 {HISTORY_DAYS} 天去重窗口內" in caplog.text
+    assert "另有 1 則條目 index 無效" in caplog.text
+
+
 def test_case_and_punctuation_mismatch_still_dedup():
     history = [
         {
@@ -314,3 +361,176 @@ def test_malformed_history_entry_ignored():
     ]
     item, _ = pick_topic(ITEMS, RANKING, history, TODAY)
     assert item["index"] == 0  # 壞資料被忽略,#0 未被近期選過
+
+
+# --- 選題 prompt 護欄 -------------------------------------------------------
+# prompt 是整條 pipeline 唯一的選題輸入,但它只是個字串常數,改壞了不會有
+# type error,只會在隔天早上安靜地選出爛題目。以下三條把意圖鎖住。
+
+
+def test_rank_prompt_template_renders_with_real_arguments():
+    """format 佔位符與 JSON 範例的大括號必須正確 — 渲染失敗 = 整天選題掛掉。"""
+    out = RANK_PROMPT_TEMPLATE.format(topic="embedded linux", items_json="[]")
+    assert "{topic}" not in out and "{items_json}" not in out  # 佔位符已替換
+    assert "embedded linux" in out  # 參數確實注入
+    assert "{{" not in out and "}}" not in out  # 跳脫字元已被 format 消化
+    assert '"ranking": [' in out and '"top1": {' in out  # JSON 契約完整
+
+
+def test_rank_prompt_keeps_editorial_priorities():
+    """編輯立場護欄:優先科技巨頭/商業衝突/突破性產品,醫療與論文降權(2026-10-07)。"""
+    out = RANK_PROMPT_TEMPLATE.format(topic="t", items_json="[]")
+    assert "PRIORITISE" in out and "DE-PRIORITISE" in out
+    for term in ("technology companies", "antitrust", "Medical", "academic"):
+        assert term in out, f"編輯準則關鍵字消失: {term!r}"
+
+
+def test_rank_prompt_requires_every_item_ranked():
+    """降權 ≠ 排除。pick_topic 沿 ranking 依序取用,若 Gemini 省略被降權的項目,
+    候選池會縮小 → 最壞情況整天 fail 選題。這道指令不能消失。"""
+    out = RANK_PROMPT_TEMPLATE.format(topic="t", items_json="[]")
+    assert "include every news item" in out
+
+
+def test_rank_prompt_asks_for_viral_titles():
+    """爆款標題四個公式必須齊全。注意它與選題共用同一次 Gemini 呼叫 —
+    免費層每日配額僅 20 次,不能為了標題另開一次呼叫(2026-10-07)。"""
+    out = RANK_PROMPT_TEMPLATE.format(topic="t", items_json="[]")
+    for formula in ("NUMBERS", "CONFLICT", "COUNTER-INTUITIVE", "SUSPENSE"):
+        assert formula in out, f"爆款公式消失: {formula!r}"
+
+
+def test_title_field_names_match_prompt_contract():
+    """漂移護欄:rank_news 在 prompt 裡要 Gemini 填的欄位名,必須與 build_title
+    讀取的常數一致。不一致不會報錯 — 只會靜默退回原始標題,很難察覺。
+
+    必須出現在 JSON 範例的 "top1" 那一行:prompt 有兩處提到欄位名(規格行與
+    JSON 範例),Gemini 是照 JSON 範例的形狀回傳的 — 只檢查「全文出現過」
+    會讓「範例欄位被刪掉、只剩規格行」照樣通過,而 Gemini 從此不再回這個欄位。
+    """
+    out = RANK_PROMPT_TEMPLATE.format(topic="t", items_json="[]")
+    top1_line = next(ln for ln in out.splitlines() if '"top1": {' in ln)
+    assert f'"{VIDEO_TITLE_FIELD}"' in top1_line
+    assert f'"{SHORTS_TITLE_FIELD}"' in top1_line
+
+
+# --- apply_dedup_choice:去重改選後的 top1 重寫(2026-10-08 補) ---------------
+# 這是整條選題鏈裡最容易「靜默出錯」的一段:錯了不會拋例外,只會讓 top1.json
+# 變成「A 的標題 + B 的內容」的混合檔,一路傳到上傳。
+
+
+def test_apply_dedup_choice_keeps_top1_when_index_matches():
+    """Gemini 的 #1 就是實際選中的那篇 → 原樣保留(含它自己的 why_top)。"""
+    top1 = {
+        "index": 1,
+        "title": "T",
+        "url": "u",
+        "why_top": "gemini reason",
+        VIDEO_TITLE_FIELD: "Viral!",
+    }
+    out = apply_dedup_choice(top1, {"title": "T"}, {"reason": "r"}, 1, logger)
+    assert out is top1
+    assert out["why_top"] == "gemini reason"
+
+
+def test_apply_dedup_choice_rewrites_on_reject():
+    """去重改選別篇 → 識別欄位換成真正選中的那篇,爆款標題清空(避免張冠李戴)。"""
+    top1 = {
+        "index": 3,
+        "title": "Rejected",
+        "url": "u3",
+        "why_top": "gemini reason",
+        VIDEO_TITLE_FIELD: "Describes The Rejected Article!",
+        SHORTS_TITLE_FIELD: "Wrong short!",
+    }
+    chosen = {"title": "Chosen", "url": "u7", "summary": "sum"}
+    out = apply_dedup_choice(top1, chosen, {"reason": "dedup reason"}, 7, logger)
+    assert out["index"] == 7
+    assert out["title"] == "Chosen"
+    assert out["url"] == "u7"
+    assert out["why_top"] == "dedup reason"
+    assert out["headline"] == "sum"
+    assert out[VIDEO_TITLE_FIELD] == ""
+    assert out[SHORTS_TITLE_FIELD] == ""
+
+
+@pytest.mark.parametrize("bad_index", [None, "abc", {"x": 1}, [0]])
+def test_apply_dedup_choice_rewrites_when_index_unreadable(caplog, bad_index):
+    """回歸護欄(2026-10-08 reviewer M1):index 缺失/畸形時,舊版因
+    `top1_index is not None and ...` 而整段跳過 → 靜默留下 Gemini 那篇的
+    title/url/爆款標題,與 top1["news"] 的真正選中文章不一致。現在一律覆寫。"""
+    top1 = {
+        "index": bad_index,
+        "title": "Gemini Pick",
+        "url": "u1",
+        VIDEO_TITLE_FIELD: "Describes The Other Article!",
+    }
+    chosen = {"title": "Actually Chosen", "url": "u2", "summary": "s"}
+    with caplog.at_level(logging.WARNING):
+        out = apply_dedup_choice(top1, chosen, {"reason": "r"}, 2, logger)
+    assert out["title"] == "Actually Chosen"
+    assert out["url"] == "u2"
+    assert out[VIDEO_TITLE_FIELD] == ""
+    assert "缺少有效 index" in caplog.text
+
+
+def test_apply_dedup_choice_missing_index_key(caplog):
+    """完全沒有 index 欄位時同樣走覆寫路徑。"""
+    chosen = {"title": "Chosen", "url": "u9", "summary": "s"}
+    with caplog.at_level(logging.WARNING):
+        out = apply_dedup_choice({"title": "No Index"}, chosen, {}, 3, logger)
+    assert out["title"] == "Chosen"
+    assert "缺少有效 index" in caplog.text
+
+
+def test_apply_dedup_choice_tolerates_missing_chosen_keys(caplog):
+    """chosen 缺 title/url 不該拋 KeyError(R4,2026-10-08 reviewer)。
+
+    呼叫端目前保證 chosen 來自 items(fetch_news 會濾掉沒 title/link 的項目),
+    所以現實中不可達 — 但同一輪已把 pick_topic 的取用改成容錯,這裡留著 []
+    就只做了一半,而這正是本檔案存在的理由:畸形輸入不該變成 traceback,
+    那會蓋掉真正的原因。
+    """
+    with caplog.at_level(logging.WARNING):
+        out = apply_dedup_choice({"index": 5}, {}, {}, 0, logger)
+    assert out["title"] == ""
+    assert out["url"] == ""
+    assert out[VIDEO_TITLE_FIELD] == ""
+    assert out[SHORTS_TITLE_FIELD] == ""
+
+
+# --- entry_index:畸形 ranking 條目的防呆 ------------------------------------
+
+
+@pytest.mark.parametrize(
+    "entry,expected",
+    [
+        ({"index": 0}, 0),
+        ({"index": "2"}, 2),
+        ({"index": 3}, None),  # 越界(3 個項目 → 0..2)
+        ({"index": -1}, None),
+        ({"title": "no index"}, None),
+        ({"index": "abc"}, None),
+        ({"index": None}, None),
+        ("not a dict", None),
+        (None, None),
+    ],
+)
+def test_entry_index_handles_malformed(entry, expected):
+    assert entry_index(entry, 3) == expected
+
+
+def test_pick_topic_skips_malformed_ranking_entries(caplog):
+    """畸形條目不可變成 traceback(IndexError/KeyError/ValueError)蓋掉真因,
+    應跳過 + 警告,其餘候選照常運作。"""
+    ranking = [
+        {"index": 99},  # 越界
+        {"title": "no index"},  # 缺欄位
+        {"index": "abc"},  # 非數字
+        {"index": 1, "title": ITEMS[1]["title"]},
+    ]
+    with caplog.at_level(logging.WARNING):
+        item, entry = pick_topic(ITEMS, ranking, [], TODAY)
+    assert item["index"] == 1
+    assert entry["index"] == 1
+    assert "index 無效" in caplog.text

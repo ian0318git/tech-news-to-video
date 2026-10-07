@@ -57,6 +57,9 @@ def main() -> None:
 
     today = today_str()
     news = top1.get("news", top1)
+    # 同 run_video_pipeline:這只是 NotebookLM 專案名稱,不是 YouTube 標題
+    # (YouTube 標題由 youtube_upload.build_metadata() 決定)。日期前綴要保留 —
+    # cleanup_notebooks.py 靠 "^(?:Shorts )?<日期> " 樣式辨識。
     title = f"Shorts {today} - {news.get('title', '')}"[:80]
     desc = f"{SHORTS_PROMPT} Story: {news.get('title')}"
     logger.info(f"[INFO] Shorts 主題: {news.get('title')}")

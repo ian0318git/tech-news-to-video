@@ -47,6 +47,10 @@ def main() -> None:
     today = today_str()
     news = top1.get("news", top1)
     prefix = channel.get("title_prefix", "Daily News")
+    # 這個 title 只是 NotebookLM 的專案名稱(影片下載後該專案會被自動刪除)。
+    # **上傳到 YouTube 的標題不在這裡決定** — 是 youtube_upload.build_metadata()
+    # 從 top1.json 讀爆款標題產生的。開頭的日期前綴要保留:
+    # cleanup_notebooks.py 靠 "^(?:Shorts )?<日期> " 樣式辨識待清理的專案。
     title = f"{today} {prefix} - {news.get('title', '')}"[:80]
     desc = (
         f"Summarize today's top {channel['keyword']} news: {news.get('title')}. "

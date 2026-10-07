@@ -36,6 +36,69 @@ SIMPLE_EN_STYLE = (
 )
 
 
+# --- YouTube 標題 -----------------------------------------------------------
+# 爆款標題由 rank_news 隨選題在同一次 Gemini 呼叫一起產生(見
+# RANK_PROMPT_TEMPLATE 的四個公式),寫進 top1.json。欄位名在此單一定義 —
+# 產生端(rank_news)與消費端(兩支影片腳本)都從這裡取,避免字串漂移。
+# 不另開 Gemini 呼叫:免費層每日配額僅 20 次,多一次呼叫就是少一天的產能。
+VIDEO_TITLE_FIELD = "video_title"
+SHORTS_TITLE_FIELD = "shorts_title"
+
+# YouTube 標題上限(官方硬限 100,留 5 字元餘裕)。
+# youtube_upload.py 原本自己截 [:95],現在統一由 build_title 收斂 —
+# 全專案只有這一個截斷點,prompt 端另有更嚴的長度指示。
+TITLE_MAX = 95
+
+
+def clean_headline(text: object) -> str:
+    """標題候選的淨化:型別檢查 → 清 < > 與換行 → 收斂空白。
+
+    換行與 < > 必須清掉:舊標題直接來自 RSS,不會有這些字元;現在是 LLM
+    自由生成(「強烈懸念」公式特別容易生成問句與符號),而 YouTube Data API
+    對標題含 < > 會回 400 invalidTitle,換行則破壞版面。
+    非字串(JSON null / 數字 / 物件)一律視為空 — 呼叫端不該為了淨化而
+    先做一次型別檢查,那會出現兩份判斷不一致的空窗。
+    """
+    if not isinstance(text, str):
+        return ""
+    return " ".join(text.replace("<", "").replace(">", "").split())
+
+
+def build_title(head: str, viral: object, fallback: object, logger) -> str:
+    """組合 YouTube 標題為 "<head> - <爆款標題>"。
+
+    viral 是 rank_news 產生的爆款標題(top1.json 的 VIDEO/SHORTS_TITLE_FIELD)。
+    取不到時退回 fallback(原始新聞標題)並發警告 — 四種取不到的情況:
+      1. Gemini 沒回這個欄位
+      2. Gemini 回的不是字串(或只有空白)
+      3. 淨化後成空字串(整串只有 < > 或空白)
+      4. 去重改選了別篇 — 沿用會張冠李戴,rank_news 已主動清空
+    fallback 同樣做型別檢查:JSON 的 "title": null 會讓 .get 回 None。
+    永不靜默失敗(CLAUDE.md)。
+
+    2026-10-08 reviewer R1:可用性判斷必須在**淨化之後**。舊版先判斷 viral
+    非空才淨化,於是 viral="<>" 會被判定「有值」→ 淨化後成空字串 → fallback
+    被跳過,產出尾端懸空的 "prefix - " 直接上傳。先淨化再判斷就沒有這個洞。
+    """
+    tail = clean_headline(viral)
+    if not tail:
+        logger.warning(
+            "[WARN] 沒有可用的爆款標題(Gemini 未回 / 型別錯誤 / 淨化後為空 /"
+            " 去重改選已清空),退回原始新聞標題"
+        )
+        tail = clean_headline(fallback)
+    if not tail:
+        logger.warning("[WARN] 標題尾段為空 — 爆款標題與原始新聞標題都取不到")
+    title = f"{head} - {tail}"
+    if len(title) > TITLE_MAX:
+        logger.warning(
+            f"[WARN] 標題 {len(title)} 字元超過上限 {TITLE_MAX},已截斷:"
+            f" {title[:70]}…"
+        )
+        title = title[:TITLE_MAX]
+    return title
+
+
 def load_channels(logger) -> list[dict]:
     """讀取 config/channels.json 的頻道定義。"""
     if not CHANNELS_FILE.exists():

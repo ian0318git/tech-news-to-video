@@ -5,7 +5,7 @@
 
 ## 專案佈局
 
-- `pipeline/scripts/` — 每日流程:`fetch_news` → `rank_news`(Gemini 排名 + 7 天話題去重)→ `collect_sources` → `run_video_pipeline` / `run_shorts_pipeline`(NotebookLM 生成,旁白用 `SIMPLE_EN_STYLE` A2 基礎英文)→ `brand_video` + `youtube_upload`(品牌片頭/片尾拼接、公開上傳)
+- `pipeline/scripts/` — 每日流程:`fetch_news` → `rank_news`(Gemini 排名 + 90 天話題去重 + 爆款標題)→ `collect_sources` → `run_video_pipeline` / `run_shorts_pipeline`(NotebookLM 生成,旁白用 `SIMPLE_EN_STYLE` A2 基礎英文)→ `brand_video` + `youtube_upload`(品牌片頭/片尾拼接、公開上傳;**YouTube 標題在此由 `build_metadata` 從 `top1.json` 的爆款標題產生**,影片階段的 title 只是 NotebookLM 專案名稱)
 - `pipeline/config/channels.json` — 頻道設定(embedded / tech,含 style_prompt)
 - `pipeline/docs/` — design-decisions.md、master-token-auth.md
 - `src/`、根目錄 `docs/` — 上游 notebooklm-py 函式庫(勿改,上游指南保留在 git 歷史與 `docs/`)
@@ -24,7 +24,7 @@
 
 ## 測試
 
-- `pytest`(45 tests:facade / CLI contract / orchestrator / rank_news 去重)
+- `pytest`(203 tests:facade / CLI contract / orchestrator / rank_news 去重 / 標題組合 / 上傳 metadata)
 - `ruff check .`
 
 ## 安全(不可違反)

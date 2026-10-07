@@ -16,6 +16,8 @@ from datetime import date, timedelta
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
 from _common import (
+    SHORTS_TITLE_FIELD,
+    VIDEO_TITLE_FIELD,
     channel_dir,
     fail,
     flag_value,
@@ -31,15 +33,61 @@ logger = setup_logging("rank_news")
 
 DEFAULT_MODEL = "gemini-2.5-flash"
 
+# 2026-10-07: 加入編輯立場。先前只給中性的四個維度(relevance/recency/depth/
+# authority),Gemini 於是把「技術上新鮮」與「產業上重要」視為等價,導致醫療研究
+# 與純學術論文長期佔走 TOP 1(使用者反應)。現在明列優先序與降權類別。
+#
+# 注意:「降權」不等於「排除」— 被降權的項目仍必須留在 ranking 裡(排在後面)。
+# pick_topic 是沿著 ranking 依序取第一則沒被去重窗口封鎖的,若 Gemini 把降權項目
+# 直接省略,候選池會縮小,最壞情況會 fail 掉整天的選題(寧可當天不產片)。
 RANK_PROMPT_TEMPLATE = """You are a news editor for an audience interested in the topic "{topic}".
-Rank the following news items by: (1) relevance to the topic, (2) recency,
-(3) technical depth, (4) source authority.
+
+Rank the following news items using these editorial priorities.
+
+PRIORITISE, roughly in this order:
+1. Major technology companies — Apple, Google, Microsoft, Amazon, Meta, NVIDIA,
+   OpenAI, Anthropic, Samsung, Tesla, SpaceX, Intel, AMD, Qualcomm, Arm, TSMC
+   and comparable industry players.
+2. Business and competitive conflict — lawsuits, antitrust and regulation,
+   licensing disputes, corporate strategy clashes, market competition.
+3. Breakthrough hardware or AI products — new chips, devices, models or
+   platforms that materially change what is possible.
+
+DE-PRIORITISE (rank these lower — do NOT drop them):
+- Medical, clinical and health-adjacent stories, unless a major technology
+  company or a shipping product is central to the story.
+- Pure academic work — papers, preprints and university lab announcements with
+  no company, product or industry dimension.
+
+Break ties by recency, technical depth, source authority and relevance to the
+topic.
+
+You MUST include every news item in the ranking, including the ones you
+de-prioritise — they still belong at the bottom of the list.
+
+Finally, for your #1 pick, write TWO English headlines for the video. Each must
+follow EXACTLY ONE of these four formulas — pick whichever fits the story best:
+  (A) NUMBERS — lead with a striking figure: money, scale, specs, people affected.
+      e.g. "Fined $5.7B!", "Now 64-Bit!"
+  (B) CONFLICT — a clash between industry giants, or a regulatory fight.
+      e.g. "Apple Takes On Microsoft!"
+  (C) COUNTER-INTUITIVE — an unexpected or futuristic use of the technology.
+      e.g. "A Chip In Space?", "VR In The Operating Theatre!"
+  (D) SUSPENSE — an open question that makes people curious.
+      e.g. "Is AGI Really Coming? Jensen Huang Just Spoke"
+
+Tone: natural, conversational, emotionally charged. Use "!" or "?" where it lands.
+Never invent facts, numbers or quotes that are not in the story.
+
+  "video_title"  — long-form explainer video. Maximum 60 characters.
+  "shorts_title" — 60-second vertical short. Punchier and shorter. Maximum 50 characters.
+
 Return JSON only, with this exact shape:
 {{
   "ranking": [
     {{"index": 0, "title": "...", "score": 8.5, "reason": "one short line"}}
   ],
-  "top1": {{"index": 0, "title": "...", "url": "...", "headline": "one-sentence summary", "why_top": "2-3 sentence rationale"}}
+  "top1": {{"index": 0, "title": "...", "url": "...", "headline": "one-sentence summary", "why_top": "2-3 sentence rationale", "video_title": "...", "shorts_title": "..."}}
 }}
 
 News items:
@@ -163,6 +211,21 @@ def parse_history_date(entry: dict) -> date | None:
         return None
 
 
+def entry_index(entry: object, n_items: int) -> int | None:
+    """ranking 條目的 index 解析 — 畸形(非 dict / 缺欄位 / 非數字 / 越界)回 None。
+
+    呼叫端跳過 None 並計數警告,不讓 Gemini 的畸形輸出變成未捕捉例外
+    (IndexError / KeyError / ValueError),那會蓋掉真正的原因。
+    """
+    if not isinstance(entry, dict):
+        return None
+    try:
+        idx = int(entry["index"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return idx if 0 <= idx < n_items else None
+
+
 def pick_topic(
     items: list, ranking: list, history: list, today: str
 ) -> tuple[dict, dict]:
@@ -188,31 +251,104 @@ def pick_topic(
             recent |= topic_keys(h.get("title", ""), h.get("url", ""))
             if h.get("title"):
                 recent_titles.append(h["title"])
-    available = [
-        e
-        for e in ranking
-        if not (
-            topic_keys(
-                items[int(e["index"])]["title"], items[int(e["index"])].get("url", "")
-            )
-            & recent
+    available = []
+    invalid = 0
+    for e in ranking:
+        idx = entry_index(e, len(items))
+        if idx is None:
+            invalid += 1
+            continue
+        item = items[idx]
+        if topic_keys(item.get("title", ""), item.get("url", "")) & recent:
+            continue
+        available.append(e)
+    if invalid:
+        # Gemini 回傳畸形條目(缺 index / 非數字 / 越界)不該變成一條 traceback —
+        # 計數發警告後跳過。2026-10-08:新 prompt 要求「每一則都要排名」,
+        # ranking 變長、出現壞 index 的機會上升。
+        logger.warning(
+            f"[WARN] ranking 有 {invalid} 則條目 index 無效(缺欄位/非數字/越界),已跳過"
         )
-    ]
     if not available:
+        if not ranking:
+            # 空陣列時 invalid 也是 0,會落進下面的「全部 index 無效」而語意
+            # 不通(0 則都不合格?)— 先攔下來說清楚(2026-10-08 reviewer F2)。
+            fail(
+                logger,
+                "Gemini 回傳的 ranking 是空陣列,沒有任何候選可挑",
+                "prompt 要求「每一則新聞都要排名」— 空陣列代表回應不符契約,"
+                "檢查 GEMINI_MODEL 與回應格式",
+            )
+        if invalid == len(ranking):
+            # 全部條目的 index 都壞 → 真因是 Gemini 回傳格式,不是去重窗口。
+            # 舊版會把這種情況報成「全部落在去重窗口內」,事故時查錯方向
+            # (2026-10-08 reviewer R2)。
+            fail(
+                logger,
+                f"ranking 的 {len(ranking)} 則條目 index 全部無效"
+                "(缺欄位/非數字/越界),沒有任何可用候選",
+                "這不是去重造成的 — 檢查 Gemini 回傳格式與 prompt 契約"
+                "(ranking[].index 必須是 0-based 且小於新聞則數)",
+            )
         fail(
             logger,
-            f"{len(ranking)} 則候選全部落在 {HISTORY_DAYS} 天去重窗口內,沒有新主題可選",
+            f"{len(ranking)} 則候選全部落在 {HISTORY_DAYS} 天去重窗口內,沒有新主題可選"
+            + (f"(另有 {invalid} 則條目 index 無效,已跳過)" if invalid else ""),
             "新聞池可能過期或去重窗口過長。寧可當天不產片,也不要重複上傳既有主題;"
             f"最近的已選主題: {recent_titles[:3]}",
         )
     if len(available) <= LOW_POOL_WARN:
-        # 先預警再失敗:窗口拉長後候選池會逐步被吃掉,這裡讓使用者提早看到
+        # 先預警再失敗:窗口拉長後候選池會逐步被吃掉,這裡讓使用者提早看到。
+        # 帶上 invalid 計數 — 否則壞條目會讓「新聞池過窄」的判斷失準
+        # (2026-10-08 reviewer R2)。
         logger.warning(
-            f"[WARN] 可用主題僅剩 {len(available)} 則(候選 {len(ranking)} 則,"
-            f"窗口 {HISTORY_DAYS} 天)— 新聞池可能過窄"
+            f"[WARN] 可用主題僅剩 {len(available)} 則(候選 {len(ranking)} 則"
+            + (f",其中 {invalid} 則 index 無效" if invalid else "")
+            + f",窗口 {HISTORY_DAYS} 天)— 新聞池可能過窄"
         )
     entry = available[0]
     return items[int(entry["index"])], entry
+
+
+def apply_dedup_choice(
+    top1: dict, chosen: dict, chosen_entry: dict, idx: int, logger
+) -> dict:
+    """去重改選後,把 top1 的識別欄位換成真正選中的那篇。
+
+    Gemini 的 top1 描述的是它自己排的 #1;pick_topic 若因去重窗口改選了別則,
+    沿用會產生「A 的標題 + B 的內容」混合檔(2026-08-14 實測:top1.json 出現
+    「FIT 標題 + ELBE news」)。
+
+    top1.index 缺失或畸形時無法證明兩者一致 — **一律視為不一致並覆寫**。
+    覆寫用的資訊全部來自 chosen(實際選中的文章),必然正確;不覆寫則有機率
+    張冠李戴且完全無聲,兩害相權取其輕(2026-10-08 reviewer 指出原設計
+    只在 `top1_index is not None` 時覆寫,None 會整段跳過)。
+    """
+    try:
+        top1_index = int(top1.get("index"))
+    except (TypeError, ValueError):
+        top1_index = None
+    if top1_index == idx:
+        return top1  # 一致 — 保留 Gemini 自己的 why_top/headline
+    if top1_index is None:
+        logger.warning(
+            "[WARN] Gemini 的 top1 缺少有效 index,無法確認與去重結果一致 —"
+            " 一律以實際選中的文章覆寫 top1"
+        )
+    return {
+        **top1,
+        "index": idx,
+        # 一律 .get:同一輪已把 pick_topic 的取用改成容錯,這裡若用 [] 就只做了
+        # 一半 — 缺 key 一樣是未捕捉的 KeyError(2026-10-08 reviewer R4)。
+        "title": chosen.get("title", ""),
+        "url": chosen.get("url", ""),
+        "why_top": chosen_entry.get("reason", ""),
+        "headline": chosen.get("summary", ""),
+        # 爆款標題描述的是 Gemini 選的那篇,不是這裡真正選中的這篇 —
+        # 清空後 build_title 會退回原始新聞標題(有警告,不靜默)
+        VIDEO_TITLE_FIELD: "",
+        SHORTS_TITLE_FIELD: "",
+    }
 
 
 def main() -> None:
@@ -280,24 +416,8 @@ def main() -> None:
             json.dumps(chosen_entry, ensure_ascii=False),
         )
 
-    # Gemini 的 top1 理由屬於它自己選的 #1;若去重改選了別則,
-    # 改用該候選的 reason,避免張冠李戴
-    try:
-        top1_index = int(top1.get("index"))
-    except (TypeError, ValueError):
-        top1_index = None
-    if top1_index is not None and top1_index != idx:
-        # 去重改選時,top1 的識別欄位也要跟著換成真正選中的那篇 —
-        # 只改 why_top/headline 會留下被封鎖文章的 title/url(08-14 實測:
-        # top1.json 出現「FIT 標題 + ELBE news」的混合檔)
-        top1 = {
-            **top1,
-            "index": idx,
-            "title": chosen["title"],
-            "url": chosen["url"],
-            "why_top": chosen_entry.get("reason", ""),
-            "headline": chosen.get("summary", ""),
-        }
+    # Gemini 的 top1 描述的是它自己排的 #1;若去重改選了別則,改用真正選中的那篇
+    top1 = apply_dedup_choice(top1, chosen, chosen_entry, idx, logger)
 
     top1_full = {
         **top1,
