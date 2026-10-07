@@ -31,7 +31,12 @@ from _common import (
 
 logger = setup_logging("rank_news")
 
-DEFAULT_MODEL = "gemini-2.5-flash"
+# 2026-10-08: 由 gemini-2.5-flash 換成 3.5-flash。2.5 世代對**新建立的**
+# GCP 專案已下線(回應 404 "no longer available to new users"),舊專案雖仍可
+# 沿用但無法據此換 key。3.6/3.7/3.8 在多數時段回 503,3.5 實測可穩定處理
+# 完整 prompt(20 則 / 14KB / 約 24s)。**配額是「每專案 × 每模型」各 20 次/天**,
+# 不是整個專案共用 20 次 — 所以換模型也會換到一份新額度。詳見 DECISIONS.md。
+DEFAULT_MODEL = "gemini-3.5-flash"
 
 # 2026-10-07: 加入編輯立場。先前只給中性的四個維度(relevance/recency/depth/
 # authority),Gemini 於是把「技術上新鮮」與「產業上重要」視為等價,導致醫療研究

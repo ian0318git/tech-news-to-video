@@ -26,7 +26,7 @@ from _common import (
 
 logger = setup_logging("collect_sources")
 
-DEFAULT_MODEL = "gemini-2.5-flash"
+DEFAULT_MODEL = "gemini-3.5-flash"  # 理由見 rank_news.DEFAULT_MODEL 的註解
 UA = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"

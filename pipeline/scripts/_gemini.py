@@ -63,7 +63,7 @@ def daily_quota_hit(resp: httpx.Response) -> str:
 def gemini_json(
     prompt: str,
     logger: logging.Logger,
-    model: str = "gemini-2.5-flash",
+    model: str = "gemini-3.5-flash",
     temperature: float = 0.2,
 ) -> dict:
     """Call Gemini with a JSON-response prompt; return the parsed JSON object.
