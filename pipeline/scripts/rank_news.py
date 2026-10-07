@@ -18,6 +18,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit
 from _common import (
     SHORTS_TITLE_FIELD,
     VIDEO_TITLE_FIELD,
+    VIDEO_TITLE_SHORT_FIELD,
     channel_dir,
     fail,
     flag_value,
@@ -30,6 +31,11 @@ from _common import (
 )
 
 logger = setup_logging("rank_news")
+
+# Gemini 回在**前三名 ranking 條目**上的爆款標題欄位。
+# 放同一條清單,避免覆寫時漏掉一個欄位而留下前一篇的殘值(那會是最糟的
+# 「A 標題 + B 內容」)。
+VIRAL_TITLE_FIELDS = (VIDEO_TITLE_FIELD, VIDEO_TITLE_SHORT_FIELD, SHORTS_TITLE_FIELD)
 
 # 2026-10-08: 由 gemini-2.5-flash 換成 3.5-flash。2.5 世代對**新建立的**
 # GCP 專案已下線(回應 404 "no longer available to new users"),舊專案雖仍可
@@ -70,8 +76,9 @@ topic.
 You MUST include every news item in the ranking, including the ones you
 de-prioritise — they still belong at the bottom of the list.
 
-Finally, for your #1 pick, write TWO English headlines for the video. Each must
-follow EXACTLY ONE of these four formulas — pick whichever fits the story best:
+Finally, for your TOP 3 picks — the first three entries of your ranking — write
+THREE English headlines each. Each headline must follow EXACTLY ONE of these
+four formulas — pick whichever fits that story best:
   (A) NUMBERS — lead with a striking figure: money, scale, specs, people affected.
       e.g. "Fined $5.7B!", "Now 64-Bit!"
   (B) CONFLICT — a clash between industry giants, or a regulatory fight.
@@ -84,15 +91,28 @@ follow EXACTLY ONE of these four formulas — pick whichever fits the story best
 Tone: natural, conversational, emotionally charged. Use "!" or "?" where it lands.
 Never invent facts, numbers or quotes that are not in the story.
 
-  "video_title"  — long-form explainer video. Maximum 60 characters.
-  "shorts_title" — 60-second vertical short. Punchier and shorter. Maximum 50 characters.
+Put all three title fields on each of those top 3 entries inside "ranking":
+  "video_title"       — long-form explainer video. Maximum 60 characters.
+  "video_title_short" — the SAME story told shorter: a backup used when the main
+                        title turns out too long once the channel prefix is added.
+                        It must be the same angle, just shorter — never a
+                        different story or a different formula.
+                        Maximum 40 characters.
+  "shorts_title"      — 60-second vertical short. Punchier and shorter.
+                        Maximum 50 characters.
+
+Every news item must still appear in "ranking" — only your top 3 carry the
+three title fields. The other entries keep just index / title / score / reason.
 
 Return JSON only, with this exact shape:
 {{
   "ranking": [
-    {{"index": 0, "title": "...", "score": 8.5, "reason": "one short line"}}
+    {{"index": 0, "title": "...", "score": 8.5, "reason": "one short line", "video_title": "...", "video_title_short": "...", "shorts_title": "..."}},
+    {{"index": 4, "title": "...", "score": 8.1, "reason": "one short line", "video_title": "...", "video_title_short": "...", "shorts_title": "..."}},
+    {{"index": 7, "title": "...", "score": 7.8, "reason": "one short line", "video_title": "...", "video_title_short": "...", "shorts_title": "..."}},
+    {{"index": 2, "title": "...", "score": 6.0, "reason": "one short line"}}
   ],
-  "top1": {{"index": 0, "title": "...", "url": "...", "headline": "one-sentence summary", "why_top": "2-3 sentence rationale", "video_title": "...", "shorts_title": "..."}}
+  "top1": {{"index": 0, "title": "...", "url": "...", "headline": "one-sentence summary", "why_top": "2-3 sentence rationale"}}
 }}
 
 News items:
@@ -328,32 +348,55 @@ def apply_dedup_choice(
     覆寫用的資訊全部來自 chosen(實際選中的文章),必然正確;不覆寫則有機率
     張冠李戴且完全無聲,兩害相權取其輕(2026-10-08 reviewer 指出原設計
     只在 `top1_index is not None` 時覆寫,None 會整段跳過)。
+
+    爆款標題欄位(VIRAL_TITLE_FIELDS)**一律**取自 chosen_entry,兩個分支都取:
+    Gemini 現在把標題寫在前三名各自的 ranking 條目上(單一來源),不再寫在
+    top1 裡 — 所以就算 top1.index 與去重結果一致,top1 本身也沒有標題可留。
+    chosen_entry 拿不到欄位時(去重改選到前三名之外)清成空字串,
+    build_title 會退回原始新聞標題,不會留下前一篇的殘值。
     """
     try:
         top1_index = int(top1.get("index"))
     except (TypeError, ValueError):
         top1_index = None
-    if top1_index == idx:
-        return top1  # 一致 — 保留 Gemini 自己的 why_top/headline
-    if top1_index is None:
-        logger.warning(
-            "[WARN] Gemini 的 top1 缺少有效 index,無法確認與去重結果一致 —"
-            " 一律以實際選中的文章覆寫 top1"
-        )
-    return {
-        **top1,
-        "index": idx,
-        # 一律 .get:同一輪已把 pick_topic 的取用改成容錯,這裡若用 [] 就只做了
-        # 一半 — 缺 key 一樣是未捕捉的 KeyError(2026-10-08 reviewer R4)。
-        "title": chosen.get("title", ""),
-        "url": chosen.get("url", ""),
-        "why_top": chosen_entry.get("reason", ""),
-        "headline": chosen.get("summary", ""),
-        # 爆款標題描述的是 Gemini 選的那篇,不是這裡真正選中的這篇 —
-        # 清空後 build_title 會退回原始新聞標題(有警告,不靜默)
-        VIDEO_TITLE_FIELD: "",
-        SHORTS_TITLE_FIELD: "",
-    }
+    matched = top1_index == idx
+    if matched:
+        base = dict(top1)  # 一致 — 保留 Gemini 自己的 why_top/headline
+    else:
+        if top1_index is None:
+            logger.warning(
+                "[WARN] Gemini 的 top1 缺少有效 index,無法確認與去重結果一致 —"
+                " 一律以實際選中的文章覆寫 top1"
+            )
+        base = {
+            **top1,
+            "index": idx,
+            # 一律 .get:同一輪已把 pick_topic 的取用改成容錯,這裡若用 [] 就只做了
+            # 一半 — 缺 key 一樣是未捕捉的 KeyError(2026-10-08 reviewer R4)。
+            "title": chosen.get("title", ""),
+            "url": chosen.get("url", ""),
+            "why_top": chosen_entry.get("reason", ""),
+            "headline": chosen.get("summary", ""),
+        }
+    for field in VIRAL_TITLE_FIELDS:
+        value = chosen_entry.get(field)
+        base[field] = value if isinstance(value, str) else ""
+    if not any(base[f] for f in VIRAL_TITLE_FIELDS):
+        if matched:
+            # 選中的就是 Gemini 自己的 #1,卻一個標題欄位都沒有 → 它沒照 prompt
+            # 的契約寫(前三名必然含 #1)。這是契約違反,不是預期路徑。
+            logger.warning(
+                "[WARN] 選中的是 Gemini 的 #1,但它的 ranking 條目沒有任何爆款標題"
+                "欄位 — 回應不符 prompt 契約;本輪將退回原始新聞標題"
+            )
+        else:
+            # 去重改選到前三名之外 — 那些條目本來就沒有標題,屬預期情形。
+            # 記 info:下游 build_title 另有 WARN,不會靜默。
+            logger.info(
+                f"[INFO] 去重改選到前三名之外的條目(index {idx}),該條目沒有爆款"
+                "標題 — 本輪將退回原始新聞標題"
+            )
+    return base
 
 
 def main() -> None:

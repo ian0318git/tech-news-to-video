@@ -40,6 +40,7 @@ POC(notebooklm-py 影片流程)驗證通過後,實作正式系統:
 | D24 | **選題準則:科技巨頭 / 商業衝突 / 突破性硬體,並由同一次 Gemini 呼叫產生爆款標題**(2026-10-08):`RANK_PROMPT_TEMPLATE` 加入明確編輯優先序(①主要科技公司 ②商業與競爭衝突 ③突破性硬體或 AI 產品),醫療臨床與純學術**降權但不剔除**;同時要求 Gemini 為 #1 產出兩條英文爆款標題(四公式擇一:數字與天價 / 對立與衝突 / 反直覺未來感 / 強烈懸念),寫入 `top1.json` 的 `video_title`(長片,≤60 字元)與 `shorts_title`(Shorts,≤50 字元) | **不另開 Gemini 呼叫是關鍵** — 免費層每日僅 20 次配額,多一次就是少一天的產能。兩者合併進既有呼叫 = 零額外成本。標題串接集中在 `_config.build_title()`(淨化 `\n`/`<`/`>`、`TITLE_MAX=95` 截斷、爆款標題從缺時退回新聞標題並警告);消費端是 `youtube_upload.build_metadata()`,Shorts 依檔名前綴取用專屬欄位。選題準則的取捨:頻道受眾是科技新聞,醫療/學術選題點閱與定位都不合。**已知未解**:`relevance to the topic` 被寫成 tie-breaker、embedded 頻道沒有對應的 PRIORITISE 類別 — 觀察數日再決定是否加 per-channel 準則 |
 | D25 | **Gemini 配額保護三件套**(2026-10-08,接 D24 的 20 次/天前提):**A** `_gemini.daily_quota_hit()` 解析 429 body,`quotaId`/`quotaMetric` 含 `PerDay` → 立刻 fail 不重試;**B** `run_daily` 在 `top1.json` 的 `date == 今天` 時跳過 fetch/rank;**C** `sources.json` 的 `topic` 等於今天選題且 `sources` 非空時跳過 collect | 起因:cron 08:00 主 run + `*/15 8-14` 補跑 = 28 次/天,而唯一的冪等閘門是「今天的影片檔存在」— **失敗時該條件永遠不成立**,所以一次短暫故障會在兩個 tick 內燒光當日 20 次額度,之後整天 429(實測 274 筆同型)。**判準只看 `quotaId` 不看 `retryDelay`**:同一種 429 的 `retryDelay` 實測 32s–85477s 都有,拿它判斷會把每分鐘速率限制誤判成每日;而每分鐘版本的 `quotaMetric` 與每日版本逐字元相同,只有 `quotaId` 的 `PerMinute`/`PerDay` 不同(兩種情境各有測試釘住)。**C 的 `topic` 比對不是冗餘**:top1.json 被換題時,舊 sources.json 是別的題目的來源。判斷抽成純函式(`load_top1`/`locked_topic`/`sources_ready`/`skip_reason`)以便離線測試;畸形輸入一律當「沒跑過」重跑而非當「已完成」跳過,未知步驟一律執行。**未採用 D(補跑間隔 15→60 分)**:B/C 讓已完成時每 tick 零成本,15 分鐘密度反而是短暫故障能快速自癒的優點 |
 | D26 | **模型世代切換 `gemini-2.5-flash` → `gemini-3.5-flash`**(2026-10-08):`_gemini.gemini_json` 預設值、`rank_news.DEFAULT_MODEL`、`collect_sources.DEFAULT_MODEL` 三處與兩台 `.env` 的 `GEMINI_MODEL` 同步 | **2.5 世代對新建立的 GCP 專案已下線**(404 `"no longer available to new users"`;`2.5-flash-lite`、`2.0-flash` 亦同),而舊專案僅因建立得早而沿用 — 換 key 就會踩到。**`ListModels` 仍列出這些模型,清單不反映生成權限,不能當判準**。3.6 / 3.7 / 3.8 在實測時段全部 503(3.8 甚至直接 429),3.5 能穩定吃下完整 prompt(20 則 / 14KB / 約 24s)。**不用 `gemini-flash-latest` 這類浮動別名** — 模型會在背後被換掉,回應風格與 JSON 契約跟著漂移 |
+| D27 | **爆款標題改為「前三名各三條」+ `video_title_short` 備援**(2026-10-08,修正 D24):prompt 要求 Gemini 為**前三名**各寫三條標題(`video_title` 長片 ≤60 / `video_title_short` **同一篇**的較短寫法 ≤40 / `shorts_title` ≤50),**掛在前三名各自的 `ranking` 條目上**;`build_metadata` 取用順序為 `prefix + video_title` ≤95 → 超長改用 `prefix + video_title_short`(整條替換不截斷)→ 都不可用才退回原始新聞標題 | D24 上線首日就暴露兩個問題:①`pick_topic` 沿排名取第一則沒被去重封鎖的,而實測 **20 則候選有 18 則落在 90 天窗口內** → 改選幾乎是常態,而舊設計只為 #1 寫標題且一改選就清空 → 標題等於白做(首日 `top1.json` 兩個標題欄位都是空的);②爆款標題常寫到 60 字元,加 `title_prefix` 就超過 95,硬切砍掉的正是最有力的字尾。**掛 `ranking` 而非另開 `top3` 鍵的理由**:`apply_dedup_choice()` 簽章本來就收 `chosen_entry`(被選中那篇的 ranking 條目)→ 零介面變動就能取到正確那篇的標題。**`video_title_short` 不得從 fallback 路徑取用**:它是同一篇的另一種寫法,而 fallback 是別篇(改選到前三名外) — 混用就是「A 標題 + B 影片」;Shorts 亦不取此欄位(有自己的 `shorts_title`) |
 
 **前置(一次性,使用者操作)**: Google Cloud 專案 → 啟用 YouTube Data API v3 →
 OAuth 同意畫面(External,加入測試使用者)→ 建立 OAuth 用戶端 ID(**TVs and Limited Input devices**)
@@ -47,7 +48,7 @@ OAuth 同意畫面(External,加入測試使用者)→ 建立 OAuth 用戶端 ID(
 
 ## 測試
 
-`pipeline/tests/` — **246 個單元測試**(pytest,mock 不連網):
+`pipeline/tests/` — **265 個單元測試**(pytest,mock 不連網):
 RSS 解析(標題/來源/摘要/上限/壞 XML)、`flag_value` 參數解析、頻道解析、來源過濾
 (Google 轉址排除、去重、非 http 排除)、選題去重(`title_key` / `url_key` / `pick_topic`)、
 權杖管理(refresh 重試、缺 refresh_token、原子寫入)、`channel_stats` 品牌帳號
@@ -59,7 +60,14 @@ fallback(`mine=true` 空 → `forHandle`)、`backfill_history` 標題解析(含 
 退回 / 截斷上限 / YouTube 非法字元)、`apply_dedup_choice`(index 一致保留、改選覆寫、
 畸形 index、缺 key)、`entry_index` 與畸形 ranking 跳過、`youtube_upload.build_metadata`
 (真的決定 YouTube 標題的地方 — 長片/Shorts 各取專屬欄位、跨日 top1 的日期閘門、
-news 欄位畸形)、resumable 續傳決策。
+news 欄位畸形)、resumable 續傳決策、Gemini 每日配額判準(`daily_quota_hit`)、
+補跑冪等(`load_top1` / `locked_topic` / `sources_ready` / `skip_reason`)。
+
+2026-10-08 追加(D27 前三名各三條):欄位名契約改為檢查**前三條 ranking 範例各自
+帶齊三欄位**且 `top1` 那行不得出現標題欄位(兩處都寫會讓 Gemini 兩邊都填,而程式
+只讀 ranking)、契約文字與三個長度上限、`apply_dedup_choice` 攜帶被選中那篇的標題
+(改選到前三名內 vs 前三名外 vs 自己的 #1 缺欄位,三種路徑的訊息分級)、備援短標題的
+四條路徑(超長換掉、備援也塞不下就走截斷、**fallback 路徑不得取用備援**、型別錯誤)。
 
 2026-10-08 追加(D25):`_gemini.daily_quota_hit` 的判準 — 真實的每日配額 payload、
 每分鐘速率限制(quotaMetric 相同、只有 quotaId 不同)必須**不**被誤判、非 JSON /
@@ -123,4 +131,5 @@ cron 指向這裡;GitHub repo 的 `pipeline/` 是**作品集快照**。兩者需
 
 - **2026-10-08 爆款標題接錯線(C1,reviewer 查出)**: 初版把爆款標題接到 `run_video_pipeline.py` / `run_shorts_pipeline.py` 的 `title` 變數,而那個 title 只流向 `cli.ensure_notebook()` — 是 NotebookLM 的**專案名稱**,影片下載後專案立刻被自動刪除,**成品完全沒套用**,整個功能等於白做。真正決定 YouTube 標題的是 `youtube_upload.build_metadata()`(讀 `top1.json`)。已修正並補回歸測試(`tests/test_youtube_upload.py` 釘住「上傳標題的來源是 build_metadata」),兩支 pipeline 檔改回原樣並加註解標明「這裡的 title 不是 YouTube 標題」。**教訓:接好線之後要一路追到「誰消費這個值、使用者最後看到什麼」才算完成 — 變數存在且測試綠燈 ≠ 功能生效**
 - **2026-10-08 同批加固(與 D24 同一輪 review)**: ①`build_title` 把「可用性判斷」移到淨化**之後** — 舊寫法下 `viral="<>"` 會被判定有值、淨化後成空字串、fallback 被跳過,產出尾端懸空的 `"prefix - "` 直接上傳;②`pick_topic` 對 ranking 條目 index 全壞時改報專屬訊息(舊版一律報「全部落在 N 天去重窗口內」,會把排查帶去翻沒問題的 `topic_history.json`);③`youtube_upload` 加上傳端**日期閘門**(`dates_agree`):`top1.json` 的 `date` 與影片檔名日期不符 → 標題與說明改用檔名並警告。這是「A 的標題出現在 B 的影片上」唯一殘存路徑(跨日補傳),正常流程不受影響,任一邊取不到日期時放行以免誤擋手動補傳;④`news.title` 為 `null` 或淨化後成空時仍會產生懸空標題 → fallback 改為「保證非空」(兩條 fallback 路徑共用 `stem_label`,避免同一件事有兩種輸出);⑤畸形 ranking 條目不再丟未捕捉例外(`entry_index`)。測試 144 → **203 passed**
-- **2026-10-08 Gemini 免費配額被 429 打爆(未修,待決)**: 症狀「早上跑得動、10:00 之後整天 429」。根因是配額算術:免費層 **20 次/天**;一次完整 run 要 4 次呼叫(2 頻道 × (`rank_news` + `collect_sources`)),`_gemini.py` 對 429/5xx 重試 2 次(每次呼叫最多 3 個 HTTP 請求);cron 08:00 主 run + `*/15 8-14` 補跑 = **28 次/天**,而唯一的冪等閘門是「今天的影片檔存在」,失敗時該條件永不成立 → 一次短暫故障就在約兩個 tick 內燒光當日額度。**教訓:重試機制在有限配額下會把單次失敗放大成整日癱瘓**。待決方案 A–E(不重試每日配額型 429 / 補跑冪等 / `collect_sources` 同樣處理 / 補跑間隔 15→60 分 / 付費 key)
+- **2026-10-08 Gemini 免費配額被 429 打爆(A+B+C 已實作,見 D25)**: 症狀「早上跑得動、10:00 之後整天 429」。根因是配額算術:免費層 **20 次/天**;一次完整 run 要 4 次呼叫(2 頻道 × (`rank_news` + `collect_sources`)),`_gemini.py` 對 429/5xx 重試 2 次(每次呼叫最多 3 個 HTTP 請求);cron 08:00 主 run + `*/15 8-14` 補跑 = **28 次/天**,而唯一的冪等閘門是「今天的影片檔存在」,失敗時該條件永不成立 → 一次短暫故障就在約兩個 tick 內燒光當日額度。**教訓:重試機制在有限配額下會把單次失敗放大成整日癱瘓**。**已實作 A+B+C**(不重試每日配額型 429 / 補跑冪等 / `collect_sources` 同樣處理,見 D25);**D(補跑間隔 15→60 分)已評估後不採用** — A+B+C 讓已完成時每個 tick 零成本;**E(付費 key)仍為備案**,目前免費層 20 次/天對「2 頻道 × 2 次呼叫 + 餘裕」足夠
+- **2026-10-08 爆款標題「只有 #1 有、且一改選就清空」(D27)**: D24 上線**首日**的 `top1.json` 兩個標題欄位都是空的 — 不是 Gemini 沒回(它回了),而是它排 #1 的那篇被去重擋掉、`pick_topic` 改選了別篇,而 `apply_dedup_choice` 依設計清空標題。去重擋掉的比率是 **18/20**,所以「改選」是常態而非例外 → 只為 #1 寫標題等於白做。**教訓:LLM 回了值 ≠ 這個值會走到使用者眼前 — 中間每一段都可能把它丟掉,而丟掉的方式是靜默的**(清空 + 下游退回,只有 WARN)。同輪加上 `video_title_short` 備援,並以 1 次真實 Gemini 呼叫驗證契約(20 則 / 16.6KB → 恰好 3 條帶標題、欄位齊全、`top1` 不殘留)。測試 246 → **265 passed**

@@ -156,3 +156,67 @@ def test_build_title_falls_back_when_sanitized_to_empty(test_logger, caplog, raw
         title = build_title("H", raw, "Real Fallback News", test_logger)
     assert title == "H - Real Fallback News"
     assert "退回原始新聞標題" in caplog.text
+
+
+# ---- build_title:備援短標題(2026-10-08)-----------------------------------
+# Gemini 為前三名各寫三條:video_title(≤60)/ video_title_short(≤40,同一篇的
+# 較短寫法)/ shorts_title(≤50)。爆款標題為了鉤人常寫得長,加上頻道前綴就超過
+# TITLE_MAX,而硬切砍掉的往往正是最有力的字尾 — 有一條短的備援就能**整條換掉**
+# 而不是腰斬。
+
+
+def test_build_title_uses_short_backup_when_too_long(test_logger, caplog):
+    """塞不下時換整條短的,而不是截斷。"""
+    head = "2026-10-08 Embedded Linux Daily"
+    viral = "y" * 80  # 31 + 3 + 80 = 114 > 95
+    with caplog.at_level(logging.WARNING):
+        title = build_title(head, viral, "fallback", test_logger, "Short Backup!")
+    assert title == f"{head} - Short Backup!"
+    assert "已改用較短的備援標題" in caplog.text
+    assert "已截斷" not in caplog.text
+
+
+def test_build_title_ignores_short_backup_that_still_overflows(test_logger, caplog):
+    """備援也塞不進上限(Gemini 沒照 ≤40 寫)→ 維持原標題走截斷。
+
+    不做「退而求其次換一條還是超長」的二次替換:那會產生一條**更長**的標題,
+    而使用者從 log 看不出換過。
+    """
+    head = "H" * 40
+    viral = "v" * 80  # 123 > 95
+    short = "s" * 60  # candidate 103 > 95
+    with caplog.at_level(logging.WARNING):
+        title = build_title(head, viral, "f", test_logger, short)
+    assert len(title) == TITLE_MAX
+    assert "已改用較短的備援標題" not in caplog.text
+    assert "已截斷" in caplog.text
+
+
+def test_build_title_never_uses_short_backup_for_the_fallback_path(
+    test_logger, caplog
+):
+    """退回原始新聞標題時,備援短標題也不得頂替。
+
+    備援是**同一篇**的另一種寫法;fallback 是**別篇**(去重改選到前三名之外、
+    或 Gemini 沒回)。混用等於把 A 的標題掛到 B 的影片上 — 正是 2026-08-14
+    那次「FIT 標題 + ELBE news」的同型錯誤。
+    """
+    with caplog.at_level(logging.WARNING):
+        title = build_title("H", None, "f" * 200, test_logger, "Some Short Backup!")
+    assert len(title) == TITLE_MAX
+    assert "Some Short Backup!" not in title
+    assert "退回原始新聞標題" in caplog.text
+    assert "已截斷" in caplog.text
+
+
+@pytest.mark.parametrize("bad", [None, 123, ["x"], {"a": 1}, "<>", "   "])
+def test_build_title_tolerates_bad_short_backup(test_logger, caplog, bad):
+    """型別錯誤或淨化後為空 → 照舊截斷,不崩也不產生 "H - None"。
+
+    與 viral 同一道防線:型別判斷只能有一份(clean_headline),呼叫端不需
+    為了淨化先做一次型別檢查。
+    """
+    with caplog.at_level(logging.WARNING):
+        title = build_title("H", "v" * 300, "f", test_logger, bad)
+    assert len(title) == TITLE_MAX
+    assert "None" not in title

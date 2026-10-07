@@ -4,7 +4,7 @@ import logging
 from datetime import date, timedelta
 
 import pytest
-from _common import SHORTS_TITLE_FIELD, VIDEO_TITLE_FIELD
+from _common import SHORTS_TITLE_FIELD, VIDEO_TITLE_FIELD, VIDEO_TITLE_SHORT_FIELD
 from rank_news import (
     HISTORY_DAYS,
     RANK_PROMPT_TEMPLATE,
@@ -404,14 +404,42 @@ def test_title_field_names_match_prompt_contract():
     """漂移護欄:rank_news 在 prompt 裡要 Gemini 填的欄位名,必須與 build_title
     讀取的常數一致。不一致不會報錯 — 只會靜默退回原始標題,很難察覺。
 
-    必須出現在 JSON 範例的 "top1" 那一行:prompt 有兩處提到欄位名(規格行與
-    JSON 範例),Gemini 是照 JSON 範例的形狀回傳的 — 只檢查「全文出現過」
-    會讓「範例欄位被刪掉、只剩規格行」照樣通過,而 Gemini 從此不再回這個欄位。
+    必須出現在 **JSON 範例**裡:prompt 有兩處提到欄位名(規格行與 JSON 範例),
+    Gemini 是照 JSON 範例的形狀回傳的 — 只檢查「全文出現過」會讓「範例欄位
+    被刪掉、只剩規格行」照樣通過,而 Gemini 從此不再回這個欄位。
+
+    2026-10-08 起欄位掛在 ranking 的前三條上(top1 那行**不該**再有標題欄位 —
+    兩處都寫會讓 Gemini 兩邊都填,而程式只讀 ranking,多出來的那份只會誤導)。
     """
     out = RANK_PROMPT_TEMPLATE.format(topic="t", items_json="[]")
-    top1_line = next(ln for ln in out.splitlines() if '"top1": {' in ln)
-    assert f'"{VIDEO_TITLE_FIELD}"' in top1_line
-    assert f'"{SHORTS_TITLE_FIELD}"' in top1_line
+    lines = out.splitlines()
+    example = [ln.strip() for ln in lines if ln.strip().startswith('{"index":')]
+    assert len(example) >= 4, "JSON 範例的 ranking 條目不見了"
+    titled = [ln for ln in example if f'"{VIDEO_TITLE_FIELD}"' in ln]
+    assert len(titled) == 3, f"範例要有三條帶標題的 ranking 條目,實得 {len(titled)}"
+    for ln in titled:
+        for field in (VIDEO_TITLE_FIELD, VIDEO_TITLE_SHORT_FIELD, SHORTS_TITLE_FIELD):
+            assert f'"{field}"' in ln, f"範例條目少了欄位: {field!r}"
+    top1_line = next(ln for ln in lines if '"top1": {' in ln)
+    for field in (VIDEO_TITLE_FIELD, VIDEO_TITLE_SHORT_FIELD, SHORTS_TITLE_FIELD):
+        assert f'"{field}"' not in top1_line, f"top1 不該再帶 {field!r}"
+
+
+def test_rank_prompt_asks_titles_for_top_three():
+    """前三名各三條 — 這是 2026-10-08 改動的核心契約。
+
+    為什麼是前三名:pick_topic 沿排名取第一則沒被去重窗口封鎖的,而實測 20 則
+    候選有 18 則落在 90 天窗口內 → 改選幾乎是常態。只為 #1 寫標題,選中的
+    往往不是 #1,標題等於白做。
+    """
+    out = RANK_PROMPT_TEMPLATE.format(topic="t", items_json="[]")
+    assert "TOP 3" in out
+    assert "THREE English headlines each" in out
+    # 長度上限是契約的一部分:video_title 60 + 前綴要能塞進 TITLE_MAX
+    for limit in ("Maximum 60 characters", "Maximum 40 characters", "Maximum 50 characters"):
+        assert limit in out, f"標題長度指示消失: {limit!r}"
+    # 只為前三名寫,其餘條目仍要留在 ranking 裡(省略會縮小候選池 → 可能整天 fail)
+    assert "Every news item must still appear" in out
 
 
 # --- apply_dedup_choice:去重改選後的 top1 重寫(2026-10-08 補) ---------------
@@ -420,17 +448,93 @@ def test_title_field_names_match_prompt_contract():
 
 
 def test_apply_dedup_choice_keeps_top1_when_index_matches():
-    """Gemini 的 #1 就是實際選中的那篇 → 原樣保留(含它自己的 why_top)。"""
-    top1 = {
-        "index": 1,
-        "title": "T",
-        "url": "u",
-        "why_top": "gemini reason",
+    """Gemini 的 #1 就是實際選中的那篇 → 保留它自己的 title/url/why_top。
+
+    標題欄位不沿用 top1 上的殘值,而是取自 chosen_entry(前三名各三條之後,
+    ranking 條目才是唯一來源)。所以這裡比對的是「有沒有照抄 Gemini 的識別
+    欄位」,不再是「回傳同一個物件」。
+    """
+    top1 = {"index": 1, "title": "T", "url": "u", "why_top": "gemini reason"}
+    entry = {
+        "reason": "gemini reason",
         VIDEO_TITLE_FIELD: "Viral!",
+        VIDEO_TITLE_SHORT_FIELD: "Viral!",
+        SHORTS_TITLE_FIELD: "Short viral!",
     }
-    out = apply_dedup_choice(top1, {"title": "T"}, {"reason": "r"}, 1, logger)
-    assert out is top1
+    out = apply_dedup_choice(top1, {"title": "T"}, entry, 1, logger)
+    assert out["index"] == 1
+    assert out["title"] == "T"
+    assert out["url"] == "u"
     assert out["why_top"] == "gemini reason"
+    assert out[VIDEO_TITLE_FIELD] == "Viral!"
+    assert out[VIDEO_TITLE_SHORT_FIELD] == "Viral!"
+    assert out[SHORTS_TITLE_FIELD] == "Short viral!"
+
+
+def test_apply_dedup_choice_carries_titles_from_the_entry_it_picked():
+    """去重改選到前三名之內的別篇 → 沿用**那一篇**的爆款標題。
+
+    這是 2026-10-08 改動的主要目的:先前只要去重改選就一律清空標題,而改選
+    幾乎是常態(20 則候選有 18 則落在 90 天窗口內)→ 爆款標題等於白做。
+    Gemini 現在為前三名各寫三條,改選到 #2/#3 時就有標題可用。
+    """
+    top1 = {
+        "index": 0,
+        "title": "Gemini #1",
+        "url": "u0",
+        VIDEO_TITLE_FIELD: "Describes The Rejected Article!",
+    }
+    chosen = {"title": "Chosen", "url": "u7", "summary": "sum"}
+    entry = {
+        "index": 2,
+        "reason": "dedup reason",
+        VIDEO_TITLE_FIELD: "Right long title!",
+        VIDEO_TITLE_SHORT_FIELD: "Right short!",
+        SHORTS_TITLE_FIELD: "Right shorts!",
+    }
+    out = apply_dedup_choice(top1, chosen, entry, 2, logger)
+    assert out["title"] == "Chosen"
+    assert out["url"] == "u7"
+    assert out[VIDEO_TITLE_FIELD] == "Right long title!"
+    assert out[VIDEO_TITLE_SHORT_FIELD] == "Right short!"
+    assert out[SHORTS_TITLE_FIELD] == "Right shorts!"
+    assert "Describes The Rejected Article!" not in out.values()
+
+
+@pytest.mark.parametrize("bad", [None, 123, ["a"], {"x": 1}])
+def test_apply_dedup_choice_coerces_non_string_titles(bad):
+    """Gemini 可能把標題回成 null / 數字 / 陣列 → 一律收成空字串。
+
+    與 build_title 的 clean_headline 同一個原則:型別判斷只有一份,不讓
+    非字串繼續往下流(那會讓下游的 WARN 訊息指向錯誤的原因)。
+    """
+    entry = {VIDEO_TITLE_FIELD: bad, VIDEO_TITLE_SHORT_FIELD: bad}
+    out = apply_dedup_choice({"index": 0}, {"title": "T"}, entry, 0, logger)
+    assert out[VIDEO_TITLE_FIELD] == ""
+    assert out[VIDEO_TITLE_SHORT_FIELD] == ""
+
+
+def test_apply_dedup_choice_warns_when_top1_itself_lacks_titles(caplog):
+    """選中的就是 Gemini 自己的 #1,卻一個標題欄位都沒有 → 契約違反,必須 WARN。
+
+    #1 必然在前三名之內,所以「前三名各三條」的契約下這裡不該是空的。
+    """
+    with caplog.at_level(logging.WARNING):
+        out = apply_dedup_choice({"index": 0}, {"title": "T"}, {}, 0, logger)
+    assert out[VIDEO_TITLE_FIELD] == ""
+    assert "不符 prompt 契約" in caplog.text
+
+
+def test_apply_dedup_choice_stays_quiet_when_picked_outside_top_three(caplog):
+    """去重改選到前三名之外 → 預期情形(那些條目本來就沒標題),記 INFO 即可。
+
+    洗 WARN 會讓真正的契約違反被埋掉;下游 build_title 另有 WARN,不會靜默。
+    """
+    with caplog.at_level(logging.INFO):
+        out = apply_dedup_choice({"index": 0}, {"title": "T"}, {}, 9, logger)
+    assert out[VIDEO_TITLE_FIELD] == ""
+    assert "前三名之外" in caplog.text
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
 
 def test_apply_dedup_choice_rewrites_on_reject():

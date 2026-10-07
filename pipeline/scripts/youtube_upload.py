@@ -6,8 +6,10 @@
   python scripts/youtube_upload.py --channel embedded --file 指定檔.mp4  # 指定檔案
   python scripts/youtube_upload.py --privacy unlisted --title "自訂標題"
 
-標題預設: "<title_prefix> - <top1.json 的爆款標題>"(取不到時退回原始新聞標題,
-再由 build_title 淨化與截斷;top1.json 與影片檔名不同天時一律退回檔名標題)。
+標題預設: "<title_prefix> - <top1.json 的爆款標題>"。爆款標題加上前綴超過 95 字元時,
+長片改用第三條 video_title_short(同一篇的較短寫法)整條替換,而不是截斷;
+兩者都不可用就退回原始新聞標題。淨化與截斷一律由 build_title 收斂。
+top1.json 與影片檔名不同天時退回檔名標題。
 輸出: output/<slug>/youtube_uploads.json。
 
 冪等設計: init_upload 後立即把 resumable session URI 寫進記錄(status=uploading);
@@ -27,6 +29,7 @@ from _common import (
     SHORTS_TITLE_FIELD,
     TITLE_MAX,
     VIDEO_TITLE_FIELD,
+    VIDEO_TITLE_SHORT_FIELD,
     build_title,
     channel_dir,
     clean_headline,
@@ -157,13 +160,18 @@ def build_metadata(cdir: Path, channel: dict, file: Path) -> tuple[str, str]:
     # 爆款標題由 rank_news 隨選題一起產生(零額外 API 呼叫)。Shorts 用專屬
     # 欄位 — 直式 60 秒需要更短更鉤人的標題。檔名前綴決定它是不是 Shorts
     # (run_shorts_pipeline 的 filename_pattern 是 "shorts_{date}.mp4")。
-    field = SHORTS_TITLE_FIELD if file.name.startswith("shorts_") else VIDEO_TITLE_FIELD
+    is_shorts = file.name.startswith("shorts_")
+    field = SHORTS_TITLE_FIELD if is_shorts else VIDEO_TITLE_FIELD
     # fallback 必須是「保證非空」的字串:news.title 可能不存在、是 null,或整串
     # 只有 < >/空白。用 .get(k, default) 只擋得住第一種 —— null 會回 None、
     # 淨化後成空,兩者都會讓 build_title 產出尾端懸空的 "prefix - "
     # (2026-10-08 reviewer F1)。先淨化,空了就退回檔名。
     fallback = clean_headline(news.get("title")) or stem_label(file)
-    title = build_title(prefix, top1.get(field), fallback, logger)
+    # 備援短標題只在長片用:Shorts 的欄位本來就 ≤50,前綴一加就爆時它更需要的是
+    # 「再短一點」而不是「換一篇的寫法」,而 prompt 沒有給 Shorts 第三條標題
+    # (前三名各三條 = 長片主/長片備援/Shorts)。傳空字串 = build_title 照舊截斷。
+    viral_short = "" if is_shorts else top1.get(VIDEO_TITLE_SHORT_FIELD)
+    title = build_title(prefix, top1.get(field), fallback, logger, viral_short)
     description_lines = [
         news.get("headline", "") or news.get("summary", ""),
         f"來源: {news.get('source', '')}  {news.get('url', '')}",

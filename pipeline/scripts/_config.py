@@ -43,6 +43,10 @@ SIMPLE_EN_STYLE = (
 # 不另開 Gemini 呼叫:免費層每日配額僅 20 次,多一次呼叫就是少一天的產能。
 VIDEO_TITLE_FIELD = "video_title"
 SHORTS_TITLE_FIELD = "shorts_title"
+# 備援長片標題:同一個故事的第二個、更短的寫法。爆款標題為了鉤人常寫得長,
+# 加上 title_prefix 後容易超過 TITLE_MAX,硬切會砍掉最有力的字尾 —
+# 有一條短的備援就能整條換掉而不是腰斷。Shorts 沒有對應欄位:它本來就 ≤50。
+VIDEO_TITLE_SHORT_FIELD = "video_title_short"
 
 # YouTube 標題上限(官方硬限 100,留 5 字元餘裕)。
 # youtube_upload.py 原本自己截 [:95],現在統一由 build_title 收斂 —
@@ -64,7 +68,9 @@ def clean_headline(text: object) -> str:
     return " ".join(text.replace("<", "").replace(">", "").split())
 
 
-def build_title(head: str, viral: object, fallback: object, logger) -> str:
+def build_title(
+    head: str, viral: object, fallback: object, logger, viral_short: object = ""
+) -> str:
     """組合 YouTube 標題為 "<head> - <爆款標題>"。
 
     viral 是 rank_news 產生的爆款標題(top1.json 的 VIDEO/SHORTS_TITLE_FIELD)。
@@ -72,16 +78,22 @@ def build_title(head: str, viral: object, fallback: object, logger) -> str:
       1. Gemini 沒回這個欄位
       2. Gemini 回的不是字串(或只有空白)
       3. 淨化後成空字串(整串只有 < > 或空白)
-      4. 去重改選了別篇 — 沿用會張冠李戴,rank_news 已主動清空
+      4. 去重改選了別篇 — 沿用會張冠李戴,rank_news 已改帶被選中那篇的標題
     fallback 同樣做型別檢查:JSON 的 "title": null 會讓 .get 回 None。
     永不靜默失敗(CLAUDE.md)。
+
+    viral_short(選用)是**同一篇的較短寫法**(VIDEO_TITLE_SHORT_FIELD)。只在
+    「用了爆款標題、但加上 head 後超長」時才拿出來比 — 這正是爆款標題最常
+    出事的場景:為了鉤人寫得長,prefix 一加就爆,硬切會砍掉最有力的字尾。
+    不從 fallback 分支取用:fallback 是**別篇**的新聞標題,換成 short 版沒有意義。
 
     2026-10-08 reviewer R1:可用性判斷必須在**淨化之後**。舊版先判斷 viral
     非空才淨化,於是 viral="<>" 會被判定「有值」→ 淨化後成空字串 → fallback
     被跳過,產出尾端懸空的 "prefix - " 直接上傳。先淨化再判斷就沒有這個洞。
     """
     tail = clean_headline(viral)
-    if not tail:
+    from_viral = bool(tail)
+    if not from_viral:
         logger.warning(
             "[WARN] 沒有可用的爆款標題(Gemini 未回 / 型別錯誤 / 淨化後為空 /"
             " 去重改選已清空),退回原始新聞標題"
@@ -90,6 +102,18 @@ def build_title(head: str, viral: object, fallback: object, logger) -> str:
     if not tail:
         logger.warning("[WARN] 標題尾段為空 — 爆款標題與原始新聞標題都取不到")
     title = f"{head} - {tail}"
+    if len(title) > TITLE_MAX and from_viral:
+        short = clean_headline(viral_short)
+        if short:
+            candidate = f"{head} - {short}"
+            # 條件只有一個:candidate ≤ 上限。它已隱含「比原標題短」—— 原標題
+            # 此刻必然 > TITLE_MAX。塞不進去就維持原標題走截斷,不做二次替換。
+            if len(candidate) <= TITLE_MAX:
+                logger.warning(
+                    f"[WARN] 標題 {len(title)} 字元超過上限 {TITLE_MAX},"
+                    "已改用較短的備援標題"
+                )
+                return candidate
     if len(title) > TITLE_MAX:
         logger.warning(
             f"[WARN] 標題 {len(title)} 字元超過上限 {TITLE_MAX},已截斷:"

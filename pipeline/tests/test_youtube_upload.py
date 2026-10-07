@@ -51,6 +51,64 @@ def test_build_metadata_uses_viral_title(tmp_path):
     assert shorts_title == "Embedded Linux Daily - Chip Giant Fined $5.7B!"
 
 
+def test_build_metadata_switches_to_short_backup_when_over_limit(tmp_path, caplog):
+    """主標題加上前綴後超過 TITLE_MAX → 整條換成 video_title_short,不腰斬。
+
+    爆款標題為了鉤人常把最有力的字放在字尾,硬切等於白寫;Gemini 為前三名
+    各寫的第三條(video_title_short)就是為此存在。
+    """
+    prefix = "Embedded Linux Daily"
+    long_title = (
+        "Broadcom Just Shipped A Brand New AI-Powered Linux Implant, "
+        "And Nobody Saw This Coming!"
+    )
+    short_title = "Broadcom's New AI Linux Implant!"
+    _write_top1(
+        tmp_path,
+        {
+            "date": "2026-10-08",
+            "video_title": long_title,
+            "video_title_short": short_title,
+            "news": {"title": "Broadcom implant", "url": "https://x", "source": "S"},
+        },
+    )
+    assert len(f"{prefix} - {long_title}") > 95, "測試前提:主標題必須真的超長"
+    with caplog.at_level(logging.WARNING):
+        title, _ = build_metadata(
+            tmp_path, {"title_prefix": prefix}, tmp_path / "video_2026-10-08.mp4"
+        )
+    assert title == f"{prefix} - {short_title}"
+    assert "已改用較短的備援標題" in caplog.text
+
+
+def test_build_metadata_never_uses_long_short_backup_for_shorts(tmp_path):
+    """Shorts 不取 video_title_short — 兩個欄位屬於不同片子。
+
+    Shorts 有專屬的 shorts_title(≤50),拿長片的備援去補是張冠李戴;真的
+    還是太長就照舊截斷,不換欄位。
+    """
+    prefix = "Embedded Linux Daily"
+    shorts_title = (
+        "Toshiba Fights Hackers With A Brand New Cyber-Resilient Linux Distro Today!"
+    )
+    _write_top1(
+        tmp_path,
+        {
+            "date": "2026-10-08",
+            "shorts_title": shorts_title,
+            "video_title_short": "Long-Form Backup!",
+            "news": {"title": "n", "url": "https://x", "source": "S"},
+        },
+    )
+    expected = f"{prefix} - {shorts_title}"
+    assert len(expected) > 95, "測試前提:Shorts 標題要真的超長,否則測不到截斷"
+    title, _ = build_metadata(
+        tmp_path, {"title_prefix": prefix}, tmp_path / "shorts_2026-10-08.mp4"
+    )
+    assert "Long-Form Backup!" not in title
+    assert title == expected[:95]
+
+
 def test_build_metadata_falls_back_to_news_title(tmp_path):
     """沒有爆款標題時退回原始新聞標題(舊行為不變,不會變成空的)。"""
     _write_top1(
