@@ -6,6 +6,8 @@
 去重因此靜默失效。這支測試就是那個 bug 的回歸鎖。
 """
 
+import logging
+
 import pytest
 from backfill_history import parse_video
 from rank_news import title_key
@@ -111,6 +113,57 @@ def test_unknown_origin_returns_none():
 def test_missing_source_url_returns_none():
     """沒有來源 URL 就沒有可靠的去重鍵 → 略過。"""
     rec = parse_video(_video(desc="Embedded Linux Daily\n沒有來源網址的描述"))
+
+    assert rec is None
+
+
+# ---------- 節目歸屬:說明裡的節目標記(2026-10-08 起)----------
+# 標題不再帶頻道前綴之後,影片的節目身分只剩說明裡的 "program: <slug>" 帶得出來
+# (兩個節目共用同一個上傳清單)。少了它,重建工具會把所有新影片當成「無法歸屬」
+# 跳過 —— 安靜地只補到舊資料,而那正是 2026-09-16 重複上傳事件的成因。
+
+
+def test_slug_from_description_marker_without_prefix():
+    """標題無前綴(現行格式)→ 靠說明裡的標記歸屬。"""
+    desc = _desc("Fined $5.7B!", "Reuters") + "\nprogram: tech"
+    rec = parse_video(_video(vid="newvid0001", title="Fined $5.7B!", desc=desc))
+
+    assert rec["slug"] == "tech"
+
+
+def test_prefix_still_attributes_legacy_video_without_marker():
+    """舊影片沒有標記 → 前綴那條路必須留著,否則整批舊資料都歸屬不了。"""
+    rec = parse_video(
+        _video(title="TechSnack Daily - 2026-09-01 Something", desc=_desc("A", "B"))
+    )
+
+    assert rec["slug"] == "tech"
+
+
+def test_marker_wins_over_conflicting_title_prefix(caplog):
+    """標記與前綴衝突 → 以標記為準**且必須留下 WARN**。
+
+    靜默選一個正是這支工具存在的理由(2026-09-16 的重複上傳事件):歸錯節目
+    會讓去重歷史被塞進錯誤的節目,當天就少擋一篇重複的文章。
+    """
+    desc = _desc("A", "B") + "\nprogram: tech"
+    with caplog.at_level(logging.WARNING):
+        rec = parse_video(
+            _video(
+                vid="x",
+                title="Embedded Linux Daily - 2026-10-08 Something",
+                desc=desc,
+            )
+        )
+
+    assert rec["slug"] == "tech"
+    assert "以標記為準" in caplog.text
+
+
+def test_summary_mentioning_program_is_not_a_marker():
+    """摘要裡出現 "program:" 不算標記(整行比對)—— 誤判會把影片歸給錯的節目。"""
+    desc = _desc("The program: 5 ways to boot faster", "B")
+    rec = parse_video(_video(vid="unknown", title="Random Thing - Whatever", desc=desc))
 
     assert rec is None
 

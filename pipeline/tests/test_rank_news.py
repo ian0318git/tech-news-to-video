@@ -393,11 +393,39 @@ def test_rank_prompt_requires_every_item_ranked():
 
 
 def test_rank_prompt_asks_for_viral_titles():
-    """爆款標題四個公式必須齊全。注意它與選題共用同一次 Gemini 呼叫 —
-    免費層每日配額僅 20 次,不能為了標題另開一次呼叫(2026-10-07)。"""
+    """爆款標題的**風格規則**必須齊全。注意它與選題共用同一次 Gemini 呼叫 —
+    免費層每日配額僅 20 次,不能為了標題另開一次呼叫(2026-10-07)。
+
+    2026-10-08 起改用使用者給的規則集(原本是四個公式 A–D);其中「少用問號
+    結尾」直接推翻了舊公式 (D) SUSPENSE(它的範例就是問句),所以那組公式
+    是**被取代**而不是被補充。逐條檢查,少一條就可能整批標題走鐘。
+    """
     out = RANK_PROMPT_TEMPLATE.format(topic="t", items_json="[]")
-    for formula in ("NUMBERS", "CONFLICT", "COUNTER-INTUITIVE", "SUSPENSE"):
-        assert formula in out, f"爆款公式消失: {formula!r}"
+    for rule in (
+        "RESULT, the CONFLICT, the number",  # 1 先講結果/衝突,不鋪陳
+        "withhold WHY",  # 2 好奇心缺口
+        "a question mark is\n   not",  # 3 直述句優先
+        "Contrast is the strongest hook",  # 4 反差
+        "series name",  # 5 禁止頻道/系列前綴
+        "put it FIRST",  # 6 數字放最前面
+        '"99% of people"',  # 7 禁止無法證實的誇大
+        "Never first person",  # 8 不用第一人稱
+    ):
+        assert rule in out, f"標題規則消失: {rule!r}"
+    # 舊公式確實退場(留著會與新規則打架:Gemini 會挑 SUSPENSE 寫問句)
+    assert "SUSPENSE" not in out
+
+
+def test_rank_prompt_bans_the_channel_prefix():
+    """標題不得含頻道/系列/固定前綴 —— 前綴會吃掉最前面的字元。
+
+    這條是 prompt 端的一半;另一半在 youtube_upload.build_metadata(傳空 head)。
+    兩邊都要有:prompt 沒說,Gemini 會自己加上品牌;程式沒拔,前綴照樣進標題。
+    使用者直接點名了這兩個字串,所以連範例都要在 prompt 裡。
+    """
+    out = RANK_PROMPT_TEMPLATE.format(topic="t", items_json="[]")
+    for banned in ("TechSnack Daily", "Embedded Linux Daily"):
+        assert banned in out, f"被點名的前綴沒寫進 prompt: {banned!r}"
 
 
 def test_title_field_names_match_prompt_contract():
@@ -435,9 +463,19 @@ def test_rank_prompt_asks_titles_for_top_three():
     out = RANK_PROMPT_TEMPLATE.format(topic="t", items_json="[]")
     assert "TOP 3" in out
     assert "THREE English headlines each" in out
-    # 長度上限是契約的一部分:video_title 60 + 前綴要能塞進 TITLE_MAX
-    for limit in ("Maximum 60 characters", "Maximum 40 characters", "Maximum 50 characters"):
+    # 長度上限是契約的一部分。2026-10-08 使用者指示:長片約 25 字內(重點在前
+    # 15 字)、Shorts 約 15 字內;備援再短一級。測試只認 prompt 的**指示**,
+    # 不認模型是否照做 —— 遵從度靠實測(同一輪的 probe 顯示:Gemini 對長度
+    # 幾乎不設防,25 字上限實測回 37–56 字 → 因此 prompt 才要明講「數」、
+    # 給改寫範例、並在結尾再檢查一次)。
+    for limit in (
+        "MAXIMUM 25 characters",
+        "FIRST 15 characters",
+        "MAXIMUM 15 characters",
+    ):
         assert limit in out, f"標題長度指示消失: {limit!r}"
+    assert "count its characters" in out, "「自己數字數」的指令消失 → 長度會再度失控"
+    assert "Final check before you return" in out
     # 只為前三名寫,其餘條目仍要留在 ranking 裡(省略會縮小候選池 → 可能整天 fail)
     assert "Every news item must still appear" in out
 

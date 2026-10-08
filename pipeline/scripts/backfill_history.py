@@ -26,6 +26,12 @@ YouTube 本身:每支影片的描述都帶著當初的 Google News 來源 URL
 - **分節目各自重建**:頻道上的 embedded / tech 是兩個節目,`topic_history.json`
   也是各一份。查證過兩節目從未做過同一篇文章(交集 0),所以把 A 節目的文章
   塞進 B 節目的歷史會造成過度封鎖。
+- **歸屬靠說明裡的 `program:` 標記**(2026-10-08 起):兩節目共用**同一個
+  YouTube 頻道**的上傳清單(實測 187 支影片裡 tech 122 / embedded 63),
+  所以一次列舉會同時看到兩個節目的影片,必須逐一歸屬。舊版靠標題的
+  `"<prefix> - "`,而標題從 2026-10-08 起不再帶前綴 → 改用上傳時寫進說明的
+  節目標記(`_config.parse_program_marker`);舊影片沒有標記,所以前綴與
+  影片 ID 白名單兩條舊路徑都保留。
 - **只補不外插**:既有條目原樣保留,只補「history 完全認不出來」的文章。
 - **日期用雪梨時區**:影片的 `publishedAt` 是 UTC,而 pipeline 的「今天」是
   AEST —— 直接取 UTC 日期會讓 08:00 AEST 上傳的影片落到前一天。
@@ -46,7 +52,13 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from _common import OUTPUT_DIR, fail, save_json, setup_logging
+from _common import (
+    OUTPUT_DIR,
+    fail,
+    parse_program_marker,
+    save_json,
+    setup_logging,
+)
 from _youtube_read import ensure_read_token
 from rank_news import topic_keys, url_key
 
@@ -101,9 +113,24 @@ def fetch_uploads(token: str) -> list[dict]:
 
 
 def parse_video(video: dict) -> dict | None:
-    """影片 → {slug, date, title, url};無法歸屬或沒有來源 URL 則回 None。"""
+    """影片 → {slug, date, title, url};無法歸屬或沒有來源 URL 則回 None。
+
+    歸屬順序:**說明裡的節目標記 → 標題前綴 → 影片 ID 白名單**。
+    2026-10-08 起上傳的影片標題不再帶前綴(CTR 規則),前綴判斷對新影片一律
+    失效 → 標記是新的主要訊號;舊影片沒有標記,所以前兩條路徑都必須留著。
+    標記是上傳時從**同一份 channels.json** 寫進去的,照理不會與標題前綴衝突;
+    真的衝突時以標記為準(它是後來的、明確的來源)但發 WARN — 靜默選一個
+    正是這支工具存在的理由(2026-09-16 的重複上傳事件)。
+    """
+    marked = parse_program_marker(video.get("desc"))
     prefix = video["title"].split(" - ")[0]
-    slug = PREFIX_TO_SLUG.get(prefix) or VID_TO_SLUG.get(video["vid"])
+    legacy = PREFIX_TO_SLUG.get(prefix) or VID_TO_SLUG.get(video["vid"])
+    if marked and legacy and marked != legacy:
+        logger.warning(
+            f"[WARN] 影片 {video['vid']} 的節目標記是 {marked!r} 但標題前綴指向"
+            f" {legacy!r} — 以標記為準(標題前綴可能是舊的/手改的)"
+        )
+    slug = marked or legacy
     if slug is None:
         logger.warning(f"[WARN] 無法歸屬的影片 {video['vid']}: {video['title'][:60]}")
     # 描述格式: 第 1 行 "<文章標題>  <來源>",第 2 行 "來源: <來源>  <URL>"

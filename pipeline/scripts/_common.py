@@ -41,6 +41,8 @@ from _config import (
     clean_headline,
     flag_value,
     load_channels,
+    parse_program_marker,
+    program_marker,
     resolve_channel,
     today_str,
 )
@@ -80,6 +82,8 @@ __all__ = [
     "notebook_delete",
     "notebook_list",
     "notebook_use",
+    "parse_program_marker",
+    "program_marker",
     "resolve_channel",
     "run_video_flow",
     "save_json",

@@ -41,6 +41,7 @@ POC(notebooklm-py 影片流程)驗證通過後,實作正式系統:
 | D25 | **Gemini 配額保護三件套**(2026-10-08,接 D24 的 20 次/天前提):**A** `_gemini.daily_quota_hit()` 解析 429 body,`quotaId`/`quotaMetric` 含 `PerDay` → 立刻 fail 不重試;**B** `run_daily` 在 `top1.json` 的 `date == 今天` 時跳過 fetch/rank;**C** `sources.json` 的 `topic` 等於今天選題且 `sources` 非空時跳過 collect | 起因:cron 08:00 主 run + `*/15 8-14` 補跑 = 28 次/天,而唯一的冪等閘門是「今天的影片檔存在」— **失敗時該條件永遠不成立**,所以一次短暫故障會在兩個 tick 內燒光當日 20 次額度,之後整天 429(實測 274 筆同型)。**判準只看 `quotaId` 不看 `retryDelay`**:同一種 429 的 `retryDelay` 實測 32s–85477s 都有,拿它判斷會把每分鐘速率限制誤判成每日;而每分鐘版本的 `quotaMetric` 與每日版本逐字元相同,只有 `quotaId` 的 `PerMinute`/`PerDay` 不同(兩種情境各有測試釘住)。**C 的 `topic` 比對不是冗餘**:top1.json 被換題時,舊 sources.json 是別的題目的來源。判斷抽成純函式(`load_top1`/`locked_topic`/`sources_ready`/`skip_reason`)以便離線測試;畸形輸入一律當「沒跑過」重跑而非當「已完成」跳過,未知步驟一律執行。**未採用 D(補跑間隔 15→60 分)**:B/C 讓已完成時每 tick 零成本,15 分鐘密度反而是短暫故障能快速自癒的優點 |
 | D26 | **模型世代切換 `gemini-2.5-flash` → `gemini-3.5-flash`**(2026-10-08):`_gemini.gemini_json` 預設值、`rank_news.DEFAULT_MODEL`、`collect_sources.DEFAULT_MODEL` 三處與兩台 `.env` 的 `GEMINI_MODEL` 同步 | **2.5 世代對新建立的 GCP 專案已下線**(404 `"no longer available to new users"`;`2.5-flash-lite`、`2.0-flash` 亦同),而舊專案僅因建立得早而沿用 — 換 key 就會踩到。**`ListModels` 仍列出這些模型,清單不反映生成權限,不能當判準**。3.6 / 3.7 / 3.8 在實測時段全部 503(3.8 甚至直接 429),3.5 能穩定吃下完整 prompt(20 則 / 14KB / 約 24s)。**不用 `gemini-flash-latest` 這類浮動別名** — 模型會在背後被換掉,回應風格與 JSON 契約跟著漂移 |
 | D27 | **爆款標題改為「前三名各三條」+ `video_title_short` 備援**(2026-10-08,修正 D24):prompt 要求 Gemini 為**前三名**各寫三條標題(`video_title` 長片 ≤60 / `video_title_short` **同一篇**的較短寫法 ≤40 / `shorts_title` ≤50),**掛在前三名各自的 `ranking` 條目上**;`build_metadata` 取用順序為 `prefix + video_title` ≤95 → 超長改用 `prefix + video_title_short`(整條替換不截斷)→ 都不可用才退回原始新聞標題 | D24 上線首日就暴露兩個問題:①`pick_topic` 沿排名取第一則沒被去重封鎖的,而實測 **20 則候選有 18 則落在 90 天窗口內** → 改選幾乎是常態,而舊設計只為 #1 寫標題且一改選就清空 → 標題等於白做(首日 `top1.json` 兩個標題欄位都是空的);②爆款標題常寫到 60 字元,加 `title_prefix` 就超過 95,硬切砍掉的正是最有力的字尾。**掛 `ranking` 而非另開 `top3` 鍵的理由**:`apply_dedup_choice()` 簽章本來就收 `chosen_entry`(被選中那篇的 ranking 條目)→ 零介面變動就能取到正確那篇的標題。**`video_title_short` 不得從 fallback 路徑取用**:它是同一篇的另一種寫法,而 fallback 是別篇(改選到前三名外) — 混用就是「A 標題 + B 影片」;Shorts 亦不取此欄位(有自己的 `shorts_title`) |
+| D28 | **爆款標題改用 CTR 規則集:內容標題去前綴、結果/數字先行、長片 ≤25 字元**(2026-10-08,使用者指示;取代 D24/D27 的**風格與長度**部分):prompt 標題段改為八條規則(①先給結果/衝突/數字,不鋪陳 ②只說發生什麼、**原因留給影片** ③直述句、**不用問號結尾** ④反差 ⑤數字放最前且必須真實 ⑥**禁頻道/系列/固定前綴** ⑦禁無法查證的誇大 ⑧不用第一人稱),長度改為長片 ≤25 字元(重點在前 15)、備援 ≤15、Shorts ≤15;`build_metadata` 改傳**空 head** → 內容標題不再加 `title_prefix`;**`filename_title()` 的降級路徑仍保留前綴** | 舊四公式(A 數字 / B 衝突 / C 反直覺 / D 強烈懸念)是被**取代而非補充** — 規則③直接推翻 D(其範例就是問句)。**前綴只在內容標題移除**:降級路徑(top1.json 不可用 / 跨日)本來就沒有內容可前置,拔掉前綴只剩裸的 `video 2026-10-08.branded`,連哪個頻道都認不出;前綴的用途是「辨識」而不是搶版面。**長度只有實測才收得住**:同一天用真實候選(20 則 / 15KB)實跑三輪 — ①只寫規則:合規 **0/18**(25 字上限回 37–56 字)②加「自己數字數」+ 改寫範例:合規 **18/18**,但**範例把模型教錯了方向** —— 範例示範「刪字」,模型就刪掉主體換長度(`Forcing EU Approval!`、`AI PC War Is On!`、`Linux At Risk!`,`Tesla`/`Microsoft`/`Apple` 全不見)③範例改成「**保留主體與數字,砍動詞/形容詞/鋪陳**」→ `$40B Nvidia Chip Bid`(20)、`EU Bows on Tesla FSD`(20)、`AI PC War on Apple`(18)、`AI Linux Implant Exposed`(24)。**教訓:對 LLM 下長度限制,只說「要短」它會刪掉最該留的字 — 必須同時指定「什麼不准刪」**。**未解 / 待觀察**:ⓐ「25 字」的單位按使用者原文是中文字數,而產出是英文,本輪讀作**英文字元**;若原意是「25 個中文字的資訊量」(≈40 英文字元),只要改 prompt 裡那兩個數字 ⓑ 15 字上限下 `video_title_short` 與 `shorts_title` 約半數情況收斂成同一條(單一事實型故事),目前視為可接受冗餘 ⓒ 今日已上傳的 3 支公開影片仍是舊標題(要改需 `youtube.force-ssl` 重新授權)ⓓ **去前綴的隱形連帶損害**:`backfill_history` 原本靠標題的 `"<prefix> - "` 歸屬節目,而去前綴後標題沒有任何節目線索 —— 兩個節目**共用同一個 YouTube 頻道的上傳清單**(實測 187 支影片:tech 122 / embedded 63 / 其他 2),所以「無法歸屬」等於整個重建工具對新影片失效(2026-09-16 的重複上傳事件就是靠這支工具補救的)。修法是上傳時在說明寫一行 `program: <slug>`(產生端 `build_description`、消費端 `parse_program_marker`,兩者共用 `_config` 的同一組函式),**舊影片沒有標記,所以標題前綴與影片 ID 白名單兩條路徑都保留**;兩者衝突時以標記為準並發 WARN(靜默選一個正是這支工具存在的理由) |
 
 **前置(一次性,使用者操作)**: Google Cloud 專案 → 啟用 YouTube Data API v3 →
 OAuth 同意畫面(External,加入測試使用者)→ 建立 OAuth 用戶端 ID(**TVs and Limited Input devices**)
@@ -48,7 +49,7 @@ OAuth 同意畫面(External,加入測試使用者)→ 建立 OAuth 用戶端 ID(
 
 ## 測試
 
-`pipeline/tests/` — **265 個單元測試**(pytest,mock 不連網):
+`pipeline/tests/` — **306 個單元測試**(pytest,mock 不連網):
 RSS 解析(標題/來源/摘要/上限/壞 XML)、`flag_value` 參數解析、頻道解析、來源過濾
 (Google 轉址排除、去重、非 http 排除)、選題去重(`title_key` / `url_key` / `pick_topic`)、
 權杖管理(refresh 重試、缺 refresh_token、原子寫入)、`channel_stats` 品牌帳號
@@ -56,7 +57,7 @@ fallback(`mine=true` 空 → `forHandle`)、`backfill_history` 標題解析(含 
 分隔的來源名剝離)與乾跑/寫入行為。
 
 2026-10-08 追加:排名 prompt 的護欄(prompt 必須渲染得出來、必須要求每一則都排名、
-四個爆款標題公式與欄位名契約)、`build_title`(爆款標題取用 / 型別與淨化後為空的
+標題風格規則集與欄位名契約)、`build_title`(爆款標題取用 / 型別與淨化後為空的
 退回 / 截斷上限 / YouTube 非法字元)、`apply_dedup_choice`(index 一致保留、改選覆寫、
 畸形 index、缺 key)、`entry_index` 與畸形 ranking 跳過、`youtube_upload.build_metadata`
 (真的決定 YouTube 標題的地方 — 長片/Shorts 各取專屬欄位、跨日 top1 的日期閘門、
@@ -68,6 +69,35 @@ news 欄位畸形)、resumable 續傳決策、Gemini 每日配額判準(`daily_q
 只讀 ranking)、契約文字與三個長度上限、`apply_dedup_choice` 攜帶被選中那篇的標題
 (改選到前三名內 vs 前三名外 vs 自己的 #1 缺欄位,三種路徑的訊息分級)、備援短標題的
 四條路徑(超長換掉、備援也塞不下就走截斷、**fallback 路徑不得取用備援**、型別錯誤)。
+
+2026-10-08 追加(D28 標題規則集):八條風格規則逐條釘住(少了任一條,Gemini
+就會漂回原本的寫法)、**舊公式 `SUSPENSE` 必須不存在**(它與新規則「不用問號
+結尾」互斥,留著模型會挑它)、prompt 裡要明文出現使用者點名的兩個前綴字串、
+「自己數字數」與結尾複查指令 (**這兩句是長度從 0/18 合規變成 18/18 合規的
+關鍵**,拿掉等於讓長度回到失控)、`build_title` 空 head 不得拼出前導 `" - "`
+(三條分支各自驗),`build_metadata` 不加前綴 / `filename_title` **保留**前綴
+(兩者互為守門人:把前綴全拔或全留,都會有一條紅)。**複審後再實測兩輪**:reviewer
+指出四組改寫範例有三組以公司名開頭、第一組又把數字放在第二個字(違反自己寫的規則
+①⑤),改成 `$40B Nvidia Chip Bid`(20)/`AI PCs Challenge Apple`(22)/
+`$5.7B Fine For Chip Giant`(25)/`Free Linux Beats Paid`(21)並補一句「主體要留,
+但不必佔開頭那個位置」→ 第 4 輪合規仍 **18/18**,然而**人眼看出第 2 輪的病灶半回來**:
+embedded 把具體名稱換成泛稱(`U-Boot` CVE → `Bug Exposes Linux Gear`、`Broadcom RedC2`
+→ `AI Implant Targets Linux`)。第 5 輪再加一句「具體名稱勝過泛稱:`U-Boot Bug Exposes
+Gear` 勝過 `Bug Exposes Linux Gear`;`Linux`/`AI`/`chip`/`tool` 不是名稱」→ 合規仍
+**18/18**,U-Boot 那則保住主體,但 Broadcom 那則仍寫泛稱、tech 的 SpaceX 那則反而退成
+`40 Billion Chip Bid`(掉了 `$` 與兩個主體名)。**結論:`temperature=0.2` 下合規率可重現
+(兩輪都 18/18),實體保留率逐輪浮動(同一份 prompt 4–6/6)** —— 不可拿單輪結果宣稱
+「修好了」,這也是「合規率用程式量、產出用人眼看、且要看多輪」的具體案例。
+
+2026-10-08 追加(D28 節目標記):`program_marker` / `parse_program_marker` 的往返
+契約、非字串與空白 slug 不得寫出半截 `program: `、**整行比對**(摘要本身出現
+`program:`/`reprogram:` 等字樣不得被當成標記 —— 誤判會把影片歸給錯的節目);
+`build_description` **在超長摘要下仍保得住標記**(截斷只砍可變前段,寫成整串
+`[:4900]` 就會把尾端標記裁掉而不報錯)、沒有 slug 時不留半截標記、
+`build_metadata` 兩條路徑(正常 / 沒有 top1.json 的降級)都帶標記;
+`backfill_history.parse_video` 的歸屬順序 — **說明標記 → 標題前綴 → 影片 ID**,
+無前綴的新標題靠標記歸屬、沒有標記的舊影片仍靠前綴、兩者衝突時以標記為準且必須
+留下 WARN、摘要裡出現 `program:` 不算標記。
 
 2026-10-08 追加(D25):`_gemini.daily_quota_hit` 的判準 — 真實的每日配額 payload、
 每分鐘速率限制(quotaMetric 相同、只有 quotaId 不同)必須**不**被誤判、非 JSON /
@@ -133,4 +163,6 @@ cron 指向這裡;GitHub repo 的 `pipeline/` 是**作品集快照**。兩者需
 - **2026-10-08 同批加固(與 D24 同一輪 review)**: ①`build_title` 把「可用性判斷」移到淨化**之後** — 舊寫法下 `viral="<>"` 會被判定有值、淨化後成空字串、fallback 被跳過,產出尾端懸空的 `"prefix - "` 直接上傳;②`pick_topic` 對 ranking 條目 index 全壞時改報專屬訊息(舊版一律報「全部落在 N 天去重窗口內」,會把排查帶去翻沒問題的 `topic_history.json`);③`youtube_upload` 加上傳端**日期閘門**(`dates_agree`):`top1.json` 的 `date` 與影片檔名日期不符 → 標題與說明改用檔名並警告。這是「A 的標題出現在 B 的影片上」唯一殘存路徑(跨日補傳),正常流程不受影響,任一邊取不到日期時放行以免誤擋手動補傳;④`news.title` 為 `null` 或淨化後成空時仍會產生懸空標題 → fallback 改為「保證非空」(兩條 fallback 路徑共用 `stem_label`,避免同一件事有兩種輸出);⑤畸形 ranking 條目不再丟未捕捉例外(`entry_index`)。測試 144 → **203 passed**
 - **2026-10-08 Gemini 免費配額被 429 打爆(A+B+C 已實作,見 D25)**: 症狀「早上跑得動、10:00 之後整天 429」。根因是配額算術:免費層 **20 次/天**;一次完整 run 要 4 次呼叫(2 頻道 × (`rank_news` + `collect_sources`)),`_gemini.py` 對 429/5xx 重試 2 次(每次呼叫最多 3 個 HTTP 請求);cron 08:00 主 run + `*/15 8-14` 補跑 = **28 次/天**,而唯一的冪等閘門是「今天的影片檔存在」,失敗時該條件永不成立 → 一次短暫故障就在約兩個 tick 內燒光當日額度。**教訓:重試機制在有限配額下會把單次失敗放大成整日癱瘓**。**已實作 A+B+C**(不重試每日配額型 429 / 補跑冪等 / `collect_sources` 同樣處理,見 D25);**D(補跑間隔 15→60 分)已評估後不採用** — A+B+C 讓已完成時每個 tick 零成本;**E(付費 key)仍為備案**,目前免費層 20 次/天對「2 頻道 × 2 次呼叫 + 餘裕」足夠
 - **2026-10-08 爆款標題「只有 #1 有、且一改選就清空」(D27)**: D24 上線**首日**的 `top1.json` 兩個標題欄位都是空的 — 不是 Gemini 沒回(它回了),而是它排 #1 的那篇被去重擋掉、`pick_topic` 改選了別篇,而 `apply_dedup_choice` 依設計清空標題。去重擋掉的比率是 **18/20**,所以「改選」是常態而非例外 → 只為 #1 寫標題等於白做。**教訓:LLM 回了值 ≠ 這個值會走到使用者眼前 — 中間每一段都可能把它丟掉,而丟掉的方式是靜默的**(清空 + 下游退回,只有 WARN)。同輪加上 `video_title_short` 備援,並以 1 次真實 Gemini 呼叫驗證契約(20 則 / 16.6KB → 恰好 3 條帶標題、欄位齊全、`top1` 不殘留)。測試 246 → **265 passed**
+- **2026-10-08 標題長度改了三次才對,而問題出在範例教錯方向(D28)**: 使用者給的 CTR 規則集把長片從 60 字元壓到 25。第一輪照抄規則進 prompt → 18 條標題**全數超標**(25 上限實回 37–56,15 上限實回 30–41),即模型對「MAXIMUM N characters」幾乎不設防。第二輪補上「輸出前自己數字數、超過就刪字再數」與五組「太長 → 改寫」範例 → **18/18 合規**,但檢查產出才發現:範例教的是「刪字」,於是模型刪的是 **Tesla / Microsoft / Apple 這些主體**(`Forcing EU Approval!`、`AI PC War Is On!`)—— 短了,卻變成沒有主詞的標題,**比超長更糟**。第三輪把範例改成保留主體與數字、只砍動詞形容詞 → 才同時得到合規與可用的標題。**教訓:對 LLM 下數值限制時,限制本身只決定「多長」,範例決定「犧牲什麼」;只驗合規率會讓「刪掉重點」的解法全綠過關,必須同時人眼看產出**。這也是本專案一貫的做法:契約用測試釘住,但**遵從度只能靠真實呼叫驗證**(測試只證明 prompt 裡有那句話,不證明模型照做)
+- **2026-10-08 拿掉標題前綴的同時,弄瞎了另一支工具(D28)**: 前綴不只是版面裝飾,它同時是 `backfill_history` 判斷「這支影片屬於哪個節目」的**唯一識別鍵** —— 兩個節目共用同一個 YouTube 頻道的上傳清單(`forHandle` 實測 187 支影片混在一起)。拔掉前綴後,那支工具會把所有新影片歸成「無法歸屬」**安靜跳過**,只在幾個月後需要重建去重歷史時才發現「怎麼補 0 筆」。這是 reviewer 在程式碼裡追出來的,不是執行時報的錯。**教訓:要移除的欄位若可能被下游當成識別鍵,先問「誰在讀它」——而且在 YouTube 這種外部系統上,唯一的驗證方式是去把真實資料撈回來看**,不能只看自己的程式(標題格式是上傳時自己寫的,但頻道上混了 187 支歷史影片,只有列出來看才知道)。修法用**新增**訊號(說明裡的 `program:` 標記)而不是恢復舊行為,兩條舊路徑都保留 → 舊影片不會因此歸屬不了
 - **2026-10-08 測試會汙染正式 log(已修)**: 步驟腳本在 import 時就呼叫 `setup_logging()`,而它建的 `FileHandler` 在**建構時**就 `open()` 了 `logs/<step>.log` → 光是匯入就寫正式 log。`deploy.sh` 每次都在 VPS 跑遠端 pytest,於是測試 WARN 落進正式 log;實測 `logs/youtube_upload.log` 出現「top1.json 是 2026-10-08 的選題,影片檔名日期是 2026-10-07 — 兩者不同天」,**看起來就像真的跨日補傳事件**(同日 01:05 的部署也留了 6 筆)。修在 `tests/conftest.py`(唯一保證先於任何 `test_*` 模組執行的位置;fixture 來不及,檔案早開了):匯入 `_base` 後把 `LOGS_DIR` 指向 `mkdtemp()` 並 `atexit` 清除,手動 `pytest` 也涵蓋。**驗證**:`touch` 蓋章 → 跑 pytest → `find logs -name '*.log' -newer <stamp>` 修好前有、修好後 0 筆。既有的 17 筆汙染行不自行改寫(log 是事實紀錄)

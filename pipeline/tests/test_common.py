@@ -6,7 +6,15 @@ import re
 from pathlib import Path
 
 import pytest
-from _common import TITLE_MAX, build_title, flag_value, resolve_channel, today_str
+from _common import (
+    TITLE_MAX,
+    build_title,
+    flag_value,
+    parse_program_marker,
+    program_marker,
+    resolve_channel,
+    today_str,
+)
 
 
 @pytest.fixture
@@ -78,10 +86,35 @@ def test_today_str_override_invalid_format(monkeypatch):
 
 
 def test_build_title_uses_viral_title(test_logger):
+    # 正式流程沒有任何呼叫端傳非空的 head(見 build_title docstring);這條守的是
+    # 通用組合器的 "<head> - tail" 行為,不是線上會出現的標題形狀。
     title = build_title(
         "2026-10-08 TechSnack Daily", "Apple Takes On Microsoft!", "Apple sues rival", test_logger
     )
     assert title == "2026-10-08 TechSnack Daily - Apple Takes On Microsoft!"
+
+
+def test_build_title_drops_the_separator_when_head_is_empty(test_logger, caplog):
+    """空 head = 不加頻道前綴(2026-10-08:「把最重要的內容放在最前面」)。
+
+    build_title 仍是通用組合器(head 有值就接得上,見上一條),但**空 head 不能
+    拼出 " - tail"** —— 前導分隔符會原樣上傳到 YouTube。三條分支都要守住:
+    爆款標題、退回新聞標題、備援短標題(備援走的是另一條 compose 呼叫)。
+    """
+    with caplog.at_level(logging.WARNING):
+        titles = [
+            build_title("", "Fined $5.7B!", "f", test_logger),
+            build_title("", None, "Original headline", test_logger),
+            build_title("", "y" * 100, "f", test_logger, "Short!"),
+        ]
+    assert titles == ["Fined $5.7B!", "Original headline", "Short!"]
+    # 舊版拼的是 f"{head} - {tail}",head 為空時的產物是 " - tail"(**前導空格**
+    # 加分隔符),不是 "-tail"。只斷言 startswith("-") 永遠是綠的,守不住任何
+    # 東西(R1 reviewer NIT)—— 要斷言的是「開頭沒有分隔符」這件事本身。
+    # 這三條 fixture 的內容都不含 " - ",所以這個檢查是有意義的。
+    for title in titles:
+        assert not title.startswith(("-", " ")), f"空 head 留下前導分隔符: {title!r}"
+        assert " - " not in title, f"空 head 留下分隔符: {title!r}"
 
 
 def test_build_title_falls_back_when_missing(test_logger, caplog):
@@ -159,10 +192,10 @@ def test_build_title_falls_back_when_sanitized_to_empty(test_logger, caplog, raw
 
 
 # ---- build_title:備援短標題(2026-10-08)-----------------------------------
-# Gemini 為前三名各寫三條:video_title(≤60)/ video_title_short(≤40,同一篇的
-# 較短寫法)/ shorts_title(≤50)。爆款標題為了鉤人常寫得長,加上頻道前綴就超過
-# TITLE_MAX,而硬切砍掉的往往正是最有力的字尾 — 有一條短的備援就能**整條換掉**
-# 而不是腰斬。
+# Gemini 為前三名各寫三條:video_title(≤25)/ video_title_short(≤15,同一篇的
+# 較短寫法)/ shorts_title(≤15)。25/15 是 prompt 的**風格目標**,不是程式強制
+# 的 —— 模型仍可能寫長,而硬切砍掉的往往正是最有力的字尾,所以有一條短的備援
+# 就能在超過 TITLE_MAX(平台硬限)時**整條換掉**而不是腰斬。
 
 
 def test_build_title_uses_short_backup_when_too_long(test_logger, caplog):
@@ -177,7 +210,7 @@ def test_build_title_uses_short_backup_when_too_long(test_logger, caplog):
 
 
 def test_build_title_ignores_short_backup_that_still_overflows(test_logger, caplog):
-    """備援也塞不進上限(Gemini 沒照 ≤40 寫)→ 維持原標題走截斷。
+    """備援也塞不進上限(Gemini 沒照 ≤15 寫)→ 維持原標題走截斷。
 
     不做「退而求其次換一條還是超長」的二次替換:那會產生一條**更長**的標題,
     而使用者從 log 看不出換過。
@@ -220,3 +253,50 @@ def test_build_title_tolerates_bad_short_backup(test_logger, caplog, bad):
         title = build_title("H", "v" * 300, "f", test_logger, bad)
     assert len(title) == TITLE_MAX
     assert "None" not in title
+
+
+# ---- 影片說明的節目標記(2026-10-08)---------------------------------------
+# 兩個節目共用**同一個 YouTube 頻道的上傳清單**,所以影片本身必須帶得出節目
+# 身分,否則 backfill_history 認不出新影片(詳見 _config 的 PROGRAM_MARKER_KEY
+# 註解)。產生端與消費端共用這裡的兩個函式,以下測試就是那個契約。
+
+
+def test_program_marker_round_trip():
+    """產生 → 解析必須逐字元對得上(契約測試)。"""
+    assert parse_program_marker(program_marker("embedded")) == "embedded"
+
+
+def test_program_marker_survives_a_full_description():
+    desc = "Some headline  Source\n來源: Source  https://example.com\n" + program_marker(
+        "tech"
+    )
+    assert parse_program_marker(desc) == "tech"
+
+
+@pytest.mark.parametrize("bad", [None, "", "   ", 123, ["x"], {"a": 1}])
+def test_program_marker_empty_for_non_slug(bad):
+    """非字串或空白 → 空字串,不寫出半截標記 "program: "。"""
+    assert program_marker(bad) == ""
+
+
+@pytest.mark.parametrize(
+    "desc",
+    [
+        "The program: 5 ways to speed up boot",   # 行首不是 "program:"
+        "see program: embedded for details",      # 標記不在行首
+        "program: embedded and more text",        # 標記後面還有字
+        "program:",                               # 沒有值
+        "reprogram: embedded",                    # 近似但不是標記
+    ],
+)
+def test_parse_program_marker_requires_whole_line(desc):
+    """新聞摘要本身可能出現 "program:" 字樣 —— 沒有行錨就會誤判成節目標記,
+    把一支 tech 影片歸給 embedded(或反之),去重歷史就被塞錯節目。"""
+    assert parse_program_marker(desc) == ""
+
+
+@pytest.mark.parametrize("bad", [None, 123, ["x"], {"a": 1}])
+def test_parse_program_marker_tolerates_non_string(bad):
+    """舊影片的 description 可能整個缺欄位(None)→ 不是崩,是回空字串,
+    呼叫端據此退回標題前綴判斷。"""
+    assert parse_program_marker(bad) == ""

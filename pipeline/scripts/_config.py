@@ -5,6 +5,7 @@
 
 import json
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -38,20 +39,59 @@ SIMPLE_EN_STYLE = (
 
 # --- YouTube 標題 -----------------------------------------------------------
 # 爆款標題由 rank_news 隨選題在同一次 Gemini 呼叫一起產生(見
-# RANK_PROMPT_TEMPLATE 的四個公式),寫進 top1.json。欄位名在此單一定義 —
+# RANK_PROMPT_TEMPLATE 的標題規則),寫進 top1.json。欄位名在此單一定義 —
 # 產生端(rank_news)與消費端(兩支影片腳本)都從這裡取,避免字串漂移。
 # 不另開 Gemini 呼叫:免費層每日配額僅 20 次,多一次呼叫就是少一天的產能。
 VIDEO_TITLE_FIELD = "video_title"
 SHORTS_TITLE_FIELD = "shorts_title"
-# 備援長片標題:同一個故事的第二個、更短的寫法。爆款標題為了鉤人常寫得長,
-# 加上 title_prefix 後容易超過 TITLE_MAX,硬切會砍掉最有力的字尾 —
-# 有一條短的備援就能整條換掉而不是腰斷。Shorts 沒有對應欄位:它本來就 ≤50。
+# 備援長片標題:同一個故事的第二個、更短的寫法。prompt 已把長片壓到 25 字元,
+# 但那是**指示**不是保證 —— 模型仍可能寫長。主標題一旦離譜到超過 TITLE_MAX,
+# 有一條短備援就能整條換掉而不是硬切腰斷(硬切會砍掉最有力的字尾)。
+# Shorts 沒有對應欄位:它本來就 ≤15,再截也沒東西。
 VIDEO_TITLE_SHORT_FIELD = "video_title_short"
 
 # YouTube 標題上限(官方硬限 100,留 5 字元餘裕)。
-# youtube_upload.py 原本自己截 [:95],現在統一由 build_title 收斂 —
-# 全專案只有這一個截斷點,prompt 端另有更嚴的長度指示。
+# 內容標題的截斷統一由 build_title 收斂;沒有內容可放的兩條路徑
+# (filename_title / --title)各自截,因為它們根本不經過 build_title。
+# 注意這是**平台硬限**,不是風格目標:風格目標(長片 25 / Shorts 15)只在
+# prompt 裡,寫在這裡會變成靜默腰斷一條本來鉤人的標題。
 TITLE_MAX = 95
+
+
+# --- 影片說明的節目標記 ------------------------------------------------
+# 單獨一行 "program: embedded"。**為什麼說明裡需要它**:`backfill_history.py`
+# 要從 YouTube 反推 `output/<slug>/topic_history.json`,而兩個節目共用同一個
+# 上傳清單(實測 187 支影片裡 tech 122 / embedded 63)→ 影片本身必須帶得出
+# 節目身分。2026-10-08 之前這個身分藏在標題的 "<prefix> - " 裡,而標題從
+# 2026-10-08 起不再帶前綴(CTR 規則)→ 少了這行,重建工具會把所有新影片
+# 當成「無法歸屬」跳過,安靜地只補到舊資料(同 D27 的教訓:靜默的資料遺失)。
+# 產生端(youtube_upload)與消費端(backfill_history)共用這裡的兩個函式,
+# 不各自寫字串 — 字串漂移正是這類 bug 的來源(欄位名契約同理)。
+PROGRAM_MARKER_KEY = "program"
+# 整行比對(^…$)而非搜尋:新聞摘要本身可能出現 "program:" 字樣,
+# 沒有行錨就會把摘要內容誤判成節目標記。
+_PROGRAM_MARKER_RE = re.compile(
+    rf"^{PROGRAM_MARKER_KEY}:\s*([A-Za-z0-9_-]+)\s*$", re.MULTILINE
+)
+
+
+def program_marker(slug: object) -> str:
+    """產生說明用的節目標記行;slug 不是非空字串時回空字串(不寫半截標記)。"""
+    if not isinstance(slug, str) or not slug.strip():
+        return ""
+    return f"{PROGRAM_MARKER_KEY}: {slug.strip()}"
+
+
+def parse_program_marker(description: object) -> str:
+    """從影片說明取出節目 slug;沒有標記則回空字串。
+
+    回空字串的呼叫端(backfill_history)要據此退回舊的標題前綴判斷 ——
+    2026-10-08 之前上傳的影片沒有這行,而那批影片仍需要被歸屬。
+    """
+    if not isinstance(description, str):
+        return ""
+    match = _PROGRAM_MARKER_RE.search(description)
+    return match.group(1) if match else ""
 
 
 def clean_headline(text: object) -> str:
@@ -71,7 +111,7 @@ def clean_headline(text: object) -> str:
 def build_title(
     head: str, viral: object, fallback: object, logger, viral_short: object = ""
 ) -> str:
-    """組合 YouTube 標題為 "<head> - <爆款標題>"。
+    """組合 YouTube 標題為 "<head> - <爆款標題>"(head 為空時只留尾段)。
 
     viral 是 rank_news 產生的爆款標題(top1.json 的 VIDEO/SHORTS_TITLE_FIELD)。
     取不到時退回 fallback(原始新聞標題)並發警告 — 四種取不到的情況:
@@ -82,15 +122,26 @@ def build_title(
     fallback 同樣做型別檢查:JSON 的 "title": null 會讓 .get 回 None。
     永不靜默失敗(CLAUDE.md)。
 
+    head 是選用的前置段,**目前唯一的正式呼叫端一律傳空字串**
+    (youtube_upload.build_metadata):2026-10-08 起爆款標題不加頻道前綴
+    (「把最重要的內容放最前面」),所以這條組合路徑在正式流程裡已經用不到。
+    參數與 "<head> - tail" 的行為留著,是因為它仍是通用組合器(單元測試守著);
+    而**降級標題的前綴不在這裡** —— top1.json 不可用、沒有內容可放時走
+    youtube_upload.filename_title,那個函式自己帶前綴,不經過 build_title。
+    空 head 不能拼成 " - tail":那會產生前導分隔符。
+
     viral_short(選用)是**同一篇的較短寫法**(VIDEO_TITLE_SHORT_FIELD)。只在
-    「用了爆款標題、但加上 head 後超長」時才拿出來比 — 這正是爆款標題最常
-    出事的場景:為了鉤人寫得長,prefix 一加就爆,硬切會砍掉最有力的字尾。
+    「用了爆款標題、但整條超長」時才拿出來比,硬切會砍掉最有力的字尾。
     不從 fallback 分支取用:fallback 是**別篇**的新聞標題,換成 short 版沒有意義。
 
     2026-10-08 reviewer R1:可用性判斷必須在**淨化之後**。舊版先判斷 viral
     非空才淨化,於是 viral="<>" 會被判定「有值」→ 淨化後成空字串 → fallback
     被跳過,產出尾端懸空的 "prefix - " 直接上傳。先淨化再判斷就沒有這個洞。
     """
+
+    def compose(part: str) -> str:
+        return f"{head} - {part}" if head else part
+
     tail = clean_headline(viral)
     from_viral = bool(tail)
     if not from_viral:
@@ -101,11 +152,11 @@ def build_title(
         tail = clean_headline(fallback)
     if not tail:
         logger.warning("[WARN] 標題尾段為空 — 爆款標題與原始新聞標題都取不到")
-    title = f"{head} - {tail}"
+    title = compose(tail)
     if len(title) > TITLE_MAX and from_viral:
         short = clean_headline(viral_short)
         if short:
-            candidate = f"{head} - {short}"
+            candidate = compose(short)
             # 條件只有一個:candidate ≤ 上限。它已隱含「比原標題短」—— 原標題
             # 此刻必然 > TITLE_MAX。塞不進去就維持原標題走截斷,不做二次替換。
             if len(candidate) <= TITLE_MAX:

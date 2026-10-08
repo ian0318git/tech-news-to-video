@@ -8,7 +8,11 @@ import logging
 from pathlib import Path
 
 import pytest
+from _common import parse_program_marker
 from youtube_upload import (
+    DESCRIPTION_MAX,
+    apply_custom_title,
+    build_description,
     build_metadata,
     dates_agree,
     decide_resume,
@@ -29,7 +33,11 @@ def _write_top1(cdir, payload: dict) -> None:
 
 
 def test_build_metadata_uses_viral_title(tmp_path):
-    """長片取 video_title、Shorts 取 shorts_title — 兩者欄位不同。"""
+    """長片取 video_title、Shorts 取 shorts_title — 兩者欄位不同,且**都不加前綴**。
+
+    channel 這裡刻意帶 title_prefix:它必須被忽略。前綴會占掉最前面的字元,
+    而那些字元該放數字與結果(2026-10-08 使用者指示)。
+    """
     _write_top1(
         tmp_path,
         {
@@ -43,24 +51,25 @@ def test_build_metadata_uses_viral_title(tmp_path):
     long_title, _ = build_metadata(
         tmp_path, channel, tmp_path / "video_2026-10-08.branded.mp4"
     )
-    assert long_title == "Embedded Linux Daily - Fined $5.7B! EU Hits Chip Giant"
+    assert long_title == "Fined $5.7B! EU Hits Chip Giant"
+    assert "Embedded Linux Daily" not in long_title
 
     shorts_title, _ = build_metadata(
         tmp_path, channel, tmp_path / "shorts_2026-10-08.mp4"
     )
-    assert shorts_title == "Embedded Linux Daily - Chip Giant Fined $5.7B!"
+    assert shorts_title == "Chip Giant Fined $5.7B!"
 
 
 def test_build_metadata_switches_to_short_backup_when_over_limit(tmp_path, caplog):
-    """主標題加上前綴後超過 TITLE_MAX → 整條換成 video_title_short,不腰斬。
+    """主標題超過 TITLE_MAX → 整條換成 video_title_short,不腰斬。
 
     爆款標題為了鉤人常把最有力的字放在字尾,硬切等於白寫;Gemini 為前三名
-    各寫的第三條(video_title_short)就是為此存在。
+    各寫的第三條(video_title_short)就是為此存在。prompt 已把長片壓到 25
+    字元,但那是指示不是保證 —— 模型寫爆的時候要有東西接住。
     """
-    prefix = "Embedded Linux Daily"
     long_title = (
         "Broadcom Just Shipped A Brand New AI-Powered Linux Implant, "
-        "And Nobody Saw This Coming!"
+        "And Absolutely Nobody Saw This Coming!"
     )
     short_title = "Broadcom's New AI Linux Implant!"
     _write_top1(
@@ -72,24 +81,26 @@ def test_build_metadata_switches_to_short_backup_when_over_limit(tmp_path, caplo
             "news": {"title": "Broadcom implant", "url": "https://x", "source": "S"},
         },
     )
-    assert len(f"{prefix} - {long_title}") > 95, "測試前提:主標題必須真的超長"
+    assert len(long_title) > 95, "測試前提:主標題必須真的超長"
     with caplog.at_level(logging.WARNING):
         title, _ = build_metadata(
-            tmp_path, {"title_prefix": prefix}, tmp_path / "video_2026-10-08.mp4"
+            tmp_path,
+            {"title_prefix": "Embedded Linux Daily"},
+            tmp_path / "video_2026-10-08.mp4",
         )
-    assert title == f"{prefix} - {short_title}"
+    assert title == short_title
     assert "已改用較短的備援標題" in caplog.text
 
 
 def test_build_metadata_never_uses_long_short_backup_for_shorts(tmp_path):
     """Shorts 不取 video_title_short — 兩個欄位屬於不同片子。
 
-    Shorts 有專屬的 shorts_title(≤50),拿長片的備援去補是張冠李戴;真的
-    還是太長就照舊截斷,不換欄位。
+    Shorts 有專屬的 shorts_title,拿長片的備援去補是張冠李戴;真的還是太長
+    就照舊截斷,不換欄位。
     """
-    prefix = "Embedded Linux Daily"
     shorts_title = (
-        "Toshiba Fights Hackers With A Brand New Cyber-Resilient Linux Distro Today!"
+        "Toshiba Fights Hackers With A Brand New Cyber-Resilient Linux "
+        "Distro, And It Ships Today For Free!"
     )
     _write_top1(
         tmp_path,
@@ -100,17 +111,21 @@ def test_build_metadata_never_uses_long_short_backup_for_shorts(tmp_path):
             "news": {"title": "n", "url": "https://x", "source": "S"},
         },
     )
-    expected = f"{prefix} - {shorts_title}"
-    assert len(expected) > 95, "測試前提:Shorts 標題要真的超長,否則測不到截斷"
+    assert len(shorts_title) > 95, "測試前提:Shorts 標題要真的超長,否則測不到截斷"
     title, _ = build_metadata(
-        tmp_path, {"title_prefix": prefix}, tmp_path / "shorts_2026-10-08.mp4"
+        tmp_path,
+        {"title_prefix": "Embedded Linux Daily"},
+        tmp_path / "shorts_2026-10-08.mp4",
     )
     assert "Long-Form Backup!" not in title
-    assert title == expected[:95]
+    assert title == shorts_title[:95]
 
 
 def test_build_metadata_falls_back_to_news_title(tmp_path):
-    """沒有爆款標題時退回原始新聞標題(舊行為不變,不會變成空的)。"""
+    """沒有爆款標題時退回原始新聞標題(舊行為不變,不會變成空的)。
+
+    前綴一併不加:fallback 是**原始新聞標題**,它本身就是完整的內容標題。
+    """
     _write_top1(
         tmp_path,
         {"news": {"title": "Plain headline", "url": "https://x", "source": "S"}},
@@ -118,11 +133,16 @@ def test_build_metadata_falls_back_to_news_title(tmp_path):
     title, _ = build_metadata(
         tmp_path, {"title_prefix": "P"}, tmp_path / "video_2026-10-08.mp4"
     )
-    assert title == "P - Plain headline"
+    assert title == "Plain headline"
 
 
 def test_build_metadata_without_top1_uses_filename(tmp_path):
-    """top1.json 不存在(例如手動補傳)時用檔名,不崩潰。"""
+    """top1.json 不存在(例如手動補傳)時用檔名,不崩潰。
+
+    這裡**保留**前綴,與內容標題相反 —— 這條路徑只有日期可放,沒有內容可以
+    前置,前綴是唯一認得出頻道的資訊。這條斷言就是那個例外的守門人:哪天有人
+    順手把前綴全拔了,這裡會紅。
+    """
     title, description = build_metadata(
         tmp_path, {"title_prefix": "P"}, tmp_path / "video_2026-10-08.mp4"
     )
@@ -170,7 +190,7 @@ def test_build_metadata_uses_top1_when_dates_match(tmp_path):
     title, _ = build_metadata(
         tmp_path, {"title_prefix": "P"}, tmp_path / "video_2026-10-08.branded.mp4"
     )
-    assert title == "P - Fined $5.7B!"
+    assert title == "Fined $5.7B!"
 
 
 def test_build_metadata_proceeds_when_date_unknown(tmp_path):
@@ -183,7 +203,7 @@ def test_build_metadata_proceeds_when_date_unknown(tmp_path):
         {"video_title": "Viral!", "news": {"title": "n", "url": "u", "source": "S"}},
     )
     title, _ = build_metadata(tmp_path, {"title_prefix": "P"}, tmp_path / "final.mp4")
-    assert title == "P - Viral!"
+    assert title == "Viral!"
 
 
 @pytest.mark.parametrize("bad_title", [None, "", "   ", "<>", 123, {"x": 1}, ["t"]])
@@ -191,8 +211,8 @@ def test_build_metadata_never_leaves_hanging_title(tmp_path, bad_title):
     """F1(2026-10-08 reviewer):`news.get("title", file.stem)` 只擋得住「鍵不存在」。
 
     `"title": null` 會回 None、`"title": "<>"` 淨化後成空 → build_title 兩邊
-    都拿不到值,產出尾端懸空的 `"P - "` 直接上傳(而 build_title 的 docstring
-    把檔名標題的責任推給呼叫端,呼叫端卻做不到)。fallback 現在保證非空。
+    都拿不到值,產出空標題直接上傳(而 build_title 的 docstring 把檔名標題的
+    責任推給呼叫端,呼叫端卻做不到)。fallback 現在保證非空。
     """
     _write_top1(
         tmp_path,
@@ -201,8 +221,10 @@ def test_build_metadata_never_leaves_hanging_title(tmp_path, bad_title):
     title, _ = build_metadata(
         tmp_path, {"title_prefix": "P"}, tmp_path / "video_2026-10-08.mp4"
     )
+    # 走的是 filename_title,所以**帶前綴** —— 內容標題不加前綴,這條沒有內容
+    # 可放,前綴是唯一認得出節目的資訊(與下面 without_top1 同一條規則)。
     assert title == "P - video 2026-10-08"
-    assert not title.endswith("- "), "尾端懸空標題會直接上傳到 YouTube"
+    assert title.strip(), "空標題會被 YouTube 拒絕(或更糟:送出無標題的影片)"
 
 
 def test_build_metadata_tolerates_non_dict_news(tmp_path):
@@ -211,7 +233,94 @@ def test_build_metadata_tolerates_non_dict_news(tmp_path):
     title, _ = build_metadata(
         tmp_path, {"title_prefix": "P"}, tmp_path / "video_2026-10-08.mp4"
     )
-    assert title == "P - V!"
+    assert title == "V!"
+
+
+# --- build_description:節目標記(2026-10-08)--------------------------------
+# 標題從 2026-10-08 起不再帶前綴,說明裡的 "program: <slug>" 就成為
+# backfill_history 歸屬節目的唯一線索。被截掉不會有任何錯誤訊息,只會在幾個月後
+# 「補 0 筆」安靜地漏掉影片 —— 所以截斷只能砍可變的前段。
+
+
+def test_build_description_carries_program_marker():
+    desc = build_description("Headline\n來源: S  https://x", "embedded")
+
+    assert parse_program_marker(desc) == "embedded"
+
+
+@pytest.mark.parametrize("slug", ["", "   ", None, 123])
+def test_build_description_omits_marker_for_missing_slug(slug):
+    """沒有 slug 就不要寫半截 "program: " —— 解析端會把它當成沒有標記。"""
+    desc = build_description("Headline", slug)
+
+    assert "program" not in desc
+    assert parse_program_marker(desc) == ""
+
+
+@pytest.mark.parametrize("head_len", [10, 4800, 40000])
+def test_build_description_keeps_marker_when_head_is_huge(head_len):
+    """摘要在長也砍不到標記(整串 [:4900] 的寫法會把尾端標記裁掉)。"""
+    head = "x" * head_len
+    desc = build_description(head, "tech")
+
+    assert len(desc) <= DESCRIPTION_MAX, "超過 YouTube 說明硬限會被拒收"
+    assert parse_program_marker(desc) == "tech"
+
+
+def test_build_metadata_description_carries_program_marker(tmp_path):
+    """上傳說明的標記由 build_metadata 蓋上去,不是靠呼叫端記得加。"""
+    _write_top1(
+        tmp_path,
+        {
+            "date": "2026-10-08",
+            "video_title": "V!",
+            "news": {"title": "n", "url": "https://x", "source": "S"},
+        },
+    )
+    _, description = build_metadata(
+        tmp_path,
+        {"title_prefix": "P", "slug": "embedded"},
+        tmp_path / "video_2026-10-08.mp4",
+    )
+
+    assert parse_program_marker(description) == "embedded"
+
+
+def test_build_metadata_description_marker_on_the_no_content_path(tmp_path):
+    """沒有 top1.json 的降級路徑也要帶標記 —— 手動補傳照樣會被 backfill 看見。"""
+    _, description = build_metadata(
+        tmp_path,
+        {"title_prefix": "P", "slug": "tech"},
+        tmp_path / "video_2026-10-08.mp4",
+    )
+
+    assert parse_program_marker(description) == "tech"
+
+
+# --- apply_custom_title:--title 的淨化 ------------------------------------
+
+
+def test_apply_custom_title_uses_cleaned_value():
+    assert apply_custom_title("  My  Title  ", "Auto", logging.getLogger("t")) == "My Title"
+
+
+@pytest.mark.parametrize("bad", ["   ", "  <  >  ", "<>", "\n<\n", "\t"])
+def test_apply_custom_title_ignores_empty_after_cleaning(bad, caplog):
+    """`--title "   "` 是 truthy → 舊版會直接截上傳,送出一條空白標題。
+    判斷必須在淨化之後(與 build_title 的 R1 同一道原則),且要留下警告。"""
+    with caplog.at_level(logging.WARNING):
+        title = apply_custom_title(bad, "Auto Title", logging.getLogger("t"))
+    assert title == "Auto Title"
+    assert "淨化後為空" in caplog.text
+
+
+def test_apply_custom_title_passes_through_when_absent():
+    """沒下 --title(值為 None)→ 不動自動標題,也不發警告。"""
+    assert apply_custom_title(None, "Auto Title", logging.getLogger("t")) == "Auto Title"
+
+
+def test_apply_custom_title_truncates_at_platform_limit():
+    assert len(apply_custom_title("x" * 300, "Auto", logging.getLogger("t"))) <= 100
 
 
 def test_file_date_and_dates_agree():

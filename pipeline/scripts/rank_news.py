@@ -77,29 +77,64 @@ You MUST include every news item in the ranking, including the ones you
 de-prioritise — they still belong at the bottom of the list.
 
 Finally, for your TOP 3 picks — the first three entries of your ranking — write
-THREE English headlines each. Each headline must follow EXACTLY ONE of these
-four formulas — pick whichever fits that story best:
-  (A) NUMBERS — lead with a striking figure: money, scale, specs, people affected.
-      e.g. "Fined $5.7B!", "Now 64-Bit!"
-  (B) CONFLICT — a clash between industry giants, or a regulatory fight.
-      e.g. "Apple Takes On Microsoft!"
-  (C) COUNTER-INTUITIVE — an unexpected or futuristic use of the technology.
-      e.g. "A Chip In Space?", "VR In The Operating Theatre!"
-  (D) SUSPENSE — an open question that makes people curious.
-      e.g. "Is AGI Really Coming? Jensen Huang Just Spoke"
+THREE English headlines each. These headlines ARE the video's YouTube title, so
+every one of them must obey ALL of these rules:
 
-Tone: natural, conversational, emotionally charged. Use "!" or "?" where it lands.
-Never invent facts, numbers or quotes that are not in the story.
+1. Lead with the most interesting thing: the RESULT, the CONFLICT, the number or
+   the surprise. Never lead with the company name, product name or backstory.
+2. Say what happened and withhold WHY. That gap is what makes people click.
+3. Declarative sentences only. An exclamation mark is fine; a question mark is
+   not — a question is the weakest way to open the same gap.
+4. Contrast is the strongest hook: expectation vs reality, cost vs payoff,
+   free vs paid, small input vs huge output.
+5. No channel name, no series name, no fixed prefix. Never write
+   "TechSnack Daily -" or "Embedded Linux Daily -" in front of a headline —
+   the very first words must be the story itself.
+6. If you use a number, put it FIRST and use only figures that appear in the
+   story. Never invent one.
+7. No hype that cannot be checked. Banned: "shocking", "insane", "you won't
+   believe", "nobody knows", "99% of people" and anything like them.
+8. Never first person. This is news reporting, not personal experience.
+
+Keep the wording plain and concrete — an everyday word beats a clever one.
+Never state a fact, number or quote that is not in the story.
+
+THE LENGTH LIMITS ARE HARD, AND THEY ARE THE POINT. A short headline hits harder
+than a long one, so a long answer is a WRONG answer even if every word is true.
+Before you output a headline, count its characters (spaces count too). Over the
+limit? Cut words and count again. Do not output anything over the limit.
+
+But cut the words AROUND the important ones — never the important ones. The name
+of the company or product, and the number, are what make people stop scrolling.
+Drop the verbs, adjectives, filler and backstory instead, and drop a name only if
+there is genuinely no room for it. A specific name always beats a vague category:
+"U-Boot Bug Exposes Gear" (23) says which devices are in danger, while "Bug
+Exposes Linux Gear" (22) could be any Linux story. Keep the product or company
+name even when a category word is shorter — "Linux", "AI", "chip" and "tool" are
+not names. Note where the names sit: a name matters, but it does not have to be
+the first word — the opening slot belongs to the number or the result (rule 1):
+
+  "SpaceX Seeks $40 Billion To Buy Nvidia Chips"  (44) → "$40B Nvidia Chip Bid"      (20)
+  "Microsoft Takes On Apple With New AI PCs"      (40) → "AI PCs Challenge Apple"    (22)
+  "EU Fines Chip Giant $5.7 Billion For Monopoly" (45) → "$5.7B Fine For Chip Giant" (25)
+  "Free Linux Tools That Beat Paid Rivals"        (38) → "Free Linux Beats Paid"     (21)
+
+A headline of four bare nouns with no actor and no number ("EU Backs Down!") is
+short but says nothing — it is NOT what these limits are for.
 
 Put all three title fields on each of those top 3 entries inside "ranking":
-  "video_title"       — long-form explainer video. Maximum 60 characters.
-  "video_title_short" — the SAME story told shorter: a backup used when the main
-                        title turns out too long once the channel prefix is added.
-                        It must be the same angle, just shorter — never a
-                        different story or a different formula.
-                        Maximum 40 characters.
-  "shorts_title"      — 60-second vertical short. Punchier and shorter.
-                        Maximum 50 characters.
+  "video_title"       — long-form video. MAXIMUM 25 characters (about 4 short
+                        words). The most important words must be inside the
+                        FIRST 15 characters — the opening is all that shows on
+                        a phone.
+  "video_title_short" — the SAME story, even shorter: the backup used only if
+                        the main one cannot be used. Same angle — never a
+                        different story. MAXIMUM 15 characters (about 3 words).
+  "shorts_title"      — 60-second vertical short. Hit the pain, the contrast or
+                        the result head-on. MAXIMUM 15 characters (about 3 words).
+
+Final check before you return: is EVERY one of those nine headlines within its
+character limit? If not, shorten it now.
 
 Every news item must still appear in "ranking" — only your top 3 carry the
 three title fields. The other entries keep just index / title / score / reason.
