@@ -83,10 +83,12 @@ _PROGRAM_MARKER_RE = re.compile(
 def program_marker(slug: object) -> str:
     """產生說明用的節目標記行;無法產生可讀回的標記時回空字串。
 
-    兩種情況回空字串,兩者都由呼叫端負責發警告(不寫半截或讀不回的標記):
-      1. 不是非空字串
-      2. 含標記字元集以外的字元(見 _PROGRAM_SLUG_RE)—— 寫出去也讀不回來,
-         等於白寫一行,而且下游會把影片歸成「無法歸屬」而靜默跳過
+    兩種情況回空字串,呼叫端責任不同(不寫半截或讀不回的標記):
+      1. 不是非空字串 → 這是「沒有 slug」的正常情況,呼叫端自行決定要不要
+         出聲(build_description 刻意不警告,有測試釘住,避免狼來了)
+      2. 含標記字元集以外的字元(見 _PROGRAM_SLUG_RE)→ **呼叫端必須警告**:
+         寫出去也讀不回來,等於白寫一行,而下游客戶會把影片歸成「無法歸屬」
+         而靜默跳過
     """
     if not isinstance(slug, str):
         return ""
@@ -108,11 +110,15 @@ def parse_program_marker(description: object) -> str:
     search 取最左匹配就會讓**偽造的值蓋過管線寫的真值**,而且因為新標題
     沒有前綴可以衝突,parse_video 連 WARN 都發不出來 —— 那就會安靜地把
     tech 的影片歸給 embedded。
+
+    用 finditer + group(1) 而非 findall:findall 在有多個捕獲群組時會回
+    tuple,日後若有人在 _PROGRAM_SLUG_RE 裡加一個捕獲群組,這個函式就會
+    **靜默回傳 tuple**;group(1) 永遠是最外層那一個,不受影響。
     """
     if not isinstance(description, str):
         return ""
-    found = _PROGRAM_MARKER_RE.findall(description)
-    return found[-1] if found else ""
+    matches = list(_PROGRAM_MARKER_RE.finditer(description))
+    return matches[-1].group(1) if matches else ""
 
 
 def clean_headline(text: object) -> str:
