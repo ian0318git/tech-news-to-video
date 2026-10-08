@@ -68,18 +68,32 @@ TITLE_MAX = 95
 # 產生端(youtube_upload)與消費端(backfill_history)共用這裡的兩個函式,
 # 不各自寫字串 — 字串漂移正是這類 bug 的來源(欄位名契約同理)。
 PROGRAM_MARKER_KEY = "program"
+# slug 的可讀字元集:**產生端與解析端共用這一個定義**,不各自寫一份 ——
+# 兩邊不一致就會出現「寫得出去、讀不回來」的標記(例:slug 含空白 → 寫成
+# "program: tech news",解析端只認 [A-Za-z0-9_-] → 回空字串),而且沒有任何
+# 錯誤訊息。這正是本設計要消滅的靜默失敗。
+_PROGRAM_SLUG_RE = re.compile(r"[A-Za-z0-9_-]+")
 # 整行比對(^…$)而非搜尋:新聞摘要本身可能出現 "program:" 字樣,
 # 沒有行錨就會把摘要內容誤判成節目標記。
 _PROGRAM_MARKER_RE = re.compile(
-    rf"^{PROGRAM_MARKER_KEY}:\s*([A-Za-z0-9_-]+)\s*$", re.MULTILINE
+    rf"^{PROGRAM_MARKER_KEY}:\s*({_PROGRAM_SLUG_RE.pattern})\s*$", re.MULTILINE
 )
 
 
 def program_marker(slug: object) -> str:
-    """產生說明用的節目標記行;slug 不是非空字串時回空字串(不寫半截標記)。"""
-    if not isinstance(slug, str) or not slug.strip():
+    """產生說明用的節目標記行;無法產生可讀回的標記時回空字串。
+
+    兩種情況回空字串,兩者都由呼叫端負責發警告(不寫半截或讀不回的標記):
+      1. 不是非空字串
+      2. 含標記字元集以外的字元(見 _PROGRAM_SLUG_RE)—— 寫出去也讀不回來,
+         等於白寫一行,而且下游會把影片歸成「無法歸屬」而靜默跳過
+    """
+    if not isinstance(slug, str):
         return ""
-    return f"{PROGRAM_MARKER_KEY}: {slug.strip()}"
+    clean = slug.strip()
+    if not _PROGRAM_SLUG_RE.fullmatch(clean):
+        return ""
+    return f"{PROGRAM_MARKER_KEY}: {clean}"
 
 
 def parse_program_marker(description: object) -> str:
@@ -87,11 +101,18 @@ def parse_program_marker(description: object) -> str:
 
     回空字串的呼叫端(backfill_history)要據此退回舊的標題前綴判斷 ——
     2026-10-08 之前上傳的影片沒有這行,而那批影片仍需要被歸屬。
+
+    取**最後一個**匹配,不是第一個(pipeline 自己寫的標記永遠是說明的最後
+    一行,見 youtube_upload.build_description)。行錨只擋得住「行內提到
+    program:」的寫法;文章摘要若自己有一整行 "program: embedded",用
+    search 取最左匹配就會讓**偽造的值蓋過管線寫的真值**,而且因為新標題
+    沒有前綴可以衝突,parse_video 連 WARN 都發不出來 —— 那就會安靜地把
+    tech 的影片歸給 embedded。
     """
     if not isinstance(description, str):
         return ""
-    match = _PROGRAM_MARKER_RE.search(description)
-    return match.group(1) if match else ""
+    found = _PROGRAM_MARKER_RE.findall(description)
+    return found[-1] if found else ""
 
 
 def clean_headline(text: object) -> str:

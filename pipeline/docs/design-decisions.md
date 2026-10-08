@@ -41,7 +41,7 @@ POC(notebooklm-py 影片流程)驗證通過後,實作正式系統:
 | D25 | **Gemini 配額保護三件套**(2026-10-08,接 D24 的 20 次/天前提):**A** `_gemini.daily_quota_hit()` 解析 429 body,`quotaId`/`quotaMetric` 含 `PerDay` → 立刻 fail 不重試;**B** `run_daily` 在 `top1.json` 的 `date == 今天` 時跳過 fetch/rank;**C** `sources.json` 的 `topic` 等於今天選題且 `sources` 非空時跳過 collect | 起因:cron 08:00 主 run + `*/15 8-14` 補跑 = 28 次/天,而唯一的冪等閘門是「今天的影片檔存在」— **失敗時該條件永遠不成立**,所以一次短暫故障會在兩個 tick 內燒光當日 20 次額度,之後整天 429(實測 274 筆同型)。**判準只看 `quotaId` 不看 `retryDelay`**:同一種 429 的 `retryDelay` 實測 32s–85477s 都有,拿它判斷會把每分鐘速率限制誤判成每日;而每分鐘版本的 `quotaMetric` 與每日版本逐字元相同,只有 `quotaId` 的 `PerMinute`/`PerDay` 不同(兩種情境各有測試釘住)。**C 的 `topic` 比對不是冗餘**:top1.json 被換題時,舊 sources.json 是別的題目的來源。判斷抽成純函式(`load_top1`/`locked_topic`/`sources_ready`/`skip_reason`)以便離線測試;畸形輸入一律當「沒跑過」重跑而非當「已完成」跳過,未知步驟一律執行。**未採用 D(補跑間隔 15→60 分)**:B/C 讓已完成時每 tick 零成本,15 分鐘密度反而是短暫故障能快速自癒的優點 |
 | D26 | **模型世代切換 `gemini-2.5-flash` → `gemini-3.5-flash`**(2026-10-08):`_gemini.gemini_json` 預設值、`rank_news.DEFAULT_MODEL`、`collect_sources.DEFAULT_MODEL` 三處與兩台 `.env` 的 `GEMINI_MODEL` 同步 | **2.5 世代對新建立的 GCP 專案已下線**(404 `"no longer available to new users"`;`2.5-flash-lite`、`2.0-flash` 亦同),而舊專案僅因建立得早而沿用 — 換 key 就會踩到。**`ListModels` 仍列出這些模型,清單不反映生成權限,不能當判準**。3.6 / 3.7 / 3.8 在實測時段全部 503(3.8 甚至直接 429),3.5 能穩定吃下完整 prompt(20 則 / 14KB / 約 24s)。**不用 `gemini-flash-latest` 這類浮動別名** — 模型會在背後被換掉,回應風格與 JSON 契約跟著漂移 |
 | D27 | **爆款標題改為「前三名各三條」+ `video_title_short` 備援**(2026-10-08,修正 D24):prompt 要求 Gemini 為**前三名**各寫三條標題(`video_title` 長片 ≤60 / `video_title_short` **同一篇**的較短寫法 ≤40 / `shorts_title` ≤50),**掛在前三名各自的 `ranking` 條目上**;`build_metadata` 取用順序為 `prefix + video_title` ≤95 → 超長改用 `prefix + video_title_short`(整條替換不截斷)→ 都不可用才退回原始新聞標題 | D24 上線首日就暴露兩個問題:①`pick_topic` 沿排名取第一則沒被去重封鎖的,而實測 **20 則候選有 18 則落在 90 天窗口內** → 改選幾乎是常態,而舊設計只為 #1 寫標題且一改選就清空 → 標題等於白做(首日 `top1.json` 兩個標題欄位都是空的);②爆款標題常寫到 60 字元,加 `title_prefix` 就超過 95,硬切砍掉的正是最有力的字尾。**掛 `ranking` 而非另開 `top3` 鍵的理由**:`apply_dedup_choice()` 簽章本來就收 `chosen_entry`(被選中那篇的 ranking 條目)→ 零介面變動就能取到正確那篇的標題。**`video_title_short` 不得從 fallback 路徑取用**:它是同一篇的另一種寫法,而 fallback 是別篇(改選到前三名外) — 混用就是「A 標題 + B 影片」;Shorts 亦不取此欄位(有自己的 `shorts_title`) |
-| D28 | **爆款標題改用 CTR 規則集:內容標題去前綴、結果/數字先行、長片 ≤25 字元**(2026-10-08,使用者指示;取代 D24/D27 的**風格與長度**部分):prompt 標題段改為八條規則(①先給結果/衝突/數字,不鋪陳 ②只說發生什麼、**原因留給影片** ③直述句、**不用問號結尾** ④反差 ⑤數字放最前且必須真實 ⑥**禁頻道/系列/固定前綴** ⑦禁無法查證的誇大 ⑧不用第一人稱),長度改為長片 ≤25 字元(重點在前 15)、備援 ≤15、Shorts ≤15;`build_metadata` 改傳**空 head** → 內容標題不再加 `title_prefix`;**`filename_title()` 的降級路徑仍保留前綴** | 舊四公式(A 數字 / B 衝突 / C 反直覺 / D 強烈懸念)是被**取代而非補充** — 規則③直接推翻 D(其範例就是問句)。**前綴只在內容標題移除**:降級路徑(top1.json 不可用 / 跨日)本來就沒有內容可前置,拔掉前綴只剩裸的 `video 2026-10-08.branded`,連哪個頻道都認不出;前綴的用途是「辨識」而不是搶版面。**長度只有實測才收得住**:同一天用真實候選(20 則 / 15KB)實跑三輪 — ①只寫規則:合規 **0/18**(25 字上限回 37–56 字)②加「自己數字數」+ 改寫範例:合規 **18/18**,但**範例把模型教錯了方向** —— 範例示範「刪字」,模型就刪掉主體換長度(`Forcing EU Approval!`、`AI PC War Is On!`、`Linux At Risk!`,`Tesla`/`Microsoft`/`Apple` 全不見)③範例改成「**保留主體與數字,砍動詞/形容詞/鋪陳**」→ `$40B Nvidia Chip Bid`(20)、`EU Bows on Tesla FSD`(20)、`AI PC War on Apple`(18)、`AI Linux Implant Exposed`(24)。**教訓:對 LLM 下長度限制,只說「要短」它會刪掉最該留的字 — 必須同時指定「什麼不准刪」**。**未解 / 待觀察**:ⓐ「25 字」的單位按使用者原文是中文字數,而產出是英文,本輪讀作**英文字元**;若原意是「25 個中文字的資訊量」(≈40 英文字元),只要改 prompt 裡那兩個數字 ⓑ 15 字上限下 `video_title_short` 與 `shorts_title` 約半數情況收斂成同一條(單一事實型故事),目前視為可接受冗餘 ⓒ 今日已上傳的 3 支公開影片仍是舊標題(要改需 `youtube.force-ssl` 重新授權)ⓓ **去前綴的隱形連帶損害**:`backfill_history` 原本靠標題的 `"<prefix> - "` 歸屬節目,而去前綴後標題沒有任何節目線索 —— 兩個節目**共用同一個 YouTube 頻道的上傳清單**(實測 187 支影片:tech 122 / embedded 63 / 其他 2),所以「無法歸屬」等於整個重建工具對新影片失效(2026-09-16 的重複上傳事件就是靠這支工具補救的)。修法是上傳時在說明寫一行 `program: <slug>`(產生端 `build_description`、消費端 `parse_program_marker`,兩者共用 `_config` 的同一組函式),**舊影片沒有標記,所以標題前綴與影片 ID 白名單兩條路徑都保留**;兩者衝突時以標記為準並發 WARN(靜默選一個正是這支工具存在的理由) |
+| D28 | **爆款標題改用 CTR 規則集:內容標題去前綴、結果/數字先行、長片 ≤25 字元**(2026-10-08,使用者指示;取代 D24/D27 的**風格與長度**部分):prompt 標題段改為八條規則(①先給結果/衝突/數字,不鋪陳 ②只說發生什麼、**原因留給影片** ③直述句、**不用問號結尾** ④反差 ⑤**禁頻道/系列/固定前綴** ⑥數字放最前且必須真實 ⑦禁無法查證的誇大 ⑧不用第一人稱),長度改為長片 ≤25 字元(重點在前 15)、備援 ≤15、Shorts ≤15;`build_metadata` 改傳**空 head** → 內容標題不再加 `title_prefix`;**`filename_title()` 的降級路徑仍保留前綴** | 舊四公式(A 數字 / B 衝突 / C 反直覺 / D 強烈懸念)是被**取代而非補充** — 規則③直接推翻 D(其範例就是問句)。**前綴只在內容標題移除**:降級路徑(top1.json 不可用 / 跨日)本來就沒有內容可前置,拔掉前綴只剩裸的 `video 2026-10-08.branded`,連哪個頻道都認不出;前綴的用途是「辨識」而不是搶版面。**長度只有實測才收得住**:同一天用真實候選(20 則 / 15KB)實跑三輪 — ①只寫規則:合規 **0/18**(25 字上限回 37–56 字)②加「自己數字數」+ 改寫範例:合規 **18/18**,但**範例把模型教錯了方向** —— 範例示範「刪字」,模型就刪掉主體換長度(`Forcing EU Approval!`、`AI PC War Is On!`、`Linux At Risk!`,`Tesla`/`Microsoft`/`Apple` 全不見)③範例改成「**保留主體與數字,砍動詞/形容詞/鋪陳**」→ `$40B Nvidia Chip Bid`(20)、`EU Bows on Tesla FSD`(20)、`AI PC War on Apple`(18)、`AI Linux Implant Exposed`(24)。**教訓:對 LLM 下長度限制,只說「要短」它會刪掉最該留的字 — 必須同時指定「什麼不准刪」**。**未解 / 待觀察**:ⓐ「25 字」的單位按使用者原文是中文字數,而產出是英文,本輪讀作**英文字元**;若原意是「25 個中文字的資訊量」(≈40 英文字元),只要改 prompt 裡那兩個數字 ⓑ 15 字上限下 `video_title_short` 與 `shorts_title` 約半數情況收斂成同一條(單一事實型故事),目前視為可接受冗餘 ⓒ 今日已上傳的 3 支公開影片仍是舊標題(要改需 `youtube.force-ssl` 重新授權)ⓓ **去前綴的隱形連帶損害**:`backfill_history` 原本靠標題的 `"<prefix> - "` 歸屬節目,而去前綴後標題沒有任何節目線索 —— 兩個節目**共用同一個 YouTube 頻道的上傳清單**(實測 187 支影片:tech 122 / embedded 63 / 其他 2),所以「無法歸屬」等於整個重建工具對新影片失效(2026-09-16 的重複上傳事件就是靠這支工具補救的)。修法是上傳時在說明寫一行 `program: <slug>`(產生端 `build_description`、消費端 `parse_program_marker`,兩者共用 `_config` 的同一組函式),**舊影片沒有標記,所以標題前綴與影片 ID 白名單兩條路徑都保留**;兩者衝突時以標記為準並發 WARN(靜默選一個正是這支工具存在的理由) |
 
 **前置(一次性,使用者操作)**: Google Cloud 專案 → 啟用 YouTube Data API v3 →
 OAuth 同意畫面(External,加入測試使用者)→ 建立 OAuth 用戶端 ID(**TVs and Limited Input devices**)
@@ -49,7 +49,7 @@ OAuth 同意畫面(External,加入測試使用者)→ 建立 OAuth 用戶端 ID(
 
 ## 測試
 
-`pipeline/tests/` — **306 個單元測試**(pytest,mock 不連網):
+`pipeline/tests/` — **317 個單元測試**(pytest,mock 不連網):
 RSS 解析(標題/來源/摘要/上限/壞 XML)、`flag_value` 參數解析、頻道解析、來源過濾
 (Google 轉址排除、去重、非 http 排除)、選題去重(`title_key` / `url_key` / `pick_topic`)、
 權杖管理(refresh 重試、缺 refresh_token、原子寫入)、`channel_stats` 品牌帳號
@@ -78,26 +78,38 @@ news 欄位畸形)、resumable 續傳決策、Gemini 每日配額判準(`daily_q
 (三條分支各自驗),`build_metadata` 不加前綴 / `filename_title` **保留**前綴
 (兩者互為守門人:把前綴全拔或全留,都會有一條紅)。**複審後再實測兩輪**:reviewer
 指出四組改寫範例有三組以公司名開頭、第一組又把數字放在第二個字(違反自己寫的規則
-①⑤),改成 `$40B Nvidia Chip Bid`(20)/`AI PCs Challenge Apple`(22)/
+①⑥),改成 `$40B Nvidia Chip Bid`(20)/`AI PCs Challenge Apple`(22)/
 `$5.7B Fine For Chip Giant`(25)/`Free Linux Beats Paid`(21)並補一句「主體要留,
 但不必佔開頭那個位置」→ 第 4 輪合規仍 **18/18**,然而**人眼看出第 2 輪的病灶半回來**:
 embedded 把具體名稱換成泛稱(`U-Boot` CVE → `Bug Exposes Linux Gear`、`Broadcom RedC2`
 → `AI Implant Targets Linux`)。第 5 輪再加一句「具體名稱勝過泛稱:`U-Boot Bug Exposes
 Gear` 勝過 `Bug Exposes Linux Gear`;`Linux`/`AI`/`chip`/`tool` 不是名稱」→ 合規仍
 **18/18**,U-Boot 那則保住主體,但 Broadcom 那則仍寫泛稱、tech 的 SpaceX 那則反而退成
-`40 Billion Chip Bid`(掉了 `$` 與兩個主體名)。**結論:`temperature=0.2` 下合規率可重現
-(兩輪都 18/18),實體保留率逐輪浮動(同一份 prompt 4–6/6)** —— 不可拿單輪結果宣稱
-「修好了」,這也是「合規率用程式量、產出用人眼看、且要看多輪」的具體案例。
+`40 Billion Chip Bid`(掉了 `$` 與兩個主體名)。**結論:`temperature=0.2` 下長度合規容易
+達成(第 3/4/5 輪都是 18/18,但第 4、5 輪各自都動過 prompt,**不是同一設定的重複**,只能
+說「改動後重跑仍合規」),實體保留率則逐輪浮動(同一份 prompt 4–6/6)** —— 不可拿單輪
+結果宣稱「修好了」,這也是「合規率用程式量、產出用人眼看、且要看多輪」的具體案例。
+**第 6 輪**(修掉「說明句把 rule 1 窄化成 number/result 開頭」與舉例不符之後)重跑:
+長度仍 **18/18**,實體保留 **3/6**(`Speed Up Kria Dev` 保住 Kria、`$40B Nvidia Chip Bid`
+保住數字與主體;`Bug Exposes Linux`(17 字,離上限還有 8 字)、`AI Malware Hits Linux`、
+`Self-Drive Forced On EU` 則把 U-Boot / Broadcom / Tesla 換成泛稱)—— 與上方結論一致:
+**長度可控、主體保留不可控**,而後者是 `temperature=0.2` 下的取樣變異,不是 prompt 缺陷。
 
 2026-10-08 追加(D28 節目標記):`program_marker` / `parse_program_marker` 的往返
-契約、非字串與空白 slug 不得寫出半截 `program: `、**整行比對**(摘要本身出現
-`program:`/`reprogram:` 等字樣不得被當成標記 —— 誤判會把影片歸給錯的節目);
+契約、非字串與空白 slug 不得寫出半截 `program: `、**整行比對**(摘要裡**行內**提到
+`program:`/`reprogram:` 不算標記 —— 誤判會把影片歸給錯的節目)、**寫不回來的 slug
+一律不寫**(產生端與解析端共用同一個 `_PROGRAM_SLUG_RE`,含空白/句點的 slug 會寫出
+一行解析成空字串的標記,而且沒有錯誤訊息)+ 一條「用 `config/channels.json` 的每個
+實際 slug 做往返」的守門測試,以及 `build_description` 對這種 slug **必須發警告**;
+**取最後一個匹配**(行錨擋不住「摘要自己有一整行 `program: embedded`」,取最左會讓
+偽造值蓋過管線寫的真值,而新標題沒有前綴可衝突 → 連 WARN 都發不出來;真值永遠是
+說明最後一行)。
 `build_description` **在超長摘要下仍保得住標記**(截斷只砍可變前段,寫成整串
-`[:4900]` 就會把尾端標記裁掉而不報錯)、沒有 slug 時不留半截標記、
+`[:4900]` 就會把尾端標記裁掉而不報錯)、沒有 slug 時不留半截標記也不誤發警告、
 `build_metadata` 兩條路徑(正常 / 沒有 top1.json 的降級)都帶標記;
 `backfill_history.parse_video` 的歸屬順序 — **說明標記 → 標題前綴 → 影片 ID**,
 無前綴的新標題靠標記歸屬、沒有標記的舊影片仍靠前綴、兩者衝突時以標記為準且必須
-留下 WARN、摘要裡出現 `program:` 不算標記。
+留下 WARN。
 
 2026-10-08 追加(D25):`_gemini.daily_quota_hit` 的判準 — 真實的每日配額 payload、
 每分鐘速率限制(quotaMetric 相同、只有 quotaId 不同)必須**不**被誤判、非 JSON /

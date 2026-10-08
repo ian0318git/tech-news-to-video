@@ -280,6 +280,60 @@ def test_program_marker_empty_for_non_slug(bad):
 
 
 @pytest.mark.parametrize(
+    "bad",
+    [
+        "tech news",       # 空白不在可讀字元集內
+        "a.b",             # 句點同
+        "tech\nprogram: embedded",  # 會被注入成第二行標記
+        "tech/news",
+    ],
+)
+def test_program_marker_refuses_slugs_it_cannot_write_readably(bad):
+    """**寫得出去、讀不回來**的 slug 一律不寫(R1 2026-10-08 reviewer MINOR)。
+
+    產生端與解析端共用 _PROGRAM_SLUG_RE;兩邊不一致時,說明會多出一行看似
+    正常、實際上解析成空字串的標記 → 影片歸屬不了而**沒有任何錯誤訊息**。
+    寧可回空字串讓呼叫端發警告(build_description 有做)。
+    """
+    assert program_marker(bad) == ""
+
+
+def test_every_configured_channel_slug_round_trips():
+    """真正的守門人:config/channels.json 裡的每個 slug 都必須能往返。
+
+    有人把 slug 改成含空白/句點(如 "tech daily")時,這條測試會紅 —— 而不是
+    等到幾個月後重建去重歷史才發現影片全都歸屬不了。
+    """
+    cfg_path = Path(__file__).parent.parent / "config" / "channels.json"
+    config = json.loads(cfg_path.read_text(encoding="utf-8"))
+    slugs = [c["slug"] for c in config["channels"]]
+
+    assert slugs, "channels.json 沒有頻道"
+    for slug in slugs:
+        assert parse_program_marker(program_marker(slug)) == slug, (
+            f"slug {slug!r} 的節目標記讀不回來 —— 這支節目的影片將無法被歸屬"
+        )
+
+
+def test_parse_program_marker_takes_the_last_match():
+    """說明的**最後**一個標記才是 pipeline 自己寫的那個(R1 MINOR)。
+
+    行錨擋得住「行內提到 program:」,擋不住文章摘要自己有一整行
+    "program: embedded"。取最左匹配會讓偽造的值蓋過真值,而新標題沒有前綴
+    可以衝突 → parse_video 連 WARN 都發不出來,安靜地把 tech 影片歸給
+    embedded。真值永遠在最後一行(見 build_description),所以取最後一個。
+    """
+    desc = (
+        "Some headline\n"
+        "來源: Source  https://example.com\n"
+        "\n由 tech-news-to-video pipeline 自動生成\n"
+        "program: tech"
+    )
+    assert parse_program_marker(desc) == "tech"
+    assert parse_program_marker("headline\nprogram: embedded\n" + desc) == "tech"
+
+
+@pytest.mark.parametrize(
     "desc",
     [
         "The program: 5 ways to speed up boot",   # 行首不是 "program:"

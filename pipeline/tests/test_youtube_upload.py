@@ -257,6 +257,26 @@ def test_build_description_omits_marker_for_missing_slug(slug):
     assert parse_program_marker(desc) == ""
 
 
+def test_build_description_warns_when_slug_cannot_be_marked(caplog):
+    """slug 有值但含非法字元 → 標記寫不出來,**必須發警告**。
+
+    靜默的版本要幾個月後重建歷史時才會發現「補 0 筆」;頻道 slug 是人改的
+    (config/channels.json),改了不會有任何徵兆。
+    """
+    with caplog.at_level(logging.WARNING):
+        desc = build_description("Headline", "tech daily")
+    assert parse_program_marker(desc) == ""
+    assert "無法歸屬" in caplog.text
+
+
+@pytest.mark.parametrize("slug", ["", "   ", None, 123])
+def test_build_description_does_not_warn_when_there_is_no_slug(slug, caplog):
+    """空白/非字串 = 沒有 slug,不是異常 → 不該發警告(避免狼來了)。"""
+    with caplog.at_level(logging.WARNING):
+        build_description("Headline", slug)
+    assert "無法歸屬" not in caplog.text
+
+
 @pytest.mark.parametrize("head_len", [10, 4800, 40000])
 def test_build_description_keeps_marker_when_head_is_huge(head_len):
     """摘要在長也砍不到標記(整串 [:4900] 的寫法會把尾端標記裁掉)。"""

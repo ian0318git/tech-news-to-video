@@ -24,7 +24,7 @@
 
 ## 測試
 
-- `pytest`(306 tests:facade / CLI contract / orchestrator / rank_news 去重 / 標題規則與組合(含備援短標題、去前綴)/ 上傳 metadata 與說明的節目標記 / backfill_history 的影片歸屬 / Gemini 配額判準 / 補跑冪等)
+- `pytest`(317 tests:facade / CLI contract / orchestrator / rank_news 去重 / 標題規則與組合(含備援短標題、去前綴)/ 上傳 metadata 與說明的節目標記 / backfill_history 的影片歸屬 / Gemini 配額判準 / 補跑冪等)
 - `ruff check .`
 
 ## 安全(不可違反)
@@ -41,5 +41,5 @@
 - 爆款標題只為**前三名**而寫(prompt 契約),且掛在各自的 `ranking` 條目上 — 去重改選到前三名之外時就沒有標題可用,`build_title` 會退回原始新聞標題並發 WARN。長片超長時改用 `video_title_short`(同一篇的較短寫法),**不可拿它補 fallback 路徑**(那是別篇)
 - 標題長度限制(prompt 的 25/15 字元)**模型不會自動遵守**:實測只寫「MAXIMUM N characters」時 18 條全數超標(回 37–56 字)。prompt 因此明講「自己數字數」+ 結尾複查 + 給改寫範例。**改動 prompt 標題段後一定要用真實候選實跑一次**並人眼看產出 —— 只驗合規率會漏掉「為了變短而刪掉主體」這種全綠的壞解(見 D28)
 - 內容標題**不加頻道前綴**(`build_metadata` 傳空 head);`filename_title()` 的降級路徑**仍保留前綴** — 那條路徑沒有內容可前置,前綴是唯一認得出頻道的資訊。拔前綴時別把兩者一起拔
-- 影片說明**必須帶 `program: <slug>` 標記**(`build_description` 寫、`backfill_history.parse_program_marker` 讀):兩個節目共用同一個 YouTube 頻道的上傳清單(實測 187 支混在一起),標題去前綴後這是「這支影片屬於哪個節目」的唯一線索。說明的截斷只能砍可變前段 —— 寫成整串 `[:4900]` 會把尾端標記一起裁掉,而且**不會報錯**,只會讓幾個月後的歷史重建「補 0 筆」安靜漏掉
+- 影片說明**必須帶 `program: <slug>` 標記**(`build_description` 寫、`backfill_history.parse_program_marker` 讀):兩個節目共用同一個 YouTube 頻道的上傳清單(實測 187 支混在一起),標題去前綴後這是「這支影片屬於哪個節目」的唯一線索。三個易錯點:①說明的截斷只能砍可變前段 —— 整串 `[:4900]` 會把尾端標記一起裁掉且**不會報錯**,只會讓幾個月後的歷史重建「補 0 筆」安靜漏掉 ②解析取**最後一個**匹配(管線的標記永遠是最後一行;取最左會讓摘要裡自成一行的 `program: X` 蓋過真值)③產生端與解析端共用 `_PROGRAM_SLUG_RE`,寫不回來的 slug 回空字串 + 警告(改 `channels.json` 的 slug 時注意,`test_every_configured_channel_slug_round_trips` 會先紅)
 - `.env` 內路徑必須絕對(cron cwd 下相對路徑失效)

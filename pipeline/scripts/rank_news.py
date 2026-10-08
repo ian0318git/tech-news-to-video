@@ -112,14 +112,15 @@ there is genuinely no room for it. A specific name always beats a vague category
 Exposes Linux Gear" (22) could be any Linux story. Keep the product or company
 name even when a category word is shorter — "Linux", "AI", "chip" and "tool" are
 not names. Note where the names sit: a name matters, but it does not have to be
-the first word — the opening slot belongs to the number or the result (rule 1):
+the first word — the opening slot belongs to the number, the result or the
+conflict (rule 1):
 
   "SpaceX Seeks $40 Billion To Buy Nvidia Chips"  (44) → "$40B Nvidia Chip Bid"      (20)
   "Microsoft Takes On Apple With New AI PCs"      (40) → "AI PCs Challenge Apple"    (22)
   "EU Fines Chip Giant $5.7 Billion For Monopoly" (45) → "$5.7B Fine For Chip Giant" (25)
   "Free Linux Tools That Beat Paid Rivals"        (38) → "Free Linux Beats Paid"     (21)
 
-A headline of four bare nouns with no actor and no number ("EU Backs Down!") is
+A headline with no actor, no number and no outcome ("A Big Change Is Coming!") is
 short but says nothing — it is NOT what these limits are for.
 
 Put all three title fields on each of those top 3 entries inside "ranking":

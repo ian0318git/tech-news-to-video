@@ -157,6 +157,14 @@ def build_description(head_text: str, slug: object) -> str:
     marker = program_marker(slug)
     if marker:
         tail_lines.append(marker)
+    elif isinstance(slug, str) and slug.strip():
+        # slug 有值卻產生不出標記(含非法字元)→ 這支影片將無法被歸屬。
+        # 不是靜默失敗:沒這行警告,要幾個月後重建歷史時才會發現「補 0 筆」。
+        # 空白/非字串代表**沒有 slug**,不算異常(降級路徑與測試會傳空值)。
+        logger.warning(
+            f"[WARN] 頻道 slug {slug!r} 產生不出節目標記(字元不合法)"
+            " — 這支影片的說明不會有 program: 標記,backfill_history 將無法歸屬"
+        )
     tail = "\n".join(tail_lines)
     return (head_text[: DESCRIPTION_MAX - len(tail)] + tail)[:DESCRIPTION_MAX]
 
