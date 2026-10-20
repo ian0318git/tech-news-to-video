@@ -287,6 +287,45 @@ def entry_index(entry: object, n_items: int) -> int | None:
     return idx if 0 <= idx < n_items else None
 
 
+def recent_topic_keys(history: list, today: str) -> tuple[set[str], list[str]]:
+    """回傳 (去重窗口內的鍵集合, 最近已選主題清單)。
+
+    `pick_topic` 與呼叫端預過濾共用同一份窗口規則:
+    - 只算 HISTORY_DAYS 天內;
+    - **當天**的條目不封鎖(同日 catch-up 重跑不該翻轉主題);
+    - 壞日期 / 缺欄位忽略,不讓選題崩潰。
+
+    抽成純函式是因為預過濾若與 pick_topic 用不同規則,會出現「送給 Gemini
+    的候選」與「最後可選的候選」不一致 — 那是最難查的一種錯。
+    """
+    cutoff = date.fromisoformat(today) - timedelta(days=HISTORY_DAYS - 1)
+    recent: set[str] = set()
+    recent_titles: list[str] = []
+    for h in history:
+        d = parse_history_date(h)
+        if d is not None and h.get("date") != today and d >= cutoff:
+            recent |= topic_keys(h.get("title", ""), h.get("url", ""))
+            if h.get("title"):
+                recent_titles.append(h["title"])
+    return recent, recent_titles
+
+
+def fresh_item_indices(items: list, history: list, today: str) -> list[int]:
+    """回傳未被 HISTORY_DAYS 天窗口封鎖的候選 index(保持原順序)。
+
+    2026-10-20: 在呼叫 Gemini **之前**先做去重過濾。舊版把全部候選送給
+    Gemini、排名後才在 `pick_topic` 丟掉重複項;若新聞池過期(20 則全在
+    窗口內),每次 catch-up 仍白燒一次 Gemini 請求,而免費層只有 20 次/天。
+    實測 10-20 一個上午就把配額燒光,後續即使有新聞也無法補救。
+    """
+    recent, _ = recent_topic_keys(history, today)
+    return [
+        i
+        for i, it in enumerate(items)
+        if not (topic_keys(it.get("title", ""), it.get("url", "")) & recent)
+    ]
+
+
 def pick_topic(
     items: list, ranking: list, history: list, today: str
 ) -> tuple[dict, dict]:
@@ -303,15 +342,7 @@ def pick_topic(
     比當天不產片更糟,而且使用者無從得知。舊版靜默退回第一名正是
     2026-09 重複上傳的成因之一。
     """
-    cutoff = date.fromisoformat(today) - timedelta(days=HISTORY_DAYS - 1)
-    recent: set[str] = set()
-    recent_titles: list[str] = []
-    for h in history:
-        d = parse_history_date(h)
-        if d is not None and h.get("date") != today and d >= cutoff:
-            recent |= topic_keys(h.get("title", ""), h.get("url", ""))
-            if h.get("title"):
-                recent_titles.append(h["title"])
+    recent, recent_titles = recent_topic_keys(history, today)
     available = []
     invalid = 0
     for e in ranking:
@@ -453,15 +484,39 @@ def main() -> None:
     if not items:
         fail(logger, "news_raw.json 沒有任何新聞項目")
 
+    today = today_str()
+    # 7 天去重 — 讀歷史 → 預過濾 → Gemini 只排未選過的主題 → 之後回寫本次選題
+    history_path = cdir / HISTORY_FILE_NAME
+    history = []
+    if history_path.exists():
+        history = json.loads(history_path.read_text(encoding="utf-8"))
+
+    # 2026-10-20: 去重預過濾必須在呼叫 Gemini 之前。舊版把全部候選送進去、
+    # 排名後才在 pick_topic 丟掉重複項 — 新聞池過期時(20 則全在 90 天窗口內)
+    # 每次 catch-up 仍燒一次請求,免費層 20 次/天在上午就耗盡。
+    fresh_indices = fresh_item_indices(items, history, today)
+    if not fresh_indices:
+        fail(
+            logger,
+            f"{len(items)} 則候選全部落在 {HISTORY_DAYS} 天去重窗口內,沒有新主題可選",
+            "已於呼叫 Gemini 前攔下(不浪費配額)。新聞池可能過期 — 檢查 "
+            'config/channels.json 的 freshness(例如 "14d"),或擴大關鍵字。',
+        )
+    if len(fresh_indices) < len(items):
+        logger.info(
+            f"[INFO] 去重預過濾: 排除 {len(items) - len(fresh_indices)} 則 "
+            f"{HISTORY_DAYS} 天內已選主題,剩 {len(fresh_indices)} 則送 Gemini"
+        )
+
     items_for_prompt = [
         {
             "index": i,
-            "title": it["title"],
-            "url": it["url"],
-            "source": it["source"],
-            "summary": it["summary"],
+            "title": items[i]["title"],
+            "url": items[i]["url"],
+            "source": items[i]["source"],
+            "summary": items[i]["summary"],
         }
-        for i, it in enumerate(items)
+        for i in fresh_indices
     ]
     prompt = RANK_PROMPT_TEMPLATE.format(
         topic=channel["keyword"],
@@ -478,13 +533,6 @@ def main() -> None:
             "Gemini 回傳缺少 ranking/top1 欄位",
             json.dumps(result, ensure_ascii=False)[:2000],
         )
-
-    today = today_str()
-    # 7 天去重 — 讀歷史 → pick_topic 跳過近期主題 → 之後回寫本次選題
-    history_path = cdir / HISTORY_FILE_NAME
-    history = []
-    if history_path.exists():
-        history = json.loads(history_path.read_text(encoding="utf-8"))
 
     chosen, chosen_entry = pick_topic(items, ranking, history, today)
     # LLM 可能把 index 回成字串 "0" — 強制轉 int 再檢查範圍

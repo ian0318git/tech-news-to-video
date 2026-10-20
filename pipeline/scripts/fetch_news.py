@@ -14,7 +14,6 @@ import urllib.parse
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 
-import httpx
 import _http
 from _common import (
     channel_dir,
@@ -36,9 +35,40 @@ UA = (
 REQUEST_TIMEOUT = 30.0  # httpx 層:涵蓋 TCP 連線/讀寫
 FETCH_DEADLINE = 45.0  # 執行緒護欄總期限(_http.bounded_get);必須 > REQUEST_TIMEOUT
 
+# Google News 搜尋的日期運算子;channel 可設 "freshness": "14d" 追加。
+WHEN_OPERATOR = "when:"
+WHEN_FORMAT = re.compile(r"\d+[dhm]\Z")
+
+
+def search_keyword(channel: dict) -> str:
+    """回傳送進 Google News 的查詢字串,必要時附加 `when:<freshness>`。
+
+    2026-10-20 根因:「embedded linux」在沒有日期條件時,Google News RSS
+    以**相關性**排序回傳 100 則,其中前 20 則常年是同一批舊文(實測最舊
+    可到 1 月);fetch_news 只取前 20,於是每天都是同一批候選,90 天去重
+    把它們全部封鎖 → embedded 頻道自 10-12 起完全停產。
+
+    加上 `when:14d` 後改由 Google 先做日期過濾(實測 28 則、全部落在
+    14 天內),新聞池才會滾動。channel 沒設 freshness 時行為完全不變。
+    關鍵字本身已含 `when:` 就不再附加,避免同一個條件出現兩次。
+    """
+    kw = str(channel["keyword"]).strip()
+    freshness = str(channel.get("freshness") or "").strip()
+    if not freshness:
+        return kw
+    if not WHEN_FORMAT.match(freshness):
+        fail(
+            logger,
+            f"頻道 {channel.get('slug')} 的 freshness 格式無效: {freshness!r}",
+            "範例: 14d / 7d / 36h(when: 運算子的日期格式)",
+        )
+    if WHEN_OPERATOR in kw:
+        return kw
+    return f"{kw} {WHEN_OPERATOR}{freshness}"
+
 
 def fetch_rss(channel: dict) -> str:
-    kw = channel["keyword"]
+    kw = search_keyword(channel)
     query = urllib.parse.quote(kw)
     url = (
         f"https://news.google.com/rss/search?q={query}"

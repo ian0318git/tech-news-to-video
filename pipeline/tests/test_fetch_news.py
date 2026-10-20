@@ -1,11 +1,11 @@
 """fetch_news 的單元測試(mock httpx,不連網):parse_items 解析 + fetch_rss 護欄。"""
 
 import time
-
-import httpx
-import pytest
+import urllib.parse
 
 import fetch_news
+import httpx
+import pytest
 
 SAMPLE_RSS = """<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0"><channel>
@@ -62,6 +62,46 @@ def test_parse_items_respects_limit(monkeypatch):
 CH = {"slug": "embedded", "keyword": "embedded linux"}
 
 
+def test_fetch_rss_appends_freshness(monkeypatch):
+    """freshness 要變成 Google News 的 `when:<期間>` 條件。
+
+    2026-10-20 根因:沒有日期條件時,Google News 以相關性排序回傳,前 20 則
+    可能是數月前同一批舊文 → 90 天去重全部封鎖 → embedded 頻道停產。
+    """
+    seen: dict = {}
+
+    def fake_get(url, **kwargs):
+        seen["url"] = url
+        return httpx.Response(200, text="<rss/>")
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+    fetch_news.fetch_rss({**CH, "freshness": "14d"})
+    assert "embedded linux when:14d" in urllib.parse.unquote(seen["url"])
+
+
+def test_fetch_rss_keeps_existing_when_operator(monkeypatch):
+    """關鍵字已自帶 when: 時不可重複附加(會變成 when:7d when:14d)。"""
+    seen: dict = {}
+
+    def fake_get(url, **kwargs):
+        seen["url"] = url
+        return httpx.Response(200, text="<rss/>")
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+    fetch_news.fetch_rss(
+        {**CH, "keyword": "embedded linux when:7d", "freshness": "14d"}
+    )
+    decoded = urllib.parse.unquote(seen["url"])
+    assert decoded.count("when:") == 1
+    assert "when:7d" in decoded
+
+
+def test_fetch_rss_rejects_invalid_freshness():
+    """格式錯誤要立刻失敗,不可把垃圾送進 Google News 後才空手而回。"""
+    with pytest.raises(SystemExit):
+        fetch_news.search_keyword({**CH, "freshness": "two weeks"})
+
+
 def test_fetch_rss_ok(monkeypatch):
     seen: dict = {}
 
@@ -70,7 +110,7 @@ def test_fetch_rss_ok(monkeypatch):
         seen["timeout"] = kwargs.get("timeout")
         return httpx.Response(200, text="<rss/>")
 
-    monkeypatch.setattr(fetch_news.httpx, "get", fake_get)
+    monkeypatch.setattr(httpx, "get", fake_get)
     out = fetch_news.fetch_rss(CH)
     assert out == "<rss/>"
     assert "embedded%20linux" in seen["url"]
@@ -78,9 +118,7 @@ def test_fetch_rss_ok(monkeypatch):
 
 
 def test_fetch_rss_non_200_fails(monkeypatch):
-    monkeypatch.setattr(
-        fetch_news.httpx, "get", lambda url, **kw: httpx.Response(503, text="nope")
-    )
+    monkeypatch.setattr(httpx, "get", lambda url, **kw: httpx.Response(503, text="nope"))
     with pytest.raises(SystemExit):
         fetch_news.fetch_rss(CH)
 
@@ -91,7 +129,7 @@ def test_fetch_rss_reraises_http_error(monkeypatch):
     def boom(url, **kwargs):
         raise httpx.ConnectError("Temporary failure in name resolution")
 
-    monkeypatch.setattr(fetch_news.httpx, "get", boom)
+    monkeypatch.setattr(httpx, "get", boom)
     with pytest.raises(httpx.ConnectError):
         fetch_news.fetch_rss(CH)
 
@@ -104,7 +142,7 @@ def test_fetch_rss_deadline_fast_fails(monkeypatch):
         time.sleep(2.0)  # 模擬 getaddrinfo 卡死
         raise AssertionError("護欄失效:worker 竟然跑完了")
 
-    monkeypatch.setattr(fetch_news.httpx, "get", slow_get)
+    monkeypatch.setattr(httpx, "get", slow_get)
     monkeypatch.setattr(fetch_news, "FETCH_DEADLINE", 0.05)
     start = time.monotonic()
     with pytest.raises(SystemExit):

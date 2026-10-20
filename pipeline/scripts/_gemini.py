@@ -78,7 +78,13 @@ def gemini_json(
             "請在 .env 加入一行 GEMINI_API_KEY=<key>(取得: https://aistudio.google.com/apikey)",
         )
     logger.info(f"[INFO] 呼叫 Gemini ({model}) ...")
-    retries = 2  # 暫時性錯誤(429/5xx)重試,backoff 5s/10s
+    retries = 2  # 429(每分鐘)重試,backoff 5s/10s
+    # 2026-10-20: 5xx(503 等)**每一次 HTTP 嘗試都算進每日配額**。實測當天
+    # 09:45 前 rank_news 8 次呼叫 + 10 次重試、collect_sources 1 次呼叫 +
+    # 2 次重試 = 21 次請求 → 20 次/天的額度在上午就耗盡,之後 catch-up
+    # 只能 fast-fail,整天再也救不回來。5xx 因此最多再試一次(共 2 個請求);
+    # 仍失敗就交給 15 分鐘後的 catch-up,不要在這一輪連續重打。
+    SERVER_ERROR_RETRIES = 1
     for attempt in range(retries + 1):
         try:
             resp = httpx.post(
@@ -110,13 +116,18 @@ def gemini_json(
                         "或改用付費方案的 key。catch-up 排程會持續嘗試到今天結束為止"
                         "(每次都會立刻失敗,不會再浪費時間等待)。",
                     )
-            if resp.status_code in (429, 500, 502, 503, 504) and attempt < retries:
-                wait = 5 * (attempt + 1)
-                logger.warning(
-                    f"[WARN] Gemini HTTP {resp.status_code},{wait}s 後重試 ({attempt + 1}/{retries}) ..."
+            if resp.status_code in (429, 500, 502, 503, 504):
+                max_retries = (
+                    retries if resp.status_code == 429 else SERVER_ERROR_RETRIES
                 )
-                time.sleep(wait)
-                continue
+                if attempt < max_retries:
+                    wait = 5 * (attempt + 1)
+                    logger.warning(
+                        f"[WARN] Gemini HTTP {resp.status_code},{wait}s 後重試 "
+                        f"({attempt + 1}/{max_retries}) ..."
+                    )
+                    time.sleep(wait)
+                    continue
             fail(logger, f"Gemini API 錯誤 (HTTP {resp.status_code})", resp.text[:2000])
         except httpx.HTTPError as exc:
             fail(logger, "Gemini API 連線失敗", str(exc))

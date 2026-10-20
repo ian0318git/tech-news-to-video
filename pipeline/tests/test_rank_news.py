@@ -10,7 +10,9 @@ from rank_news import (
     RANK_PROMPT_TEMPLATE,
     apply_dedup_choice,
     entry_index,
+    fresh_item_indices,
     pick_topic,
+    recent_topic_keys,
     title_key,
     topic_keys,
     url_key,
@@ -361,6 +363,64 @@ def test_malformed_history_entry_ignored():
     ]
     item, _ = pick_topic(ITEMS, RANKING, history, TODAY)
     assert item["index"] == 0  # 壞資料被忽略,#0 未被近期選過
+
+
+# --- 呼叫 Gemini 前的去重預過濾(2026-10-20) --------------------------------
+# 舊版把全部候選送給 Gemini、排名後才丟重複項。新聞池過期時(20 則全在
+# 90 天窗口內)每次 catch-up 仍白燒一次請求,免費層 20 次/天在上午耗盡。
+
+def test_recent_topic_keys_excludes_today_and_bad_dates():
+    """窗口規則只有一份:當天不封鎖、壞日期忽略。"""
+    history = [
+        {"date": TODAY, "title": ITEMS[0]["title"]},
+        {"date": "not-a-date", "title": ITEMS[1]["title"]},
+        {"date": "2026-08-09", "title": ITEMS[2]["title"]},
+    ]
+    keys, titles = recent_topic_keys(history, TODAY)
+    assert not (topic_keys(ITEMS[0]["title"]) & keys)
+    assert not (topic_keys(ITEMS[1]["title"]) & keys)
+    assert topic_keys(ITEMS[2]["title"]) & keys
+    assert titles == [ITEMS[2]["title"]]
+
+
+def test_fresh_item_indices_filters_blocked_topics():
+    """被窗口封鎖的候選要在送 Gemini 前移除,且保留原始 index。"""
+    history = [
+        {"date": "2026-08-09", "title": ITEMS[0]["title"]},
+        {"date": "2026-08-08", "title": ITEMS[2]["title"]},
+    ]
+    assert fresh_item_indices(ITEMS, history, TODAY) == [1, 3]
+
+
+def test_fresh_item_indices_same_day_not_blocked():
+    """同日 catch-up 重跑時,今天已選的主題仍須可選(不能翻轉主題)。"""
+    history = [{"date": TODAY, "title": ITEMS[0]["title"]}]
+    assert fresh_item_indices(ITEMS, history, TODAY) == [0, 1, 2, 3]
+
+
+def test_fresh_item_indices_all_blocked_returns_empty():
+    """全部封鎖 → 空清單;呼叫端據此在打 Gemini 前就 fail(省配額)。"""
+    history = [
+        {"date": "2026-08-09", "title": it["title"]} for it in ITEMS
+    ]
+    assert fresh_item_indices(ITEMS, history, TODAY) == []
+
+
+def test_fresh_item_indices_agrees_with_pick_topic_window():
+    """預過濾與 pick_topic 必須用同一份窗口規則 — 不一致會讓送出去的候選
+    與最後可選的候選不同,事故時極難查。"""
+    history = [
+        {"date": "2026-08-09", "title": ITEMS[0]["title"]},
+        {"date": "2026-08-08", "title": ITEMS[1]["title"]},
+    ]
+    allowed = fresh_item_indices(ITEMS, history, TODAY)
+    assert allowed == [2, 3]
+    # 把 ranking 限定在預過濾後的候選 → pick_topic 必須選到其中一個,
+    # 且不會再被去重踢掉。
+    ranking = [e for e in RANKING if e["index"] in allowed]
+    item, entry = pick_topic(ITEMS, ranking, history, TODAY)
+    assert item["index"] == 2
+    assert entry["index"] in allowed
 
 
 # --- 選題 prompt 護欄 -------------------------------------------------------

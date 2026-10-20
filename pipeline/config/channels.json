@@ -4,6 +4,7 @@
     {
       "slug": "embedded",
       "keyword": "embedded linux",
+      "freshness": "14d",
       "title_prefix": "Embedded Linux Daily",
       "video_style": "custom",
       "style_prompt": "Sleek dark tech aesthetic: deep navy-black background with subtle circuit board traces and PCB patterns, glowing cyan and teal HUD interface elements, crisp monospace accents, minimalist modern typography. Precise, engineering-grade feel.",

@@ -161,3 +161,13 @@ def test_gemini_json_still_retries_per_minute_429(monkeypatch):
         gemini_json("hi", logging.getLogger("t"))
     assert len(calls) == 3
     assert sleeps == [5, 10]
+
+
+def test_gemini_json_retries_5xx_only_once(monkeypatch):
+    """5xx 每次嘗試都算進每日配額(2026-10-20 實測 21 次請求耗盡 20 次額度),
+    所以最多再試一次;仍失敗交給 15 分鐘後的 catch-up,不在本輪連續重打。"""
+    calls, sleeps = _capture(monkeypatch, text_resp("Service Unavailable", 503))
+    with pytest.raises(SystemExit):
+        gemini_json("hi", logging.getLogger("t"))
+    assert len(calls) == 2
+    assert sleeps == [5]
