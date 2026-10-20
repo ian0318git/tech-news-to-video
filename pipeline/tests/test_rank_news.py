@@ -383,6 +383,14 @@ def test_recent_topic_keys_excludes_today_and_bad_dates():
     assert titles == [ITEMS[2]["title"]]
 
 
+def test_recent_topic_keys_skips_non_dict_entries():
+    """手改/損壞的 history(非 dict 條目)不可讓選題崩潰(docstring 的承諾)。"""
+    history = ["broken", None, 42, {"date": "2026-08-09", "title": ITEMS[2]["title"]}]
+    keys, titles = recent_topic_keys(history, TODAY)
+    assert topic_keys(ITEMS[2]["title"]) & keys
+    assert titles == [ITEMS[2]["title"]]
+
+
 def test_fresh_item_indices_filters_blocked_topics():
     """被窗口封鎖的候選要在送 Gemini 前移除,且保留原始 index。"""
     history = [

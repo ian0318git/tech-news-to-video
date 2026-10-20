@@ -114,6 +114,8 @@ def test_fetch_rss_ok(monkeypatch):
     out = fetch_news.fetch_rss(CH)
     assert out == "<rss/>"
     assert "embedded%20linux" in seen["url"]
+    # 沒設 freshness 的頻道(如 tech)不可被硬加日期條件
+    assert "when:" not in urllib.parse.unquote(seen["url"])
     assert seen["timeout"] == fetch_news.REQUEST_TIMEOUT
 
 

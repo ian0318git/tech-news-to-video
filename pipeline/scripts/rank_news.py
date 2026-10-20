@@ -3,7 +3,7 @@
 
 用法: python scripts/rank_news.py [--channel <slug>]
 讀取 output/<slug>/news_raw.json,依 Gemini 排名選出 TOP 1,
-但跳過 topic_history.json 中 7 天內已選過的主題(去重),
+但跳過 topic_history.json 中 HISTORY_DAYS 天內已選過的主題(去重),
 寫出 output/<slug>/ranking.json、top1.json 並回寫 topic_history.json。
 需要 .env 的 GEMINI_API_KEY。
 """
@@ -302,6 +302,8 @@ def recent_topic_keys(history: list, today: str) -> tuple[set[str], list[str]]:
     recent: set[str] = set()
     recent_titles: list[str] = []
     for h in history:
+        if not isinstance(h, dict):  # 手改/結構損壞的條目直接忽略,不讓選題崩潰
+            continue
         d = parse_history_date(h)
         if d is not None and h.get("date") != today and d >= cutoff:
             recent |= topic_keys(h.get("title", ""), h.get("url", ""))
@@ -485,7 +487,7 @@ def main() -> None:
         fail(logger, "news_raw.json 沒有任何新聞項目")
 
     today = today_str()
-    # 7 天去重 — 讀歷史 → 預過濾 → Gemini 只排未選過的主題 → 之後回寫本次選題
+    # HISTORY_DAYS 天去重 — 讀歷史 → 預過濾 → Gemini 只排未選過的主題 → 之後回寫本次選題
     history_path = cdir / HISTORY_FILE_NAME
     history = []
     if history_path.exists():
