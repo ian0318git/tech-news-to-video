@@ -5,6 +5,12 @@
       "slug": "embedded",
       "keyword": "embedded linux",
       "freshness": "14d",
+      "feeds": [
+        {"name": "Phoronix", "url": "https://www.phoronix.com/rss.php"},
+        {"name": "CNX Software", "url": "https://www.cnx-software.com/feed/"},
+        {"name": "LWN", "url": "https://lwn.net/headlines/rss"},
+        {"name": "Hackaday", "url": "https://hackaday.com/feed/"}
+      ],
       "title_prefix": "Embedded Linux Daily",
       "video_style": "custom",
       "style_prompt": "Sleek dark tech aesthetic: deep navy-black background with subtle circuit board traces and PCB patterns, glowing cyan and teal HUD interface elements, crisp monospace accents, minimalist modern typography. Precise, engineering-grade feel.",
@@ -15,6 +21,17 @@
     {
       "slug": "tech",
       "keyword": "technology OR artificial intelligence OR smartphone OR apple OR samsung OR tesla OR spacex OR \"electric vehicle\"",
+      "feeds": [
+        {"name": "BBC Tech", "url": "https://feeds.bbci.co.uk/news/technology/rss.xml"},
+        {"name": "Ars Technica", "url": "https://feeds.arstechnica.com/arstechnica/index"},
+        {"name": "The Verge", "url": "https://www.theverge.com/rss/index.xml"},
+        {"name": "TechCrunch", "url": "https://techcrunch.com/feed/"},
+        {"name": "Engadget", "url": "https://www.engadget.com/rss.xml"},
+        {"name": "Wired", "url": "https://www.wired.com/feed/rss"},
+        {"name": "Tom's Hardware", "url": "https://www.tomshardware.com/feeds/all"},
+        {"name": "GSMArena", "url": "https://www.gsmarena.com/rss-news-reviews.php3"},
+        {"name": "MIT Tech Review", "url": "https://www.technologyreview.com/feed/"}
+      ],
       "title_prefix": "TechSnack Daily",
       "video_style": "custom",
       "style_prompt": "Modern friendly dark tech aesthetic: deep charcoal-indigo background with soft glowing gradient orbs, large rounded shapes and smooth 3D-style bubbles, floating tech icons (chips, rockets, robots) with soft edges, warm vibrant accents (coral and violet), playful and welcoming — a cozy night-mode tech explainer show.",
