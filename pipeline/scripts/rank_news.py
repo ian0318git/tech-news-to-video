@@ -371,7 +371,7 @@ def pick_topic(
                 logger,
                 "Gemini 回傳的 ranking 是空陣列,沒有任何候選可挑",
                 "prompt 要求「每一則新聞都要排名」— 空陣列代表回應不符契約,"
-                "檢查 GEMINI_MODEL 與回應格式",
+                "檢查 GEMINI_MODEL/GEMINI_FALLBACK_MODEL 與回應格式",
             )
         if invalid == len(ranking):
             # 全部條目的 index 都壞 → 真因是 Gemini 回傳格式,不是去重窗口。

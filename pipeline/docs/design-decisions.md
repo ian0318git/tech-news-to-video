@@ -192,3 +192,12 @@ cron 指向這裡;GitHub repo 的 `pipeline/` 是**作品集快照**。兩者需
   - **複審修正(同輪,測試 340 → 347)**:reviewer 實測抓到三個邊界問題,已修 —①`item_title_key` 原本無條件剝「 - 尾綴」,會把 `Tech Life - BBC` 與 `Tech Now - BBC` 壓成同一個 key 而誤殺候選;改為對齊 `rank_news.MIN_BASE_LEN`(剝完的正規化字元 <20 就保留原標題)。②`item_url_key` 對 `http://[` 這類畸形 URL 會拋 `ValueError`,任何一個 publisher 的壞 link 就能讓整個頻道 crash;改為捕獲後退回字串正規化。③`fetch_source` 只捕捉 `httpx.HTTPError`,而 `httpx.InvalidURL` 不是它的子類;改為一併捕捉,且 `feed_defs` 先驗證 scheme/netloc(config 錯誤 fail-fast)。並修正「全部來源都失敗」與「來源有回應但解析為空」的錯誤訊息混淆,補上對應測試(短標題不誤殺、畸形 URL、InvalidURL、非 http(s) URL)。
   - **驗證**:測試 327 → **340 passed**;ruff 對修改檔全綠。真實抓取:embedded 20 則(Phoronix/CNX/LWN/Hackaday 各 4 + Google 4),20/20 在 14 天內;tech 20 則(BBC 3、Ars 3、其餘 2 + Google 2),20/20 為當天。輪流取樣確實讓每個來源都有代表。
   - **未解**:直接 feed 的 summary 多為文章摘要、長度不一(已截 500 字);跨來源同一新聞的不同寫法仍可能同時入池(URL/標題鍵只能抓近似重複),由 `rank_news` 的 90 天去重與 Gemini 排名處理。
+
+- **2026-10-21 503 自動切換備援模型(已實作)**:2026-10-21 08:00 起 `gemini-3.5-flash` 連續回 503;`run_daily_cron` 每個頻道的 rank/collect 各有 1 次重試,`*/15` 的 catch-up 每 tick 打 4 個請求,09:00 前 20 次/天的配額就被「失敗的重試」燒光,之後全部 fast-fail,兩支長片與 Shorts 整天缺產。當晚 18:10 手動補跑時 3.5 仍 503,改用 `gemini-3.1-flash-lite`(配額按「專案 × 模型」各自計算)才成功。
+  - **修法**:`scripts/_gemini.py` 把單一模型的呼叫抽成 `_call_model(...)`;5xx 重試耗盡時拋 `GeminiServerError`(而不是直接 `fail()`),由 `gemini_json()` 改打 `GEMINI_FALLBACK_MODEL`(預設 `gemini-3.1-flash-lite`)一次。主模型純 5xx 序列最多 2 個請求(1 次重試);若中間夾雜每分鐘 429,則共用 429 的 3 次 attempt 上限(最多 3 個請求)。備援遇到 5xx **只打 1 次、不重試**(429 每分鐘限速仍照常重試) — 兩個模型同時 5xx 時不要把第二份 20/天也燒光,交給 15 分鐘後的 catch-up。
+  - **不切換的情況**:每日配額 429(換模型前先由 `daily_quota_hit()` 攔下 → fast-fail)、4xx、連線錯誤。這些換模型救不了,只會多燒一次請求。備援與主模型相同、或 `GEMINI_FALLBACK_MODEL=""` 時停用備援。
+  - **設定**:`.env.example` 新增 `GEMINI_FALLBACK_MODEL=gemini-3.1-flash-lite`,並把過時的 `GEMINI_MODEL=gemini-2.5-flash` 更正為 3.5(2.5 世代對新專案已下線);本機與 VPS 的 `.env` 都已加入。程式有預設值,就算 `.env` 沒這行也會啟用。
+  - **測試**:初版新增 9 個測試函式(含 500/502/503/504 參數化,共 12 個案例);複審後再補 5 個函式(混合 5xx/429、備援壞 JSON×2、備援每分鐘 429、連線錯誤、最後 5xx),全套 347 → **365 passed**,ruff 全綠。
+  - **複審**:reviewer 以舊版 `_gemini.py` 實測 **12 failed / 29 passed**(新版測試),證明備援行為測試不是假綠;並實測停用/同主模型/每日 429 的錯誤訊息。6 項 MINOR/NIT 修正後複核 `[REVIEW_PASSED]`。
+  - **驗證範圍(誠實說明)**:今晚的手動補跑是**用 `GEMINI_MODEL` 覆寫**證明 lite 在同一個 503 時段可用,不是這支自動切換程式跑出來的;自動切換要等下一個 503 事件才會走到。`deploy.sh -y` 已於 22:09 部署,VPS md5 相符、`compileall` 通過、**365 passed**;自動切換的實際 503 路徑仍待下一次事件驗證。
+  - **未解**:每日配額 429 目前仍直接 fail、不切換備援。若日後主模型配額常態性先耗盡,可再考慮「每日 429 也切 lite」;本輪先依使用者要求只處理 503,避免改變既有的配額失敗語意。
